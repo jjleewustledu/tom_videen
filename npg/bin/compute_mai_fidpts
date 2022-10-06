@@ -1,0 +1,108 @@
+# compute_mai_fidpts			(18 Nov 2008)
+#
+# Intent:
+#	1) Create atlas_to_MaiAtlas AIR file from fid.pts, std.hdr, res.hdr
+#	2) Combine MR AIR files and reslice to MaiAtlas
+#	3) Combine CT AIR files and reslice to MaiAtlas
+#	4) Compute coordinates in MaiAtlas (.loc) and Sterotaxic space (.atl)
+#	5) Resample CT to 0.5 mm voxels to identify contact locations 
+#	6) Identify contact locations and write to Overlay
+#
+# Image Arrays:
+#	ct1      = original CT
+#	tse1     = original transverse Turbo Spin Echo MR
+#	tse2     = original coronal Turbo Spin Echo MR
+#	atlas    = initial atlas estimate (256x256x128)
+#	MaiAtlas = final atlas (1113x39x960)
+# --------------------------------------------------------------
+
+if ($#argv != 1) then
+    echo "Usage:  compute_mai_fidpts dbid"
+    echo " e.g.,  compute_mai_fidpts db250"
+    exit 1
+endif
+set DB = $1
+
+set REF   = /data/jsp/human/DBS/Atlas
+set DDIR  = /data/jsp/human/DBS/$DB
+;set ALDIR = $DDIR/Alignment
+set ALDIR = $DDIR/Align
+set CTDIR = $DDIR/CT_CCIR
+set MRDIR = $DDIR/MR
+set ATDIR = $DDIR/Atlas
+set MAIDIR = $DDIR/Mai_compute
+set MAIATL = $REF/MaiAtlas
+set OLDDIR = $DDIR/Mai
+set TSE1  = ${DB}_tse1
+set TSE2  = ${DB}_tse2
+set CCTR  = ${DB}_ct1
+;set AIR1  = $ALDIR/${DB}_cct2tse
+set AIR1  = $ALDIR/${DB}_ct2tse
+set AIR2  = $ALDIR/${DB}_tse2to1
+set AIR3  = $ATDIR/${DB}_tse1_to_atlas
+set AIR4  = ${DB}_atlas_to_MaiAtlas
+set AIR5  = ${DB}_ct1_resampled_to_MaiAtlas
+set AIR6  = ${CCTR}_to_MaiAtlas
+set ATL   = $ATDIR/r${DB}_tra_tri
+set PTS1  = $ATDIR/r${DB}_tabbals.pts
+set PTS2  = $ATDIR/r${DB}_morvaridk.pts
+set PTS   = ${DB}.pts
+set DMMR1 = ${DB}_MaiAtlas_tse1
+set DMMR2 = ${DB}_MaiAtlas_tse2
+set DMCT  = ${DB}_MaiAtlas_ct
+set DOVER = ${DB}_MaiOverlays
+
+echo "======================================================================"
+set FILES = ($PTS1 $PTS2 $MRDIR/$TSE2.img $AIR1.air $AIR2.air $AIR3.air)
+checkfiles $FILES
+if ($status != 0) exit
+
+if (! -e $MAIDIR) then
+	mkdir $MAIDIR
+	chgrp jsp $MAIDIR
+	chmod 770 $MAIDIR
+endif
+cd $MAIDIR
+
+unalias cp
+cp $MRDIR/$TSE2.hdr .
+cp $MRDIR/$TSE2.img .
+
+# 1) Average pts and then Create atlas_to_MaiAtlas AIR file 
+#	----------------------------------------------------
+fidpts_mean $DB $PTS1 $PTS2
+fiducial_transform $PTS $ATL $MAIATL $AIR4
+
+# 2) Combine AIR files and reslice to MaiAtlas
+#	-------------------------------------------------
+combine_air $DMMR1.air y $AIR4.air $AIR3.air
+combine_air $DMMR2.air y $AIR4.air $AIR3.air $AIR2.air
+combine_air $DMCT.air  y $AIR4.air $AIR3.air $AIR1.air
+#imgreslice $TSE2 $DMMR2
+#mv r$TSE2.hdr $DMMR2.hdr
+#mv r$TSE2.img $DMMR2.img
+#echo Compare:;echo '  Image 1: '$DMMR2.img'    Color: Gray S   Max: 1100'; \
+#echo '  Image 2: Atlas/MaiOverlays.img      Color: Hues     Max: 240'; \
+#echo '  Coronal Planes	(OX=14; AC=17; PC=38; RN=34; STN=29)'
+
+# 4) Compute coordinates in MaiAtlas (.loc) and Sterotaxic space (.atl)
+#	------------------------------------------------------
+fidpts_to_mai $AIR4 $DB
+fidpts_format $DB.atl ${DB}_fid.atl b
+rm $DB.loc $DB.atl
+
+# 5) Identify contact locations and write to Overlay (ctpts_to_mai)
+# 		STN spacing = 2; VIM spacing = 3
+#	------------------------------------------------------
+set cmd = `head -1 $OLDDIR/${DB}_left_contacts.loc`
+$cmd 2
+set cmd = `head -1 $OLDDIR/${DB}_right_contacts.loc`
+$cmd 2
+
+#	Clean up and check
+
+rm $TSE2.hdr $TSE2.img 
+
+checkfiles $DMMR2.img $DMMR2.air $DMCT.air $AIR4.air $PTS \
+    ${DB}_fid.atl ${DB}_left_contacts.atl ${DB}_right_contacts.atl 
+

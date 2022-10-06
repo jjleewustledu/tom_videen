@@ -1,0 +1,277 @@
+head	1.7;
+access;
+symbols;
+locks
+	tom:1.7; strict;
+comment	@c @;
+
+
+1.7
+date	93.07.26.22.07.02;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.07.26.18.59.25;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.07.26.15.04.31;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.07.26.14.49.59;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.07.26.14.46.37;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.07.22.22.30.15;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@working c/fortran
+@
+
+
+1.7
+log
+@fixed imgrots to use NROW and NCOL
+@
+text
+@      SUBROUTINE IMGROTS (IMAGENEW, IMAGE, MASK, NSLICE, NCOL, NROW, MMPPIX, PARAM)
+
+      REAL*4		IMAGENEW(NCOL,NROW,NSLICE)
+      REAL*4		IMAGE(NCOL,NROW,NSLICE)
+      INTEGER*2 MASK(NCOL,NROW,NSLICE)
+			INTEGER*2	NSLICE
+			INTEGER*2	NCOL
+			INTEGER*2	NROW
+      REAL*4 		MMPPIX(3)
+      REAL*4 		PARAM(12)
+
+      REAL*4 		X(3)
+      REAL*4 		XP(3)
+      REAL*4 		TROT(4,4)
+      REAL*4		A(4,4)
+      REAL*4		B(4,4)
+      REAL*4		C(4,4)
+      REAL*4 		T(4,4)
+			REAL*4		V
+      REAL*4 		WX, WY, WZ
+			INTEGER*4	IX, IY, IZ
+			INTEGER*4	N0, N1, N4
+			INTEGER*4	I, J, K, L, N
+
+			CHARACTER*256	RCSHEADER
+
+			DATA N0, N1, N4 /0,1,4/
+
+			RCSHEADER = "$Id: imgrots.f,v 1.6 1993/07/26 18:59:25 tom Exp tom $"
+
+C		Force VRT2IMG to recognize on the next call that C is to be computed again
+
+      CALL VRT2IMG (MMPPIX, PARAM(1), C)
+
+C		Compute C, the scale-translation from virtual -> image coordinates
+
+      CALL VRT2IMG (MMPPIX, PARAM(7), C)
+
+C		Compute its inverse, B
+
+      CALL IMG2VRT (MMPPIX, PARAM(7), B)
+
+C		Shock TROTCAL so that the next call will compute TROT
+
+      CALL TROTCAL (N0, PARAM, TROT)
+
+C		Compute the nudge-rotation matrix, TROT, for the current PARAM
+
+      CALL TROTCAL (N1, PARAM, TROT)
+      CALL IMGROTRL (TROT)
+
+C		Combine the 3 matrices in T
+
+			CALL MATMUL (C, TROT, A, N4)
+			CALL MATMUL (A, B, T, N4)
+      CALL IMGROTRL (T)
+
+      N = 0
+      DO 400 K=1,NSLICE
+	      DO 300 J=1,NROW
+		      DO 200 I=1,NCOL
+			      X(1) = FLOAT(I)
+			      X(2) = FLOAT(J)
+			      X(3) = FLOAT(K)
+			      DO L=1,3
+			        XP(L) = T(L,1)*X(1)+T(L,2)*X(2)+T(L,3)*X(3)+T(L,4)
+			      ENDDO
+			      IX = NINT(XP(1)-.5)
+			      WX = XP(1) - FLOAT(IX)
+			      IY = NINT(XP(2)-.5)
+			      WY = XP(2) - FLOAT(IY)
+			      IZ = NINT(XP(3)-.5)
+			      WZ = XP(3) - FLOAT(IZ)
+			      IF (IZ.EQ.0. AND. WZ.GT.0.999) THEN
+			        IZ = 1
+			        WZ = 0.
+			      ENDIF
+			      IF(IZ.EQ.NSLICE .AND. WZ.LT.0.001) THEN
+			        IZ = NSLICE-1
+			        WZ = 1.
+			      ENDIF
+
+			      IF (IX.LE.1 .OR. IX.GE.NCOL) THEN
+							V = 0.
+
+			      ELSE IF (IY.LE.1 .OR. IY.GE.NROW) THEN
+							V = 0.
+
+			      ELSE IF (IZ.LT.1 .OR. IZ.GE.NSLICE) THEN
+							V = 0.
+
+      			ELSE IF (MASK(IX,  IY  ,IZ)  .EQ.0
+     &					.OR. MASK(IX+1,IY  ,IZ)  .EQ.0
+     &					.OR. MASK(IX,  IY+1,IZ)  .EQ.0
+     &					.OR. MASK(IX+1,IY+1,IZ)  .EQ.0
+     &					.OR. MASK(IX,  IY  ,IZ+1).EQ.0
+     &					.OR. MASK(IX+1,IY  ,IZ+1).EQ.0
+     &					.OR. MASK(IX,  IY+1,IZ+1).EQ.0
+     &					.OR. MASK(IX+1,IY+1,IZ+1).EQ.0) THEN
+							V = 0.
+
+						ELSE
+			     		V = (1.-WZ) * ((1.-WY)* ((1.-WX)*IMAGE(IX, IY  ,IZ)   + WX*IMAGE(IX+1,IY  ,IZ))
+     &        	            +    WY * ((1.-WX)*IMAGE(IX, IY+1,IZ)   + WX*IMAGE(IX+1,IY+1,IZ)))
+     &    				+  WZ   * ((1.-WY)* ((1.-WX)*IMAGE(IX, IY  ,IZ+1) + WX*IMAGE(IX+1,IY  ,IZ+1))
+     &        	            +    WY * ((1.-WX)*IMAGE(IX, IY+1,IZ+1) + WX*IMAGE(IX+1,IY+1,IZ+1)))
+			      	N = N+1
+						END IF
+
+						IMAGENEW(I,J,K) = V
+200				CONTINUE
+300			CONTINUE
+400		CONTINUE
+      TYPE "('Number of non-zero pixels saved',I8)", N
+
+      RETURN
+      END
+@
+
+
+1.6
+log
+@working c/fortran
+@
+text
+@d29 1
+a29 1
+			RCSHEADER = "$Id: imgrots.f,v 1.5 1993/07/26 15:04:31 tom Exp tom $"
+d60 2
+a61 2
+	      DO 300 J=1,100
+		      DO 200 I=1,100
+d83 1
+a83 1
+			      IF (IX.LE.1 .OR. IX.GE.100) THEN
+d86 1
+a86 1
+			      ELSE IF (IY.LE.1 .OR. IY.GE.100) THEN
+@
+
+
+1.5
+log
+@working c/fortran
+@
+text
+@d29 1
+a29 1
+			RCSHEADER = "$Id$"
+@
+
+
+1.4
+log
+@working c/fortran
+@
+text
+@d25 2
+d28 2
+@
+
+
+1.3
+log
+@working c/fortran
+@
+text
+@@
+
+
+1.1
+log
+@working c/fortran
+@
+text
+@d1 1
+a1 1
+      SUBROUTINE IMGROTS (IMAGNEW, IMAG, MASK, NSLICE, NCOL, NROW, MMPPIX, PARAM)
+d3 2
+a4 2
+      REAL*4		IMAGNEW(NCOL,NROW,NSLICE)
+      REAL*4		IMAG(NCOL,NROW,NSLICE)
+a23 1
+      LOGICAL*4 LVALID
+d27 2
+d30 3
+d34 3
+d38 3
+d42 3
+d47 3
+d70 1
+a70 3
+			      IF (IX.LE.1 .OR. IX.GE.100) GOTO 90
+			      IF (IY.LE.1 .OR. IY.GE.100) GOTO 90
+			      IF (IZ.EQ.0.AND.WZ.GT.0.999)THEN
+d74 1
+a74 1
+			      IF(IZ.EQ.NSLICE.AND.WZ.LT.0.001)THEN
+a77 1
+			      IF (IZ.LT.1 .OR. IZ.GE.NSLICE) GOTO 90
+d79 2
+a80 8
+      			IF    (MASK(IX,  IY  ,IZ)  .EQ.0
+     &				.OR. MASK(IX+1,IY  ,IZ)  .EQ.0
+     &				.OR. MASK(IX,  IY+1,IZ)  .EQ.0
+     &				.OR. MASK(IX+1,IY+1,IZ)  .EQ.0
+     &				.OR. MASK(IX,  IY  ,IZ+1).EQ.0
+     &				.OR. MASK(IX+1,IY  ,IZ+1).EQ.0
+     &				.OR. MASK(IX,  IY+1,IZ+1).EQ.0
+     &				.OR. MASK(IX+1,IY+1,IZ+1).EQ.0) GOTO 90
+d82 2
+a83 4
+			      V = (1.-WZ) * ((1.-WY)* ((1.-WX)*IMAG(IX, IY  ,IZ)   + WX*IMAG(IX+1,IY  ,IZ))
+     &                    +    WY * ((1.-WX)*IMAG(IX, IY+1,IZ)   + WX*IMAG(IX+1,IY+1,IZ)))
+     &    			+  WZ   * ((1.-WY)* ((1.-WX)*IMAG(IX, IY  ,IZ+1) + WX*IMAG(IX+1,IY  ,IZ+1))
+     &                    +    WY * ((1.-WX)*IMAG(IX, IY+1,IZ+1) + WX*IMAG(IX+1,IY+1,IZ+1)))
+d85 22
+a106 6
+			      LVALID = .TRUE.
+			      N = N+1
+			      GOTO 150
+90					V = 0.
+			      LVALID = .FALSE.
+150					IMAGNEW(I,J,K) = V
+d110 1
+a110 1
+      TYPE "('Number of non-zero pixels saved',I8)",N
+@

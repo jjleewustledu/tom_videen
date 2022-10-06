@@ -1,0 +1,582 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.8
+date	2007.07.09.17.58.26;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2004.02.17.15.13.33;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.12.19.16.17.38;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.07.02.15.59.44;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.02.11.21.26.23;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial unix release
+@
+
+
+1.8
+log
+@update for 63 slice images
+@
+text
+@c $Log: piecreate.f,v $
+c Revision 1.7  2004/02/17  15:13:33  tom
+c Feb 2004
+c
+c Revision 1.3  1995/12/19  16:17:38  tom
+c extended arrays for 961
+c
+c Revision 1.2  1993/07/02  15:59:44  tom
+c Skips reading image for 953B files
+c
+c Revision 1.1  1993/02/11  21:26:23  tom
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      PIECREATE.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         24-Dec-87
+C
+C  History:
+C     Modified 19-Apr-88 by TOV to allow RGT files using fewer than
+C        7 slices (allows regions on bad slices to be deleted).
+C     Modified 07-Oct-88 by TOV to check one scan file before assigning
+C        the file type.  Type 3 is used for images with type 1000;
+C        type 5 is used for images with type 1020 (new reconstruction).
+C     Modified 30-Mar-89 by TOV to get date of pie scans and NORM mean
+C        counts/bin/minute and write them as the last line of the PIE file.
+C     Modified 29-May-91 by TOV with messages for processing EM-processed
+C        images (Super PETT format)--tell user to read an atten. image.
+C
+C			Modified 23-Oct-92 for Unix (TOV)
+C				Creates PIE file type 7 for ECAT images (image type 3000).
+C				Add SCALEFACTOR for ecat2pett6 conversion.
+C				PIE file is named .pie
+C			Modified 11-Feb-93 (TOV)
+C				Commented out debugging 'write' lines.
+C				Corrected treatment of SCALEFACTOR (now a product).
+C				Compute MEANDPETT for pie.
+C			Modified 02-Jul-93 (TOV)
+C				Added prompt to bypass reading images for 953B image files.
+C				Show individual factors as well as mean for 953B.
+C
+C  Intent:
+C     Create a PIE file to be used for converting PET counts
+C     do well counts/min.
+C     Documentation in PIE.DOC
+C     Input file structure in PDFORMAT.TXT
+C     Output file structure in PIEFORM.FIL
+C
+C  Uses TERMINAL.LIB
+C     GTSTRING
+C
+C  Link instructions:   use Makefile
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM PIECREATE
+C
+      INTEGER*4    NSCANS,SCANLEN(10),NCOUNTS,DISK,PB(6),IOREAD,
+     &             PDFFILE,RGTFILE,PIEFILE,USERIN,USEROUT,NROWS,NCOLS,
+     &             REFSECS,TIMESECS,SECS,VER,TYPE
+      REAL*4       CORCNTS,PETTCNTS(63),CNTS,MEANCNTS(10),LEN,ALPHA,
+     &             BANKPAIR(10),MEANBP(10),SUMCNTS,DTIME,DPETT(10),
+     &             SCALEFACTOR, MEANDPETT
+      INTEGER*2    HEADER(128),FILETYPE,NORMAVE,NORMTIME
+      CHARACTER*1  BELL
+      CHARACTER*6  SCANDATE
+      CHARACTER*8  SCANSTART(10),REFTIME,ENCODED
+      CHARACTER*256 FNAME, PDFROOT, RGTROOT, PIEROOT
+      CHARACTER*256 PDFNAME, RGTNAME, PIENAME
+      CHARACTER*80 Q,STR
+			CHARACTER*256 RCSHEADER
+			LOGICAL*1     A
+C
+      EQUIVALENCE (HEADER(1),  ENCODED)
+      EQUIVALENCE (HEADER(13), SCANDATE)
+      EQUIVALENCE (HEADER(38), FILETYPE)
+      EQUIVALENCE (HEADER(50), NORMAVE)
+      EQUIVALENCE (HEADER(70), NORMTIME)
+C
+      COMMON /USRIO/ USERIN, USEROUT
+C
+      DATA PDFFILE, RGTFILE, USERIN, USEROUT, PIEFILE /1, 2, 5, 6, 3/
+      DATA DISK    /7/
+      DATA IOREAD /88/
+C
+		RCSHEADER = "$Header: /home/npggw/tom/src/piecreate/RCS/piecreate.f,v 1.7 2004/02/17 15:13:33 tom Exp tom $"
+      BELL = CHAR(7)
+      PB(6) = 0
+C
+      WRITE(USEROUT,*) 'Create PIE File    {15-Dec-95}'
+C
+C  Added for Unix
+C
+		CALL GETARG(1,PDFROOT)
+		WRITE(USEROUT,*) "PDF    ",PDFROOT( : LNBLNK(PDFROOT))
+		CALL GETARG(2,RGTROOT)
+		WRITE(USEROUT,*) "RGT    ",RGTROOT( : LNBLNK(RGTROOT))
+		CALL GETARG(3,PIEROOT)
+		WRITE(USEROUT,*) "PIE    ",PIEROOT( : LNBLNK(PIEROOT))
+C
+C  Open PDF, RGT, and PIE files
+C			
+  		PDFNAME = PDFROOT( : LNBLNK(PDFROOT))//'.pdf'
+			OPEN(PDFFILE,FILE=PDFNAME,STATUS='OLD',ERR=15)
+			GO TO 30
+15 		PDFNAME = PDFROOT( : LNBLNK(PDFROOT))//'.PDF'
+			OPEN(PDFFILE,FILE=PDFNAME,STATUS='OLD',ERR=25)
+			GO TO 30
+25		WRITE(USEROUT,8110) PDFNAME( : LNBLNK(PDFNAME))
+			STOP
+30		WRITE(USEROUT,8115) PDFNAME( : LNBLNK(PDFNAME))
+
+8110	FORMAT('Cannot open file ',A)
+8115	FORMAT('PDF file = ',A)
+
+  		RGTNAME = RGTROOT( : LNBLNK(RGTROOT))//'.rgt'
+			OPEN(RGTFILE,FILE=RGTNAME,STATUS='OLD',ERR=35)
+			GO TO 50
+35 		RGTNAME = RGTROOT( : LNBLNK(RGTROOT))//'.RGT'
+			OPEN(RGTFILE,FILE=RGTNAME,STATUS='OLD',ERR=45)
+			GO TO 50
+45		WRITE(USEROUT,8110) RGTNAME( : LNBLNK(RGTNAME))
+			STOP
+50		WRITE(USEROUT,8125) RGTNAME( : LNBLNK(RGTNAME))
+
+8125	FORMAT('RGT file = ',A)
+
+		PIENAME = PIEROOT( : LNBLNK(PIEROOT))//'.pie'
+			OPEN(PIEFILE,FILE=PIENAME,ERR=55)
+			GO TO 60
+55		WRITE(USEROUT,8130) PIENAME( : LNBLNK(PIENAME))
+			STOP
+60		WRITE(USEROUT,8135) PIENAME( : LNBLNK(PIENAME))
+8130	FORMAT('Cannot open file ',A,' as a new file.')
+8135	FORMAT('PIE file = ',A)
+
+C  Read PDF file
+
+8100  FORMAT(I,I)
+8200  FORMAT(14X,A8,3X,I6,3X,F6.2)
+8300  FORMAT(A8,F18.7)
+8400  FORMAT(F9.0)
+
+      READ(PDFFILE,*)
+      READ(PDFFILE,8100) NSCANS
+      READ(PDFFILE,*)
+      DO 100 I=1,NSCANS
+        READ(PDFFILE,8200) SCANSTART(I),SCANLEN(I),BANKPAIR(I)
+100   CONTINUE
+      READ(PDFFILE,8300) REFTIME,ALPHA
+      READ(PDFFILE,8100) NCOUNTS
+      READ(PDFFILE,*)
+      READ(PDFFILE,*)
+      SUMCNTS = 0
+      DO 200 I=1,NCOUNTS
+        READ(PDFFILE,8400) CNTS
+        SUMCNTS = SUMCNTS + CNTS
+200   CONTINUE
+      CORCNTS =SUMCNTS/FLOAT(NCOUNTS)
+C
+C  Compute Average Bank Pair for each scan
+C
+      DO 320 I=1,NSCANS
+        LEN = FLOAT(SCANLEN(I))
+        MEANBP(I) = 0.5*BANKPAIR(I)*(1.0-EXP(-2.0*ALPHA*LEN))/
+     &     (1.0-EXP(-ALPHA*LEN))
+320   CONTINUE
+
+C  Read RGT file
+
+8500  FORMAT(12(F10.1,' '))
+      READ(RGTFILE,8100) VER
+      IF (VER.NE.11) THEN
+        WRITE(USEROUT,*) '*** RGT file was not created with SPIDERAM ',
+     &    '***',BELL
+        WRITE(USEROUT,*) '*** Version number must be 11'
+      END IF
+      READ(RGTFILE,8100) NROWS,NCOLS
+      IF (NROWS.NE.NSCANS) THEN
+        WRITE(USEROUT,*) '*** RGT and PDF files have different ',
+     &    'numbers of scans ***',BELL
+        STOP
+      END IF
+      IF (NCOLS.GT.63) THEN
+        WRITE(USEROUT,*) '*** RGT file has too many slices ***',BELL
+        STOP
+      END IF
+      WRITE(USEROUT,*) 'Reading RGT file'
+      DO 400 I=1,NROWS
+        READ(RGTFILE,8500) (PETTCNTS(J),J=1,NCOLS)
+        SUMCNTS = 0.0
+        DO 380 J=1,NCOLS
+C  	 	  write(userout,*) J, PETTCNTS(J)
+          SUMCNTS = SUMCNTS + PETTCNTS(J)
+380     CONTINUE
+        MEANCNTS(I) = SUMCNTS/FLOAT(NCOLS)
+400   CONTINUE
+
+C  DECAY-CORRECT PET COUNTS
+
+      REFSECS = SECS(REFTIME)
+      DO 500 I=1,NSCANS
+
+C  Decay correct mean PET counts/(pixel*sec) in each scan to scan start;
+
+        LEN = SCANLEN(I)
+        DPETT(I) = MEANCNTS(I)*ALPHA/(1-EXP(-ALPHA*LEN))
+C		write(userout,*) I, DPETT(I), MEANCNTS(I), ALPHA, LEN
+
+C  Convert to mean PET counts/(pixel*minute);
+
+        DPETT(I) = 60.0*DPETT(I)
+C		write(userout,*) I, DPETT(I)
+
+C  Then decay correct PET counts in each scan to reference time;
+
+        TIMESECS = SECS(SCANSTART(I))
+        DTIME = FLOAT(TIMESECS-REFSECS)
+C		write(userout,*) I, DTIME, " sec"
+        DPETT(I) = DPETT(I)*EXP(ALPHA*DTIME)
+C		write(userout,*) I, DPETT(I)
+
+500   CONTINUE
+
+C  Assign file type to PIE file using type of image reconstruction
+C    FILETYPE = 1000 (old reconstruction)       --> TYPE = 3
+C    FILETYPE = 1020 (new reconstruction, 1988) --> TYPE = 5
+
+		Q = 'Are these ECAT image files'
+		A = .TRUE.
+		CALL YESNO(Q,A)
+		IF (A) THEN
+			TYPE = 7
+			Q = 'Enter scan date with exactly 6 numbers: MMDDYY'
+			STR = ' '
+			CALL GTSTRING(Q,STR)
+			SCANDATE = STR(1:6)
+			GO TO 590
+		END IF
+
+510   Q = 'File name of one of the pie images used to create RGT file'
+      STR = ' '
+      CALL GTSTRING(Q,STR)
+      FNAME = STR(1:20)
+      OPEN (DISK,FILE=FNAME,STATUS='OLD',ERR=520)
+        GO TO 530
+520     WRITE(USEROUT,*) '*** File ',FNAME,' cannot be read.'
+        GO TO 510
+530   CALL SYSIO(PB,IOREAD,DISK,HEADER,256,0)
+      IF (ENCODED.EQ.'ENCODED ') THEN
+        CALL SYSIO(PB,IOREAD,DISK,HEADER,256,0)
+      END IF
+      IF (FILETYPE.EQ.1000) THEN
+        TYPE = 3
+      ELSE IF (FILETYPE.EQ.1010 .OR. FILETYPE.EQ.1020) THEN
+        IF (NORMAVE.EQ.0 .OR. NORMTIME.EQ.0) THEN
+          WRITE(USEROUT,*) '*** File ',FNAME,' does not contain the ',
+     &      'NORM average counts in its header.'
+          WRITE(USEROUT,*) '*** Try the attenuation image file.'
+          GO TO 510
+        ELSE
+          TYPE = 5
+        END IF
+      ELSE IF (FILETYPE.EQ.3000) THEN
+        TYPE = 7
+      ELSE
+        WRITE(USEROUT,*) '*** File ',FNAME,' is of wrong type ',FILETYPE
+        WRITE(USEROUT,*) '*** Use the ATTENUATION IMAGE file.'
+        GO TO 510
+      END IF
+
+C  Write Pie File
+
+8600  FORMAT(I1,'  (TYPE)')
+8700  FORMAT(A80)
+8800  FORMAT(I2,5X,'(wellcounts/ml/sec)/(PETcounts/pixel/min)')
+8900  FORMAT(F8.4,3X,F8.4)
+8950  FORMAT(A2,'/',A2,'/',A2,3X,F7.2)
+8960  FORMAT(F8.4,I12,' sec')
+590   WRITE(PIEFILE,8600) TYPE
+      Q = 'Pie file header'
+      STR = ' '
+      CALL GTSTRING(Q,STR)
+      WRITE(PIEFILE,8700) STR
+
+		IF (TYPE.LE.6) THEN
+     		WRITE(PIEFILE,8800) NSCANS
+     		DO 600 I=NSCANS,1,-1
+	        	WRITE(PIEFILE,8900) CORCNTS/DPETT(I),MEANBP(I)
+C				write(userout,*) I, CORCNTS, DPETT(I), CORCNTS/DPETT(I)
+600   		CONTINUE
+	    	WRITE(PIEFILE,8950) SCANDATE(1:2),SCANDATE(3:4),SCANDATE(5:6),
+     &  		60.*FLOAT(NORMAVE)/FLOAT(NORMTIME)
+		ELSE
+			Q = "Scaler applied to ECAT phantom image (scaler used in ecat2pett6)"
+			SCALEFACTOR = 1.0
+			CALL GETREAL(Q,SCALEFACTOR,0.001,100.0)
+			MEANDPETT = 0.
+			DO 700 I=1,NSCANS
+				MEANDPETT = MEANDPETT + DPETT(I)
+700			CONTINUE
+			MEANDPETT = MEANDPETT / FLOAT(NSCANS)
+       		WRITE(PIEFILE,8800) 2
+      		WRITE(PIEFILE,8900) SCALEFACTOR * CORCNTS / MEANDPETT, 0.0
+      		WRITE(PIEFILE,8900) SCALEFACTOR * CORCNTS / MEANDPETT, 999.
+	    	WRITE(PIEFILE,8950) SCANDATE(1:2), SCANDATE(3:4), SCANDATE(5:6), 1.0
+			WRITE(PIEFILE,*)
+			WRITE(PIEFILE,*) 'Component scans:'
+			DO 710 I=1,NSCANS
+      			TIMESECS = SECS(SCANSTART(I)) - REFSECS
+      			WRITE(PIEFILE,8960) SCALEFACTOR * CORCNTS/DPETT(I), TIMESECS
+710			CONTINUE
+		END IF
+
+      STOP
+      END
+@
+
+
+1.7
+log
+@Feb 2004
+@
+text
+@d2 3
+d63 1
+a63 1
+      REAL*4       CORCNTS,PETTCNTS(47),CNTS,MEANCNTS(10),LEN,ALPHA,
+d88 1
+a88 1
+		RCSHEADER = "$Header: /home/npggw/tom/src/piecreate/RCS/piecreate.f,v 1.3 1995/12/19 16:17:38 tom Exp tom $"
+d186 1
+a186 1
+      IF (NCOLS.GT.47) THEN
+@
+
+
+1.3
+log
+@extended arrays for 961
+@
+text
+@d2 3
+d85 1
+a85 1
+		RCSHEADER = "$Header: /home/npggw/tom/src/piecreate/RCS/piecreate.f,v 1.2 1993/07/02 15:59:44 tom Exp tom $"
+@
+
+
+1.2
+log
+@Skips reading image for 953B files
+@
+text
+@d2 3
+d57 1
+a57 1
+      REAL*4       CORCNTS,PETTCNTS(31),CNTS,MEANCNTS(10),LEN,ALPHA,
+d82 1
+a82 1
+			RCSHEADER = "$Header: /home/petsun2/tom/src/piecreate/RCS/piecreate.f,v 1.1 1993/02/11 21:26:23 tom Exp tom $"
+d86 1
+a86 1
+      WRITE(USEROUT,*) 'Create PIE File    {23-Oct-92}'
+d90 6
+a95 6
+			CALL GETARG(1,PDFROOT)
+			WRITE(USEROUT,*) "PDF    ",PDFROOT( : LNBLNK(PDFROOT))
+			CALL GETARG(2,RGTROOT)
+			WRITE(USEROUT,*) "RGT    ",RGTROOT( : LNBLNK(RGTROOT))
+			CALL GETARG(3,PIEROOT)
+			WRITE(USEROUT,*) "PIE    ",PIEROOT( : LNBLNK(PIEROOT))
+d108 1
+a108 1
+C
+d111 1
+a111 1
+C
+d121 1
+a121 1
+C
+d123 2
+a124 2
+C
+			PIENAME = PIEROOT( : LNBLNK(PIEROOT))//'.pie'
+d132 1
+a132 1
+C
+d134 1
+a134 1
+C
+d137 1
+a137 1
+8300  FORMAT(A8,3X,F9.7)
+d139 1
+a139 1
+C
+d162 1
+a162 1
+     2     (1.0-EXP(-ALPHA*LEN))
+d164 1
+a164 1
+C
+d166 1
+a166 1
+C
+d171 1
+a171 1
+     2    '***',BELL
+d177 1
+a177 1
+     2    'numbers of scans ***',BELL
+d180 1
+a180 1
+      IF (NCOLS.GT.31) THEN
+d189 1
+a189 1
+C   			write(userout,*) J, PETTCNTS(J)
+d194 1
+a194 1
+C
+d196 1
+a196 1
+C
+d199 1
+a199 1
+C
+d201 1
+a201 1
+C
+d204 2
+a205 2
+C				write(userout,*) I, DPETT(I), MEANCNTS(I), ALPHA, LEN
+C
+d207 1
+a207 1
+C
+d209 2
+a210 2
+C				write(userout,*) I, DPETT(I)
+C
+d212 1
+a212 1
+C
+d215 1
+a215 1
+C				write(userout,*) I, DTIME, " sec"
+d217 2
+a218 2
+C				write(userout,*) I, DPETT(I)
+C
+d220 1
+a220 1
+C
+d224 13
+a236 13
+C
+			Q = 'Are these 953B image files'
+			A = .TRUE.
+			CALL YESNO(Q,A)
+			IF (A) THEN
+				TYPE = 7
+				Q = 'Enter scan date with exactly 6 numbers: MMDDYY'
+				STR = ' '
+				CALL GTSTRING(Q,STR)
+				SCANDATE = STR(1:6)
+				GO TO 590
+			END IF
+C	
+d267 1
+a267 1
+C
+d269 1
+a269 1
+C
+d282 2
+a283 2
+			IF (TYPE.LE.6) THEN
+        WRITE(PIEFILE,8800) NSCANS
+d285 12
+a296 12
+      	  WRITE(PIEFILE,8900) CORCNTS/DPETT(I),MEANBP(I)
+C					write(userout,*) I, CORCNTS, DPETT(I), CORCNTS/DPETT(I)
+600   	CONTINUE
+	      WRITE(PIEFILE,8950) SCANDATE(1:2),SCANDATE(3:4),SCANDATE(5:6),
+     &  	60.*FLOAT(NORMAVE)/FLOAT(NORMTIME)
+			ELSE
+				Q = "Scaler applied to ECAT phantom image (scaler used in ecat2pett6)"
+				SCALEFACTOR = 1.0
+				CALL GETREAL(Q,SCALEFACTOR,0.01,100.0)
+				MEANDPETT = 0.
+				DO 700 I=1,NSCANS
+					MEANDPETT = MEANDPETT + DPETT(I)
+d298 10
+a307 10
+				MEANDPETT = MEANDPETT / FLOAT(NSCANS)
+        WRITE(PIEFILE,8800) 2
+      	WRITE(PIEFILE,8900) SCALEFACTOR * CORCNTS / MEANDPETT, 0.0
+      	WRITE(PIEFILE,8900) SCALEFACTOR * CORCNTS / MEANDPETT, 999.
+	      WRITE(PIEFILE,8950) SCANDATE(1:2), SCANDATE(3:4), SCANDATE(5:6), 1.0
+				WRITE(PIEFILE,*)
+				WRITE(PIEFILE,*) 'Component scans:'
+				DO 710 I=1,NSCANS
+      	  TIMESECS = SECS(SCANSTART(I)) - REFSECS
+      	  WRITE(PIEFILE,8960) SCALEFACTOR * CORCNTS/DPETT(I), TIMESECS
+d309 2
+a310 2
+			END IF
+C
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+c $Log$
+d31 3
+d65 1
+d79 1
+a79 1
+			RCSHEADER = "$Header$"
+d222 12
+d272 2
+a273 1
+      WRITE(PIEFILE,8600) TYPE
+d278 1
+d280 1
+a281 1
+          WRITE(PIEFILE,8800) NSCANS
+a298 1
+C				write(userout,*) CORCNTS, DPETT(I), SCALEFACTOR * CORCNTS / MEANDPETT
+d300 6
+@

@@ -1,0 +1,244 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2009.03.13.19.32.58;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@; $Id: fiducial_transform_hc.pro,v 1.4 2008/11/17 21:58:19 tom Exp tom $
+;
+;+
+; NAME:
+;	FIDUCIAL_TRANSFORM_HC
+;
+; PURPOSE:
+;	Compute transformation matrix to map a fiducial image into a standard atlas image,
+;	then write this matrix to an AIR file.
+;	The dimensions and voxels sizes of the standard and reslice images are read from Analyze hdr files.
+;	Four fiducial points are required to create a matrix that can be inverted.
+;	We are using:
+;		1) AC
+;		2) PC
+;		3) point along vertical midline corresponding to depth of OX
+;		4) point in AC-PC plane (perpendicular to midline) at constant lateral (left) distance
+;	The matrix stored in the AIR file performs as follows:
+;		[AIRMAT] * [SCALE] * [STDMAT] = [RESMAT]
+;	where:
+;		AIRMAT = Air Matrix
+;		SCALE  = scales to cubic voxels with minimum standard file voxel size
+;		STDMAT = internal coords in standard image (not interpolated to cubic voxels)
+;		RESMAT = internal coords in reslice image (not interpolated to cubic voxels)
+;		internal coords = coordinates indexed from 0 in order of image array
+;			e.g., vidi [100, 120, 50] in a 256x256x128 image will have
+;			int coords = [256-100, 256-120, 128-50] = [156, 136, 78] due to Analyze ordering
+;
+; MODIFICATION HISTORY:
+;	Written by: Tom Videen, Nov 2008.
+;	Modified:	TOV, Mar 2009
+;		Changed the name to fiducial_transform_hc to note this older version in which TILT
+;		was determined by a line across the tops of the hippocampi.
+;
+;-
+
+PRO FIDUCIAL_TRANSFORM_HC
+
+	on_error,2
+	fidptsfile = getenv('FIDPTS')
+	resfile = getenv('FIDFILE')
+	stdfile = getenv('STDFILE')
+	airfile = getenv('AIRFILE')
+
+	print, 'Standard file: ', stdfile
+	print, 'Reslice file:  ', resfile
+
+	a = {air}
+	h = {analyzehdr}
+	str = ''
+	str1 = ''
+	x = 0.
+	y = 0.
+	z = 0.
+	std = fltarr(4, 3)
+	fidpts = fltarr(13, 3)
+	fidcalc = fltarr(2, 3)
+
+	;; Read standard image hdr file and set AIR dimensions and voxel sizes
+	;; ------------------------------------------------------------------
+	openr,lu,stdfile,/get_lun
+	readu,lu,h
+	close,lu
+	free_lun,lu
+	a.std.bits = 16
+	a.std.x_dim = h.dime.dim[1]
+	a.std.y_dim = h.dime.dim[2]
+	a.std.z_dim = h.dime.dim[3]
+	a.std.x_size = h.dime.pixdim[1]
+	a.std.y_size = h.dime.pixdim[2]
+	a.std.z_size = h.dime.pixdim[3]
+
+	;; Read reslice image hdr file and set AIR dimensions and voxel sizes
+	;; ------------------------------------------------------------------
+	openr,lu,resfile,/get_lun
+	readu,lu,h
+	close,lu
+	free_lun,lu
+
+	a.res.bits = 16
+	a.res.x_dim = h.dime.dim[1]
+	a.res.y_dim = h.dime.dim[2]
+	a.res.z_dim = h.dime.dim[3]
+	a.res.x_size = h.dime.pixdim[1]
+	a.res.y_size = h.dime.pixdim[2]
+	a.res.z_size = h.dime.pixdim[3]
+
+	;; Define standard points
+	;; -----------------------------------------------------
+	std[0,0] = 483.0			; AC
+	std[0,1] = 17.0
+	std[0,2] = 586.0
+
+	std[1,0] = 483.0			; PC
+	std[1,1] = 38.5
+	std[1,2] = 586.0
+
+	std[2,0] = 483.0			; OC depth 
+	std[2,1] = 17.0			; projected to directly below AC
+	std[2,2] = 689.0
+
+	std[3,0] = (483.0	+ 60 / a.std.x_size)	; fixed point 60 mm to left
+	std[3,1] = 17.0	
+	std[3,2] = 586.0
+
+	x = a.std.x_dim
+	y = a.std.y_dim
+	z = a.std.z_dim
+	STDMAT = [[x-std[0,0],x-std[1,0],x-std[2,0],x-std[3,0]], $
+			  [y-std[0,1],y-std[1,1],y-std[2,1],y-std[3,1]], $
+			  [z-std[0,2],z-std[1,2],z-std[2,2],z-std[3,2]], $
+			  [1,1,1,1]]
+	print,'Standard Points'
+	print,STDMAT
+
+	;; Read reslice image fiducial points
+	;; ----------------------------------
+	openr,lu,fidptsfile,/get_lun
+	readf,lu,format='(A)',str1
+	readf,lu,format='(A)',str
+	for i=0,12 do begin
+		readf,lu,format='(A3,3F8)',str,x,y,z
+		fidpts[i,0] = x
+		fidpts[i,1] = y
+		fidpts[i,2] = z
+	endfor
+	close,lu
+	free_lun,lu
+
+	;; AC and PC are fully 3D defined; use fidpts[0,*] and fidpts[1,*]
+
+	;; Compute 3 angles of rotation (ang_x = pitch; ang_y = roll; ang_z = yaw)
+	;; all angles are presumed sufficiently small to compute from 2D projects
+	;; ----------------------------------------------------------------------
+	dy = fidpts[0,1] - fidpts[1,1]
+	dz = fidpts[0,2] - fidpts[1,2]
+	ang_x = ATAN(dz/dy)
+
+	dx = fidpts[12,0] - fidpts[11,0]
+	dz = fidpts[12,2] - fidpts[11,2]
+	ang_y = ATAN(dz/dx)
+
+	dx = fidpts[0,0] - fidpts[1,0]
+	dy = fidpts[0,1] - fidpts[1,1]
+	ang_z = ATAN(dx/dy)
+
+	Rad_to_Deg = 180./3.14159
+	print,'Angles (deg): ',ang_x*Rad_to_Deg, ang_y*Rad_to_Deg, ang_z*Rad_to_Deg
+
+	;; Compute location of OX depth projected directly vertically below AC
+	;; -------------------------------------------------------------------
+	dz = fidpts[2,2] - fidpts[0,2]
+	fidcalc[0,0] = fidpts[0,0] + dz * TAN(ang_y)
+	fidcalc[0,1] = fidpts[0,1] + dz * TAN(ang_x) 
+	fidcalc[0,2] = fidpts[2,2] 
+
+	;; Compute location of fixed point 60 mm from AC
+	;; -------------------------------------------------------------------
+	dx = 60 / a.res.x_size
+	fidcalc[1,0] = fidpts[0,0] + dx * COS(ang_y)
+	fidcalc[1,1] = fidpts[0,1] + dx * SIN(ang_z)
+	fidcalc[1,2] = fidpts[0,2] + dx * SIN(ang_y)
+
+	x = a.res.x_dim
+	y = a.res.y_dim
+	z = a.res.z_dim
+	RESMAT = [[x-fidpts[0,0],x-fidpts[1,0],x-fidcalc[0,0],x-fidcalc[1,0]], $
+			  [y-fidpts[0,1],y-fidpts[1,1],y-fidcalc[0,1],y-fidcalc[1,1]], $
+			  [z-fidpts[0,2],z-fidpts[1,2],z-fidcalc[0,2],z-fidcalc[1,2]], $
+			  [1,1,1,1]]
+	print,str1
+	print,RESMAT
+
+	;; Create AIR file structure
+	;; -------------------------
+	len = strlen(stdfile)
+	for i=0,len do a.std_file[i] = byte(strmid(stdfile,i,1))
+	len = strlen(resfile)
+	for i=0,len do a.res_file[i] = byte(strmid(resfile,i,1))
+
+	str = 'fiducial_transform_hc from '+fidptsfile+' to '+stdfile
+	len = strlen(str)
+	for i=0,len do a.comment[i] = byte(strmid(str,i,1))
+
+	;; Scale matrix used in AIR (image sized to smallest voxel dimension)
+	;; ------------------------------------------------------------------
+	minvox = MIN([a.std.x_size, a.std.y_size, a.std.z_size])
+	sxoom = a.std.x_size/minvox
+	syoom = a.std.y_size/minvox
+	szoom = a.std.z_size/minvox
+	SCALE = [[sxoom,0,0,0], $
+		 	 [0,syoom,0,0], $
+			 [0,0,szoom,0], $
+			 [0,0,0,1]]
+
+	;; Compute Transformation Matrix, AIRMAT, where:
+	;;		[AIRMAT] * [SCALE] * [STDMAT] = [RESMAT]
+	;;		AIRMAT ## SCALE ## STDMAT = RESMAT	(with arrays in conventional AIR ordering)
+	;;		AIRMAT ## (SCALE ## STDMAT) = RESMAT
+	;;		AIRMAT = RESMAT ## invert(SCALE ## STDMAT)
+	;; ------------------------------------------------------------------
+	AIRMAT = RESMAT ## invert(SCALE ## STDMAT)
+	AIRMAT = AIRMAT / AIRMAT[3,3]
+
+	print,'Computed RESMAT'
+	print, AIRMAT ## SCALE ## STDMAT
+
+	;; Air Matrix is rotated prior to saving in AIR file
+	a.e = ROTATE(AIRMAT, 4)
+	print,'Transform'
+	print,ROTATE(a.e, 4)
+
+	;; Write the AIR file
+	;; ----------------------
+	openw,lu,airfile,/get_lun
+	writeu,lu,a
+	close,lu
+	free_lun,lu
+	print, 'AIR file: ', airfile
+	print, 'Comment:  ', string(a.comment)
+
+END
+@

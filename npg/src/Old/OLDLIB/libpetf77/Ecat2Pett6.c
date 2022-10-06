@@ -1,0 +1,267 @@
+/*$Id: Ecat2Pett6.c,v 1.2 1995/10/31 14:54:09 tom Exp $*/
+/*$Log: Ecat2Pett6.c,v $
+ * Revision 1.2  1995/10/31  14:54:09  tom
+ * remove petutil parent directory from include statements
+ *
+ * Revision 1.1  1995/10/09  17:20:43  ty7777
+ * Initial revision
+ **/
+
+#ifndef lint
+static char sccsid[]="@(#)Ecat2Pett6.c	10/09/92  Copyright Neural Pet Group, Washington University 1992";
+#endif
+
+static char rcsid []	= "$Header: /home/npggw/tom/src/libpetf77/RCS/Ecat2Pett6.c,v 1.2 1995/10/31 14:54:09 tom Exp $";
+
+/*___________________________________________________________________________________
+	File Name:	Ecat2Pett6.c
+
+	Function Name:	Ecat2Pett6
+
+	Arguments:	fptr,		Pointer to a MatrixFile structure.
+					Get this pointer before calling
+					with matrixx_open () function from 
+					the CTI library. Free memory after
+					the pointer is not used anymore.
+			scale_factor,	Multiplied times each pixel.
+			pett6_header,	Pointer to a PETT6HDR structure.
+					Allocate memory before calling.
+			slice_data,	Pointer to a short integer array.
+					Allocate memory before calling.
+			num_slices,	number of slices in image.
+			matval,		structure containing information of
+					frame, plane, gate, data, and bed.
+	Return Value:	SUCCEED: successful; FAIL: failed.
+
+	Description:	Read a slice of ECAT image and fill the fields of a PETT6HDR 
+			structure with either default information or information from 
+			the ECAT main header and the ECAT image subheader.
+
+	Called by:	getimage.c in this library.
+			ecat2pett6.c in the program "ecat2pett6".
+
+	Calling:	FillHeaderPett6 (), ieee2pe (), itoa (), mat_numcod (), 
+			matrixx_read ().
+	 
+	Author:		Tom Yang
+
+	Date:		04/10/1992
+___________________________________________________________________________________*/
+
+#include <stdio.h>
+#include <math.h>
+#include <matrix_64.h>
+#include <petutil.h>
+#include <pettable.h>
+
+#define	MAX_YEAR_LEN		4
+
+int Ecat2Pett6 (fptr, scale_factor, pett6_header, slice_data, num_slices, matval)
+MatrixFile	*fptr;
+float		scale_factor;
+PETT6HDR	*pett6_header;
+short		*slice_data;
+short		num_slices;
+struct Matval	matval;
+{
+	MatrixData	*matrix_read ();
+	int		mat_numcod ();
+
+	COMMENT_INFO		comment_info_data;
+	Main_header		*main_header;
+	Main_header_64		main_header64;
+	MatDirNode		*node;
+	MatrixData		*matrix_data;
+	MatrixData		*volume;
+	Image_subheader		*image_subheader;
+	Image_subheader_64	image_subheader64;
+	char			day [MAX_YEAR_LEN + 1];
+	char			filter_params [FILTER_PARAMS_LEN + 1];
+	char			month [MAX_YEAR_LEN + 1];
+	char			year [MAX_YEAR_LEN + 1];
+	int			dimension;
+	int			filter_name_index;
+	int			frame_duration;
+	int			i;
+	int			matnum;
+	int			slice_index;
+	float			decay;
+	float			ecat_calibration_fctr;
+	float			quant_factor;
+	short			*raw_slice_data;
+
+	/*
+	 * Get the fields filled for the MatrixData structure.
+	 */
+	main_header	= fptr->mhptr;
+	mh64_convert (&main_header64, main_header);
+
+	if (main_header->file_type == PetImage || main_header->file_type == PetVolume
+	|| main_header->file_type == ByteImage || main_header->file_type == ByteVolume
+	|| main_header->file_type == InterfileImage)
+	{
+		if (main_header->file_type == PetVolume)
+		{
+			slice_index	= 0;
+			node = fptr->dirlist->first;
+			while (node && slice_index < matval.plane) 
+			{
+				volume = matrix_read (fptr, node->matnum, MAT_SUB_HEADER);
+
+				for (i = 0; i < volume->zdim && slice_index < matval.plane; i++) 
+				{
+					slice_index++;
+				}
+				if (slice_index < matval.plane)
+					free_matrix_data (volume);
+
+				node = node->next;
+			}
+			if (slice_index == matval.plane)
+			{
+				matrix_data      = matrix_read_slice (fptr, volume, i - 1, 0);
+				free_matrix_data (volume);
+			}
+		}
+		else
+		{
+			matnum		= mat_numcod (matval.frame, matval.plane, 
+						matval.gate, matval.data, matval.bed);
+			matrix_data	= matrix_read (fptr, matnum, main_header64.data_type);
+		}
+		if (matrix_data == NULL)
+			return FAIL;
+
+		image_subheader	= (Image_subheader *) matrix_data->shptr;
+		ih64_convert (&image_subheader64, image_subheader, main_header);
+
+		raw_slice_data	= (short *) matrix_data->data_ptr;
+
+		/*
+	 	 * Get the information in comment if there is any.
+	 	 */
+		comment_info (main_header64.study_description, &comment_info_data);
+
+		/*
+	 	 * Fill the PETT6HDR header with the necessary information.
+	 	 */
+		FillHeaderPett6 (pett6_header);
+
+		pett6_header->scan_time	= image_subheader64.frame_duration 
+						/ MILISECONDS_PER_SECOND,
+
+		itoa (main_header64.scan_start_day, day);
+		itoa (main_header64.scan_start_month, month);
+		itoa (main_header64.scan_start_year, year);
+
+		/*
+		 * Find the date. Check for single or double digit.
+		 */
+		if (strlen (month) == 1)
+		{
+			pett6_header->date[0]	= '0';
+			pett6_header->date[1]	= month[0];
+		}
+		else
+		{
+			pett6_header->date[0]	= month[0];
+			pett6_header->date[1]	= month[1];
+		}
+
+		if (strlen (day) == 1)
+		{
+			pett6_header->date[2]	= '0';
+			pett6_header->date[3]	= day[0];
+		}
+		else
+		{
+			pett6_header->date[2]	= day[0];
+			pett6_header->date[3]	= day[1];
+		}
+
+		if (strlen (year) == 2)
+		{
+			pett6_header->date[4]	= year[0];
+			pett6_header->date[5]	= year[1];
+		}
+		else
+		{
+			pett6_header->date[4]	= year[2];
+			pett6_header->date[5]	= year[3];
+		}
+
+		/*
+		 * Convert decay constant to PE representation.
+		 */
+		decay	= log (2.0) / main_header64.isotope_halflife;
+		pett6_header->decay_constant	= ieee2pe (&decay); 
+
+		pett6_header->slice_number	= matval.plane;
+
+		/*
+		 * Get the compound name.
+		 */
+		for (i = 0; i < PETT6_COMPOUND_LEN; i++)
+			pett6_header->compound [i]	
+				= main_header64.radiopharmaceutical [i];
+
+		pett6_header->number_of_slices	= num_slices;
+		pett6_header->file_type		= ECAT_FILE_TYPE;
+		if (image_subheader64.filter_code < GAUSSIAN_FILTER_CODE - 1)
+			filter_name_index	= image_subheader64.filter_code;
+		else if (image_subheader64.filter_code >= GAUSSIAN_FILTER_CODE - 1 &&
+			image_subheader64.filter_code < BUTTERWORTH_FILTER_CODE - 1)
+			filter_name_index	= GAUSS_INDEX;
+		else 
+			filter_name_index	= BUTTERWORTH_INDEX;
+		if (filter_name_index < 0)
+		{
+			filter_name_index	= RAMP_INDEX;
+		}
+		strcpy (pett6_header->filter, filterTable [filter_name_index]);	
+		sprintf (filter_params, "%5f", image_subheader64.filter_params [0]);
+
+		/*
+		 * Filter name.
+		 */
+		for (i = 0; i < FILTER_PARAMS_LEN; i++)
+			pett6_header->filter[FILTER_NAME_LEN + i]	
+				= filter_params [i]; 
+
+		/*
+		 * Factor multiplied to ecah pixel value.
+		 */
+		if (image_subheader64.frame_duration != 0)
+			frame_duration	= image_subheader64.frame_duration;
+		else	
+			frame_duration	= DEFAULT_FRAME_DURATION;
+		if (pkg_abs (image_subheader64.ecat_calibration_fctr) >= ERROR_BOUND)
+			ecat_calibration_fctr	= image_subheader64.ecat_calibration_fctr;
+		else	
+			ecat_calibration_fctr	= DEFAULT_CALIBRATION_FACTOR;
+		if (main_header->system_type == SYSTEM_TYPE_961)
+			quant_factor	= image_subheader64.quant_scale * ecat_calibration_fctr
+					* scale_factor;
+		else
+			quant_factor	= image_subheader64.quant_scale * ecat_calibration_fctr
+					* frame_duration * scale_factor;
+
+		dimension	= image_subheader64.dimension_1 * image_subheader64.dimension_2;
+
+		if (!(comment_info_data.xflip_flag || comment_info_data.pett6_flag))
+		{
+			reflection (image_subheader64.dimension_1, 
+			image_subheader64.dimension_2, raw_slice_data);
+		}
+		pett6_header->ecat_orientation	= 1;
+
+		for (i = 0; i < dimension; i++)
+		{
+			slice_data [i]	= ROUND (raw_slice_data [i] * quant_factor);
+		}
+
+		free_matrix_data (matrix_data);
+	}
+
+	return SUCCEED;
+}

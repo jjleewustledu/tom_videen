@@ -1,0 +1,255 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2004.02.20.14.15.22;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.27.17.49.11;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.02.01.19.30.57;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@/*	$Log: slicenrm.c,v $
+ * Revision 1.2  2002/11/27  17:49:11  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/02/01  19:30:57  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			slicenrm.c
+ *	Date:			Jan 1999
+ *	Author:			Tom Videen
+ *	Description:	Normalize all slices of an Analyze image so that pixels
+ *					initially in the range MIN<=pix<=MAX have a mean value of NORM
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/slicenrm/RCS/slicenrm.c,v 1.2 2002/11/27 17:49:11 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			slicenrm
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	int             slice_normalize ();
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;		 /* input file */
+	char           *img2, *hdr2;		 /* output files */
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+	long            i, j, k;
+	short           min, max;		 /* include all <= or >= these pixel values */
+	short           val;			 /* normalize to this value */
+	short        ***img;			 /* image */
+	short          *row;			 /* single row of input image */
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 8) {
+		printf ("Usage: slicenrm img1 hdr1 img2 hdr2 min max normval\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	min = atoi (argv[5]);
+	max = atoi (argv[6]);
+	val = atoi (argv[7]);
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [slicenrm]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [slicenrm]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [slicenrm]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [slicenrm]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [slicenrm]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+/*
+ *	Read img
+ */
+
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [slicenrm]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+    if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+        fprintf (stderr, "ERROR [slicenrm]: Cannot calloc img\n");
+        return (ERROR);
+    }
+	if (NULL == (row = (short *) calloc (dim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [slicenrm]: Cannot calloc memory for row\n");
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			(void) fread (row, dim1 * 2, 1, fd_img);
+			for (k = 1; k <= dim1; k++)
+				img[i][j][dim1 - (k - 1)] = row[k - 1];
+		}
+	}
+	(void) fclose (fd_img);
+	free (row);
+
+	if ((slice_normalize (img, min, max, val, dim1, dim2, dim3)) == ERROR) {
+		fprintf (stderr, "ERROR [slicenrm]: in slice_normalize\n");
+		return (ERROR);
+	}
+
+/*
+ * Write to output file
+ */
+
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [slicenrm]: Unable to create ANALYZE header %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fd_img = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [slicenrm]: Unable to create ANALYZE image %s\n", img2);
+		return (ERROR);
+	}
+	if (NULL == (row = (short *) calloc (dim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [slicenrm]: Cannot calloc memory for row\n");
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			for (k = 1; k <= dim1; k++)
+				row[k-1] = img[i][j][dim1 - (k - 1)];
+			(void) fwrite (row, dim1 * 2, 1, fd_img);
+		}
+	}
+	free (row);
+
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [slicenrm]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+
+	(void) fclose (fd_hdr);
+	(void) fclose (fd_img);
+/*
+ *	Free & Exit
+ */
+
+	printf ("Converted: %s to %s\n", img1, img2);
+	free_s3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jan-99
+d16 1
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/slicenrm/RCS/slicenrm.c,v 1.1 1999/02/01 19:30:57 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/slicenrm/RCS/slicenrm.c,v 1.1 1999/01/27 20:00:45 tom Exp $";
+d18 1
+a18 1
+#include <string.h>
+a20 1
+#include <libimage.h>
+a22 1
+#include <matrixlib.h>
+d93 1
+a93 1
+	fclose (fd_hdr);
+d113 1
+a113 1
+			fread (row, dim1 * 2, 1, fd_img);
+d118 1
+a118 1
+	fclose (fd_img);
+d146 1
+a146 1
+			fwrite (row, dim1 * 2, 1, fd_img);
+d156 2
+a157 2
+	fclose (fd_hdr);
+	fclose (fd_img);
+@

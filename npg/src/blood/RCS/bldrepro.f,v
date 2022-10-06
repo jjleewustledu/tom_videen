@@ -1,0 +1,685 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.16.38.58;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.12.16.20.21.58;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.06.06.17.59.32;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.05.10.16.13.20;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.10.14.20.52.38;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.10.12.16.17.30;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@bldrepro.f initial checking in.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@C$Header: /home/npggw/tom/src/blood/RCS/bldrepro.f,v 1.5 2002/12/16 20:21:58 tom Exp tom $
+C$Log: bldrepro.f,v $
+c Revision 1.5  2002/12/16  20:21:58  tom
+c change FORMAT I to I3
+c
+CRevision 1.4  2001/06/06 17:59:32  tom
+Cadd ntypes 7-9 for steady-state and steady-inhalation oxygen methods
+C
+c Revision 1.3  1995/05/10  16:13:20  tom
+c default count time differs for different scanners
+c
+c Revision 1.2  1992/10/14  20:52:38  ty7777
+c Release version of blood.
+c
+c Revision 1.1  1992/10/12  16:17:30  ty7777
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   BLDREPRO.FTN
+C  Author:       Tom O. Videen
+C  Date:         03-Oct-86
+C
+C  History:
+C     Revised 26-Feb-87 by TOV to change header spacing on DTA file;
+C     Revised 24-Aug-87 by TOV to reprocess every curve as soon as
+C        it is read;
+C
+C  Intent:
+C     This subroutine is used for reviewing and reprocessing
+C     an existing DTA file.
+C
+C     The old DTA file is read one curve at a time. The user may:
+C        1) alter points in the curve;
+C        2) add points to the curve;
+C        3) delete points from the curve;
+C        4) shift the times of points in the curve;
+C
+C     For reprocessing, the program computes the counts per second for
+C     each blood sample corrected for decay from the time of sampling,
+C     the volume of the sample used in the well counter, and the
+C     position of the sample in the well counter.
+C
+C     When adding a point, the user enters syringe dry & wet weights,
+C     times drawn & counted, and the counts per n seconds.
+C
+C  Uses BLOOD Subroutines:
+C     BLDSECS:
+C       SECS   - convert time from form MIN.SEC to seconds;
+C       MINUTES  - convert time from seconds to form MIN.SEC;
+C     BLDPARM  - gets scan parameters for each blood curve;
+C     BLDLIST  - writes scan parameters to terminal;
+C     BLDCURVE - writes blood curve values to the terminal;
+C     BLDSAVE  - writes blood curve values to a disk (.DTA) file;
+C     BLDALTER - alter a point in a blood curve;
+C     BLDADDPT - add a point to a blood curve;
+C     BLDDELPT - delete a point from a blood curve;
+C     BLDCALC  - calculate corrected counts for all points in curve;
+C     BLDSHIFT - shift times of a blood curve;
+C
+C  Uses TERMINAL.LIB
+C     GETINT
+C     GETCHAR
+C     YESNO
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+      SUBROUTINE BLDREPRO
+
+      INCLUDE 'blood.inc'
+
+      INTEGER*4    NCURVES, ICURVE, I, M
+      REAL         STARTSEC, LENGTHSEC, MINUTES, SECS
+      CHARACTER*1  CH
+      CHARACTER*80 Q, STR, CHARSET
+      CHARACTER*256 RCSHEADER    ! RCS header information
+
+      LOGICAL*1    ANS, DONE, ALTERED
+
+      RCSHEADER = "$Header: /home/npggw/tom/src/blood/RCS/bldrepro.f,v 1.5 2002/12/16 20:21:58 tom Exp tom $"
+
+      SAVE = .TRUE.
+      DO 10 I = 1, 6
+        SCANNUM(I) = 1
+10    CONTINUE
+
+C  Read the header, the column headings, and the number of blood
+C  curves from the old DTA file and copy them to the new DTA file.
+C  (Note: 8702 and 8703 should correspond to same in BLDNEW.FTN)
+
+8700  FORMAT (A80)
+8702  FORMAT (5X, '  Corrected     Syringe Weight      Sample Time    Measured   Per')
+8703  FORMAT (5X, 'Sec   Counts     Dry      Wet      Drawn  Counted    Counts   Sec')
+8705  FORMAT(I3)
+
+      READ  (OLDDTA, 8700) STR
+      WRITE (DTAFILE,8700) STR
+      READ  (OLDDTA, 8700) STR
+      READ  (OLDDTA, 8700) STR
+      WRITE (DTAFILE,8702)
+      WRITE (DTAFILE,8703)
+      READ  (OLDDTA, 8705) NCURVES
+      WRITE (DTAFILE,8705) NCURVES
+
+C  Select option for varying well count times
+
+      VARYTIME = .FALSE.
+      IF (DEFTIME.EQ.12) THEN
+        Q = 'Were well counter periods other than 12 seconds used'
+      ELSE
+        Q = 'Were well counter periods other than 10 seconds used'
+      ENDIF
+      CALL YESNO (Q, VARYTIME)
+
+C  LOOP for each blood curve
+
+      DO 500 ICURVE = 1, NCURVES
+
+C  Read start time, length of scan, bank pairs, oxygen content
+C  and hematocrit from the old DTA file
+
+8730    FORMAT (4X, I1, ' = ', A)
+        READ (OLDDTA, *) SCANTYPE, SCANID
+
+C    Set ISOTOPE to value corresponding to the scan type
+
+        IF (SCANTYPE .EQ. 4) THEN
+          ISOTOPE = 3
+        ELSE IF (SCANTYPE .EQ. 5) THEN
+          ISOTOPE = 5
+        ELSE IF (SCANTYPE .NE. 6) THEN
+          ISOTOPE = 1
+        ELSE
+          WRITE (USEROUT, *)
+          DO 30  I = 1, 6
+            WRITE (USEROUT, 8730) I, NUCLIDE(I)
+30        CONTINUE
+          WRITE (USEROUT, *)
+          Q = 'Isotope Number'
+          CALL GETINT (Q, ISOTOPE, 1, 6)
+          WRITE (USEROUT, *) 'Isotope = ', NUCLIDE(ISOTOPE)
+        END IF
+
+        READ (OLDDTA, *) STARTSEC, LENGTHSEC
+        SCANSTART  = MINUTES(STARTSEC)
+        SCANLENGTH = MINUTES(LENGTHSEC)
+        READ (OLDDTA, *) BANKPAIRS
+        READ (OLDDTA, *) OXYCONT, HEMATOCRIT
+150     CALL BLDLIST
+        ANS = .FALSE.
+        Q   = 'Redo these values'
+        CALL YESNO (Q, ANS)
+        IF (ANS) THEN
+          CALL BLDPARM (ICURVE)
+          GO TO 150
+        END IF
+
+C  Check BLDSAVE.FTN 
+
+        READ (OLDDTA, *) N
+        DO 200 I = 1, N
+          READ (OLDDTA, *) TIMESECS(I), CORCNTS(I), DRYWEIGHT(I), WETWEIGHT(I),
+     &      TIMEDRAW(I), TIMECNT(I), COUNTS(I), COUNTIME(I)
+200     CONTINUE
+
+C  Initialize all array values which were not read
+
+        N = N + 1
+        DO 300 I = N, 200
+          DRYWEIGHT(I) = 0.
+          WETWEIGHT(I) = 0.
+          TIMEDRAW(I)  = 0.
+          TIMESECS(I)  = 0.
+          TIMECNT(I)   = 0.
+          COUNTIME(I)  = 10.
+          COUNTS(I)    = 0
+          CORCNTS(I)   = 0.
+300     CONTINUE
+        DONE    = .TRUE.
+        ALTERED = .FALSE.
+
+C  Reprocess the blood curve before displaying it
+
+        CALL BLDCALC
+
+400     CALL BLDCURVE (DONE)
+
+        IF ((SCANTYPE.EQ.1 .OR. SCANTYPE.EQ.7) .AND. HEMATOCRIT.NE.0.0 .AND. N.GT.2) THEN
+          WRITE (USEROUT, *) 'The last point should be the well counts for plasma.'
+          IF (TIMEDRAW(N - 1) .NE. TIMEDRAW(N - 2)) THEN
+            WRITE(USEROUT,*) 'WARNING: The last 2 points should be whole-blood & plasma counts'
+            WRITE(USEROUT,*) '         sample at the same time!'
+          END IF
+          WRITE (USEROUT, *)
+        END IF
+
+        WRITE (USEROUT, *) 'Curve is shifted by ',NINT(TIMESECS(1)-SECS(TIMEDRAW(1))),'seconds.'
+
+        Q ='Next, Shift, Change point, Add point, Delete point (N,S,C,A,D)'
+        CHARSET = 'NSCADnscad'
+        CH = 'N'
+        CALL GETCHAR (Q, CH, CHARSET)
+        IF (CH .EQ. 'C' .OR. CH .EQ. 'c') THEN
+          Q = 'Change point #'
+          M = N - 1
+          CALL GETINT (Q, M, 1, N - 1)
+          CALL BLDALTER (M)
+          ALTERED = .TRUE.
+          GO TO 400
+        ELSE IF (CH .EQ. 'S' .OR. CH .EQ. 's') THEN
+          CALL BLDSHIFT
+          GO TO 400
+        ELSE IF (CH .EQ. 'A' .OR. CH .EQ. 'a') THEN
+          Q = 'Add a point BEFORE point #'
+          M = N
+          CALL GETINT (Q, M, 1, N)
+          CALL BLDADDPT (M)
+          ALTERED = .TRUE.
+          GO TO 400
+        ELSE IF (CH .EQ. 'D' .OR. CH .EQ. 'd') THEN
+          Q = 'Delete point #'
+          M = N - 1
+          CALL GETINT (Q, M, 1, M)
+          CALL BLDDELPT (M)
+          GO TO 400
+        END IF
+
+C  If any points have been added or altered, reprocess all
+C  points before saving the curve and be sure all points
+C  are shifted by the appropriate amount.
+
+        IF (ALTERED) THEN
+          CALL BLDCALC
+          CALL BLDSHIFT
+        END IF
+        CALL BLDSAVE (ICURVE)
+        SCANNUM(SCANTYPE) = SCANNUM(SCANTYPE) + 1
+500   CONTINUE
+
+      RETURN
+      END
+@
+
+
+1.5
+log
+@change FORMAT I to I3
+@
+text
+@d1 1
+a1 1
+C$Header: /home/tom/src/blood/RCS/bldrepro.f,v 1.4 2001/06/06 17:59:32 tom Exp tom $
+d3 3
+d80 1
+a80 1
+      RCSHEADER = "$Header: /home/tom/src/blood/RCS/bldrepro.f,v 1.4 2001/06/06 17:59:32 tom Exp tom $"
+@
+
+
+1.4
+log
+@add ntypes 7-9 for steady-state and steady-inhalation oxygen methods
+@
+text
+@d1 1
+a1 1
+C$Header: /home/npggw/tom/src/blood/RCS/bldrepro.f,v 1.3 1995/05/10 16:13:20 tom Exp tom $
+d3 3
+d77 1
+a77 1
+      RCSHEADER = "$Header: /home/npggw/tom/src/blood/RCS/bldrepro.f,v 1.3 1995/05/10 16:13:20 tom Exp tom $"
+d91 1
+a91 1
+8705  FORMAT(I)
+@
+
+
+1.3
+log
+@default count time differs for different scanners
+@
+text
+@d1 1
+a1 1
+C$Header: /home/npggw/tom/src/blood/RCS/bldrepro.f,v 1.2 1992/10/14 20:52:38 ty7777 Exp tom $
+d3 3
+a11 1
+C
+a14 1
+C
+d61 1
+a61 1
+C
+d63 1
+a63 1
+C
+d65 1
+a65 1
+C
+d68 1
+a68 1
+      CHARACTER*1  BELL, CH
+a72 4
+C
+C  Initializations
+C
+      RCSHEADER = "$Header$"
+d74 2
+a75 1
+      BELL = CHAR (7)
+d78 1
+a78 1
+        SCANNUM (I) = 1
+d80 1
+a80 1
+C
+d84 1
+a84 1
+C
+d86 2
+a87 4
+8702  FORMAT (7X, 'Corrected     Syringe Weight', 6X,
+     2   'Sample Time    Measured   Per')
+8703  FORMAT (5X, 'Sec   Counts     Dry      Wet', 6X,
+     2   'Drawn  Counted    Counts   Sec')
+d89 10
+a98 10
+C
+      READ (OLDDTA, 8700) STR
+      WRITE (DTAFILE, 8700) STR
+      READ (OLDDTA, 8700) STR
+      READ (OLDDTA, 8700) STR
+      WRITE (DTAFILE, 8702)
+      WRITE (DTAFILE, 8703)
+      READ (OLDDTA, 8705) NCURVES
+      WRITE (DTAFILE, 8705) NCURVES
+C
+d100 1
+a100 1
+C
+d108 1
+a108 1
+C
+d110 1
+a110 1
+C
+d112 1
+a112 1
+C
+d115 1
+a115 3
+C
+8710    FORMAT (I, A4)
+8720    FORMAT (2F)
+a116 1
+C        READ (OLDDTA, 8710) SCANTYPE, SCANID
+d118 1
+a118 1
+C
+d120 2
+a121 4
+C
+        IF (SCANTYPE .LE. 3) THEN
+          ISOTOPE = 1
+        ELSE IF (SCANTYPE .EQ. 4) THEN
+d125 2
+d130 1
+a130 1
+            WRITE (USEROUT, 8730) I, NUCLIDE (I)
+d135 1
+a135 1
+          WRITE (USEROUT, *) 'Isotope = ', NUCLIDE (ISOTOPE)
+d137 1
+a137 2
+C
+C        READ (OLDDTA, 8720) STARTSEC, LENGTHSEC
+d139 2
+a140 4
+        SCANSTART  = MINUTES (STARTSEC)
+        SCANLENGTH = MINUTES (LENGTHSEC)
+C        READ (OLDDTA, 8720) BANKPAIRS
+C        READ (OLDDTA, 8720) OXYCONT, HEMATOCRIT
+d151 3
+a153 3
+C
+C  Check BLDSAVE.FTN for changes in format 8740
+C
+d156 2
+a157 5
+C          READ (OLDDTA, 8740) TIMESECS (I), CORCNTS (I), DRYWEIGHT (I),
+C     2      WETWEIGHT (I), TIMEDRAW (I), TIMECNT (I), COUNTS (I), COUNTIME (I)
+          READ (OLDDTA, *) TIMESECS (I), CORCNTS (I), 
+     2	    DRYWEIGHT (I), WETWEIGHT (I), TIMEDRAW (I), 
+     3      TIMECNT (I), COUNTS (I), COUNTIME (I)
+d159 1
+a159 2
+8740    FORMAT (6F, I, F)
+C
+d161 1
+a161 1
+C
+d164 8
+a171 8
+          DRYWEIGHT (I) = 0.
+          WETWEIGHT (I) = 0.
+          TIMEDRAW (I)  = 0.
+          TIMESECS (I)  = 0.
+          TIMECNT (I)   = 0.
+          COUNTIME (I)  = 10.
+          COUNTS (I)    = 0
+          CORCNTS (I)   = 0.
+d175 1
+a175 1
+C
+d177 1
+a177 1
+C
+d179 1
+a179 1
+C
+d181 6
+a186 9
+C
+        IF (SCANTYPE .EQ. 1 .AND. 
+     2	  HEMATOCRIT .NE. 0.0 .AND. N .GT. 2) THEN
+          WRITE (USEROUT, *) 'The last point should be the well ',
+     2      'counts for plasma.'
+          IF (TIMEDRAW (N - 1) .NE. TIMEDRAW (N - 2)) THEN
+            WRITE (USEROUT, *) '*** WARNING: THE LAST TWO POINTS ',
+     2        'SHOULD BE WHOLE BLOOD & PLASMA COUNTS'
+            WRITE (USEROUT, *) '             TAKEN AT THE SAME TIME',BELL
+d190 4
+a193 6
+C
+        WRITE (USEROUT, *) 'Curve is shifted by ',
+     2   NINT (TIMESECS (1) - SECS (TIMEDRAW (1))), ' seconds.'
+C
+        Q ='Next, Shift, Change point, Add point, '//
+     2     'Delete point (N,S,C,A,D)'
+d221 1
+a221 1
+C
+d225 1
+a225 1
+C
+d231 1
+a231 1
+        SCANNUM (SCANTYPE) = SCANNUM (SCANTYPE) + 1
+d233 1
+a233 1
+C
+@
+
+
+1.2
+log
+@Release version of blood.
+@
+text
+@d1 1
+a1 1
+C$Header: /home/petsun4/ty7777/src/blood/RCS/bldrepro.f,v 1.1 1992/10/12 16:17:30 ty7777 Exp ty7777 $
+d3 3
+a62 1
+C
+d69 2
+d75 2
+d106 5
+a110 1
+      Q = 'Were well counter periods other than 10 seconds used'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+C$Header$
+C$Log$
+d63 5
+a67 5
+      INTEGER*4    NCURVES,ICURVE,I,M
+      REAL         STARTSEC,LENGTHSEC,MINUTES,SECS
+      CHARACTER*1  BELL,CH
+      CHARACTER*80 Q,STR,CHARSET
+      LOGICAL*1    ANS,DONE,ALTERED
+d71 1
+a71 1
+      BELL = CHAR(7)
+d73 2
+a74 2
+      DO 10 I=1,6
+        SCANNUM(I) = 1
+d81 2
+a82 2
+8700  FORMAT(A80)
+8702  FORMAT(7X,'Corrected     Syringe Weight',6X,
+d84 1
+a84 1
+8703  FORMAT(5X,'Sec   Counts     Dry      Wet',6X,
+d88 8
+a95 8
+      READ(OLDDTA,8700) STR
+      WRITE(DTAFILE,8700) STR
+      READ(OLDDTA,8700) STR
+      READ(OLDDTA,8700) STR
+      WRITE(DTAFILE,8702)
+      WRITE(DTAFILE,8703)
+      READ(OLDDTA,8705) NCURVES
+      WRITE(DTAFILE,8705) NCURVES
+d101 1
+a101 1
+      CALL YESNO(Q,VARYTIME)
+d105 1
+a105 1
+      DO 500 ICURVE=1,NCURVES
+d110 5
+a114 4
+8710    FORMAT(I,A4)
+8720    FORMAT(2F)
+8730    FORMAT(4X,I1,' = ',A)
+        READ(OLDDTA,8710) SCANTYPE,SCANID
+d118 1
+a118 1
+        IF (SCANTYPE.LE.3) THEN
+d120 1
+a120 1
+        ELSE IF (SCANTYPE.EQ.4) THEN
+d122 1
+a122 1
+        ELSE IF (SCANTYPE.EQ.5) THEN
+d125 3
+a127 3
+          WRITE(USEROUT,*)
+          DO 30  I=1,6
+            WRITE(USEROUT,8730) I,NUCLIDE(I)
+d129 1
+a129 1
+          WRITE(USEROUT,*)
+d131 2
+a132 2
+          CALL GETINT(Q,ISOTOPE,1,6)
+          WRITE(USEROUT,*) 'Isotope = ',NUCLIDE(ISOTOPE)
+d135 8
+a142 5
+        READ(OLDDTA,8720) STARTSEC,LENGTHSEC
+        SCANSTART = MINUTES(STARTSEC)
+        SCANLENGTH= MINUTES(LENGTHSEC)
+        READ(OLDDTA,8720) BANKPAIRS
+        READ(OLDDTA,8720) OXYCONT,HEMATOCRIT
+d145 2
+a146 2
+        Q = 'Redo these values'
+        CALL YESNO(Q,ANS)
+d148 1
+a148 1
+          CALL BLDPARM(ICURVE)
+d154 7
+a160 4
+        READ(OLDDTA,*) N
+        DO 200 I=1,N
+          READ(OLDDTA,8740) TIMESECS(I),CORCNTS(I),DRYWEIGHT(I),
+     2      WETWEIGHT(I),TIMEDRAW(I),TIMECNT(I),COUNTS(I),COUNTIME(I)
+d162 1
+a162 1
+8740    FORMAT(6F,I,F)
+d166 10
+a175 10
+        N = N+1
+        DO 300 I=N,200
+          DRYWEIGHT(I) = 0.
+          WETWEIGHT(I) = 0.
+          TIMEDRAW(I) = 0.
+          TIMESECS(I) = 0.
+          TIMECNT(I) = 0.
+          COUNTIME(I) = 10.
+          COUNTS(I) = 0
+          CORCNTS(I) = 0.
+d177 1
+a177 1
+        DONE = .TRUE.
+d184 1
+a184 1
+400     CALL BLDCURVE(DONE)
+d186 3
+a188 2
+        IF (SCANTYPE.EQ.1 .AND. HEMATOCRIT.NE.0.0 .AND. N.GT.2) THEN
+          WRITE(USEROUT,*) 'The last point should be the well ',
+d190 2
+a191 2
+          IF (TIMEDRAW(N-1).NE.TIMEDRAW(N-2)) THEN
+            WRITE(USEROUT,*) '*** WARNING: THE LAST TWO POINTS ',
+d193 1
+a193 1
+            WRITE(USEROUT,*) '             TAKEN AT THE SAME TIME',BELL
+d195 1
+a195 1
+          WRITE(USEROUT,*)
+d198 2
+a199 2
+        WRITE(USEROUT,*) 'Curve is shifted by ',
+     2   NINT(TIMESECS(1)-SECS(TIMEDRAW(1))),' seconds.'
+d205 2
+a206 2
+        CALL GETCHAR(Q,CH,CHARSET)
+        IF (CH.EQ.'C' .OR. CH.EQ.'c') THEN
+d208 3
+a210 3
+          M = N-1
+          CALL GETINT(Q,M,1,N-1)
+          CALL BLDALTER(M)
+d213 1
+a213 1
+        ELSE IF (CH.EQ.'S' .OR. CH.EQ.'s') THEN
+d216 1
+a216 1
+        ELSE IF (CH.EQ.'A' .OR. CH.EQ.'a') THEN
+d219 2
+a220 2
+          CALL GETINT(Q,M,1,N)
+          CALL BLDADDPT(M)
+d223 1
+a223 1
+        ELSE IF (CH.EQ.'D' .OR. CH.EQ.'d') THEN
+d225 3
+a227 3
+          M = N-1
+          CALL GETINT(Q,M,1,M)
+          CALL BLDDELPT(M)
+d239 2
+a240 2
+        CALL BLDSAVE(ICURVE)
+        SCANNUM(SCANTYPE) = SCANNUM(SCANTYPE) + 1
+@

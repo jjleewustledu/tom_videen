@@ -1,0 +1,882 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2002.02.27.18.11.36;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.07.21.21.35.17;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.03.03.22.12.36;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.03.03.22.08.19;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.02.09.19.50.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@original
+@
+
+
+1.5
+log
+@lint cleaning
+@
+text
+@/* @@(#)makefilter.c	1.2 6/6/91 */
+
+/*  makefilter.c : Make the frequency filter */
+
+/* Revision Log */
+
+/*
+	19-nov-1989	p. luk	original version
+	02-may-1991	p. luk	add scatter correction filter
+	20-sep-1991	p. luk	add shepp filter
+	20-mar-1992	p. luk	modified ramp now uses CSPI ssl calls
+	19-apr-1992	p. luk	add support for modified ramp based shepp
+				and butterworth filters
+*/
+
+#include <math.h>
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/bkproj_sun/RCS/makefilter.c,v 1.4 1998/07/21 21:35:17 tom Exp $";
+
+#define	NO_FILTER	0
+#define	RAMP		1
+#define	BUTTERWORTH	2
+#define	HANN		3
+#define	HAMMING		4
+#define	PARZEN		5
+#define	SHEPP		6
+#define EXP		7
+#define SCATTER		16
+#define ADD_SCATTER	17
+
+int makefilter (nprojs, fx, fcode, fpars, buf1, buf2)
+	int             fcode, nprojs;
+	float          *fx, fpars[], *buf1, *buf2;
+
+{
+	int             i, retcode;
+	float          *ptr;
+
+	static void			ramp();
+	static void			xramp();
+	static void			hamm();
+	static void			hann();
+	static void			butter();
+	static void			parz();
+	static void			shepp();
+	static void			add_scatter();
+	static void			exp_filter();
+	static void			scatter_correction();
+
+	retcode = 1;
+	switch (fcode) {
+	case NO_FILTER:
+		printf ("makefilter: no filter specified\n");
+		ptr = fx;
+		for (i = 0; i < nprojs / 2; i++) {
+			*ptr++ = 1.0;
+			*ptr++ = 0.0;
+		}
+		fx[1] = 1.0;
+		break;
+	case RAMP:
+		ramp (fx, fpars, nprojs);
+		break;
+	case BUTTERWORTH:
+		ramp (fx, fpars, nprojs);
+		butter (fx, fpars, nprojs);
+		break;
+	case HANN:
+		ramp (fx, fpars, nprojs);
+		hann (fx, fpars, nprojs);
+		break;
+	case HAMMING:
+		ramp (fx, fpars, nprojs);
+		hamm (fx, fpars, nprojs);
+		break;
+	case PARZEN:
+		ramp (fx, fpars, nprojs);
+		parz (fx, fpars, nprojs);
+		break;
+	case SHEPP:
+		ramp (fx, fpars, nprojs);
+		shepp (fx, fpars, nprojs);
+		break;
+	case EXP:
+		exp_filter (fx, fpars, nprojs);
+		break;
+	case -RAMP:
+		xramp (fx, fpars, nprojs, buf1, buf2);
+		break;
+	case -BUTTERWORTH:
+		xramp (fx, fpars, nprojs, buf1, buf2);
+		butter (fx, fpars, nprojs);
+		break;
+	case -HANN:
+		xramp (fx, fpars, nprojs, buf1, buf2);
+		hann (fx, fpars, nprojs);
+		break;
+	case -HAMMING:
+		xramp (fx, fpars, nprojs, buf1, buf2);
+		hamm (fx, fpars, nprojs);
+		break;
+	case -PARZEN:
+		xramp (fx, fpars, nprojs, buf1, buf2);
+		parz (fx, fpars, nprojs);
+		break;
+	case -SHEPP:
+		xramp (fx, fpars, nprojs, buf1, buf2);
+		shepp (fx, fpars, nprojs);
+		break;
+	case -EXP:
+		exp_filter (fx, fpars, nprojs);
+		break;
+	case SCATTER:
+		ptr = fx;
+		for (i = 0; i < nprojs / 2; i++) {
+			*ptr++ = 1.0;
+			*ptr++ = 0.0;
+		}
+		scatter_correction (fx, fpars, nprojs);
+		break;
+	case ADD_SCATTER:
+		ptr = fx;
+		for (i = 0; i < nprojs / 2; i++) {
+			*ptr++ = 1.0;
+			*ptr++ = 0.0;
+		}
+		add_scatter (fx, fpars, nprojs);
+		break;
+	default:
+		retcode = 0;
+		break;
+	}					 /* end switch */
+	return retcode;
+}
+
+static int      tramp_size = 0;
+
+#define MAXFFT 2048
+
+static void xramp (fx, fpars, nprojs, tramp, h)
+	float          *fx, fpars[], *tramp, *h;
+	int             nprojs;
+{
+	int             i, n;
+	float           tau, ra;
+	int				xfrf_();
+
+	if (tramp_size != nprojs) {
+		tau = 1.0;			 /* cm */
+		n = nprojs / 2;
+
+		for (i = 0; i < nprojs; i++)
+			h[i] = 0.0;		 /* h[even] = 0.0 */
+		h[n] = 1.0 / (4 * tau * tau);	 /* h[0] */
+		for (i = 1; i < n; i += 2)
+			h[n - i] = h[n + i] = -1.0 / (((float) i * M_PI * tau) * ((float) i * M_PI * tau));
+		xfrf_ (tramp, &ra, h, &n);
+		/* xldone_(tramp) ; */
+		for (i = 0; i < n; i++) {
+			tramp[2 * i] = 0.5 * sqrt ((double) (tramp[2 * i] * tramp[2 * i] +
+							     tramp[2 * i + 1] * tramp[2 * i + 1]));
+			tramp[2 * i + 1] = 0.0;
+		}
+		tramp[1] = 0.5 * ra;
+		tramp_size = nprojs;
+	}
+	for (i = 0; i < nprojs; i++)
+		fx[i] = (((float) (i >> 1) * 0.5 / (float) n > fpars[0]) ? 0.0 : tramp[i]);
+}
+
+static void ramp (fx, fpars, nprojs)
+	float          *fx, fpars[];
+	int             nprojs;
+
+{
+	int             i;
+	float          *ptr;
+	float           cutoff, dc_component, ramp_slope, v;
+
+	cutoff = (fpars[0] == 0.0) ? 0.5 : fpars[0];
+	dc_component = fpars[1];
+	ramp_slope = (fpars[2] == 0.0) ? 0.5 : fpars[2];
+	v = ramp_slope / (float) (nprojs / 2);
+
+	fx[0] = dc_component * v;
+	fx[1] = (ramp_slope <= cutoff) ? ramp_slope : 0.0;
+	ptr = fx + 2;
+	for (i = 1; i < nprojs / 2; i++) {
+		*ptr++ = ((float) i * v <= cutoff) ? (float) i *v : 0.0;
+		*ptr++ = 0.0;
+	}
+}
+
+static void hann (fx, fpars, nprojs)
+	float          *fx, fpars[];
+	int             nprojs;
+{
+	int             i;
+
+	fx[1] *= 0.5 * (1.0 + cos (M_PI * fx[1] / fpars[0]));
+	for (i = 1; i < nprojs / 2; i++) {
+		fx[2 * i] *= 0.5 * (1.0 + cos (M_PI * fx[2 * i] / fpars[0]));
+	}
+}
+
+static void hamm (fx, fpars, nprojs)
+	float          *fx, fpars[];
+	int             nprojs;
+{
+	int             i;
+
+	fx[1] *= 0.54 + 0.46 * cos (M_PI * fx[1] / fpars[0]);
+	for (i = 1; i < nprojs / 2; i++)
+		fx[2 * i] *= 0.54 + 0.46 * cos (M_PI * fx[2 * i] / fpars[0]);
+}
+
+static void parz (fx, fpars, nprojs)
+	float          *fx, fpars[];
+	int             nprojs;
+{
+	int             i;
+	float           q;
+
+	q = fx[1] / fpars[0];
+	fx[1] *= (q < 0.5) ? 1.0 - 6.0 * q * q * (1.0 - q) :
+		2.0 * (1.0 - q) * (1.0 - q) * (1.0 - q);
+
+	for (i = 1; i < nprojs / 2; i++) {
+		q = fx[2 * i] / fpars[0];
+		fx[2 * i] *= (q < 0.5) ? 1.0 - 6.0 * q * q * (1.0 - q) :
+			2.0 * (1.0 - q) * (1.0 - q) * (1.0 - q);
+	}
+}
+
+static void shepp (fx, fpars, nprojs)
+	float          *fx, fpars[];
+	int             nprojs;
+{
+	float           cutoff, q;
+	int             i;
+
+	cutoff = fpars[0];
+	if (cutoff <= 0.0)
+		cutoff = 0.5;
+	q = 2.0 * cutoff / M_PI;
+	for (i = 0; i < nprojs / 2; i++) {
+		fx[2 * i] = q * sin ((double) fx[2 * i] / q);
+		if (fx[2 * i] < 0)
+			fx[2 * i] = 0;
+	}
+}
+
+static void butter (fx, fpars, nprojs)
+	float          *fx, fpars[];
+	int             nprojs;
+{
+	static float    xipow ();
+	float           cutoff, x, orderx;
+	int             i;
+
+	cutoff = fpars[4];
+	if (cutoff <= 0.0)
+		cutoff = 0.5;
+	orderx = fpars[3];
+	if (orderx <= 0.0)
+		orderx = 6.0;
+
+	for (i = 0; i < nprojs / 2; i++) {
+		x = 0.5 / ((nprojs - 2) / 2.0);
+		fx[2 * i] *= sqrt (1.0 / (1.0 + xipow (i * x / cutoff, (int) orderx)));
+	}
+}
+
+static float           xipow (x, p)
+	float           x;
+	int             p;
+{
+	float           r = 1.0;
+	int             i;
+
+	for (i = 0; i < p; i++)
+		r = r * x;
+	return r;
+}
+
+static void exp_filter (fx, fpars, nprojs)
+	float          *fx, fpars[];
+	int             nprojs;
+{
+	int             i, pow;
+	float           x, cutoff, xp;
+
+	cutoff = fpars[0];
+	if (cutoff <= 0.0)
+		cutoff = 0.5;
+	pow = (int) fpars[1];
+	if (pow < 1)
+		pow = 1;
+	for (i = 0; i < nprojs / 2; i++) {
+		x = (float) i / (float) (nprojs / 2);
+		xp = xipow (2.0 * x / cutoff, pow);
+		fx[2 * i] = x * exp (-xp);
+		fx[2 * i + 1] = 0.0;
+	}
+	x = 1.0;
+	xp = xipow (2.0 * x / cutoff, pow);
+	fx[1] = x * exp (-xp);
+}
+
+/***********************************/
+static void scatter_correction (fx, fpars, nprojs)
+/***********************************/
+
+	float          *fx,			 /* Filter kernel. */
+	                fpars[];		 /* Filter parameters. */
+	int             nprojs;
+{
+	int             i;
+	float           sf, slope, pix_size;
+	float           v, a2, w2, fmod, aa, freq;
+
+	if (fpars[4] <= 0.0)
+		return;
+	if (fpars[5] <= 0.0)
+		return;
+	sf = fpars[4];
+	slope = fpars[5];
+	pix_size = fpars[6];
+	v = 0.5 / ((float) nprojs / 2.0);
+	a2 = (slope * pix_size) * (slope * pix_size);
+	for (i = 1; i < nprojs / 2; i++) {
+		freq = (float) i *v;
+		w2 = (2 * M_PI * freq) * (2 * M_PI * freq);
+		aa = a2 / (a2 + w2);
+		fmod = 1.0 / (1.0 + sf * (aa - 1.0));
+		fx[2 * i] = fmod;
+	}
+
+	/* last point */
+	freq = 0.5;
+	w2 = (2 * M_PI * freq) * (2 * M_PI * freq);
+	aa = a2 / (a2 + w2);
+	fmod = 1.0 / (1.0 + sf * (aa - 1.0));
+	fx[1] = fmod;
+
+}
+
+static void add_scatter (fx, fpars, nprojs)
+	float          *fx, fpars[];
+	int             nprojs;
+{
+	int             i;
+	float           sf, slope, pix_size;
+	float           v, a2, w2, fmod, aa, freq;
+
+	if (fpars[4] <= 0.0)
+		return;
+	if (fpars[5] <= 0.0)
+		return;
+	sf = fpars[4];
+	slope = fpars[5];
+	pix_size = fpars[6];
+	v = 0.5 / ((float) nprojs / 2.0);
+	a2 = (slope * pix_size) * (slope * pix_size);
+	for (i = 1; i < nprojs / 2; i++) {
+		freq = (float) i *v;
+		w2 = (2 * M_PI * freq) * (2 * M_PI * freq);
+		aa = a2 / (a2 + w2);
+		fmod = 1.0 / (1.0 + sf * (aa - 1.0));
+		fx[2 * i] = 1.0 / fmod;
+	}
+
+	/* last point */
+	freq = 0.5;
+	w2 = (2 * M_PI * freq) * (2 * M_PI * freq);
+	aa = a2 / (a2 + w2);
+	fmod = 1.0 / (1.0 + sf * (aa - 1.0));
+	fx[1] = 1.0 / fmod;
+}
+@
+
+
+1.4
+log
+@Solaris version
+@
+text
+@d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/bkproj_sun/RCS/makefilter.c,v 1.3 1994/03/03 22:12:36 tom Exp tom $";
+d31 1
+a31 1
+makefilter (nprojs, fx, fcode, fpars, buf1, buf2)
+d37 1
+a37 1
+	float          *ptr, temp, x;
+d39 11
+a132 4
+/*
+	for (i=0 ; i<nprojs ; i+=4)
+	    printf("i, fx[i] = %d, %f\n", i, fx[i]) ;
+*/
+d140 1
+a140 1
+xramp (fx, fpars, nprojs, tramp, h)
+d146 1
+d171 1
+a171 1
+ramp (fx, fpars, nprojs)
+d194 1
+a194 1
+hann (fx, fpars, nprojs)
+a198 1
+	float           x;
+d206 1
+a206 1
+hamm (fx, fpars, nprojs)
+a214 1
+
+d217 1
+a217 1
+parz (fx, fpars, nprojs)
+d235 1
+a235 1
+shepp (fx, fpars, nprojs)
+d239 1
+a239 2
+	double          sin ();
+	float           cutoff, q, x;
+d253 1
+a253 1
+butter (fx, fpars, nprojs)
+d257 2
+a258 2
+	double          sqrt ();
+	float           cutoff, x, orderx, xipow ();
+d274 1
+a274 1
+float           xipow (x, p)
+d286 1
+a286 1
+exp_filter (fx, fpars, nprojs)
+d311 1
+a311 1
+scatter_correction (fx, fpars, nprojs)
+d348 1
+a348 1
+add_scatter (fx, fpars, nprojs)
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d18 1
+a18 1
+static char rcsid [] = "$Header: /home/petsun2/tom/src/bkproj_sun/RCS/makefilter.c,v 1.2 1994/03/03 22:08:19 tom Exp tom $";
+d31 3
+a33 1
+makefilter(nprojs, fx, fcode, fpars, buf1, buf2)
+a34 3
+int	fcode, nprojs ;
+float	*fx, fpars[], *buf1, *buf2 ;
+
+d36 2
+a37 2
+int	i, retcode ;
+float	*ptr, temp, x ;
+d39 1
+a39 1
+	retcode = 1 ;
+d41 81
+a121 81
+	  case NO_FILTER :
+	     printf("makefilter: no filter specified\n") ;
+	     ptr = fx ;
+	     for (i=0 ; i<nprojs/2 ; i++) {
+		*ptr++ = 1.0 ;
+		*ptr++ = 0.0 ;
+	     } 
+	     fx[1] = 1.0;
+	     break ;
+	  case RAMP :
+	     ramp(fx, fpars, nprojs) ;
+    	     break ;
+	  case BUTTERWORTH :
+	     ramp(fx, fpars, nprojs) ;
+	     butter(fx, fpars, nprojs ) ;
+	     break ;
+	  case HANN :
+	     ramp(fx, fpars, nprojs) ;
+	     hann(fx, fpars, nprojs) ;
+	     break ;
+	  case HAMMING:
+	     ramp(fx, fpars, nprojs) ;
+	     hamm(fx, fpars, nprojs) ;
+	     break ;
+	  case PARZEN :
+	     ramp(fx, fpars, nprojs) ;
+	     parz(fx, fpars, nprojs) ;
+	     break ;
+	  case SHEPP :
+	     ramp(fx, fpars, nprojs) ;
+	     shepp(fx, fpars, nprojs) ;
+	     break ;
+	  case EXP:
+	     exp_filter(fx, fpars, nprojs);
+	     break;
+	  case -RAMP :
+	     xramp(fx, fpars, nprojs, buf1, buf2) ;
+	     break ;
+	  case -BUTTERWORTH :
+	     xramp(fx, fpars, nprojs, buf1, buf2) ;
+	     butter(fx, fpars, nprojs ) ;
+	     break ;
+	  case -HANN :
+	     xramp(fx, fpars, nprojs, buf1, buf2) ;
+	     hann(fx, fpars, nprojs) ;
+	     break ;
+	  case -HAMMING:
+	     xramp(fx, fpars, nprojs, buf1, buf2) ;
+	     hamm(fx, fpars, nprojs) ;
+	     break ;
+	  case -PARZEN :
+	     xramp(fx, fpars, nprojs, buf1, buf2) ;
+	     parz(fx, fpars, nprojs) ;
+	     break ;
+	  case -SHEPP :
+	     xramp(fx, fpars, nprojs, buf1, buf2) ;
+	     shepp(fx, fpars, nprojs) ;
+	     break ;
+	  case -EXP:
+	     exp_filter(fx, fpars, nprojs);
+	     break;
+	  case SCATTER:
+	     ptr = fx ;
+	     for (i=0 ; i<nprojs/2 ; i++) {
+		*ptr++ = 1.0 ;
+		*ptr++ = 0.0 ;
+	     } 
+	     scatter_correction(fx, fpars, nprojs) ;
+	     break ;
+	  case ADD_SCATTER:
+	     ptr = fx ;
+	     for (i=0 ; i<nprojs/2 ; i++) {
+		*ptr++ = 1.0 ;
+		*ptr++ = 0.0 ;
+	     } 
+	     add_scatter(fx, fpars, nprojs) ;
+	     break ;
+	  default :
+	     retcode = 0 ;
+	     break ;
+	}  /* end switch */
+d126 1
+a126 1
+	return retcode ;
+d129 1
+a129 1
+static int tramp_size=0;
+d133 3
+a135 3
+xramp( fx, fpars, nprojs, tramp, h)
+  float *fx, fpars[], *tramp, *h ;
+  int nprojs;
+d137 2
+a138 2
+	int i,n;
+	float tau, ra ;
+d140 3
+a142 4
+	if (tramp_size != nprojs)
+	{
+	  tau = 1.0; /* cm */
+	  n=nprojs/2;
+d144 14
+a157 15
+	  for (i=0; i<nprojs; i++)
+	    h[i] = 0.0;			/* h[even] = 0.0 */
+	  h[n] = 1.0/(4*tau*tau);		/* h[0] */
+	  for (i=1; i<n; i+=2)
+	    h[n-i] = h[n+i] = -1.0/(((float)i*M_PI*tau)*((float)i*M_PI*tau));
+	  xfrf_( tramp, &ra, h, &n);
+	 /* xldone_(tramp) ; */
+	  for (i=0; i<n; i++)
+	  {
+	    tramp[2*i] = 0.5*sqrt((double)(tramp[2*i]*tramp[2*i]+
+			        tramp[2*i+1]*tramp[2*i+1]));
+	    tramp[2*i+1] = 0.0;
+	  }
+	  tramp[1] = 0.5*ra;
+	  tramp_size = nprojs ;
+d159 2
+a160 2
+	for (i=0; i<nprojs; i++)
+	  fx[i] = (((float)(i>>1)*0.5/(float)n > fpars[0]) ? 0.0 : tramp[i]);
+d163 3
+a165 1
+ramp(fx, fpars, nprojs)
+a166 3
+float	*fx, fpars[] ;
+int	nprojs ;
+
+d168 3
+a170 3
+int	i ;
+float	*ptr ;
+float	cutoff, dc_component, ramp_slope, v ;
+d172 4
+a175 4
+	cutoff = (fpars[0] == 0.0) ? 0.5 : fpars[0] ;
+	dc_component = fpars[1] ;
+	ramp_slope = (fpars[2] == 0.0) ? 0.5 : fpars[2] ;
+	v = ramp_slope/(float)(nprojs/2) ;
+d177 2
+a178 2
+	fx[0] = dc_component * v ;
+	fx[1] = ( ramp_slope <= cutoff) ? ramp_slope : 0.0;
+d180 3
+a182 3
+	for (i=1 ; i<nprojs/2 ; i++) {
+	  *ptr++ = ((float)i*v <= cutoff) ? (float)i*v : 0.0;
+	  *ptr++ = 0.0 ;
+d186 3
+a188 3
+hann( fx, fpars, nprojs)
+  float *fx, fpars[];
+  int nprojs;
+d190 2
+a191 2
+	int i;
+	float x ;
+d193 3
+a195 4
+	fx[1] *= 0.5*(1.0+cos(M_PI*fx[1]/fpars[0])); 
+	for (i=1; i<nprojs/2; i++)
+	{
+	  fx[2*i] *= 0.5*(1.0+cos(M_PI*fx[2*i]/fpars[0]));
+d199 3
+a201 3
+hamm( fx, fpars, nprojs)
+  float *fx, fpars[];
+  int nprojs;
+d203 1
+a203 1
+	int i;
+d205 3
+a207 3
+	fx[1] *= 0.54+0.46*cos(M_PI*fx[1]/fpars[0]);
+	for (i=1; i<nprojs/2; i++)
+	  fx[2*i] *= 0.54+0.46*cos(M_PI*fx[2*i]/fpars[0]);
+d211 3
+a213 3
+parz( fx, fpars, nprojs)
+  float *fx, fpars[];
+  int nprojs;
+d215 2
+a216 2
+	int i;
+	float q;
+d218 3
+a220 3
+	q = fx[1]/fpars[0];
+	fx[1] *= (q<0.5)? 1.0-6.0*q*q*(1.0-q) :
+			     2.0*(1.0-q)*(1.0-q)*(1.0-q);
+d222 4
+a225 4
+	for (i=1; i<nprojs/2; i++)
+	{ q = fx[2*i]/fpars[0];
+	  fx[2*i] *= (q<0.5)? 1.0-6.0*q*q*(1.0-q) :
+			     2.0*(1.0-q)*(1.0-q)*(1.0-q);
+d229 3
+a231 3
+shepp( fx, fpars, nprojs)
+  float *fx, fpars[] ;
+  int nprojs ;
+d233 3
+a235 3
+	double	sin() ;
+	float	cutoff, q, x ;
+	int	i ;
+d237 8
+a244 7
+	cutoff = fpars[0] ;
+	if (cutoff <= 0.0) cutoff = 0.5 ;
+	q = 2.0 * cutoff / M_PI ;
+	for (i=0 ; i<nprojs/2 ; i++)
+	{
+	   fx[2*i] = q * sin( (double) fx[2*i]/q) ;
+	   if (fx[2*i] < 0) fx[2*i] = 0 ;
+d248 3
+a250 3
+butter( fx, fpars, nprojs)
+  float *fx, fpars[] ;
+  int	nprojs ;
+d252 3
+a254 3
+	double sqrt() ;
+	float	cutoff, x, orderx, xipow() ;
+	int	i ;
+d256 6
+a261 4
+	cutoff = fpars[4] ;
+	if (cutoff <= 0.0) cutoff = 0.5 ;
+	orderx = fpars[3] ;
+	if (orderx <= 0.0) orderx = 6.0 ;
+d263 3
+a265 4
+	for (i=0 ; i<nprojs/2 ; i++)
+	{
+	   x = 0.5/((nprojs-2)/2.0) ;
+	   fx[2*i] *= sqrt(1.0/(1.0 + xipow( i*x/cutoff, (int) orderx)));
+d269 3
+a271 2
+float xipow( x, p)
+  float x;  int p;
+d273 2
+a274 1
+	float r=1.0; int i;
+d276 2
+a277 1
+	for (i=0; i<p; i++) r=r*x;
+d281 3
+a283 3
+exp_filter( fx, fpars, nprojs)
+  float *fx, fpars[];
+  int nprojs;
+d285 2
+a286 2
+	int i, pow;
+	float x, cutoff, xp;
+d289 2
+a290 1
+	if (cutoff <= 0.0) cutoff = 0.5;
+d292 7
+a298 7
+	if (pow < 1) pow = 1;
+	for( i=0; i<nprojs/2; i++)
+	{
+	  x = (float) i/(float)(nprojs/2);
+	  xp = xipow(2.0*x/cutoff, pow);
+	  fx[2*i] = x*exp(-xp);
+	  fx[2*i+1] = 0.0;
+d301 2
+a302 2
+	xp = xipow(2.0*x/cutoff, pow);
+	fx[1] = x*exp(-xp);
+d306 1
+a306 1
+scatter_correction(fx, fpars, nprojs)
+d309 3
+a311 3
+  float *fx,  		/* Filter kernel. */
+	fpars[] ;	/* Filter parameters. */
+  int	nprojs ;
+d313 3
+a315 3
+  int	i ;
+  float sf, slope, pix_size ;
+  float	v, a2, w2, fmod, aa , freq ;
+d317 15
+a331 14
+	if (fpars[4] <= 0.0) return ;
+	if (fpars[5] <= 0.0) return ;
+	sf = fpars[4] ;
+	slope = fpars[5] ;
+	pix_size = fpars[6] ;
+	v = 0.5/((float) nprojs/2.0) ;
+	a2 = (slope*pix_size) * (slope*pix_size) ;
+	for (i=1 ; i<nprojs/2 ; i++)
+	{
+	   freq = (float) i * v ;
+	   w2 = (2*M_PI*freq) * ( 2*M_PI*freq) ;
+	   aa = a2 /(a2 + w2) ;
+	   fmod = 1.0/(1.0 + sf * (aa - 1.0)) ;
+	   fx[2*i] = fmod ;
+d335 5
+a339 5
+	freq = 0.5 ;
+	w2 = (2*M_PI*freq) * (2*M_PI*freq) ;
+	aa = a2 / (a2 + w2) ;
+	fmod = 1.0/(1.0 + sf * (aa -1.0)) ;
+	fx[1] = fmod ;
+d343 3
+a345 3
+add_scatter(fx, fpars, nprojs)
+  float *fx, fpars[] ;
+  int	nprojs ;
+d347 3
+a349 3
+  int i ;
+  float sf, slope, pix_size ;
+  float	v, a2, w2, fmod, aa , freq ;
+d351 15
+a365 14
+	if (fpars[4] <= 0.0) return ;
+	if (fpars[5] <= 0.0) return ;
+	sf = fpars[4] ;
+	slope = fpars[5] ;
+	pix_size = fpars[6] ;
+	v = 0.5/((float) nprojs/2.0) ;
+	a2 = (slope*pix_size) * (slope*pix_size) ;
+	for (i=1 ; i<nprojs/2 ; i++)
+	{
+	   freq = (float) i * v ;
+	   w2 = (2*M_PI*freq) * ( 2*M_PI*freq) ;
+	   aa = a2 /(a2 + w2) ;
+	   fmod = 1.0/(1.0 + sf * (aa - 1.0)) ;
+	   fx[2*i] = 1.0/fmod ;
+d369 5
+a373 5
+	freq = 0.5 ;
+	w2 = (2*M_PI*freq) * (2*M_PI*freq) ;
+	aa = a2 / (a2 + w2) ;
+	fmod = 1.0/(1.0 + sf * (aa -1.0)) ;
+	fx[1] = 1.0/fmod ;
+@
+
+
+1.2
+log
+@changed Id to $Header$
+@
+text
+@d18 1
+a18 1
+static char rcsid [] = "$Header$";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d18 2
+@

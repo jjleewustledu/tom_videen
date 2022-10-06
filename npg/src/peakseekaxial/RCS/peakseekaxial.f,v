@@ -1,0 +1,181 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.4
+date	2004.02.17.15.04.28;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.18.17.13.55;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      PEAKSEEKAXIAL.FTN
+C  Author:       Tom O. Videen
+C  Date:         08-Sep-89
+C  Written For:  Quantitation of PETT VI Images
+C
+C  History:
+C     Modification of PEAKSEEK.FTN on 17-Mar-98
+C
+C  Parameters of Fit:
+C     A(1) - amplitude of 1st gaussian
+C     A(2) - X-location of peak (both gaussians)
+C     A(3) - Y-location of peak (both gaussians)
+C     A(4) - sigma X of 1st gaussian
+C     A(5) - sigma Y of 1st gaussian
+C     A(6) - amplitude of 2nd gaussian
+C     A(7) - sigma X of 2nd gaussian
+C     A(8) - sigma Y of 2nd gaussian
+C     A(9) - background (constant; not altered in fit)
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM PEAKSEEKAXIAL
+
+      PARAMETER (NDIM = 10)  ! max. number of points
+      PARAMETER (NZ = 31)    ! number of slices in this image
+
+      INTEGER*2  IMG(128,128) ! image array
+      INTEGER*2  IMAGE(128,128) ! image array
+
+      INTEGER*4  DISK        ! log. unit for image file
+      INTEGER*4  DATAFILE    ! log. unit for final fit parmeters
+      INTEGER*4  Z           ! slice number
+      INTEGER*4  MAX         ! maximum pixel value
+      INTEGER*4  CUTOFF      ! cutoff for local maxima
+      INTEGER*4  LRANGE      ! local range increment in searching for local max
+      INTEGER*4  FRANGE      ! local range to use for fitting curve to local
+      INTEGER*4  X,Y         ! coordinates of a pixel
+      INTEGER*4  N           ! no of local maxima
+      INTEGER*4  I,J         ! local integers
+
+      REAL*4    XMID(10),YMID(10) ! coordinates of centers of local maxima
+      REAL*4    BKGND           ! background value for all points (constant)
+
+      CHARACTER*256 FNAME     ! image file name
+      CHARACTER*256 FNAME1    ! output file name
+
+      LOGICAL*1  HDRONLY     ! false --> read header and image
+      LOGICAL*1  ERR         ! true iff unable to open disk file,
+C        unable to read desired slice, or if file format is incorrect
+
+C  Common Block Variables
+
+      REAL*4    XP(NDIM,NDIM)   ! 1st indep. variable (rotated axes)
+      REAL*4    YP(NDIM,NDIM)   ! 2nd indep. variable (rotated axes)
+      REAL*4    ZP(NDIM,NDIM)   ! value of input data at point X,Y
+
+      INTEGER*4 NPTS            ! number of points in X, Y
+      INTEGER*4 USERIN          ! log. unit for user input
+      INTEGER*4 USEROUT         ! log. unit for user output
+
+C  Common RAWDATA is used in FCHI22DG and GAUSS22E
+
+      COMMON /RAWDATA/ XP,YP,ZP,NPTS
+      COMMON /USRIO/ USERIN,USEROUT
+
+      DATA DISK, DATAFILE, USERIN, USEROUT /1,3,5,6/
+      DATA HDRONLY /.FALSE./
+      BKGND = 0.
+      LRANGE = 5
+      FRANGE = 3
+      FNAME = ' '
+      CALL GETARG (1, FNAME)
+      CALL GETARG (2, FNAME1)
+      WRITE(USEROUT,*) '*** PEAKSEEKAXIAL  17-MAR-98 {axial fit 2D Gaussian to local peak}'
+
+C  Get the image point for 1 coronal slice
+
+      OPEN (DATAFILE, FILE = FNAME1, ERR = 102)
+      GO TO 103
+102   L = INANYR (FNAME1, ' ')
+      WRITE (USEROUT, *) '*** ERROR -- cannot open file ', FNAME1(1:L),' ***'
+103   CONTINUE
+
+      DO 210 J=1,128
+        DO 200 I=1,128
+          IMAGE(I,J) = 0
+          IMG(I,J) = 0
+200     CONTINUE
+210   CONTINUE
+
+C  The local max is characterized using a rectangular array of pixels
+C  with the dimensions FRANGE x FRANGE
+
+      X = 72
+      Y = 60
+      Z = 14
+
+      DO 310 J=1,NZ
+        CALL GETUIMAGE (IMG, FNAME, J, ERR)
+        DO 300 I=1,128
+          IMAGE(I,J) = IMG(I,Y)
+300     CONTINUE
+310   CONTINUE
+      IF (ERR) STOP
+
+C  Find max value for this slice
+
+      MAX = 0
+      DO 500 J=1,NZ
+        DO 400 I=1,128
+          IF (MAX.LT.IMAGE(I,J)) MAX=IMAGE(I,J)
+400     CONTINUE
+500   CONTINUE
+      WRITE(USEROUT,*) 'Coronal Slice = ',Y,' Maximum Pixel = ',MAX
+
+C  Local peaks must have at least a pixel value of CUTOFF
+
+      CUTOFF = 3*MAX/4
+
+C  Once a pixel with a value >= CUTOFF is found, a search is made for
+C  the pixel with the largest value with a rectangle whose dimensions
+C  are (2*LRANGE + 1) x (2*LRANGE + 1) centered on the specified pixel.
+
+      WRITE (DATAFILE,8600) FNAME, Y, 2*FRANGE+1, 2*FRANGE+1
+8600  FORMAT(A20,' Coronal Slice ',I2,3X,I2,'x',I2,' pixel fit',/)
+
+C  Loop until no more peaks are found:
+C     1) find a local max
+C     2) find the coordinates of the center of this local max
+C     3) fit 1 2D gaussian to the region of the local max
+C     4) zero the pixel values in this region
+
+      N = 0
+      CALL LOCALMAX (X, Z, LRANGE, CUTOFF, MAX, IMAGE)
+
+      IF (X.GT.0) THEN
+        N = N+1
+        CALL LOCALMID (X, Z, MAX, XMID(N), YMID(N), IMAGE)
+        CALL GAUS2DGB (X, Z, MAX, XMID(N), YMID(N), IMAGE, FRANGE, DATAFILE, Y, Y)
+      END IF
+
+      STOP
+      END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

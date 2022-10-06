@@ -1,0 +1,494 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.02.12.20.17.16;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.01.08.16.43.35;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@changed fit to 2-D projection followed by computation of Z
+@
+text
+@; $Id: fit_fiducial_N_nc.pro,v 1.1 1996/01/08 16:43:35 tom Exp tom $
+;
+;+
+; NAME:
+;   FIT_FIDUCIAL_N_NC
+;
+; PURPOSE:
+;   Fit 3 line segments to an N-shaped fiducial and return the coordinates
+;	of the two intersections.  Each segment is fit independently with no
+;	constraints (hence, "NC") on the angles or distances (unlike fit_fiducial_n.pro).
+;	The segments are fit on a 2-D projection and then the 3rd coordinate (z) is
+;	computed from the regression of z vs. x and y.
+;
+; CATEGORY:
+;   Image processing.
+;
+; CALLING SEQUENCE:
+;   FIT_FIDUCIAL_N_NC, Name, Branch, Flag
+;
+; INPUTS:
+;   Name:	Root name of input files.
+;   Branch:	Second part of root name of input files.
+;	Flag:	Determines the axis along which to compute centers-of-mass (0 or 1)
+;
+; OUTPUTS:
+;   File:	A file named "Name.fid" contains the coordinates of the 2 points
+;			in both pixels and mm.
+;
+; FUNCTION:
+;   Read the points in each branch of the N from separate files (with standard names).
+;   Compute the centers-of-mass along the specified axis for the points in each
+;		branch.
+;	Perform 2-D linear regression to the centers-of-mass of each branch in a 2-D
+;		projection.
+;	Determine the 2 intersecting points in this plane.
+;	Compute the 3rd coordinate using a regression of against the first 2.
+;	Write the coordinates of the 2 points to a file with extension ".fid".
+;	Coordinates will be written in mm.
+;
+; EXAMPLE:
+;   FIT_FIDUCIAL_N_NC, "p2000", "backn", 0
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, June 1995
+;   Change fit to 2D: Tom Videen, Feb 1996
+;-
+
+pro fit_fiducial_N_nc, name, branch, flag
+
+; Get filenames & initialize parameters for the particular orientation of the fiducial
+; branch eq "backn"
+; ------------------------------------------------------------------------------------
+
+	left = name + branch + "lf.img"
+	middle = name + branch + "diag.img"
+	right  = name + branch + "rt.img"
+	plane = 2
+	planez = 0
+	x_title = "Z"
+	y_title = "X"
+	xc = 2
+	yc = 0
+	zc = 1
+
+	plot_title = name + branch
+	outfile = name + ".fid"
+
+; Determine image array size & type
+; ---------------------------------
+	asize = intarr(3)
+	pixsize = fltarr(3)
+	analyze_dim, left, asize, dsize, pixsize
+
+	if (dsize eq 8) then $
+		data = bytarr(asize(0), asize(1), asize(2)) $
+	else $
+		data = intarr(asize(0), asize(1), asize(2))
+	points = fltarr(2, 2)
+	get_lun,lu
+
+; Read each array & extract the non-zero coordinates for each segment of the N.
+; Then divide each column by pixel size to scale to isotropic 1x1x1 mm space.
+; ----------------------------------------------------------------------------
+
+	openr,lu,left
+	readu,lu,data,TRANSFER_COUNT=count
+	close,lu
+	nonzero_coords, data, leftset
+	for i=0,2 do $
+		leftset(i,*) = leftset(i,*) * pixsize(i)
+	if (flag eq 1) then $
+		leftpts = center_of_mass(leftset, plane) $
+	else $
+		leftpts = center_of_mazz(leftset, plane)
+	nl = (size(leftpts))(2)
+
+	openr,lu,middle
+	readu,lu,data
+	close,lu
+	nonzero_coords, data, middleset
+	for i=0,2 do $
+		middleset(i,*) = middleset(i,*) * pixsize(i)
+	if (flag eq 1) then $
+		middlepts1 = center_of_mazz(middleset, planez) $
+	else $
+		middlepts1 = center_of_mass(middleset, plane)
+	nm = (size(middlepts1))(2)
+
+; Discard 2 end points
+
+	middlepts = middlepts1(*,1:nm-2)
+	nm = (size(middlepts))(2)
+
+	openr,lu,right
+	readu,lu,data
+	close,lu
+	nonzero_coords, data, rightset
+	for i=0,2 do $
+		rightset(i,*) = rightset(i,*) * pixsize(i)
+	if (flag eq 1) then $
+		rightpts = center_of_mass(rightset, plane) $
+	else $
+		rightpts = center_of_mazz(rightset, plane)
+	nr = (size(rightpts))(2)
+
+; Combine all non-zero points
+;   all contains all non-zero points
+;   data contains centers-of-mass points
+;   sn are used to index each set within "data"
+
+	all = [[leftset], [rightset], [middleset]]
+	data = [[leftpts], [rightpts], [middlepts]]
+
+	s1 = nl-1
+	s2 = nl
+	s3 = nl+nr-1
+	s4 = nl+nr
+	s5 = nl+nr+nm-1
+
+; Plot all points (2D projection prior to rotation):
+; --------------------------------------------------
+;   First plot all the points
+ 
+	xp = all(xc,*)
+	yp = rotate(all(yc,*),4)
+	plot_fiducial, xp, yp, plot_title, x_title, y_title
+
+;   Then plot the centers-of-mass
+
+	xp = data(xc,*)
+	yp = rotate(data(yc,*),4)
+	oplot, xp, yp, psym=1
+
+	val = data(3,*)
+	data(3,*) = 1.
+	w = rotate(val,4)
+
+;   w now contains the weights for fitting the points
+
+; Fit the fiducial Z to the points in the xc-yc plane
+; ---------------------------------------------------
+; Fit line to each segment
+; Left
+
+    x1 = data(xc,0:s1)
+    y1 = rotate(data(yc,0:s1),4)
+    w1 = w(0:s1)
+    b1 = regress(x1, y1, w1, fit, a1, sigma, ftest, r, rmul, chisq)
+	print, "Branch          Chisq           A0              A1              A2"
+	print, "Left  ",[chisq, a1, b1]
+
+; Right
+
+    x1 = data(xc,s2:s3)
+    y1 = rotate(data(yc,s2:s3),4)
+    w1 = w(s2:s3)
+    b2 = regress(x1, y1, w1, fit, a2, sigma, ftest, r, rmul, chisqs)
+	print, "Right ", [chisq, a2, b2]
+
+; Middle
+
+    x1 = data(xc,s4:s5)
+    y1 = rotate(data(yc,s4:s5),4)
+    w1 = w(s4:s5)
+    b3 = regress(x1, y1, w1, fit, a3, sigma, ftest, r, rmul, chisq)
+	print, "Middle", [chisq, a3, b3]
+
+; Compute the intersections of the fiducial branches in 2-D space
+; ---------------------------------------------------------------
+; Intersection of left + middle
+ 
+    xc1 = (a3 - a1) / (b1 - b3)
+    yc1 = b1 *xc1 + a1
+
+; Intersection of right + middle
+ 
+    xc2 = (a3 - a2) / (b2 - b3)
+    yc2 = b2 *xc2 + a2
+
+; Grab point from ends of the Z
+
+	xc3a = max(xp(0,0:s1))
+	xc3b = min(xp(0,0:s1))
+	val = abs(xc3a-xc1) gt abs(xc3b-xc1)	; IDL thinks this is an array
+	if (val(0)) then begin $
+		xc3 = xc3a
+		xc4 = min(xp(0,s2:s3))
+	endif else begin $
+		xc3 = xc3b
+		xc4 = max(xp(0,s2:s3))
+	endelse
+
+	yc3 = a1 + b1*xc3
+	yc4 = a2 + b2*xc4
+
+; Determine zc coordinates of the 4 points
+; ----------------------------------------
+
+	xy = [data(xc,*),data(yc,*)]
+	z = rotate(data(zc,*),4)
+	xyn = regress(xy, z, w, fit, xy0, sigma, ftest, r, rmul, chisq)
+	print, "Z     ", [chisq, xy0, rotate(xyn,4)]
+
+	zc1 = xy0 + xyn(0) * xc1 + xyn(1) * yc1
+	zc2 = xy0 + xyn(0) * xc2 + xyn(1) * yc2
+	zc3 = xy0 + xyn(0) * xc3 + xyn(1) * yc3
+	zc4 = xy0 + xyn(0) * xc4 + xyn(1) * yc4
+
+; Plot intersection points & 3 lines
+; ----------------------------------
+ 
+	oplot,[xc1],[yc1],psym=4
+	oplot,[xc2],[yc2],psym=4
+ 
+	xcoord = [xc3, xc1, xc2, xc4]
+	ycoord = [yc3, yc1, yc2, yc4]
+	oplot, xcoord, ycoord, psym=0
+
+; Scale coordinates back to original image space
+; Write coordinates of intersection to outfile
+; ----------------------------------------------
+ 
+	if (exist_file(outfile)) then $
+		openu, lu, outfile, /APPEND $
+	else $
+		openw, lu, outfile
+
+	case 1 of
+	(plane eq 0): begin
+			print, name+branch, " (x,y,z)      pixels                          mm"
+			print, [xc1/pixsize(0), yc1/pixsize(1), zc1/pixsize(2), xc1, yc1, zc1]
+			print, [xc2/pixsize(0), yc2/pixsize(1), zc2/pixsize(2), xc2, yc2, zc2]
+			printf, lu, [xc1/pixsize(0), yc1/pixsize(1), zc1/pixsize(2), xc1, yc1, zc1]
+			printf, lu, [xc2/pixsize(0), yc2/pixsize(1), zc2/pixsize(2), xc2, yc2, zc2]
+		end
+	(plane eq 1): begin	
+			print, name+branch, " (x,y,z)      pixels                          mm"
+			print, [zc1/pixsize(0), xc1/pixsize(1), yc1/pixsize(2), zc1, xc1, yc1]
+			print, [zc2/pixsize(0), xc2/pixsize(1), yc2/pixsize(2), zc2, xc2, yc2]
+			printf, lu, [zc1/pixsize(0), xc1/pixsize(1), yc1/pixsize(2), zc1, xc1, yc1]
+			printf, lu, [zc2/pixsize(0), xc2/pixsize(1), yc2/pixsize(2), zc2, xc2, yc2]
+		end
+	(plane eq 2): begin
+			print, name+branch, " (x,y,z)      pixels                          mm"
+			print, [yc1/pixsize(0), zc1/pixsize(1), xc1/pixsize(2), yc1, zc1, xc1]
+			print, [yc2/pixsize(0), zc2/pixsize(1), xc2/pixsize(2), yc2, zc2, xc2]
+			printf, lu, [yc1/pixsize(0), zc1/pixsize(1), xc1/pixsize(2), yc1, zc1, xc1]
+			printf, lu, [yc2/pixsize(0), zc2/pixsize(1), xc2/pixsize(2), yc2, zc2, xc2]
+		end
+	endcase
+	close, lu
+	free_lun,lu
+end
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+; $Id: fit_fiducial_N_nc.pro,v 1.4 1995/06/29 20:20:48 tom Exp $
+d9 4
+a12 3
+;	of the two intersections.  Each segment is fit independently (after the
+;	common plane is identified) with no constraints (hence, "NC") on the
+;	angles or distances (unlike fit_fiducial_n.pro).
+d33 2
+a34 4
+;	Determine the plane in which the points lie.
+;	Rotate the coordinate system to this plane.
+;	Perform 2-D linear regression to the centers-of-mass of each branch in this
+;		plane.
+d36 1
+a36 1
+;	Rotate the 2 points back to the initial coordinate system.
+d45 1
+a159 55
+; Align yc-axis (X) to data rotating about the xc-axis (Z):
+; Rotation yc -> zc (X -> Y) is positive according to the right-hand rule.
+; Coordinate Transformation.
+; ---------------------------------------------------------------
+
+	mat0 = [[1., 0., 0., 0.], $
+			[0., 1., 0., 0.], $
+			[0., 0., 1., 0.], $
+			[0., 0., 0., 1.]]
+
+	y = data(yc,*)
+	z = rotate(data(zc,*),4)
+	yz = regress(y, z, w, fit, yz0, sigma, ftest, r, rmul, chisq)
+	print, yz, yz0, chisq
+
+	alpha = atan(yz)
+	mat1 = mat0
+	mat1(zc,3) = -yz0
+	mat2 = mat0
+	mat2(yc,yc) = cos(alpha)
+	mat2(zc,zc) = cos(alpha)
+	mat2(yc,zc) = -sin(alpha)
+	mat2(zc,yc) = sin(alpha)
+	matyz = mat2#mat1
+	rdata = matyz#data
+
+; Align xc-axis (Z) to data rotating about the yc-axis (X):
+; Rotation xc -> zc (Z -> Y) is negative according to the right-hand rule.
+; ---------------------------------------------------------------
+
+	x = rdata(xc,*)
+	z = rotate(rdata(zc,*),4)
+	xz = regress(x, z, w, fit, xz0, sigma, ftest, r, rmul, chisq)
+	print, xz, xz0, chisq
+	beta = atan(xz)
+	mat1 = mat0
+	mat1(zc,3) = -xz0
+	mat2 = mat0
+	mat2(xc,xc) = cos(beta)
+	mat2(zc,zc) = cos(beta)
+	mat2(xc,zc) = sin(beta)
+	mat2(zc,xc) = -sin(beta)
+	matxz = mat2#mat1
+	mat = matxz#matyz
+	rdata = mat#data
+	rdata(3,*) = val
+
+; Check new plane
+
+	xy = [rdata(xc,*), rdata(yc,*)]
+	z = rotate(rdata(zc,*),4)
+	b2 = regress(xy, z, w, fit, a2, sigma, ftest, r, rmul, chisq)
+	print,"Fit to Plane"
+	print,b2, a2, chisq
+
+d165 2
+a166 2
+    x1 = rdata(xc,0:s1)
+    y1 = rotate(rdata(yc,0:s1),4)
+d169 2
+a170 2
+    print, "Left"
+    print, b1, a1, chisq
+d174 2
+a175 2
+    x1 = rdata(xc,s2:s3)
+    y1 = rotate(rdata(yc,s2:s3),4)
+d177 2
+a178 3
+    b2 = regress(x1, y1, w1, fit, a2, sigma, ftest, r, rmul, chisq)
+    print, "Right"
+    print, b2, a2, chisq
+d182 2
+a183 2
+    x1 = rdata(xc,s4:s5)
+    y1 = rotate(rdata(yc,s4:s5),4)
+d186 1
+a186 2
+    print, "Middle"
+    print, b3, a3, chisq
+d216 2
+a217 2
+; Rotate back into original space & get the coordinates
+; -----------------------------------------------------
+d219 4
+a222 22
+	imat = invert(mat)
+	
+	case 1 of
+	(plane eq 0): begin
+			pt1 = [xc1, yc1, 0., 1.]
+			pt2 = [xc2, yc2, 0., 1.]
+			pt3 = [xc3, yc3, 0., 1.]
+			pt4 = [xc4, yc4, 0., 1.]
+		end
+ 	(plane eq 1): begin	
+			pt1 = [0., xc1, yc1, 1.]
+			pt2 = [0., xc2, yc2, 1.]
+			pt3 = [0., xc3, yc3, 1.]
+			pt4 = [0., xc4, yc4, 1.]
+		end
+ 	(plane eq 2): begin
+			pt1 = [yc1, 0., xc1, 1.]
+			pt2 = [yc2, 0., xc2, 1.]
+			pt3 = [yc3, 0., xc3, 1.]
+			pt4 = [yc4, 0., xc4, 1.]
+		end
+	endcase
+d224 4
+a227 14
+	pt1r = imat#pt1
+	pt2r = imat#pt2
+	pt3r = imat#pt3
+	pt4r = imat#pt4
+	xc1  = pt1r(xc)
+	yc1  = pt1r(yc)
+	zc1  = pt1r(zc)
+	xc2  = pt2r(xc)
+	yc2  = pt2r(yc)
+	zc2  = pt2r(zc)
+	xc3  = pt3r(xc)
+	yc3  = pt3r(yc)
+	xc4  = pt4r(xc)
+	yc4  = pt4r(yc)
+d230 1
+d241 1
+d250 5
+a254 10
+			xc1p = xc1 / pixsize(0)
+			yc1p = yc1 / pixsize(1)
+			zc1p = zc1 / pixsize(2)
+			xc2p = xc2 / pixsize(0)
+			yc2p = yc2 / pixsize(1)
+			zc2p = zc2 / pixsize(2)
+			print, "(x,y,z) = ", xc1p, yc1p, zc1p, "   ", xc1, yc1, zc1, "   ", name+branch
+			printf, lu, xc1p, yc1p, zc1p, "   ",  xc1, yc1, zc1
+			print, "(x,y,z) = ", xc2p, yc2p, zc2p, "   ", xc2, yc2, zc2, "   ", name+branch
+			printf, lu, xc2p, yc2p, zc2p, "   ", xc2, yc2, zc2
+d257 5
+a261 10
+			zc1p = zc1 / pixsize(0)
+			xc1p = xc1 / pixsize(1)
+			yc1p = yc1 / pixsize(2)
+			zc2p = zc2 / pixsize(0)
+			xc2p = xc2 / pixsize(1)
+			yc2p = yc2 / pixsize(2)
+			print, "(x,y,z) = ", zc1p, xc1p, yc1p, "   ", zc1, xc1, yc1, "   ", name+branch
+			printf, lu, zc1p, xc1p, yc1p, "   ", zc1, xc1, yc1
+			print, "(x,y,z) = ", zc2p, xc2p, yc2p, "   ", zc2, xc2, yc2, "   ", name+branch
+			printf, lu, zc2p, xc2p, yc2p, "   ", zc2, xc2, yc2
+d264 5
+a268 10
+			yc1p = yc1 / pixsize(0)
+			zc1p = zc1 / pixsize(1)
+			xc1p = xc1 / pixsize(2)
+			yc2p = yc2 / pixsize(0)
+			zc2p = zc2 / pixsize(1)
+			xc2p = xc2 / pixsize(2)
+			print, "(x,y,z) = ", yc1p, zc1p, xc1p, "   ", yc1, zc1, xc1, "   ", name+branch
+			printf, lu, yc1p, zc1p, xc1p, "   ", yc1, zc1, xc1
+			print, "(x,y,z) = ", yc2p, zc2p, xc2p, "   ", yc2, zc2, xc2, "   ", name+branch
+			printf, lu, yc2p, zc2p, xc2p, "   ", yc2, zc2, xc2
+a270 1
+
+a272 1
+
+@

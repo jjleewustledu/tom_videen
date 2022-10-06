@@ -1,0 +1,234 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.12.22.21.45;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2004.02.12.22.19.09;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.10.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Fields function for spideram.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  infield.f
+C
+C  This procedure gets a character string from the user.
+C     The string is read from a field on the terminal screen
+C     beginning at the specified row and column with the
+C     specified length.
+C     If the user enters a carriage return, the string is
+C     returned unchanged.
+C     If a new string is entered, it is returned.
+C     The cursor is turned on while the string is being entered,
+C     but is left in its initial ON/OFF state.
+C
+C  NOTE: one should not attempt to use column 80 of the terminal
+C     for input.
+C
+C  Modified 06-Feb-86 to allow termination of input with up or down arrows.
+C     ASCII characters for up and down arrows are assumed to be identical
+C     except for the last character of each sequence.
+C     Returns a variable NEXT.
+C
+C  Variables:
+C     STR = character string;
+C     LENGTH = length of the field (no. of characters <= 80-COL);
+C     ROW = row where the field begins;
+C     COL = column where the field begins;
+C     NEXT set true or false upon exiting:
+C        true ==> subroutine terminated with RETURN or DOWN ARROW;
+C        false==> subroutine terminated with UP ARROW;
+C
+C     LEN = length of the field (no. of characters <= 80-COL);
+C     L   = length of string (0-79)
+C     L+COL = cursor position (column) (1-80)
+C
+C  Uses:
+C     TCONTROL
+C     WRTFIELD
+C     CURSON
+C     CURSOFF
+C     PUTCH
+C     GETCH
+C
+C  Subroutine of FIELDS.LIB
+C
+C  T.O. Videen -- 07-Feb-86
+C
+C  Modified 16-Sep-91 by Tom Yang to allow backspace and default 
+C	character position.
+C
+C Revision 1.2  90/03/19  09:18:02  09:18:02  todd (M. Todd Gamble)
+C 
+C Revision 1.1  89/11/28  12:38:29  12:38:29  todd (M. Todd Gamble)
+C Initial revision
+C 
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+      SUBROUTINE INFIELD (STR, LENGTH, ROW, COL, NEXT)
+C
+      INTEGER*4	TLENGTH (120), ROWLOC, COLLOC
+      CHARACTER TPARMS (120)*40
+      LOGICAL*1	CURSOR
+      COMMON	/TPARAMS/ TPARMS, TLENGTH, ROWLOC, COLLOC, CURSOR
+C
+      INTEGER*4		LENGTH, LEN, ROW, COL, L, POSCUR, ALENGTH, L1, L2
+      CHARACTER*80	STR
+      CHARACTER*1	CH, BELL, SPACE, RETURN, BACKSP, UPARROW1, DNARROW1,
+     2			UPARROWL, DNARROWL
+      LOGICAL*1		NEXT, CFLAG
+C
+      DATA POSCUR /3/
+      BELL	= CHAR (7)
+      BACKSP	= CHAR (8)
+      RETURN	= CHAR (13)
+      SPACE	= CHAR (32)
+      ALENGTH	= TLENGTH (5)
+      UPARROW1	= TPARMS (5) (1:1)
+      DNARROW1	= TPARMS (6) (1:1)
+      IF (ALENGTH .GT. 1) THEN
+	UPARROWL	= TPARMS(5) (ALENGTH:ALENGTH)
+	DNARROWL	= TPARMS(6) (ALENGTH:ALENGTH)
+      END IF
+C
+C	Do not accept LEN+COL > 80
+C
+      IF ((LENGTH + COL) .GT. 80) THEN
+	LEN	= 80 - COL
+      ELSE
+	LEN	= LENGTH
+      END IF
+C
+C	Write the current value of STR in the field and leave the
+C	cursor at the end of the last character (if any).
+C
+      L1 = INANYR (STR(1:LEN), SPACE)
+      CALL WRTFIELD (STR (1:L1), L1, ROW, COL)
+      IF (.NOT. CURSOR) THEN
+	CALL CURSON
+	CFLAG	= .TRUE.
+      ELSE
+	CFLAG	= .FALSE.
+      END IF
+C
+C The cursor is just to the right of the string
+       L	= L1
+C
+C  Read a character from the terminal.
+C
+100   CALL GETCH (CH)
+C
+C  Carriage Return --> exit with the current string.
+C
+      IF (CH. EQ. RETURN) THEN
+	NEXT	= .TRUE.
+	CALL ERSFIELD (MIN(LEN + 2, 80 - COL), ROW, COL)
+	L1	= INANYL (STR (1:LEN), SPACE)
+	L2	= INANYR (STR (1:LEN), SPACE)
+	CALL WRTFIELD (STR (L1:L2), L2 - L1 + 1, ROW, COL)
+	GO TO 9000
+      ELSE IF (CH .EQ. UPARROW1) THEN
+	IF (ALENGTH .EQ. 1) THEN
+		NEXT	= .FALSE.
+		GO TO 9000
+	ELSE
+		DO 110 I = 2, ALENGTH
+			CALL GETCH (CH)
+110		CONTINUE
+		IF (CH .EQ. UPARROWL) THEN
+			NEXT	= .FALSE.
+			GO TO 9000
+		ELSE IF (CH .EQ. DNARROWL) THEN
+			NEXT	= .TRUE.
+			GO TO 9000
+		ELSE
+			CALL PUTCH (BELL)
+			CALL TCONTROL (POSCUR, ROW, L + COL)
+		END IF
+	END IF
+      ELSE IF (CH .EQ. DNARROW1) THEN
+	NEXT	= .TRUE.
+	GO TO 9000
+C
+C  Backspace --> delete the last character from the string unless
+C     there are no more characters in the string (in which case,
+C     sound the bell).
+C
+      ELSE IF (CH .EQ. BACKSP) THEN
+	IF (L .GT. 0) THEN
+		STR (L:L)	= ' '
+		L1		= INANYL (STR, SPACE)
+		L2		= INANYR (STR, SPACE)
+		CALL ERSFIELD (2,ROW,COL+L)
+		L		= L - 1
+		CALL TCONTROL (POSCUR,ROW,COL+L)
+	ELSE
+		CALL ERSFIELD (2, ROW, COL)
+		CALL PUTCH (BELL)
+		CALL TCONTROL (POSCUR, ROW, COL)
+	END IF
+C
+C  Unprintable Character --> sound the bell.
+C
+      ELSE IF ((ICHAR (CH) .LT. 32) .OR. (ICHAR (CH) .GT. 126)) THEN
+	CALL PUTCH (BELL)
+	CALL TCONTROL (POSCUR, ROW, L + COL)
+C
+C  Printable Character --> add the character to the string,
+C     unless the field is full (in which case, sound the bell).
+C
+      ELSE IF (L .EQ. LEN) THEN
+	CALL PUTCH (BELL)
+	CALL TCONTROL (POSCUR, ROW, L + COL)
+        CALL PUTCH (SPACE)
+        CALL TCONTROL (POSCUR, ROW, L + COL)
+      ELSE
+	L		= L + 1
+	STR (L:L)	= CH
+      END IF
+C
+      GO TO 100
+C
+9000  IF (CFLAG) CALL CURSOFF
+C
+      RETURN
+      END
+@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

@@ -1,0 +1,49 @@
+PRO FID_LINE, uv, xp1, yp1, zp1, xp2, yp2, zp2
+   ;; Scale and display Coronal image (obj) in Window 2 only (do not update transverse)
+   ;; uv = the info structure for this display
+   COMMON IMAGE_UTILS
+   COMMON FID
+
+   zoom = dsp[0].zoom
+   obj = uv.img[1]
+   IF (obj.data EQ ptr_new()) THEN return
+
+   xsize = obj.dim[0] * zoom
+   ysize = obj.dim[2] * zoom
+   dsp[1].xsize = xsize
+   dsp[1].ysize = ysize
+   top = dsp[0].nc-2
+   mini = dsp[1].min
+   maxi = dsp[1].max
+   object = reform((*obj.data)[*,yp1,*,0])
+   obj0 = bytscl(rebin(object, xsize, ysize), MIN=mini, MAX=maxi, TOP=top)
+   widget_control, uv.wid.win[1], draw_xsize=xsize, draw_ysize=ysize
+   wset, dsp[1].id
+   tv, obj0
+      
+   x1 = (xp1 - 1) * zoom
+   z1 = (obj.dim[2] + 0.75 - zp1) * zoom
+   x2 = (xp2 - 1) * zoom
+   z2 = (obj.dim[2] + 0.75 - zp2) * zoom
+
+   !x.s = [0, 1/float(!d.x_size)]
+   !y.s = [0, 1/float(!d.y_size)]
+   plots, [[x1,z1],[x2,z2]], color=dsp[0].nc
+
+   ;; Add a perpendicular line passing through AC to assess tilt
+
+   IF ((locus[0,0] NE 0) AND (locus[1,0] NE 0) AND (locus[2,0] NE 0)) THEN BEGIN
+      xa = locus[0,0] - 1
+      za = obj.dim[2] + 0.75 - locus[2,0]
+      z0 = 0
+      z3 = obj.dim[2]
+      IF (zp2 NE zp1) THEN BEGIN
+         slope = (xp1-xp2)/(zp1-zp2)
+         x0 = (z0-za)/slope + xa
+         x3 = (z3-za)/slope + xa
+         plots, [[x0*zoom,z0*zoom],[x3*zoom,z3*zoom]], color=dsp[0].nc
+      ENDIF ELSE BEGIN
+         plots, [[xa*zoom,z0*zoom],[xa*zoom,z3*zoom]], color=dsp[0].nc
+      ENDELSE
+   ENDIF
+END

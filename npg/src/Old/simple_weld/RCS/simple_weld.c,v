@@ -1,0 +1,720 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	95.07.20.16.58.53;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.07.19.18.54.50;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.07.19.16.01.39;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.07.19.15.47.06;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.07.19.15.11.45;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.5
+log
+@Modified the description.
+@
+text
+@/*$Id: simple_weld.c,v 1.4 1995/07/19 18:54:50 ty7777 Exp ty7777 $*/
+/*$Log: simple_weld.c,v $
+ * Revision 1.4  1995/07/19  18:54:50  ty7777
+ * Created the fancy header.
+ *
+ * Revision 1.3  1995/07/19  16:01:39  ty7777
+ * Get rid of the flag simple_weld.
+ *
+ * Revision 1.2  1995/07/19  15:47:06  ty7777
+ * After indent.
+ *
+ * Revision 1.1  1995/07/19  15:11:45  ty7777
+ * Initial revision
+ **/
+
+/* ===============================================================================
+ *  Module:	simple_weld
+ *  Date:	July 19, 1995.	          
+ *  Author:	Tom Yang       
+ * Description:	This program reads two ECAT images which represent the
+ *		top and bottom scans of the brain with some overlapped
+ *		slices. It then construct an ECAT image for the whole
+ *		brain. The overlapped slices is constructed as the average
+ *		of the top and bottom scans.
+ *	
+ *		Please note that the top 26-31 and bottom 1-5 slices are not used
+ *		the welding od the overlapped slices. The normalization factor is
+ *		computed from the mean of the image list.
+ *  History:	Created by Tom Yang on 07/19/95.
+ * ===============================================================================
+ */
+
+#include <petutil/imglist.h>
+#include "simple_weld.h"
+
+static char     rcsid[] = "$Header: /data/petsun4/src/new/RCS/simple_weld.c,v 1.4 1995/07/19 18:54:50 ty7777 Exp ty7777 $";
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	BOOLEAN         demigrate;
+	FILE           *recfp;
+	IMAGE_LIST_DATA *image_list;
+	IMAGE_LIST_DATA pseudo_image_list;
+	LITERALIST_DATA *literal_image_list;
+	PARAMETER_DATA  parameter_data;
+	char            complete_image_files[6][MAXPATH];
+	char            complete_sxrfile[MAXPATH];
+	char            date[MAXLINE];
+	char           *image_list_file;
+	char            image_recfile[MAXPATH];
+	char            line[MAXLINE];
+	char           *parameter_list_file;
+	char            rec_file[MAXLINE];
+	char            short_image_files[6][MAXLINE];
+	char            short_sxrfile[MAXLINE];
+	char            short_weldedimg_files[6][MAXLINE];
+	char            string[MAXLINE];
+	char           *uid;
+	float           bottom_scaling_factor;
+	float           top_scaling_factor;
+	int             filter_mode;
+	int             i;
+	int             image_mode;
+	int             j;
+	int             k;
+	int             noisy_slices;
+	int             num_image_files;
+	int             num_image_list;
+	struct INFO_TYPE finfo;
+
+/*
+ * Get command line arguments.
+ */
+	parameter_list_file = argv[1];
+	image_list_file = argv[2];
+	noisy_slices = atoi (argv[3]);
+	sprintf (date, "%s %s %s %s %s %s", argv[4], argv[5], argv[6], argv[7], argv[8], argv[9]);
+	uid = argv[10];
+
+/*
+ * Read the parameters in the image parameters file to the structure INFO_TYPE finfo.
+ */
+	if (readparm (parameter_list_file, &parameter_data) == FAIL) {
+		fprintf (stderr, "Error: from readparm ().\n");
+		exit (FAIL);
+	}
+
+/*
+ * Allocate memory for an array of image list structures.
+ */
+	if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE) {
+		image_list = (IMAGE_LIST_DATA *) pkg_malloc (sizeof (IMAGE_LIST_DATA)
+					      * MAX_IMAGE_LIST_SIZE, "simple_weld", "image_list");
+
+		/*
+		 * Read list from image_list_file to IMAGE_LIST_DATA structure list image_list for
+		 * manipulation.
+		 */
+		if (readimglist (image_list_file, image_list, &num_image_list) == FAIL) {
+			fprintf (stderr, "Error from readimglist () for list %s.\n",
+				 image_list_file);
+			free (image_list);
+			exit (FAIL);
+		}
+	} else {
+		literal_image_list = (LITERALIST_DATA *) pkg_malloc (sizeof (LITERALIST_DATA)
+				      * MAX_IMAGE_LIST_SIZE, "simple_weld", "literal_image_list");
+
+		if (read_literalist (image_list_file, literal_image_list, &num_image_list) == FAIL) {
+			fprintf (stderr, "Error from read_literalist () for list %s.\n",
+				 image_list_file);
+			free (image_list);
+			exit (FAIL);
+		}
+
+/*
+ * Fill the finfo structure for searching in archive.
+ */
+		get_finfo (parameter_data, &finfo);
+	}
+
+/*
+ * Weld the top and bottom images for each image pair.
+ */
+	demigrate = TRUE;
+	image_mode = parameter_data.imglist_mode;
+	filter_mode = RECFILTER_MODE;
+	for (i = 0; i < num_image_list; i++) {
+
+/*
+ * Build the short names for top and bottom scans.
+ */
+		if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE) {
+			if (build_shortnames (parameter_data, image_list[i],
+				     image_mode, filter_mode, &num_image_files, short_image_files,
+					      short_sxrfile) == FAIL) {
+				fprintf (stderr,
+					 "Error in building short names from image list %s %s %f %s %f %s\n",
+					 image_list[i].subject_id,
+					 image_list[i].scanset1_id, image_list[i].mean1,
+					 image_list[i].scanset2_id, image_list[i].mean2,
+					 image_list[i].sxrid);
+			}
+		} else {
+			strcpy (short_image_files[0], literal_image_list[i].topscan);
+			strcpy (short_image_files[1], literal_image_list[i].bottomscan);
+			num_image_files = 2;
+		}
+
+/*
+ * Clean the array of complete image files.
+ */
+		for (j = 0; j < num_image_files; j++)
+			strcpy (complete_image_files[j], "");
+
+/*
+ * Get the complete top and bottom scans files.
+ */
+		if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE) {
+			if (checkimg (parameter_data, image_list[i], image_mode, demigrate,
+			      num_image_files, short_image_files, complete_image_files) == FAIL) {
+				fprintf (stderr,
+				  "Error in checking files from image list %s %s %f %s %f %s\n\n",
+					 image_list[i].subject_id,
+					 image_list[i].scanset1_id, image_list[i].mean1,
+					 image_list[i].scanset2_id, image_list[i].mean2,
+					 image_list[i].sxrid);
+				exit (FAIL);
+			}
+		} else {
+			for (j = 0; j < num_image_files; j++) {
+				if (searchpath (parameter_data.datapath, short_image_files[j],
+						finfo, complete_image_files[j]) == FAIL) {
+					fprintf (stderr,
+					 "Error in checking files from literal list %s %s %s\n\n",
+						 literal_image_list[i].topscan,
+						 literal_image_list[i].bottomscan,
+						 literal_image_list[i].weldedscan);
+					exit (FAIL);
+				}
+			}
+		}
+
+/*
+ * Build short whole scan files.
+ */
+		if (parameter_data.imglist_mode == STDIMAGE_MODE) {
+			build_shortnames (parameter_data, image_list[i], WELDED_IMAGE_MODE,
+			     filter_mode, &num_image_files, short_weldedimg_files, short_sxrfile);
+		} else if (parameter_data.imglist_mode == PREWELDED_IMAGE_MODE) {
+			build_shortnames (parameter_data, image_list[i], STDIMAGE_MODE,
+			     filter_mode, &num_image_files, short_weldedimg_files, short_sxrfile);
+		} else if (parameter_data.imglist_mode == LITERAL_IMAGE_MODE) {
+			strcpy (short_weldedimg_files[0], literal_image_list[i].weldedscan);
+			num_image_files = 1;
+		} else {
+			fprintf (stderr, "Error: Unknown weld_lstmode: %d in the parameter file %s.\n",
+				 parameter_list_file);
+			exit (FAIL);
+		}
+
+/*
+ * Welds the top and bottom scans together.
+ */
+		for (j = 0; j < num_image_files; j++) {
+
+/*
+ * Construct the rec file name and creates the rec file header.
+ */
+			strcpy (rec_file, short_weldedimg_files[j]);
+			strcat (rec_file, REC_EXT);
+
+			recfp = fopen (rec_file, "w");
+			if (recfp == (FILE *) NULL) {
+				fprintf (stderr, "Error in opening rec file %s\n", rec_file);
+				exit (FAIL);
+			}
+			fprintf (recfp, "rec %s %s %s\n", short_weldedimg_files[j], date, uid);
+			fprintf (recfp, "imageweld %s %s\n", parameter_list_file, image_list_file);
+			fprintf (recfp, "   %s\n\n", rcsid);
+
+/*
+ * Copy the parameter file to the rec file.
+ */
+			fprintf (recfp, "prm\n");
+			copyrec (recfp, parameter_list_file);
+			fprintf (recfp, "endprm\n\n");
+
+/*
+ * Copy the relevant line from the image list file to the rec file.
+ */
+			fprintf (recfp, "imglist\n");
+			if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE) {
+				fprintf (recfp, "%s %s %f %s %f %s\n",
+					 image_list[i].subject_id,
+					 image_list[i].scanset1_id, image_list[i].mean1,
+					 image_list[i].scanset2_id, image_list[i].mean2,
+					 image_list[i].sxrid);
+			} else {
+				fprintf (recfp, "%s %s %s %s\n",
+					 literal_image_list[i].topscan,
+					 literal_image_list[i].bottomscan,
+					 literal_image_list[i].weldedscan,
+					 literal_image_list[i].matfile);
+			}
+			fprintf (recfp, "endimglist\n\n");
+
+/*
+ * Find the top and bottom sscaling factors.
+ */
+			if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE) {
+				if (getfactor (parameter_data, image_list[i], image_mode,
+					   short_image_files[2 * j], short_image_files[2 * j + 1],
+				     complete_image_files[2 * j], complete_image_files[2 * j + 1],
+					noisy_slices, &top_scaling_factor, &bottom_scaling_factor,
+					       recfp) == FAIL) {
+					fprintf (stderr, "Error: BuildTransform () failed.\n");
+					exit (FAIL);
+				}
+			} else {
+				if (getfactor (parameter_data, pseudo_image_list, image_mode,
+					   short_image_files[2 * j], short_image_files[2 * j + 1],
+				     complete_image_files[2 * j], complete_image_files[2 * j + 1],
+					noisy_slices, &top_scaling_factor, &bottom_scaling_factor,
+					       recfp) == FAIL) {
+					fprintf (stderr, "Error: BuildTransform () failed.\n");
+					exit (FAIL);
+				}
+			}
+
+/*
+ * Copy the image rec files if there are any.
+ */
+			strcpy (image_recfile, complete_image_files[2 * j]);
+			strcat (image_recfile, REC_EXT);
+			copyrec (recfp, image_recfile);
+
+			strcpy (image_recfile, complete_image_files[2 * j + 1]);
+			strcat (image_recfile, REC_EXT);
+			copyrec (recfp, image_recfile);
+
+			if (WeldImages (complete_image_files[2 * j],
+					complete_image_files[2 * j + 1], short_weldedimg_files[j],
+					noisy_slices, top_scaling_factor, bottom_scaling_factor,
+					recfp, date, rcsid) == FAIL) {
+				fprintf (stderr, "Error: WeldedImages () failed.\n");
+				exit (FAIL);
+			}
+			fprintf (recfp, "endrec\n");
+
+			fclose (recfp);
+		}
+	}
+
+	if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE)
+		free (image_list);
+	else
+		free (literal_image_list);
+}
+@
+
+
+1.4
+log
+@Created the fancy header.
+@
+text
+@d1 1
+a1 1
+/*$Id: simple_weld.c,v 1.3 1995/07/19 16:01:39 ty7777 Exp ty7777 $*/
+d3 3
+d25 4
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /data/petsun4/src/new/RCS/simple_weld.c,v 1.3 1995/07/19 16:01:39 ty7777 Exp ty7777 $";
+@
+
+
+1.3
+log
+@Get rid of the flag simple_weld.
+@
+text
+@d1 1
+a1 1
+/*$Id: simple_weld.c,v 1.2 1995/07/19 15:47:06 ty7777 Exp ty7777 $*/
+d3 3
+d13 12
+a24 6
+/*_________________________________________________________________
+  Description:	This program reads two ECAT images which represent the
+		top and bottom scans of the brain with some overlapped
+		slices. It then construct an ECAT image for the whole
+		brain. The overlapped slices is constructed in such a
+		way that the noise is minimum.
+a25 3
+  History:	Created by Tom Yang on 05/05/93.
+_________________________________________________________________*/
+
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /data/petsun4/src/new/RCS/simple_weld.c,v 1.2 1995/07/19 15:47:06 ty7777 Exp ty7777 $";
+@
+
+
+1.2
+log
+@After indent.
+@
+text
+@d1 1
+a1 1
+/*$Id: simple_weld.c,v 1.1 1995/07/19 15:11:45 ty7777 Exp ty7777 $*/
+d3 3
+a21 1
+#define	MATRIX_FILE_EXT		".mat"
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /data/petsun4/src/new/RCS/simple_weld.c,v 1.1 1995/07/19 15:11:45 ty7777 Exp ty7777 $";
+a28 1
+	BOOLEAN         simple_weld;
+a47 1
+	float           bottomT4[4][4];
+a48 1
+	float           topT4[4][4];
+d66 2
+a67 3
+	simple_weld = atoi (argv[4]);
+	sprintf (date, "%s %s %s %s %s %s", argv[5], argv[6], argv[7], argv[8], argv[9], argv[10]);
+	uid = argv[11];
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d14 1
+a14 1
+  History:	Created by Tom Yang on 05/05/93. 
+d21 1
+a21 1
+static char rcsid [] = "$Header$";
+d24 2
+a25 2
+	int	argc;
+	char	**argv;
+d27 33
+a59 33
+	BOOLEAN			simple_weld;
+	BOOLEAN			demigrate;
+	FILE			*recfp;
+	IMAGE_LIST_DATA		*image_list;
+	IMAGE_LIST_DATA		pseudo_image_list;
+	LITERALIST_DATA		*literal_image_list;
+	PARAMETER_DATA		parameter_data;
+	char			complete_image_files [6][MAXPATH];
+	char			complete_sxrfile [MAXPATH];
+	char			date [MAXLINE];
+	char			*image_list_file;
+	char			image_recfile [MAXPATH];
+	char			line [MAXLINE];
+	char			*parameter_list_file;
+	char			rec_file [MAXLINE];
+	char			short_image_files [6][MAXLINE];
+	char			short_sxrfile [MAXLINE];
+	char			short_weldedimg_files [6][MAXLINE];
+	char			string [MAXLINE];
+	char			*uid;
+	float			bottomT4 [4][4];
+	float			bottom_scaling_factor;
+	float			topT4 [4][4];
+	float			top_scaling_factor;
+	int			filter_mode;
+	int			i;
+	int			image_mode;
+	int			j;
+	int			k;
+	int			noisy_slices;
+	int			num_image_files;
+	int			num_image_list;
+	struct INFO_TYPE	finfo;
+d61 9
+a69 9
+	/*
+	 * Get command line arguments.
+	 */
+	parameter_list_file	= argv [1];
+	image_list_file		= argv [2];
+	noisy_slices		= atoi (argv [3]);
+	simple_weld		= atoi (argv [4]);
+	sprintf (date, "%s %s %s %s %s %s", argv [5], argv [6], argv [7], argv [8], argv [9], argv [10]);
+	uid			= argv [11];
+d71 4
+a74 6
+	/* 
+	 * Read the parameters in the image parameters file to the structure
+	 * INFO_TYPE finfo.
+	 */
+	if (readparm (parameter_list_file, &parameter_data) == FAIL)
+	{
+d79 6
+a84 7
+	/* 
+	 * Allocate memory for an array of image list structures. 
+	 */
+	if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE)
+	{
+		image_list	= (IMAGE_LIST_DATA *) pkg_malloc (sizeof (IMAGE_LIST_DATA) 
+				* MAX_IMAGE_LIST_SIZE, "simple_weld", "image_list");
+d86 7
+a92 8
+		/* 
+	 	 * Read list from image_list_file to IMAGE_LIST_DATA structure list
+	 	 * image_list for manipulation.
+	 	 */
+		if (readimglist (image_list_file, image_list, &num_image_list) == FAIL)
+		{
+			fprintf (stderr, "Error from readimglist () for list %s.\n", 
+			image_list_file);
+d96 3
+a98 5
+	}
+	else
+	{
+		literal_image_list	= (LITERALIST_DATA *) pkg_malloc (sizeof (LITERALIST_DATA) 
+					* MAX_IMAGE_LIST_SIZE, "simple_weld", "literal_image_list");
+d100 3
+a102 4
+		if (read_literalist (image_list_file, literal_image_list, &num_image_list) == FAIL)
+		{
+			fprintf (stderr, "Error from read_literalist () for list %s.\n", 
+			image_list_file);
+d107 3
+a109 3
+		/* 
+	 	 * Fill the finfo structure for searching in archive.
+	 	 */
+d113 21
+a133 23
+	/* 
+	 * Compute the mean for each image pair.
+	 */
+	demigrate	= TRUE;
+	image_mode	= parameter_data.imglist_mode;	
+	filter_mode	= RECFILTER_MODE;
+	for (i = 0; i < num_image_list; i++)
+	{
+		/*
+		 * Build the short names for top and bottom scans.
+		 */
+		if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE)
+		{
+			if (build_shortnames (parameter_data, image_list [i], 
+			image_mode, filter_mode, &num_image_files, short_image_files, 
+			short_sxrfile) == FAIL)
+			{
+				fprintf (stderr, 
+				"Error in building short names from image list %s %s %f %s %f %s\n",
+				image_list [i].subject_id, 
+				image_list [i].scanset1_id, image_list [i].mean1, 
+				image_list [i].scanset2_id, image_list [i].mean2, 
+				image_list [i].sxrid);
+d135 4
+a139 6
+		else
+		{
+			strcpy (short_image_files [0], literal_image_list [i].topscan);
+			strcpy (short_image_files [1], literal_image_list [i].bottomscan);
+			num_image_files	= 2;
+		}
+d141 3
+a143 3
+		/*
+		 * Clean the array of complete image files.
+		 */
+d145 1
+a145 1
+			strcpy (complete_image_files [j], "");
+d147 12
+a158 14
+		/*
+		 * Get the complete top and bottom scans files.
+		 */
+		if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE)
+		{
+			if (checkimg (parameter_data, image_list [i], image_mode, demigrate, 
+			num_image_files, short_image_files, complete_image_files) == FAIL)
+			{
+				fprintf (stderr, 
+				"Error in checking files from image list %s %s %f %s %f %s\n\n",
+				image_list [i].subject_id, 
+				image_list [i].scanset1_id, image_list [i].mean1, 
+				image_list [i].scanset2_id, image_list [i].mean2, 
+				image_list [i].sxrid);
+d161 9
+a169 13
+		}
+		else
+		{
+			for (j = 0; j < num_image_files; j++)
+			{
+				if (searchpath (parameter_data.datapath, short_image_files [j], 
+				finfo, complete_image_files [j]) == FAIL)
+				{
+					fprintf (stderr, 
+				"Error in checking files from literal list %s %s %s\n\n",
+					literal_image_list [i].topscan, 
+					literal_image_list [i].bottomscan, 
+					literal_image_list [i].weldedscan);
+d175 13
+a187 20
+		/*
+		 * Build short whole scan files.
+		 */
+		if (parameter_data.imglist_mode == STDIMAGE_MODE)
+		{
+			build_shortnames (parameter_data, image_list [i], WELDED_IMAGE_MODE, 
+			filter_mode, &num_image_files, short_weldedimg_files, short_sxrfile);
+		}
+		else if (parameter_data.imglist_mode == PREWELDED_IMAGE_MODE)
+		{
+			build_shortnames (parameter_data, image_list [i], STDIMAGE_MODE, 
+			filter_mode, &num_image_files, short_weldedimg_files, short_sxrfile);
+		}
+		else if (parameter_data.imglist_mode == LITERAL_IMAGE_MODE)
+		{
+			strcpy (short_weldedimg_files [0], literal_image_list [i].weldedscan);
+			num_image_files	= 1;
+		}
+		else
+		{
+d189 1
+a189 1
+				parameter_list_file);
+d193 9
+a201 9
+		/*
+		 * Welds the top and bottom scans together.
+		 */
+		for (j = 0; j < num_image_files; j++)
+		{
+			/*
+			 * Construct the rec file name and creates the rec file header.
+			 */
+			strcpy (rec_file, short_weldedimg_files [j]);
+d204 2
+a205 3
+			recfp	= fopen (rec_file, "w");
+			if (recfp == (FILE *) NULL)
+			{
+d209 1
+a209 1
+			fprintf (recfp, "rec %s %s %s\n", short_weldedimg_files [j], date, uid);
+d213 3
+a215 3
+			/*
+			 * Copy the parameter file to the rec file.
+			 */
+d220 3
+a222 4
+			/*
+			 * Copy the relevant line from the image list file 
+			 * to the rec file.
+			 */
+d224 1
+a224 2
+			if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE)
+			{
+d226 5
+a230 7
+					image_list [i].subject_id, 
+					image_list [i].scanset1_id, image_list [i].mean1, 
+					image_list [i].scanset2_id, image_list [i].mean2, 
+					image_list [i].sxrid);
+			}
+			else
+			{
+d232 4
+a235 4
+					literal_image_list [i].topscan, 
+					literal_image_list [i].bottomscan, 
+					literal_image_list [i].weldedscan, 
+					literal_image_list [i].matfile);
+d239 9
+a247 11
+			/*
+			 * Find the top and bottom sscaling factors.
+			 */
+			if (parameter_data.imglist_mode != LITERAL_IMAGE_MODE)
+			{
+				if (getfactor (parameter_data, image_list [i], image_mode, 
+				short_image_files [2 * j], short_image_files [2 * j + 1], 
+				complete_image_files [2 * j], complete_image_files [2 * j + 1],
+				noisy_slices, &top_scaling_factor, &bottom_scaling_factor, 
+				recfp) == FAIL)
+				{
+d251 6
+a256 9
+			}
+			else
+			{
+				if (getfactor (parameter_data, pseudo_image_list, image_mode, 
+				short_image_files [2 * j], short_image_files [2 * j + 1], 
+				complete_image_files [2 * j], complete_image_files [2 * j + 1],
+				noisy_slices, &top_scaling_factor, &bottom_scaling_factor, 
+				recfp) == FAIL)
+				{
+d262 4
+a265 4
+			/*
+			 * Copy the image rec files if there are any.
+			 */
+			strcpy (image_recfile, complete_image_files [2 * j]);
+d269 1
+a269 1
+			strcpy (image_recfile, complete_image_files [2 * j + 1]);
+d273 4
+a276 5
+			if (WeldImages (complete_image_files [2 * j], 
+			complete_image_files [2 * j + 1], short_weldedimg_files [j],
+			noisy_slices, top_scaling_factor, bottom_scaling_factor, 
+			recfp, date, rcsid) == FAIL) 
+			{
+a279 1
+
+d289 1
+a289 1
+		free (literal_image_list);	
+@

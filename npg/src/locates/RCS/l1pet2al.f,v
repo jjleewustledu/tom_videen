@@ -1,0 +1,363 @@
+head	2.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.5
+date	2004.02.16.19.39.57;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	2002.11.27.20.14.04;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	98.06.18.16.31.38;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.10.23.21.26.41;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.01.28.22.25.35;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking, working version.
+@
+
+
+2.5
+log
+@Feb 2004
+@
+text
+@C$Log: l1pet2al.f,v $
+c Revision 2.2  2002/11/27  20:14:04  tom
+c *** empty log message ***
+c
+c Revision 2.1  1998/06/18  16:31:38  tom
+c *** empty log message ***
+c
+c Revision 2.0  1996/10/23  21:26:41  tom
+c Solaris
+c
+c Revision 1.1  1994/01/28  22:25:35  ty7777
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   L1PET2AL.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         05-May-87
+C  Written for:  LOCATES.FTN
+C
+C  Modified by Tom Yang on 28-Jan-94 to port to the UNIX platform.
+C
+C  Revised version of LOCATE.FTN by Joel S. Perlmutter (9/22/85)
+C
+C  Intent:
+C     This subroutine converts PET region coordinates to stereotaxic
+C     atlas coordinates.
+C     (Computation is done by L1PT2AL.FTN)
+C
+C  Common Blocks from LOCATES.INC:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **PETDATA   - tomograph parameters;         (read only)
+C     **REGION   - region analysis parameters     (read only)
+C     **SXRDATA  - skull xray parameters          (read only)
+C     **ATLDATA  - atlas region parameters        (write)
+C
+C  Uses Subroutines:
+C     L1PRGET  - get regions from a paired regions-SXR name file;
+C     L1PRNEW  - create a paired regions-SXR file;
+C     L1PRSAVE - write atlas coordinates to a paired file;
+C     L1PT2AL  - compute PET-to-atlas conversion;
+C     L1RGET   - get a region file;
+C     L13DGET  - get regions from an AF3D file;
+C     L13DSAVE - write atlas coordinates to an AF3D file;
+C
+C  TERMINAL.LIB
+C     TCONTROL
+C     GETREAL
+C     GTSTRING
+C     YESNO
+C
+C  Called by:  LOCATES
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE L1PET2AL
+
+      INCLUDE 'locates.inc'
+
+      INTEGER*4    I
+      REAL         RLRATIO(100),RESPONSE(100),DEGX,DEGY,DEGZ
+      CHARACTER*1  BELL,CH
+      CHARACTER*2  RNUM
+      CHARACTER*256 SXRNAME(100),FNAME
+      CHARACTER*80 Q,STR,HEADER,CHARSET
+      CHARACTER*256 RCSHEADER
+      LOGICAL*1    READFILE,ANS,ERROR,AF3D,PAIRED
+
+      RCSHEADER = '$Id: l1pet2al.f,v 2.2 2002/11/27 20:14:04 tom Exp tom $'
+
+      BELL = CHAR(7)
+      AF3D = .FALSE.
+      PAIRED = .FALSE.
+      FNAME = ' '
+      CH = 'R'
+
+      CALL TCONTROL (1, 0, 0)
+      CALL TCONTROL (2, 0, 0)
+      WRITE (USEROUT, *) 'PET-to-ATLAS Conversion'
+      WRITE (USEROUT, *) '-----------------------'
+      WRITE (USEROUT, *)
+
+C  Get input from regional data files
+
+50    Q = 'Get data from a file'
+      READFILE = .TRUE.
+      CALL YESNO (Q, READFILE)
+      IF (READFILE) THEN
+        Q = 'Type of regions file (R = Regular, A = AF3D, P = Paired)'
+        CHARSET = 'RAPrap'
+        CALL GETCHAR (Q, CH, CHARSET)
+        IF (CH .EQ. 'A' .OR. CH .EQ. 'a') THEN
+          AF3D = .TRUE.
+          CALL L13DGET (FNAME, RESPONSE, HEADER, ERROR)
+        ELSE IF (CH .EQ. 'P' .OR. CH .EQ. 'p') THEN
+          PAIRED = .TRUE.
+          Q = 'Read an existing paired file'
+          ANS = .TRUE.
+          CALL YESNO (Q, ANS)
+          IF (ANS) THEN
+            CALL L1PRGET (FNAME, HEADER, SXRNAME, ERROR)
+          ELSE
+            CALL L1PRNEW (FNAME, HEADER, SXRNAME, ERROR)
+          END IF
+        ELSE
+          CALL L1RGET (ERROR)
+        END IF
+        IF (ERROR) THEN
+          WRITE (USEROUT, *) '*** ERROR reading file', BELL
+          GO TO 50
+        END IF
+        DO 100 I = 1, NREGS
+          ATLNAME (I) = REGNAME (I)
+          CALL L1PT2AL (I, RLRATIO (I))
+100     CONTINUE
+C
+      ELSE
+        I = 0
+200     I = I+1
+        Q = 'R-L coordinate (X) (enter 0 to stop)'
+        CALL GETREAL(Q,RLPET(I),0.0,128.0)
+        IF (RLPET(I).EQ.0.0) THEN
+          I = I-1
+          NREGS = I
+        ELSE
+          Q = 'A-P coordinate (Y)'
+          CALL GETREAL(Q,APPET(I),0.0,128.0)
+          Q = 'Slice number'
+          CALL GETREAL(Q,SLICE(I),1.0,FLOAT(NSLICES))
+          WRITE(RNUM,8000) I
+          Q = 'Name of Region '//RNUM
+          STR = ' '
+          CALL GTSTRING(Q,STR)
+          ATLNAME(I) = STR(1:10)
+          CALL L1PT2AL(I,RLRATIO(I))
+          GO TO 200
+        END IF
+      END IF
+
+      IF (NREGS .LE. 0) RETURN
+
+C  Write the results to the terminal/printer
+
+8000  FORMAT(I2)
+8100  FORMAT(1X,'SXR Values:')
+8140  FORMAT(1X,'Scan #   AC-PC   Angle X   Angle Y   Angle Z   ',
+     2          'Ztot   delta Z  delta AP  Origin: Z   AP')
+8160  FORMAT(1X,A5,3X,7(F7.3,2X),I11,F8.2,/)
+8180  FORMAT(1X,'Regions made using regions file: ',A20,/)
+8190  FORMAT(1X,'Regions entered by hand',/)
+8200  FORMAT(1X,16X,'ATLAS COORDINATES',13X,'PET COORDINATES')
+8220  FORMAT(1X,' Region',8X,'RL',7X,'AP',7X,'Z',10X,'RL',7X,'AP',5X,'Slice')
+8240  FORMAT(1X,A10,3(2X,F7.2),2X,3(2X,F7.2))
+
+      DEGX = ANGX*180.0/3.1416
+      DEGY = ANGY*180.0/3.1416
+      DEGZ = ANGZ*180.0/3.1416
+
+      WRITE(USEROUT,8100)
+      WRITE(USEROUT,8140)
+      WRITE(USEROUT,8160) SCAN,APXRAY,DEGX,DEGY,DEGZ,ZXRAY,DZ,DAP,REFSLICE,APCTR
+      IF (READFILE) THEN
+        WRITE(USEROUT,8180) REGFILE
+      ELSE
+        WRITE(USEROUT,8190)
+      END IF
+      WRITE(USEROUT,8200)
+      WRITE(USEROUT,8220)
+
+      DO 500 I = 1, NREGS
+        WRITE (USEROUT, 8240) REGNAME(I), RLATLAS(I), APATLAS(I),
+     &    ZATLAS(I), RLPET(I), APPET(I), SLICE(I)
+500   CONTINUE
+
+      IF (AF3D) THEN
+        Q = 'Save atlas values in an AF3D file'
+        ANS = .TRUE.
+        CALL YESNO(Q,ANS)
+        IF (ANS) CALL L13DSAVE (FNAME,RLRATIO,RESPONSE,HEADER)
+      ELSE IF (PAIRED) THEN
+        Q = 'Save atlas values in a paired regions-SXR file'
+        ANS = .TRUE.
+        CALL YESNO(Q,ANS)
+        IF (ANS) CALL L1PRSAVE(FNAME,RLRATIO,SXRNAME,HEADER)
+      ELSE
+        Q = 'Continue'
+        ANS = .TRUE.
+        CALL YESNO(Q,ANS)
+      END IF
+      ATLAS = ' '
+
+      RETURN
+      END
+@
+
+
+2.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d70 1
+a70 1
+      RCSHEADER = '$Id: l1pet2al.f,v 2.1 1998/06/18 16:31:38 tom Exp tom $'
+@
+
+
+2.1
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d67 1
+a67 1
+      RCSHEADER = '$Id: l1pet2al.f,v 2.0 1996/10/23 21:26:41 tom Exp tom $'
+d149 1
+a149 1
+8200  FORMAT(1X,16X'ATLAS COORDINATES',13X,'PET COORDINATES')
+@
+
+
+2.0
+log
+@Solaris
+@
+text
+@d2 3
+d52 1
+a52 1
+C
+d54 1
+a54 1
+C
+d63 3
+a65 3
+C
+      RCSHEADER = '$Id: l1pet2al.f,v 1.1 1994/01/28 22:25:35 ty7777 Exp tom $'
+C
+d71 1
+a71 1
+C
+d77 1
+a77 1
+C
+d79 1
+a79 1
+C
+d134 1
+a134 1
+C
+d136 1
+a136 1
+C
+d138 1
+a138 1
+C
+a140 1
+8120  FORMAT(1X,63X,'Center of PET')
+d142 2
+a143 2
+     2          'Ztot   delta Z  delta AP  Slice ',I,'(pix)')
+8160  FORMAT(1X,A5,3X,7(F7.3,2X),3X,F7.3,/)
+d147 1
+a147 2
+8220  FORMAT(1X,' Region',8X,'RL',7X,'AP',7X,'Z',10X,'RL',7X,'AP',
+     2  5X,'Slice')
+d149 1
+a149 1
+C
+d153 1
+a153 1
+C
+d155 2
+a156 4
+      WRITE(USEROUT,8120)
+      WRITE(USEROUT,8140) REFSLICE
+      WRITE(USEROUT,8160) SCAN,APXRAY,DEGX,DEGY,DEGZ,ZXRAY,DZ,DAP,
+     2  APCTR
+d164 1
+a164 1
+C
+d166 2
+a167 2
+        WRITE (USEROUT, 8240) REGNAME (I), RLATLAS (I), APATLAS (I),
+     2    ZATLAS (I), RLPET (I), APPET (I), SLICE (I)
+d169 1
+a169 1
+C
+d186 1
+a186 1
+C
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 4
+
+C$Id$
+C$Log$
+C
+a49 4
+C
+C
+C
+C
+d56 1
+a56 1
+      CHARACTER*20 SXRNAME(100),FNAME
+d61 1
+a61 1
+      RCSHEADER = '$Id$'
+@

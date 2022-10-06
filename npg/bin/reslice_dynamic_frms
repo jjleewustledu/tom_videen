@@ -1,0 +1,109 @@
+#!/bin/csh
+# Program:	reslice_dynamic_frms
+# Author:	Tom Videen
+# Date:		Nov 2010
+# Usage:	Reslice specified frames from a dynamic ECAT6 or ECAT7 image.
+# 	Requires:
+# 		1) dynamic image has been separated into single-frame images in Analyze format
+#		2) combined air files aligning each image to the first
+#	Creates:
+#		1) resliced images in ECAT 6 or 7 format
+#		2) corresponding hdr files if they exist for the original images
+#	Removes:
+#		1) resliced images in Analyze format
+
+if (! $?NPG) setenv NPG /usr/local/npg
+ 
+if ($#argv != 6) then
+	echo "Usage:  reslice_dynamic_frms root ext first last ref original_image"
+	echo " e.g.,  reslice_dynamic_frms p6000fd .i 2 45 11 p6000fdg1.v"
+	exit 1
+endif
+
+unalias rm
+unalias cp
+set NAME  = $1
+set ANAM  = a$NAME
+set EXT   = $2
+set AEXT  = `echo $EXT | cut -f1 -d.`
+set FIRST = $3
+set LAST  = $4
+set REF   = $5
+set ORIG  = $6
+set NULLAIR  = ${NAME}_null
+
+if (! -e $ORIG) then
+	echo "ERROR [reslice_dynamic_frms]: cannot find $ORIG"
+	exit 1
+else
+	set ECATTYPE = `imghdr $ORIG | grep 'File format' | cut -f5 -d' '`
+endif
+
+# Check existence of all single-frame image files 
+# -----------------------------------------------
+set i = $FIRST
+while ($i <= $LAST)
+	set IMG  = $NAME$i$EXT
+	set AIMG = $ANAM$i$AEXT
+	if (! -e $AIMG.img) then
+		if (! -e $IMG) then
+			echo "ERROR [reslice_dynamic_frms]: cannot find $IMG"
+			echo "      Use singlefrm_gauss or separate_dynframes to create single-frame images"
+			exit 1
+		else
+			${NPG}/bin/img2analyze $IMG $AIMG
+			rm $AIMG.ifh
+			if (-e $AIMG.lkup) rm $AIMG.lkup
+		endif
+	endif
+	@ i++
+end
+
+# Reslice all images using appropriate air file 
+# ---------------------------------------------
+set i = $FIRST
+while ($i <= $LAST)
+	set IMG  = $NAME$i$EXT
+	set RIMG = r$IMG
+	set AIMG = $ANAM$i$AEXT
+	set RAIMG = r$ANAM$i$AEXT
+	set NETAIR = ${NAME}_${REF}vs${i}
+	if (! -e $NETAIR.air) then
+		echo "Warning [reslice_dynamic_frms]: No corresponding AIR file $NETAIR.air"
+		if (! -e $NULLAIR.air) alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 50 -p1 1 -p2 0
+		echo "   using $NULLAIR.air"
+		imgreslice $AIMG $NULLAIR
+		if ($ECATTYPE == 7) then
+			${NPG}/bin/analyze2img $RAIMG $RIMG $ORIG $i
+		else if ($ECATTYPE == 6) then
+			${NPG}/bin/analyze2ecat6 $RAIMG $RIMG $ORIG $i
+		else
+			${NPG}/bin/analyze2img $RAIMG $RIMG
+		endif
+		rm $RAIMG.hdr
+		rm $RAIMG.img
+	else
+		echo "-- imgreslice $AIMG $NETAIR"
+		imgreslice $AIMG $NETAIR
+		if ($ECATTYPE == 7) then
+			${NPG}/bin/analyze2img $RAIMG $RIMG $ORIG $i
+		else if ($ECATTYPE == 6) then
+			${NPG}/bin/analyze2ecat6 $RAIMG $RIMG $ORIG $i
+		else
+			${NPG}/bin/analyze2img $RAIMG $RIMG
+		endif
+		rm $RAIMG.hdr
+		rm $RAIMG.img
+	endif
+	set HDR = $NAME$i$AEXT.hdr
+	set RHDR = r$HDR
+	if (! -e $RHDR) then
+		if (-e $HDR) then
+			echo "-- cp $HDR $RHDR"
+			cp $HDR $RHDR
+		endif
+	endif
+	@ i++
+end
+echo "[reslice_dynamic_frms] Complete at `date`"
+

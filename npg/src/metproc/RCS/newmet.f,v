@@ -1,0 +1,554 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	92.11.02.16.27.14;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@c $Log: metproc.f,v $
+c Revision 1.3  1992/10/19  15:56:10  tom
+c modified RCSHEADER length
+c
+c Revision 1.2  1992/10/16  22:32:51  tom
+c added RCSHEADER
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      METPROC.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         12-Jun-87
+C
+C  Intent:
+C     This program reads .DTA (blood curve) files, computes metabolic
+C     conversion constants, and writes these plus certain parameters
+C     from the scan image file (.IMG or .CMG) to a header file (.HDR)
+C     associated with the image.  The specific values written to the
+C     HDR file are documented in WRITEHDR.
+C     These values in the .HDR file are necessary for SPIDERAM to
+C     display metabolic images instead of merely PET numbers.
+C
+C  History:
+C     Revision of METEVAL.FTN written by Mark Mintun.
+C     Modified 13-Aug-87 by TOV to read write-protected files.
+C     Modified 10-Sep-87 by TOV to search for PIE files on DT1 if
+C        they are not found on the user's volume when no volume
+C        name is specified for the PIE file.
+C     Typo in printout from WRITERCD fixed 02-May-88 by TOV.
+C     Modified 24-May-88 by TOV to eliminate the need for a redundant
+C        blood curve time in processing oxygen (O2UTIL.FTN).
+C     Modified 10-Oct-88 by TOV to read PIE file types 4 and 5 (as well
+C        as 3) and to check for correct pie based on IMGTYPE
+C        (PIEFILE, GETPIE, SAVEPIE)
+C        The header from 1 image file must be read before reading a pie file.
+C        (METPROC).  IMGTYPE is assigned 1000 or 1020 based on this header
+C        and is checked against all other image files during processing.
+C        Write version date in output file (WRITERCD).
+C        Decay constant of O15 entered correctly as 0.005668 instead of
+C        0.005568 as it was entered on 31-Mar-88.
+C     Modified 13-Oct-88 by TOV to allow minimum bank pairs to be 0.1 in
+C        INTERPIE.
+C     Modified 07-Dec-88 by TOV:
+C        1) fix minor bugs in PIEFILES, SAVEPIE, and WRITEHDR;
+C        2) alter BLOODFLW to write flow vs. PETT COUNTS;
+C        3) user may now select maximum flow used to fit curve in BLOODFLW;
+C     Modified 27-Mar-89 by TOV:
+C        1) user has option of correcting for PETT VI efficiency changes
+C           since the specified pie file:
+C        2) reads NORM mean counts/bin/minute from scan file header for
+C           PETT VI (NORMMEAN)
+C        3) reads NORM mean counts/bin/minute and scan date from pie file
+C        4) decay corrects pie NORM mean to date of current scan (PIEMEAN)
+C           and multiplies all factors by the ratio PIEMEAN/NORMMEAN.
+C        5) write PIESLOPE and EFACTOR to HDR file.
+C        Altered: METPROC.INC, METPROC, READHEAD, PIEFILE, GETPIE
+C           GETFACTR, WRITERCD, INTERPIE, WRITEHDR
+C        Add:  PIESCALE
+C     Modified 06-Oct-89 by TOV to prevent error it PIEMEAN and PIEDATE
+C        do not exist at the end of the pie file; EFACTOR set to 1.0.
+C        Altered:  GETPIE, METPROC
+C     Modified 25-Jan-91 by TOV to read pie file type 6 and image type 2000.
+C     Modified 08-Oct-91 by TOV to correct reading of P8FILTER.
+C        Altered:  READHEAD
+C
+C			Modified for UNIX by TOV 14-Jan to 14-Feb-92:
+C				USERIN = 5; USEROUT = 6 (defaults)
+C				All files opened internally by name. 
+C					PIENAME, DTANAME, RCDNAME, IMGNAME, HDRNAME 
+C				Add subroutines: GETARG, GETCWD, ieee2pe
+C				Eliminate TERMSET, TCONTROL
+C				Changes in:   BLOODFLW, GETIMAGE, GETPIE, INTCONV, METFILE, METPROC
+C					READDTA, READHEAD, SAVEPIE, WRITEHDR, WRITERCD, METPROC.INC
+C			Modified 12-May-92 by TOV 
+C				1) to incorporate libpetutil and libpe.
+C						Changes in:	Makefile, WRITEHDR, READHEAD
+C						Use GETIMG from libpetutil.
+C				2) changed remaining FNAME to IMGNAME
+C						Changes in: METFILE, READHDR
+C
+C  Uses Subroutines:
+C
+C  Main Subroutines:
+C     READDTA  - read blood curve (.DTA) file;
+C     METFILE  - open a scan file and set HDRNAME;
+C     READHEAD - read selected paramters from scan file header;
+C     GETFACTR - get pie slope and partition coefficient;
+C     INTERPIE - get pie slope from interpolation of PIE file values;
+C     PIEFILE  - read or write PIE files;
+C     PIESCALE - compute PETT efficiency factor (EFACTOR) of PIE rel. to scan;
+C     O2UTIL   - oxygen utilization model;
+C     BLOODFLW - blood flow model;
+C     BLOODVOL - blood volume model;
+C     INTEGRAT - integrate a function;
+C     READHDR  - read scan parameters from an .HDR file;
+C     WRITEHDR - create .HDR file;
+C     WRITERCD - write record (.RCD) file;
+C
+C  libpe
+C     GTSTRING
+C     UPPERCAS
+C     YESNO
+C
+C		Sun FORTRAN
+C			GETARG
+C			GETCWD
+C			LNBLNK
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM METPROC
+C
+      INTEGER*4		DTAFILE	! file descriptor (lu) of .DTA file
+      INTEGER*4		RCDFILE	! file descriptor (lu) of .RCD file
+      INTEGER*4		DISK		! file descriptor (lu) for image, PIE, and HDR files
+C
+      INTEGER*4		NPIES		! number of PSLOPES/BNKPAIRS
+      INTEGER*4		I,L,N
+      INTEGER*4		IMGTYPE
+C
+      REAL*4       PSLOPES(10)	! pie slopes read from PIE file
+      REAL*4       BNKPAIRS(10)	! bank pairs read from PIE file
+      REAL*4       EFACTOR
+      REAL*4       NORM1,NORM2
+C
+      LOGICAL*1    PEAKUSED	! true--> user enters peak of Bank Pairs and
+C																			program estimates the mean;
+C															false--> user enters mean Bank Pairs;
+      LOGICAL*1    SKIPSCAN	!	true--> do not process the scan;
+C															false--> process the scan;
+      LOGICAL*1    IOPTION	! true--> Pie Slope is computed internally by
+C        reading a PIE file and interpolating peak bank pairs;
+      LOGICAL*1    ERRFLAG
+      LOGICAL*1    REPROCES	! true--> reprocess existing HDR files
+C                false-->get scan parameters from original scan files;
+      LOGICAL*1    A
+C
+      CHARACTER*1		BELL
+      CHARACTER*3		MON
+			CHARACTER*3		FSTATUS	! file status (OLD or NEW)
+      CHARACTER*4		FILELABL	! 4 characters at the beginning of a DTA file
+C				which are used to check agreement with the current program version;
+      CHARACTER*8		DATE1, DATE2
+      CHARACTER*9		VERSION
+      CHARACTER*80	Q
+			CHARACTER*256 STR
+			CHARACTER*256 RCSHEADER
+C
+			CHARACTER*256	HDRNAME	! name of .HDR file
+      CHARACTER*256	DTANAME	! name of .DTA file
+      CHARACTER*256	RCDNAME	! name of .RCD file
+C
+      INCLUDE 'metproc.inc'
+C
+			DATA DTAFILE, RCDFILE, DISK /1,2,3/
+			DATA USERIN, USEROUT /5,6/
+      DATA SCANTYPE(1) /'Oxygen              '/
+      DATA SCANTYPE(2) /'Blood Flow (H2O)    '/
+      DATA SCANTYPE(3) /'Blood Volume (CO)   '/
+      DATA SCANTYPE(4) /'Blood Flow (Butanol)'/
+      DATA SCANTYPE(5) /'Spiperone           '/
+      DATA SCANTYPE(6) /'Glucose             '/
+      DATA VERSION /'19-Oct-92'/
+C -------------------------------------------------------------------
+      DATA TAUO15    /0.005668/
+      DATA TAUO1502  /0.005592/
+      DATA TAUO1501  /0.005677/
+      DATA TAUO1500  /0.00568033/
+      DATA TAUC11    /0.0005668/
+      DATA TAUGA68   /0.0001691/
+      DATA TAUF18    /0.0010529/
+      DATA HOLAMBDA  /0.95/
+      DATA BULAMBDA  /0.81/
+      DATA BRAINDEN  /1.05/
+      DATA BLOODDEN  /1.06/
+      DATA SLVRATIO  /0.85/
+      DATA RBCFACTOR /0.766/
+C
+C  Source for decay constants: first listed halflife for each in
+C     Lederer & Shirley, Table of Isotopes, 1978 (7th edition), Wiley.
+C     (same no. of significant figures as halflives in this source)
+C  Except for O15 where the decay constant was measured using six 20 min
+C     decay curves by Mike Welch taken Jan. 1988.  Curves were fit by
+C     Tom Videen.
+C
+C  Source for HOLAMBDA,BRAINDEN,BLOODDEN,RBCFACTOR:
+C     Herscovitch & Raichle (1985) J. Cereb Blood Flow Metabol, 5:65
+C
+C  Source for SLVRATIO:
+C     Grubb, Raichle, Higgins & Eichling (1978) Annals of Neurology, 4:322
+C
+C -------------------------------------------------------------------
+C  Initialize constants
+C
+			RCSHEADER = "$Header: /usr/local/src/metproc/RCS/metproc.f,v 1.3 1992/10/19 15:56:10 tom Exp $"
+      BELL = CHAR(7)
+      IMGTYPE = 0           ! avoid compiler warning
+      EFACTOR = 1.0
+      REPROCES = .FALSE.
+			PIEMEAN = 1.0
+8100  FORMAT(19X,A44)
+8101  FORMAT(35X,A1,A9,A1)
+      WRITE(USEROUT,8100)'********************************************'
+      WRITE(USEROUT,8100)'     METABOLIC PROCESSING of SCAN FILES     '
+      WRITE(USEROUT,8101)'(',VERSION,')'
+      WRITE(USEROUT,8100)'                UNIX version                '
+      WRITE(USEROUT,8100)'             Creates .HDR Files             '
+      WRITE(USEROUT,8100)'********************************************'
+      WRITE(USEROUT,*)
+C
+			CALL GETENV('PWD',PATH)
+			CALL GETARG(1,SUBJECT)
+      L = LNBLNK(SUBJECT)
+			WRITE(USEROUT,8105) PATH( : LNBLNK(PATH)), SUBJECT
+8105	FORMAT('Current Directory = ',A,/,'Subject ID = ',A)
+      DO 10 I=1,6
+        COUNT(I) = 1
+10    CONTINUE
+C
+C  Open DTA and RCD files
+C			
+			DTANAME = SUBJECT(1:L)//'.DTA'
+			FSTATUS = 'OLD'
+			OPEN(DTAFILE,FILE=DTANAME,STATUS='OLD',ERR=15)
+			GO TO 30
+15		DTANAME = SUBJECT(1:L)//'.DAT'
+			OPEN(DTAFILE,FILE=DTANAME,STATUS='OLD',ERR=25)
+			GO TO 30
+25		WRITE(USEROUT,8110) SUBJECT(1:L), SUBJECT(1:L)
+			STOP
+30		WRITE(USEROUT,8115) DTANAME( : LNBLNK(DTANAME))
+C
+8110	FORMAT('Neither blood curve file ',A,'.DTA nor ',A,'.DAT exists!')
+8115	FORMAT('Reading blood curve from ',A)
+C
+			RCDNAME = SUBJECT(1:L)//'.RCD'
+			OPEN(RCDFILE,FILE=RCDNAME,ERR=35)
+			GO TO 40
+35		WRITE(USEROUT,8120) RCDNAME( : LNBLNK(RCDNAME))
+			STOP
+40		WRITE(USEROUT,8125) RCDNAME( : LNBLNK(RCDNAME))
+8120	FORMAT('Cannot open file ',A)
+8125	FORMAT('Log of processing will be written to ',A)
+C
+C  Obtain initials of USER
+C
+	    STR = ' '
+      Q = 'Enter your initials (max=4)'
+      CALL GTSTRING(Q,STR)
+      INITIALS = STR(1:4)
+C
+C  Reprocess existing HDR files
+C
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'WARNING:  If you REPROCESS HDR files, ',
+     2  'you must be certain that all'
+      WRITE(USEROUT,*) 'images were processed with the same ',
+     2  'reconstruction stream.'
+      WRITE(USEROUT,*) 'If they were not, the wrong pie factor ',
+     2  'may be used.'
+      WRITE(USEROUT,*)
+      Q = 'Reprocess existing HDR files without reading scan files'
+      CALL YESNO(Q,REPROCES)
+C
+C  Get default volume and extension
+C
+      IF (REPROCES) THEN
+        Q = 'Directory path for HDR files'
+        STR = PATH
+        CALL GTSTRING(Q,STR)
+        PATH = STR
+        EXTENSION = '.HDR'
+      ELSE
+        Q = 'Directory path for scan files'
+        STR = PATH
+        CALL GTSTRING(Q,STR)
+        PATH = STR
+				WRITE(USEROUT,*) 'Extension may be up to 10 characters but MUST '//
+     &		'include the period if there is one'
+        Q = 'Extension for scan files (i.e., .IMG, .CMG, .C, ., or blank)'
+        STR = '.C'
+        CALL GTSTRING(Q,STR)
+        EXTENSION = STR
+      END IF
+C
+C  Read PIE file
+C
+      IOPTION = .TRUE.
+      PEAKUSED = .TRUE.
+45    Q = 'Let the program compute the Pie Slope'
+      CALL YESNO(Q,IOPTION)
+      IF (IOPTION) THEN
+C
+C  Must get RCONTYPE (image type) before reading a pie file
+C
+50      Q = 'Enter the name of 1 image file you will be processing'
+        STR = ' '
+        CALL GTSTRING(Q,STR)
+        IMGNAME = STR
+        IF (.NOT.REPROCES) THEN
+          IF (STR(1:1).NE.'/') THEN
+            IMGNAME = PATH( : LNBLNK(PATH))//'/'//STR( : LNBLNK(STR))//
+     &					EXTENSION( : LNBLNK(EXTENSION))
+					ELSE
+            IMGNAME = STR( : LNBLNK(STR))//EXTENSION( : LNBLNK(EXTENSION))
+          END IF
+        END IF
+        CALL READHEAD(DISK,ERRFLAG)
+        IMGTYPE = RCONTYPE
+        IF (ERRFLAG) THEN
+          WRITE(USEROUT,*) '*** Cannot read ',IMGNAME( :LNBLNK(IMGNAME)),BELL
+          GO TO 50
+        ELSE IF (IMGTYPE.NE.1000 .AND. IMGTYPE.NE.1020
+     &     .AND. IMGTYPE.NE.2000) THEN
+          WRITE(USEROUT,*)'*** ERROR: Image Type ',IMGTYPE,
+     &      ' is incompatable with this program.',BELL
+          GO TO 50
+        END IF
+C
+C  For images reconstructed with new stream on PETT VI:
+C  If image file does not contain NORM mean, try an attenuation image
+C  (in order to get an efficiency scaler)
+C
+        IF ((IMGTYPE.EQ.1020 .OR. IMGTYPE.EQ.2000)
+     &      .AND. NORMMEAN.LE.0.0) THEN
+60        Q = 'Enter the name of an attenuation image'
+          STR = ' '
+          CALL GTSTRING(Q,STR)
+          IMGNAME = STR
+          IF (STR(1:1).NE.'/') THEN
+            IMGNAME = PATH( : LNBLNK(PATH))//'/'//STR( : LNBLNK(STR))
+          END IF
+C
+          CALL READHEAD(DISK,ERRFLAG)
+          IF (ERRFLAG) THEN
+            WRITE(USEROUT,*) '*** Cannot read ',IMGNAME(:LNBLNK(IMGNAME)),BELL
+            GO TO 60
+          ELSE IF (RCONTYPE.NE.1010) THEN
+            WRITE(USEROUT,*)'*** ERROR: Image Type ',RCONTYPE,
+     &        ' is not a new attenuation image.',BELL
+            GO TO 60
+          END IF
+        END IF
+C
+        CALL PIEFILE(NPIES,PSLOPES,BNKPAIRS,DISK,IMGTYPE)
+				IF (PIENAME.EQ.' ') GO TO 45				
+C
+        WRITE(USEROUT,*)
+        WRITE(USEROUT,*) 'If you choose to enter PEAK bank pairs ',
+     2    'instead of a calculated mean,'
+        WRITE(USEROUT,*) 'the program will estimate the mean.'
+        WRITE(USEROUT,*) 'The program assumes your scans are of the ',
+     2    'usual length,'
+        WRITE(USEROUT,*) 'and uses the following formula:'
+        WRITE(USEROUT,*)
+        WRITE(USEROUT,*) '  Mean Bank Pairs = Peak Bank Pairs x Factor'
+        WRITE(USEROUT,*)
+        WRITE(USEROUT,*)'   Scan Type     Usual Length     Factor'
+        WRITE(USEROUT,*)'   ---------     ------------     ------'
+        WRITE(USEROUT,*)'   H2O (CBF)        40 sec         0.9'
+        WRITE(USEROUT,*)'   CO  (CBV)         5 min         0.59'
+        WRITE(USEROUT,*)'   O2  (CMRO2)      40 sec         0.9'
+        WRITE(USEROUT,*)
+        Q = 'Are you using PEAK Bank Pairs (and NOT calculated means)'
+        CALL YESNO(Q,PEAKUSED)
+        CALL UPPERCAS(PIENAME,256)
+C
+C  If PIEMEAN=1, no info was available in pie file for efficiency correction
+C
+        IF (PIEMEAN.EQ.1.0) THEN
+          EFACTOR = 1.0
+          WRITE(USEROUT,*) 'PETT efficiency factor set to 1.0'
+        ELSE
+          DATE1 = PIEDATE
+          DATE2 = SCANDATE
+          NORM1 = PIEMEAN
+          NORM2 = NORMMEAN
+        	CALL PIESCALE(NORM1,NORM2,DATE1,DATE2,EFACTOR)
+          IF ((IMGTYPE.NE.1020 .AND. IMGTYPE.NE.2000) .OR.
+     &        EFACTOR.LT.0.1) THEN
+            EFACTOR = 1.0
+            WRITE(USEROUT,*) 'PETT efficiency factor set to 1.0'
+          ELSE
+            WRITE(USEROUT,*)
+            WRITE(USEROUT,*) 'PETT efficiency of PIE relative to ',
+     &        'scan = ',EFACTOR
+            Q = 'Multiply pie factors by this efficiency'
+            A = .TRUE.
+            CALL YESNO(Q,A)
+            IF (.NOT.A) EFACTOR = 1.0
+          END IF
+        END IF
+      ELSE
+        PIENAME = ' '
+      END IF
+C
+8300  FORMAT(A4,A50)
+      READ(DTAFILE,8300) FILELABL,HEADER
+      IF (FILELABL.EQ.'@@01@@') THEN
+        FILETYPE = 4
+        OLDO15 = TAUO1501
+        READ(DTAFILE,*)
+        READ(DTAFILE,*)
+      ELSE IF (FILELABL.EQ.'@@02@@') THEN
+        FILETYPE = 5
+        OLDO15 = TAUO1502
+        READ(DTAFILE,*)
+        READ(DTAFILE,*)
+      ELSE IF (FILELABL.EQ.'@@ @@@@') THEN
+        FILETYPE = 3
+        OLDO15 = TAUO1500
+      ELSE IF (FILELABL.EQ.'@@@@@@@@') THEN
+        FILETYPE = 2
+        OLDO15 = TAUO1500
+      ELSE
+        MON = FILELABL(1:3)
+        IF (MON.EQ.'JAN' .OR. MON.EQ.'FEB' .OR. MON.EQ.'MAR') GO TO 100
+        IF (MON.EQ.'APR' .OR. MON.EQ.'MAY' .OR. MON.EQ.'JUN') GO TO 100
+        IF (MON.EQ.'JUL' .OR. MON.EQ.'AUG' .OR. MON.EQ.'SEP') GO TO 100
+        IF (MON.EQ.'OCT' .OR. MON.EQ.'NOV' .OR. MON.EQ.'DEC') GO TO 100
+        WRITE(USEROUT,*) '*** ERROR:  This is not a blood curve file',
+     2    BELL
+        STOP
+100     FILETYPE = 1
+        OLDO15 = TAUO1500
+        READ(DTAFILE,*)
+        READ(DTAFILE,*) N
+        DO 200 I=1,(N*2)+6
+          READ(DTAFILE,*)
+200     CONTINUE
+      END IF
+      READ(DTAFILE,*) NUMSCANS
+C
+C ===================================================================
+C  Loop for each scan
+C
+      DO 1000 N=1,NUMSCANS
+        CALL READDTA(DTAFILE)
+        IF (NTYPE.GT.6) THEN
+          WRITE(USEROUT,*) '*** This scan matches no known type ***'
+          WRITE(USEROUT,*) '*** and CANNOT BE PROCESSED       ***',BELL
+          GO TO 1000
+        END IF
+C
+C  Check that the entire scan can be mapped into TIME
+C
+        IF (SCANEND.GT.TIME(NUMPNTS)) THEN
+          WRITE(USEROUT,8400) SCANEND,TIME(NUMPNTS)
+          STOP
+        END IF
+8400    FORMAT('*** ERROR End of Scan,',F10.2,
+     2      ' is AFTER End of Curve,',F10.2)
+C
+C  Get parameters from the scan file header
+C
+        CALL METFILE(HDRNAME,SKIPSCAN)
+        IF (SKIPSCAN) GO TO 1000
+        IF (REPROCES) THEN
+          CALL READHDR(HDRNAME,ERRFLAG)
+          IF (ERRFLAG) THEN
+            WRITE(USEROUT,*) 'Cannot read HDR file'
+            WRITE(USEROUT,*) 'File was NOT processed',BELL
+            WRITE(USEROUT,*)
+            GO TO 1000
+          END IF
+        ELSE
+          CALL READHEAD(DISK,ERRFLAG)
+          IF (IOPTION .AND. RCONTYPE.NE.IMGTYPE) THEN
+            WRITE(USEROUT,*) '*** ERROR:',BELL
+            WRITE(USEROUT,*) '*** Pie factors were read for type ',
+     2        IMGTYPE
+            WRITE(USEROUT,*) '*** Image is of type ',RCONTYPE,
+     2        ' and can NOT be processed.'
+            WRITE(USEROUT,*)
+            GO TO 1000
+          END IF
+          IF (ERRFLAG) THEN
+            WRITE(USEROUT,*) '** ERROR:',BELL
+            WRITE(USEROUT,*) '** File type is not PETT VI or Super PETT'
+            WRITE(USEROUT,*) '** and can NOT be processed.'
+            WRITE(USEROUT,*)
+            GO TO 1000
+          END IF
+          IF (SLICES.GT.7) THEN
+            WRITE(USEROUT,*) '*** ERROR:',BELL
+            WRITE(USEROUT,*) '*** METPROC does not currently support ',
+     2         SLICES,'-slice studies.'
+            WRITE(USEROUT,*) '*** This scan can NOT be processed.'
+            WRITE(USEROUT,*)
+            GO TO 1000
+          END IF
+        END IF
+C
+C  Get pie slope and partition coefficient
+C
+        CALL GETFACTR(IOPTION,PEAKUSED,NPIES,PSLOPES,BNKPAIRS,EFACTOR)
+C
+C  Calculate the integral of the Blood Curve Activity
+C
+        CALL INTEGRAT(TIME,ACTIVITY,0.,SCANEND,TOTALCNTS)
+        CALL INTEGRAT(TIME,ACTIVITY,SCANST,SCANEND,SCANCNTS)
+        WRITE(USEROUT,*) 'Blood Counts:  (Non-Decay-Corrected)'
+        WRITE(USEROUT,8500) 'Injection     = ',TOTALCNTS
+        WRITE(USEROUT,8500) 'Start of Scan = ',SCANCNTS
+8500    FORMAT(' Integrated Blood Curve from ',A,F15.1)
+C
+C  Get Metabolic Conversion Constants appropriate to the file
+C
+        IF (NTYPE.EQ.1) THEN
+          CALL O2UTIL
+        ELSE IF (NTYPE.EQ.2 .OR. NTYPE.EQ.4) THEN
+          CALL BLOODFLW
+        ELSE IF (NTYPE.EQ.3) THEN
+          CALL BLOODVOL
+        END IF
+        COUNT(NTYPE) = COUNT(NTYPE)+1
+C
+C  Write information to .RCD file
+C
+        CALL WRITERCD(N,RCDFILE,EFACTOR,VERSION)
+C
+C  Create the HDR file
+C
+        CALL WRITEHDR(DISK,EFACTOR,HDRNAME)
+C
+1000  CONTINUE
+C ===================================================================
+C
+      STOP
+      END
+@

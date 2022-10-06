@@ -1,0 +1,143 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2001.07.12.20.39.29;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@date from 1998
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/bin/csh
+# Program:	aligndyn_1
+# Author:	Tom Videen
+# Date:		Oct-98
+# Usage:	Align all frames in a dynamic image.
+
+set BINPATH = /usr/local/npg/bin
+set PUBPATH = /usr/bin
+ 
+if ($#argv < 6) then
+	echo "Usage: aligndyn_1 root ext ref frms cutoff thresh [peakslices]"
+	echo " i.e., aligndyn_1 m500n img m500ref.img 3to44 0.3 3 [peakslices]"
+	exit(1)
+endif
+
+set ROOT  = $1
+set EXT   = .$2
+set BRAIN = $3
+set FIRST = `echo $4 | nawk '{FS="to";print $1}'`
+set LAST  = `echo $4 | nawk '{FS="to";print $2}'`
+set SECOND = `echo "$FIRST + 1; quit" | bc`
+set ANAM  = a${ROOT}
+set XNAM  = x${ROOT}
+set CUTOFF = $5
+set GF = `echo "$CUTOFF * 10; quit" | bc -l | cut -f1 -d.`
+set OEXT  = _g$GF$EXT
+set AEXT  = _g$GF
+set THRESH = $6
+if ($#argv == 7) then
+	set SLICES = $7
+else
+	set SLICES = 0
+endif
+set TMP = ${ROOT}temp.img
+set TLOG  = ${ROOT}.temp
+set ALOG  = ${ROOT}_th${THRESH}${AEXT}_noresampling.log
+set CLOG  = ${ROOT}_th${THRESH}${AEXT}_noresampling.fit
+echo `date` >! $ALOG
+echo `date` >! $CLOG
+
+# Check existence of all single-frame files used for alignment
+# ------------------------------------------------------------
+set i = $FIRST
+while ($i <= $LAST)
+	set AIMG = $ANAM$i$AEXT
+	if (!(-e $AIMG.img)) then
+		echo "ERROR [aligndyn_1]: Missing image $AIMG.img"
+		echo "      Use singlefrm_gauss to create filtered, single-frame images for alignment."
+		exit(1)
+	endif
+	@@ i++
+end
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set i = $FIRST
+set IMG  = $ROOT$i$OEXT
+set AIMG = $ANAM$i$AEXT
+set NULLAIR  = ${ROOT}_null.air
+set imax = `${BINPATH}/imghdr $IMG | grep Max | cut -f3 -d ' '`
+set ithr = `echo "$imax/$THRESH;quit" | bc`
+echo "-- alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 $ithr -p1 16 -p2 0"
+${BINPATH}/alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 $ithr -p1 16 -p2 0
+
+# Align all adjacent pairs 
+# ------------------------
+set i = $FIRST
+while ($i < $LAST)
+	set j = `echo "$i + 1; quit" | bc`
+	set IMG  = $ROOT$i$OEXT
+	set JMG  = $ROOT$j$OEXT
+	set AIMG = $ANAM$i$AEXT
+	set AJMG = $ANAM$j$AEXT
+	set AIR  = ${ROOT}_${i}vs${j}.air
+	set NETAIR = ${ROOT}_${FIRST}vs${j}.air
+	if ($i == $FIRST) then
+		if ($SLICES != 0) then
+			echo -- saveslc $IMG $TMP $SLICES
+			${BINPATH}/saveslc $IMG $TMP $SLICES
+			set imax = `${BINPATH}/imghdr $TMP | grep Max | cut -f3 -d ' '`
+		else
+			set imax = `${BINPATH}/imghdr $IMG | grep Max | cut -f3 -d ' '`
+		endif
+		set ithr = `echo "$imax/$THRESH;quit" | bc`
+	endif
+	if ($SLICES != 0) then
+		echo -- saveslc $JMG $TMP $SLICES
+		${BINPATH}/saveslc $JMG $TMP $SLICES
+		set jmax = `${BINPATH}/imghdr $TMP | grep Max | cut -f3 -d ' '`
+	else
+		set jmax = `${BINPATH}/imghdr $JMG | grep Max | cut -f3 -d ' '`
+	endif
+	set jthr = `echo "$jmax/$THRESH;quit" | bc`
+	setanamin $AIMG 0 $imax
+	setanamin $AJMG 0 $jmax
+	echo "-- alignlinear $AIMG $AJMG $AIR -m 6 -t1 $ithr -p1 256 -t2 $jthr -p2 256 -v >! $TLOG"
+	${BINPATH}/alignlinear $AIMG $AJMG $AIR -m 6 -t1 $ithr -p1 256 -t2 $jthr -p2 256 -v >! $TLOG
+	tail -1 $TLOG >> $CLOG
+	${PUBPATH}/rm $TLOG
+	if ($i > $FIRST) then
+		echo -- combine_air $NETAIR y $AIR1 $AIR 
+		${BINPATH}/combine_air $NETAIR y $AIR1 $AIR
+	else
+		${PUBPATH}/cp $AIR $NETAIR
+	endif
+	if ($i > $SECOND) then
+		${PUBPATH}/rm $AIR2
+	endif	
+	set AIR2 = $AIR
+	set AIR1 = $NETAIR
+	set ithr = $jthr
+	echo "-- airdif $NETAIR $NULLAIR $BRAIN >> $ALOG"
+    ${BINPATH}/airdif $NETAIR $NULLAIR $BRAIN | grep Mean >> $ALOG
+	@@ i++
+end
+${PUBPATH}/rm $AIR2
+if (-e $TMP) ${PUBPATH}/rm $TMP
+echo "[aligndyn_1] Complete at `date`"
+
+@

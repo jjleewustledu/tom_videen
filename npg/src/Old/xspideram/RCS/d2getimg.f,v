@@ -1,0 +1,496 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.7
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	92.12.08.21.08.33;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	92.10.21.20.02.27;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	92.08.21.19.47.15;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	92.04.29.15.26.15;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+1.7
+log
+@added rcsheader
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   d2getimg.f
+C
+C  Author:       Tom O. Videen
+C  Date:         04-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified 28-Jul-87 by TOV to read write-protected files;
+C     Modified 06-Oct-87 by TOV to read PETTDCOR from HDR file
+C        (PETT conversion factor with no decay correction);
+C     Modified 12-Sep-88 by TOV to read PETT VI filter name from header.
+C     Modified 14-Nov-89 by TOV to read Scanditronix PC2048-15B files
+C        as PETT 8 images.
+C     Modified 18-Apr-90 by TOV to read CTI ECAT-953B files
+C        as PETT 8 images.
+C     Modified 02-Oct-91 by Tom Yang to read metabolic header and
+C        convert floating point numbers in os32 format to
+C	 IEEE format.
+C     Modified 14-Oct-91 by TOV to use Unix file names.
+C        Replace GETIMAGE with GETUIMAGE.
+C     Modified 15-Oct-91 by Tom Yang to use path names.
+C        Deleted the INQUIRE part before GETUIMAGE can
+C	 check file existence. Deleted logical variable
+C        EXISTS.
+C     Modified 28-Apr-92 by Tom Yang to process ECAT images.
+C     Modified 21-Aug-92 by Tom Yang to do no error checking
+C	 for images with different slice numbers.
+C     Modified 28-Oct-92 by Tom Yang to read either .HDR or
+C	 .hdr header files.
+C
+C  Intent:
+C     This subroutine reads an image file.
+C     If HDRONLY = true, only the header is read for the specified slice.
+C     Otherwise, it gets one slice of an image from a disk file
+C     and sets the scaler to 1.
+C
+C     Decoded and encoded PETT 6-8 images can be read (7-49 slices).
+C        (PETT VI, Super PETT I and Super PETT IIH, ECAT).
+C
+C  Common Blocks from: SPIDERAM.INC
+C     **IMAGEDAT - image arrays                   (write)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (write)
+C     **FILES    - scan file list                 (write)
+C
+C  Passed Variables:
+C     INUM = number of the image to get (1-5);
+C     SLICENUM = number of the desired slice of the image (1-14);
+C     FNM = scan file number to read (1-20);
+C     HDRONLY = true--> read the header only;
+C               false--> read the header and image;
+C     ERRTYPE = type of error in processing images:
+C       0 = no errors in processing;
+C       6 = cannot read FILE(1);
+C       7 = cannot read FILE(2);
+C       8 = cannot read FILE(3);
+C       9 = cannot read FILE(4);
+C      10 = cannot read FILE(5);
+C      17 = illegal scanner = SCANRERR;
+C      18 = illegal number of slices in image = SLICERR;
+C
+C  Local Variables:
+C     P8DATE = Date of scan in PETT 8 header;
+C     P7DATE = Date of scan in PETT 7 header;
+C     P6DATE = Date of scan in PETT 6 header;
+C     P8TIME = scan time from PETT 8 header;
+C     P7TIME = scan time from PETT 7 header;
+C     P6TIME = scan time from PETT 6 header;
+C     P8COMPND = compound from PETT 8 header;
+C     P7COMPND = compound from PETT 7 header;
+C     P6COMPND = compound from PETT 6 header;
+C     P8FILTER = filter from PETT 8 header;
+C     P7FILTER = filter from PETT 7 header;
+C     P8NUCLID = nuclide from PETT 8 header;
+C     P7NUCLID = nuclide from PETT 7 header;
+C     P6DECAY  = decay constant from PETT6 header;
+C     NUMSLCS  = no. of slices in the file (local variables used
+C        to check with common NMSLICES);
+C     NUMPETT  = local variable used to check with PETTNUM;
+C
+C  Uses:
+C     GETUIMAGE
+C
+C  Called by:  D2PRCIMG
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE D2GETIMG (INUM, SLICENUM, FNM, ERRTYPE, HDRONLY)
+C
+      INTEGER*4     INUM, SLICENUM, FNM, ERRTYPE, NUMSLCS, 
+     &              NUMPETT, PB (6)
+      INTEGER*4     IOREAD, HBYTES, COUNT6, COUNT7, COUNT8, I, 
+     &              L1, L2, L3
+      INTEGER*4     READERR (5), SCANRERR, SLICERR, METCONST (11, 2)
+      INTEGER*2	    IO (128), HEAD5, HEAD12, P8TIME, P7TIME, P6TIME
+      REAL*4        HEAD18, P6DECAY
+      CHARACTER*4   HEAD11
+      CHARACTER*6   P8DATE, P7DATE, P6DATE
+      CHARACTER*8   HEAD2, HEAD3, HEAD10
+      CHARACTER*10  HEAD6, P8COMPND, P7COMPND, P6COMPND, 
+     &              P8NUCLID, P7NUCLID
+      CHARACTER*12  HEAD7, P8FILTER, P7FILTER, P6FILTER
+      CHARACTER*14  HEAD1
+      CHARACTER*100 HDRNAME, UHDRNAME
+      LOGICAL*1	    HDRONLY, ERROR
+      character*256 rcsheader
+C
+C  Parameters in HDR files
+C
+      EQUIVALENCE (IO (1),  HEAD1),	! SCANNER
+     2		(IO (8),  HEAD2),	! SCANNAME
+     3		(IO (12), HEAD3),	! SCANDATE
+     4		(IO (17), HEAD5),	! SCANTIME
+     5		(IO (18), HEAD6),	! COMPOUND
+     6		(IO (23), HEAD7),	! FILTER
+     7		(IO (31), HEAD10)	! PROCDATE
+      EQUIVALENCE (IO (35), HEAD11),	! INITIALS
+     2		(IO (37), HEAD12),	! NTYPE
+     3		(IO (49), HEAD18),	! SCANLEN
+     4		(IO (55), METCONST)	! Metabolic Conversion Constants
+C
+C  Parameters in Image files
+C
+      EQUIVALENCE (IO (53), COUNT8),	! Slice Counts
+     2		(IO (65), COUNT7),
+     3		(IO (23), COUNT6)
+      EQUIVALENCE (IO (11), P8DATE),	! Scan Date
+     2		(IO (11), P7DATE),
+     3		(IO (13), P6DATE)
+      EQUIVALENCE (IO (30), P8TIME),	! Scan Time
+     2		(IO (14), P7TIME),
+     3		(IO (8),  P6TIME)
+      EQUIVALENCE (IO (39), P8COMPND),	! Compound
+     2		(IO (26), P7COMPND),
+     3		(IO (25), P6COMPND)
+      EQUIVALENCE (IO (55), P8FILTER),	! Filter
+     2		(IO (110), P7FILTER),
+     3		(IO (41), P6FILTER)
+      EQUIVALENCE (IO (34), P8NUCLID),	! Nuclide
+     2		(IO (21), P7NUCLID),
+     3		(IO (19), P6DECAY)	! Decay Constant
+C
+      INCLUDE 'spideram.inc'
+      rcsheader = "$Id$"
+
+      DATA IOREAD /88/
+      DATA HBYTES /256/
+      DATA READERR, SCANRERR, SLICERR /6, 7, 8, 9, 10, 17, 18/
+C
+C  Check existence of file
+C
+      ERRTYPE	= 0
+C
+C  Read Image Slice and/or Header
+C
+      CALL GETUIMAGE (IMAGE(1, 1, INUM), IO, FILENAME(FNM), IMGVOL,
+     &	SLICENUM, NUMSLCS, NUMPETT, DISK, USEROUT, HDRONLY, ERROR)
+      IF (ERROR) THEN
+	ERRTYPE	= READERR (INUM)
+	RETURN
+      END IF
+      FILE (INUM) = FNM
+C
+C  Compare PETT number and no. of slices with current scan file list
+C
+      IF (PETTNUM .EQ. 0) THEN
+	PETTNUM	= NUMPETT
+	NMSLICES= NUMSLCS
+C      ELSE IF (NUMPETT .NE. PETTNUM) THEN
+C	ERRTYPE	= SCANRERR
+C	RETURN
+C The following three lines are commented by Tom Yang on Aug. 21, 1992.
+C      ELSE IF (NUMSLCS .NE. NMSLICES) THEN
+C	ERRTYPE	= SLICERR
+C	RETURN
+      END IF
+C
+C  Get Nuclide used in scan
+C
+      IF (PETTNUM .EQ. 6) THEN
+	IF (P6DECAY .GE. 5.5E-3 .AND. P6DECAY .LE. 5.7E-3) THEN
+	  NUCLIDE (INUM)	= 'O15'
+        ELSE IF (P6DECAY .GE. 1.1E-3 .AND. P6DECAY .LE. 1.2E-3) THEN
+	  NUCLIDE (INUM)	= 'N13'
+        ELSE IF (P6DECAY .GE. 5.5E-4 .AND. P6DECAY .LE. 5.7E-4) THEN
+	  NUCLIDE (INUM)	= 'C11'
+        ELSE IF (P6DECAY .GE. 1.6E-4 .AND. P6DECAY .LE. 1.7E-4) THEN
+	  NUCLIDE (INUM)	= 'GA68'
+        ELSE IF (P6DECAY .GE. 1.0E-4 .AND. P6DECAY .LE. 1.1E-4) THEN
+	  NUCLIDE (INUM)	= 'F18'
+        ELSE
+	  NUCLIDE (INUM)	= ' '
+        END IF
+      ELSE IF (PETTNUM .EQ. 7) THEN
+	NUCLIDE (INUM)	= P7NUCLID
+      ELSE IF (PETTNUM .EQ. 8 .OR. PETTNUM .EQ. 1) THEN
+	NUCLIDE (INUM)	= P8NUCLID
+      END IF
+C
+C  If read image, then initialize SCALER and CURSLICE
+C
+      IF (.NOT. HDRONLY) THEN
+	SCALER (INUM) = 1.0
+	CURSLICE      = SLICENUM
+      END IF
+C
+C  Check if there is a .HDR file
+C
+      L1 = INANYR (HDRVOL, ' ')
+      L2 = IANYR (FILENAME(FNM), '/') + 1
+      L3 = IANYR (FILENAME(FNM), '.') - 1
+      IF (L3 .LE. 0) THEN
+	L3 = INANYR (FILENAME (FNM), ' ')
+      ENDIF
+      IF (L1 .NE. 0) THEN
+	HDRNAME  = HDRVOL (1: L1)//FILENAME (FNM) (L2:L3)//'.hdr'
+	UHDRNAME = HDRVOL (1: L1)//FILENAME (FNM) (L2:L3)//'.HDR'
+      ELSE
+        HDRNAME  = FILENAME (FNM)(L2:L3)//'.hdr'
+        UHDRNAME = FILENAME (FNM)(L2:L3)//'.HDR'
+      END IF
+      OPEN (DISK, FILE = HDRNAME, STATUS = 'OLD', ERR = 101)
+      GO TO 400
+101   OPEN (DISK, FILE = UHDRNAME, STATUS = 'OLD', ERR = 200)
+      GO TO 400
+C
+C  Case: No .HDR file
+C
+200   HDRFILE (FNM)	= .FALSE.
+      NTYPE (INUM)	= 0
+      PROCDATE (FNM)	= '* NO HDR'
+      PROCBY (FNM)	= 'FILE'
+      DO 300 I = 1, 2
+	PETTCONV (INUM, I)	= 0.0
+	AFLOW (INUM, I)		= 0.0
+	BFLOW (INUM, I)		= 0.0
+	BVFACTOR (INUM, I)	= 0.0
+	AOXYGEN (INUM, I)	= 0.0
+	BOXYGEN (INUM, I)	= 0.0
+	AWATER (INUM, I)	= 0.0
+	BWATER (INUM, I)	= 0.0
+	O2CNTS (INUM, I)	= 0.0
+	OXYCONT (INUM, I)	= 0.0
+	PETTDCOR (INUM, I)	= 0.0
+300   CONTINUE
+      L1 = IANYR(FILENAME(FNM), '/') + 1
+      L2 = IANYR(FILENAME(FNM), '.') - 1
+      IF (L2.LE.0) L2 = INANYR (FILENAME(FNM), ' ')
+      SCANNAME(INUM) = FILENAME(FNM)(L1:L2)
+      IF (PETTNUM .EQ. 6 .OR. PETTNUM .EQ. 10) THEN
+	IF (PETTNUM .EQ. 6) THEN
+	   SCANNER	= 'PETT VI'
+	ELSE
+	   SCANNER	= 'ECAT'
+	ENDIF
+	SCANLEN(INUM)	= P6TIME
+	COMPOUND(INUM)	= P6COMPND
+	SCANDATE(INUM)	= P6DATE (1:2)//'/'//P6DATE (3:4)//'/'//P6DATE (5:6)
+	SLCOUNTS(INUM, SLICENUM)= COUNT6
+        FILTER (INUM) = P6FILTER
+      ELSE IF (PETTNUM .EQ. 7) THEN
+	SCANNER	= 'SUPER PETT I'
+	SCANLEN(INUM) = P7TIME
+	COMPOUND(INUM)	= P7COMPND
+	SCANDATE(INUM)	= P7DATE (1:2)//'/'//P7DATE (3:4)//'/'//P7DATE (5:6)
+	SLCOUNTS(INUM, SLICENUM)= COUNT7
+	FILTER(INUM)= P7FILTER
+      ELSE IF (PETTNUM .EQ. 8 .OR. PETTNUM .EQ. 1) THEN
+	IF (PETTNUM .EQ. 8) THEN
+	  SCANNER = 'SUPER PETT IIH'
+	ELSE
+	  SCANNER = 'PC2048-15B    '
+	END IF
+	SCANLEN(INUM)	= P8TIME
+	COMPOUND(INUM)	= P8COMPND
+	SCANDATE(INUM)	= P8DATE (1:2)//'/'//P8DATE (3:4)//'/'//P8DATE (5:6)
+	SLCOUNTS(INUM, SLICENUM)= COUNT8
+	FILTER(INUM)= P8FILTER
+      END IF
+      RETURN
+C
+C  Case: .HDR file exists
+C
+400   HDRFILE(FNM) = .TRUE.
+      IF (PETTNUM .EQ. 6) THEN
+	SLCOUNTS (INUM, SLICENUM)= COUNT6
+      ELSE IF (PETTNUM .EQ. 7) THEN
+	SLCOUNTS (INUM, SLICENUM)= COUNT7
+      ELSE IF (PETTNUM .EQ. 8) THEN
+	SLCOUNTS (INUM, SLICENUM)= COUNT8
+      END IF
+C
+C  Read HDR file
+C
+      CALL SYSIO (PB, IOREAD, DISK, IO, HBYTES, 0)
+      CLOSE (DISK)
+      SCANNER		= HEAD1
+      SCANNAME (INUM)	= HEAD2
+      SCANDATE (INUM)	= HEAD3
+      COMPOUND (INUM)	= HEAD6
+      FILTER (INUM)	= HEAD7
+      PROCDATE (FNM)	= HEAD10
+      PROCBY (FNM)	= HEAD11
+      NTYPE (INUM)	= HEAD12
+      SCANLEN (INUM)	= HEAD5
+      DO 500 I = 1, 2
+	PETTCONV (INUM, I) = PEFLOAT (METCONST (1, I))
+	AFLOW (INUM, I)	   = PEFLOAT (METCONST (2, I))
+	BFLOW (INUM, I)	   = PEFLOAT (METCONST (3, I))
+	BVFACTOR (INUM, I) = PEFLOAT (METCONST (4, I))
+	AOXYGEN (INUM, I)  = PEFLOAT (METCONST (5, I))
+	BOXYGEN (INUM, I)  = PEFLOAT (METCONST (6, I))
+	AWATER (INUM, I)   = PEFLOAT (METCONST (7, I))
+	BWATER (INUM, I)   = PEFLOAT (METCONST (8, I))
+	O2CNTS (INUM, I)   = PEFLOAT (METCONST (9, I))
+	OXYCONT (INUM, I)  = PEFLOAT (METCONST (10, I))
+	PETTDCOR (INUM, I) = PEFLOAT (METCONST (11, I))
+500   CONTINUE
+C
+      RETURN
+      END
+@
+
+
+1.6
+log
+@Before using libcti library.
+@
+text
+@d108 1
+d146 1
+@
+
+
+1.5
+log
+@After delete checking of image types and number of slices.
+@
+text
+@d30 2
+d92 16
+a107 14
+      INTEGER*4    INUM, SLICENUM, FNM, ERRTYPE, NUMSLCS, NUMPETT, PB(6)
+      INTEGER*4    IOREAD, HBYTES, COUNT6, COUNT7, COUNT8, I, L1, L2, L3
+      INTEGER*4    READERR(5), SCANRERR, SLICERR, METCONST(11,2)
+      INTEGER*2	   IO (128), HEAD5, HEAD12, P8TIME, P7TIME, P6TIME
+      REAL*4       HEAD18, P6DECAY
+      CHARACTER*4  HEAD11
+      CHARACTER*6  P8DATE, P7DATE, P6DATE
+      CHARACTER*8  HEAD2, HEAD3, HEAD10
+      CHARACTER*10 HEAD6, P8COMPND, P7COMPND, P6COMPND, 
+     2             P8NUCLID, P7NUCLID
+      CHARACTER*12 HEAD7, P8FILTER, P7FILTER, P6FILTER
+      CHARACTER*14 HEAD1
+      CHARACTER*100 HDRNAME
+      LOGICAL*1	   HDRONLY, ERROR
+d203 2
+a204 2
+	SCALER(INUM) = 1.0
+	CURSLICE = SLICENUM
+d216 2
+a217 1
+	HDRNAME = HDRVOL (1: L1)//FILENAME (FNM) (L2:L3)//'.HDR'
+d219 2
+a220 1
+        HDRNAME = FILENAME (FNM)(L2:L3)//'.HDR'
+d222 3
+a224 1
+      OPEN (DISK, FILE = HDRNAME, STATUS = 'OLD', ERR = 200)
+@
+
+
+1.4
+log
+@After ECAT num of slices bug fixed.
+@
+text
+@d3 1
+a3 1
+C  Subroutine:   D2GETIMG.FTN
+d165 3
+a167 3
+      ELSE IF (NUMPETT .NE. PETTNUM) THEN
+	ERRTYPE	= SCANRERR
+	RETURN
+d205 5
+a209 5
+      L1= INANYR (HDRVOL, ' ')
+      L2= IANYR (FILENAME(FNM), '/') + 1
+      L3= IANYR (FILENAME(FNM), '.') - 1
+      IF (L3.LE.0) THEN
+	L3 = INANYR (FILENAME(FNM), ' ')
+d211 2
+a212 2
+      IF (L1.NE.0) THEN
+	HDRNAME = HDRVOL(1:L1)//FILENAME(FNM)(L2:L3)//'.HDR'
+d214 1
+a214 1
+        HDRNAME = FILENAME(FNM)(L2:L3)//'.HDR'
+d216 1
+a216 1
+      OPEN (DISK, FILE=HDRNAME, STATUS='OLD', ERR=200)
+@
+
+
+1.3
+log
+@Process ECAT images.
+@
+text
+@d28 2
+d168 4
+a171 3
+      ELSE IF (NUMSLCS .NE. NMSLICES) THEN
+	ERRTYPE	= SLICERR
+	RETURN
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d27 1
+d36 1
+a36 1
+C        (PETT VI, Super PETT I and Super PETT IIH).
+d239 6
+a244 2
+      IF (PETTNUM .EQ. 6) THEN
+	SCANNER		= 'PETT VI'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

@@ -1,0 +1,1036 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2010.04.30.18.14.41;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2010.04.30.16.50.05;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2010.04.26.16.25.46;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2010.04.23.19.41.48;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2010.04.23.18.33.19;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@correct pixel size (cm instead of mm)
+@
+text
+@/* $Id: dcmpet2img.c,v 1.4 2010/04/30 16:50:05 tom Exp tom $ */
+/* $Log: dcmpet2img.c,v $
+ * Revision 1.4  2010/04/30  16:50:05  tom
+ * correct left/right orientation
+ *
+ * Revision 1.3  2010/04/26  16:25:46  tom
+ * convert CT images
+ *
+ * Revision 1.2  2010/04/23  19:41:48  tom
+ * add fields to header
+ *
+ * Revision 1.1  2010/04/23  18:33:19  tom
+ * Initial revision
+ * */
+/*  ===============================================================================
+ *  Module:         dcmpet2img.c
+ *  Date:           Apr 2010
+ *  Author:         Tom Videen
+ *  Description:    Transform Siemens PETCT DICOM images into ECAT Matrix 7 format.
+ *  ===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmpet2img/RCS/dcmpet2img.c,v 1.4 2010/04/30 16:50:05 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <math.h>
+#include <time.h>
+#include <values.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <imgutil.h>
+#include <nrutil.h>
+
+int             main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	union temp_short {
+		short           s[512 * 512];
+		char            c[512 * 512 * 2];
+	}               tmp;
+
+	struct tm       t, d;
+
+	ImageFile      *file;
+	Index           indx;
+	FILE           *fdcm;			 /* DICOM file */
+	FILE           *fhdr;			 /* dcm_dump file */
+	char           *fname;			 /* DICOM filename */
+	char           *dname;			 /* dcm_dump filename */
+	char           *ecatimg;		 /* output ECAT filename */
+	char           *oname;			 /* first filename */
+	char           *isotope;
+	char           *scan_time;
+	char           *scan_date;
+	char           *substr;
+	char           *serial_number;
+	char           *patient_id;
+	char           *model_name;
+	char           *compound;
+	char           *facility_name;
+	char           *command;
+	char           *ptr;
+	char           *ptr2;
+	char           *ptr_end;
+	char            runstamp[40];		 /* version, date and userid info */
+	char            str[256];
+	float           val;
+	float           size[3];
+	long            dim[4];
+	long            scantime;
+	long            dosetime;
+	long            nframes = 1;
+	int             fnum = 1;
+	int             orientation = 8;
+	int             vec1[3], vec2[3];	 /* Image Orientation */
+	float           t1, t2, t3, t4, t5, t6;	 /* input for sscanf */
+	int             i, j, k, m, n;
+	float           ftmp;
+	int             ntype = 0;
+	int             scatcor = 0;
+	int             filter = 0;
+	int             model = 0;
+	int             first;			 /* first file number to convert */
+	int             nfiles;
+	int             order;
+	int             pln;
+	int             ipln;
+	int             scn;			 /* file number to convert */
+	int             bitsperpix;
+	int             version = 0;
+	int             intercept = 0;	 /* subtraction for HU	*/
+	long            dsize = 0;
+
+	float           cutoff = 0;
+	float           cal_factor = 0;
+	float           time0 = 0;
+	float           frm_start = 0;
+	float           frm_duration = 0;
+	float           scl_factor = 1;
+	float           decay_cor = 1;
+	float           bed_hor = 0;
+	float           halflife = 0;
+	float           lowlim = 435;
+	float           highlim = 650;
+	float           dose = 0;
+
+	float           global_max;
+	float           global_min;
+	long            ndim1, ndim2, ndim3;	 /* dimensions of image */
+
+	float        ***image;			 /* output image */
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 13) {
+		(void) printf ("Usage: dcmpet2img first dumpname ecat.v nfiles order\n");
+		return (ERROR);
+	}
+	first = atoi (argv[1]);
+	dname = argv[2];
+	ecatimg = argv[3];
+	nfiles = atoi (argv[4]);
+	order = atoi (argv[5]);
+
+	n = 6;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n + 1], argv[n + 2],
+			argv[n + 4], argv[n + 5], argv[n + 6]);
+
+/* lint free */
+
+	dim[0] = 128;
+	dim[1] = 128;
+	dim[2] = nfiles;
+	dim[3] = 1;
+	size[0] = 2.32417;
+	size[1] = 2.32417;
+	size[2] = 2.027;
+	vec1[0] = 0;
+	vec1[1] = 0;
+	vec1[2] = 0;
+	vec2[0] = 0;
+	vec2[1] = 0;
+	vec2[2] = 0;
+
+	facility_name = (char *) calloc (20, sizeof (char));
+	model_name = (char *) calloc (20, sizeof (char));
+	patient_id = (char *) calloc (16, sizeof (char));
+	serial_number = (char *) calloc (10, sizeof (char));
+	isotope = (char *) calloc (8, sizeof (char));
+	compound = (char *) calloc (32, sizeof (char));
+	fname = (char *) calloc (11, sizeof (char));
+	oname = (char *) calloc (11, sizeof (char));
+
+/*
+ *	Get Main Header info
+ */
+
+	command = (char *) calloc (80, sizeof (char));
+	(void) strncpy (command, "dcm_dump_file -t ", 17);
+	(void) sprintf (oname, "%06d.dcm", first);
+	(void) strcat (command, oname);
+	(void) strcat (command, " > ");
+	(void) strcat (command, dname);
+	(void) system (command);
+	free (command);
+
+	ptr_end = strchr (dname, '\n');
+	if (ptr_end != NULL)
+		*ptr_end = '\0';
+	if (ptr_end != NULL)
+		*ptr_end = '\0';
+	if ((fhdr = fopen (dname, "r")) == 0) {
+		fprintf (stderr, "ERROR [dcmpet2img]: Unable to open %s\n", dname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), fhdr) == NULL) {
+		fprintf (stderr, "ERROR [dcmpet2img]: reading %s\n", dname);
+		return (ERROR);
+	}
+	if (strncmp (str, "DICOM", 5) != 0) {
+		fprintf (stderr, "ERROR [dcmpet2img]: %s is not a DICOM file\n", dname);
+		return (ERROR);
+	}
+	while (fgets (str, sizeof (str), fhdr) != NULL) {
+		if (strlen (str) >= 55) {
+			ptr = strrchr (str, '/');
+			if (ptr != NULL) {
+				ptr += 1;
+				if (strncmp (str, "0008 0022", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					scan_date = (char *) calloc (9, sizeof (char));
+					(void) strncpy (scan_date, ptr, 8);
+					substr = (char *) calloc (5, sizeof (char));
+					(void) strncpy (substr, ptr, 4);
+					t.tm_year = atoi (substr) - 1900;
+					(void) free (substr);
+					substr = (char *) calloc (3, sizeof (char));
+					ptr += 4;
+					(void) strncpy (substr, ptr, 2);
+					t.tm_mon = atoi (substr) - 1;
+					ptr += 2;
+					(void) strncpy (substr, ptr, 2);
+					t.tm_mday = atoi (substr);
+					(void) free (substr);
+					d.tm_year = t.tm_year;
+					d.tm_mon = t.tm_mon;
+					d.tm_mday = t.tm_mday;
+					continue;
+				}
+				if (strncmp (str, "0008 0032", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					scan_time = (char *) calloc (7, sizeof (char));
+					(void) strncpy (scan_time, ptr, 6);
+					substr = (char *) calloc (3, sizeof (char));
+					(void) strncpy (substr, ptr, 2);
+					t.tm_hour = atoi (substr);
+					ptr += 2;
+					(void) strncpy (substr, ptr, 2);
+					t.tm_min = atoi (substr);
+					ptr += 2;
+					(void) strncpy (substr, ptr, 2);
+					t.tm_sec = atoi (substr);
+					(void) free (substr);
+					continue;
+				}
+				if (strncmp (str, "0018 1020", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					ptr += 3;
+					version = atoi (ptr);
+					continue;
+				}
+				if (strncmp (str, "0008 103e", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					(void) strncpy (compound, ptr, 31);
+					continue;
+				}
+				if (strncmp (str, "0008 1010", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					(void) strncpy (facility_name, ptr, 19);
+					continue;
+				}
+				if (strncmp (str, "0008 1090", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					(void) strncpy (model_name, ptr, 19);
+					if (strncmp (model_name, "1094", 4) == 0)
+						model = 1094;
+					else if (strncmp (model_name, "Biograph 40", 11) == 0)
+						model = 1094;
+					else
+						fprintf (stderr, "Model Name: %s\n", model_name);
+					continue;
+				}
+				if (strncmp (str, "0010 0020", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					(void) strcpy (patient_id, ptr);
+					continue;
+				}
+				if (strncmp (str, "0018 1000", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					(void) strncpy (serial_number, ptr, 9);
+					continue;
+				}
+				if (strncmp (str, "0018 1072", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					substr = (char *) calloc (3, sizeof (char));
+					(void) strncpy (substr, ptr, 2);
+					d.tm_hour = atoi (substr);
+					ptr += 2;
+					(void) strncpy (substr, ptr, 2);
+					d.tm_min = atoi (substr);
+					ptr += 2;
+					(void) strncpy (substr, ptr, 2);
+					d.tm_sec = atoi (substr);
+					(void) free (substr);
+					continue;
+				}
+				if (strncmp (str, "0018 1074", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					dose = atof (ptr);
+					continue;
+				}
+				if (strncmp (str, "0018 1075", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					halflife = atof (ptr);
+					continue;
+				}
+				if (strncmp (str, "0020 0037", 9) == 0) {
+					(void) sscanf (ptr, "%f\\%f\\%f\\%f\\%f\\%f", &t1, &t2, &t3, &t4, &t5, &t6);
+					vec1[0] = ROUND (t1);
+					vec1[1] = ROUND (t2);
+					vec1[2] = ROUND (t3);
+					vec2[0] = ROUND (t4);
+					vec2[1] = ROUND (t5);
+					vec2[2] = ROUND (t6);
+					if (vec1[0] == 1 && vec1[1] == 0 && vec1[2] == 0
+					    && vec2[0] == 0 && vec2[1] == 1 && vec2[2] == 0)
+						orientation = 3;
+					continue;
+				}
+				if (strncmp (str, "0028 0011", 9) == 0) {
+					dim[0] = atoi (ptr + 4);
+					continue;
+				}
+				if (strncmp (str, "0028 0010", 9) == 0) {
+					dim[1] = atoi (ptr + 4);
+					continue;
+				}
+				if (strncmp (str, "0054 0014", 9) == 0) {
+					lowlim = atoi (ptr);
+					continue;
+				}
+				if (strncmp (str, "0054 0015", 9) == 0) {
+					highlim = atoi (ptr);
+					continue;
+				}
+				if (strncmp (str, "0054 0081", 9) == 0) {
+					dim[2] = atoi (ptr + 4);
+					continue;
+				}
+				if (strncmp (str, "0054 0101", 9) == 0) {
+					dim[3] = atoi (ptr + 4);
+					nframes = (int) dim[3];
+					continue;
+				}
+				if (strncmp (str, "0028 0030", 9) == 0) {
+					ptr2 = strrchr (ptr, '\\');
+					size[0] = atof (ptr2 + 1);
+					size[1] = atof (ptr2 + 1);
+					continue;
+				}
+				if (strncmp (str, "0018 0050", 9) == 0) {
+					size[2] = atof (ptr);
+					continue;
+				}
+				if (strncmp (str, "0028 0101", 9) == 0) {
+					bitsperpix = atoi (ptr + 4);
+					if (bitsperpix == 16)
+						ntype = 2;
+					else if (bitsperpix == 32)
+						ntype = 4;
+					continue;
+				}
+				if (strncmp (str, "7fe0 0010", 9) == 0) {
+					ptr_end = strchr (str, '/');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					dsize = atoi (str + 10);
+					continue;
+				}
+			}
+		}
+	}
+	(void) fclose (fhdr);
+
+	scantime = mktime (&t);
+	dosetime = mktime (&d);
+
+	fprintf (stdout, "dim: %ldx%ldx%ld  frames: %ld  pixel_size: %f x %f x %f mm   datatype: %d\n",
+		 dim[0], dim[1], dim[2], dim[3], size[0], size[1], size[2], ntype);
+
+	global_max = MINFLOAT;
+	global_min = MAXFLOAT;
+
+/*
+ * Read Slice Header info
+ */
+
+	ptr_end = strchr (dname, '\n');
+	if (ptr_end != NULL)
+		*ptr_end = '\0';
+	if (ptr_end != NULL)
+		*ptr_end = '\0';
+	if ((fhdr = fopen (dname, "r")) == 0) {
+		fprintf (stderr, "ERROR [dcmpet2img]: Unable to open %s\n", dname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), fhdr) == NULL) {
+		fprintf (stderr, "ERROR [dcmpet2img]: reading %s\n", dname);
+		return (ERROR);
+	}
+	if (strncmp (str, "DICOM", 5) != 0) {
+		fprintf (stderr, "ERROR [dcmpet2img]: %s is not a DICOM file\n", dname);
+		return (ERROR);
+	}
+	while (fgets (str, sizeof (str), fhdr) != NULL) {
+		if (strlen (str) >= 55) {
+			ptr = strrchr (str, '/');
+			if (ptr != NULL) {
+				ptr += 1;
+				if (strncmp (str, "0008 0032", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					ftmp = 1000 * atof (ptr);
+					if (fnum == 1)
+						time0 = ftmp;
+					frm_start = ftmp - time0;
+					continue;
+				}
+				if (strncmp (str, "0018 1242", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					frm_duration = atof (ptr);
+					continue;
+				}
+				if (strncmp (str, "0028 1052", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					intercept = atoi (ptr);
+					continue;
+				}
+				if (strncmp (str, "0028 1053", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					scl_factor = atof (ptr);
+					continue;
+				}
+				if (strncmp (str, "0054 1321", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					decay_cor = atof (ptr);
+					continue;
+				}
+				if (strncmp (str, "0020 1041", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					bed_hor = atof (ptr);
+					continue;
+				}
+				if (strstr (str, "end_of_header") != NULL) {
+					break;
+				}
+			}
+		}
+	}
+	(void) fclose (fhdr);
+
+/*
+ *  Read all input image planes
+ */
+
+	ndim1 = dim[0];
+	ndim2 = dim[1];
+	ndim3 = dim[2];
+
+	if ((image = f3tensor (1, ndim3, 1, ndim2, 1, ndim1)) == NULL) {
+		fprintf (stderr, "ERROR [dcmpet2img]: malloc image\n");
+		return (ERROR);
+	}
+	for (pln = 1, scn = first; pln <= ndim3; pln++, scn++) {
+		(void) sprintf (fname, "%06d.dcm", scn);
+		if ((fdcm = fopen (fname, "r")) == 0) {
+			fprintf (stderr, "ERROR [dcmpet2img]: opening DICOM file %s\n", fname);
+			return (ERROR);
+		}
+		/* Read pixel data from end of file */
+		if (order > 0)
+			ipln = pln;
+		else
+			ipln = ndim3 - pln + 1;
+
+		if (fseek (fdcm, -dsize, SEEK_END) != 0) {
+			fprintf (stderr, "ERROR [dcmpet2img]: fseek %s\n", fname);
+			return (ERROR);
+		}
+		if (fread (tmp.c, dsize, 1, fdcm) != 1) {
+			fprintf (stderr, "ERROR [dcmpet2img]: fread %ld bytes %s\n", dsize, fname);
+			return (ERROR);
+		}
+		(void) fclose (fdcm);
+		swab (tmp.c, tmp.c, dsize);
+
+		n = 0;
+		for (j = 1; j <= ndim2; j++) {
+			for (i = ndim1; i >= 1; i--) {
+				val = scl_factor * tmp.s[n] + intercept;
+				image[ipln][j][i] = val;
+				if (val > global_max)
+					global_max = val;
+				if (val < global_min)
+					global_min = val;
+				n++;
+			}
+		}
+	}
+
+/*
+ *	Create ECAT file
+ */
+
+	file = make_imgfile (ecatimg);
+	if (make_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [dcmpet2img]: making mh for %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (make_sh (file) == ERROR) {
+		fprintf (stderr, "ERROR [dcmpet2img]: making sh for %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ *	Define ECAT file properties
+ */
+
+	file->mh->file_format = MATRIX_REV7;
+	file->mh->filetype = PetVolume;
+	file->mh->scanner_type = (short) model;
+	file->mh->start_time = scantime;
+	if (halflife > 122 && halflife < 123)
+		(void) strcpy (isotope, "O-15");
+	else if (halflife > 6586 && halflife < 6587)
+		(void) strcpy (isotope, "F-18");
+	for (i = 0; i < 8; i++)
+		file->mh->isotope[i] = isotope[i];
+	for (i = 0; i < 32; i++)
+		file->mh->radiopharmaceutical[i] = compound[i];
+	file->mh->bed_elevation = 0;
+	file->mh->wobble_speed = 0;
+	file->mh->calibration_factor = cal_factor;
+	file->mh->sw_version = version;
+	file->mh->sw_revision = (char *) calloc (32, sizeof (char));
+	file->mh->filetime = (char *) calloc (32, sizeof (char));
+	file->mh->nplane = ndim3;
+	file->mh->nframe = nframes;
+	file->mh->ngate = 1;
+	file->mh->nbed = 1;
+	file->mh->init_bed_pos = bed_hor;
+	for (i = 0; i < 16; i++)
+		file->mh->bed_off[i] = 0;
+	file->mh->slicesep = 0.1 * size[2];
+
+	file->sh->number_format = SHORT_DATA;
+	file->sh->ndim = 3;
+	file->sh->dim1 = ndim1;
+	file->sh->dim2 = ndim2;
+	file->sh->dim3 = ndim3;
+	file->sh->sample_size_1 = 0.1 * size[0];
+	file->sh->sample_size_2 = 0.1 * size[0];
+	file->sh->sample_size_3 = 0.1 * size[2];
+	file->sh->start_time = (int) frm_start;
+	file->sh->duration = (int) frm_duration;
+	file->mh->nplane = ndim3;
+	file->mh->orientation = 0;
+	file->sh->dim3 = ndim3;
+	file->sh->decay_corr = decay_cor;
+	file->sh->max = (int) global_max;
+	file->sh->min = (int) global_min;
+	file->sh->filter_code = filter;
+	file->sh->filter_cutoff_frequency = cutoff;
+	file->sh->filter_scatter_fraction = scatcor;
+	file->sh->filter_scatter_slope = scatcor;
+
+
+	if (make_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [dcmpet2img]: making mh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+	(void) fill_mh7 (file);
+	if (make_sh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [dcmpet2img]: making sh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+	(void) strncpy (file->m7->mh->original_file_name, oname, 31);
+	j = strlen (oname);
+	k = strlen (patient_id);
+	m = j + k;
+	if (m < 31) {
+		(void) strcat (file->m7->mh->original_file_name, " ");
+		(void) strcat (file->m7->mh->original_file_name, patient_id);
+	}
+	(void) strncpy (file->m7->mh->facility_name, facility_name, 19);
+	(void) strncpy (file->m7->mh->patient_id, patient_id, 15);
+	(void) strncpy (file->m7->mh->patient_name, patient_id, 15);
+	(void) strncpy (file->m7->mh->serial_number, serial_number, 9);
+	file->m7->mh->system_type = (short) model;
+	file->m7->mh->plane_separation = 0.1 * size[2];
+	file->m7->mh->isotope_halflife = halflife;
+	file->m7->mh->lwr_true_thres = lowlim;
+	file->m7->mh->upr_true_thres = highlim;
+	file->m7->mh->patient_orientation = orientation;
+	file->m7->mh->dosage = dose;
+	file->m7->mh->dose_start_time = dosetime;
+	file->m7->mh->septa_state = 1;
+	file->m7->sh->decay_corr_fctr = decay_cor;
+	file->m7->sh->x_pixel_size = 0.1 * size[0];
+	file->m7->sh->y_pixel_size = 0.1 * size[0];
+	file->m7->sh->z_pixel_size = 0.1 * size[2];
+	file->m7->sh->image_max = (int) global_max;
+	file->m7->sh->image_min = (int) global_min;
+	file->m7->sh->frame_duration = (int) frm_duration;
+	(void) save_rcs (file, rcsid, runstamp);
+
+/*
+ *	Write ECAT image file
+ */
+
+	(void) strcpy (file->name, ecatimg);
+	(void) strcpy (file->mode, "w");
+
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [dcmpet2img]: opening %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [dcmpet2img]: writing %s\n", ecatimg);
+		return (ERROR);
+	}
+	indx.frm = fnum;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	fprintf (stdout, "%s  frm:%3d  len:%5.1f  max: %.1f  min: %.1f  decay_cor: %.4f\n",
+		 ecatimg, indx.frm, frm_duration / 1000., global_max, global_min, decay_cor);
+	if (writetensor (file, &indx, image) == ERROR) {
+		fprintf (stderr, "ERROR [dcmpet2img]: writing %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ * Repeat for all additional frames
+ */
+
+	while (fnum < nframes) {
+		fnum++;
+		command = (char *) calloc (80, sizeof (char));
+		(void) strcpy (command, "dcm_dump_file -t ");
+		(void) sprintf (fname, "%06d.dcm", scn);
+		(void) strcat (command, fname);
+		(void) strcat (command, " > ");
+		(void) strcat (command, dname);
+		(void) system (command);
+		free (command);
+
+		if ((fhdr = fopen (dname, "r")) == 0) {
+			fprintf (stderr, "ERROR [dcmpet2img]: Unable to open %s\n", dname);
+			return (ERROR);
+		}
+		if (fgets (str, sizeof (str), fhdr) == NULL) {
+			fprintf (stderr, "ERROR [dcmpet2img]: reading %s\n", dname);
+			return (ERROR);
+		}
+		if (strncmp (str, "DICOM", 5) != 0) {
+			fprintf (stderr, "ERROR [dcmpet2img]: %s is not a DICOM file\n", dname);
+			return (ERROR);
+		}
+		global_max = MINFLOAT;
+		global_min = MAXFLOAT;
+
+		while (fgets (str, sizeof (str), fhdr) != NULL) {
+			if (strlen (str) >= 55) {
+				ptr = strrchr (str, '/');
+				if (ptr != NULL) {
+					ptr += 1;
+					if (strncmp (str, "0008 0032", 9) == 0) {
+						ptr_end = strchr (ptr, '\n');
+						if (ptr_end != NULL)
+							*ptr_end = '\0';
+						ftmp = 1000 * atof (ptr);
+						if (fnum == 1)
+							time0 = ftmp;
+						frm_start = ftmp - time0;
+						continue;
+					}
+					if (strncmp (str, "0018 1242", 9) == 0) {
+						ptr_end = strchr (ptr, '\n');
+						if (ptr_end != NULL)
+							*ptr_end = '\0';
+						frm_duration = atof (ptr);
+						continue;
+					}
+					if (strncmp (str, "0028 1053", 9) == 0) {
+						ptr_end = strchr (ptr, '\n');
+						if (ptr_end != NULL)
+							*ptr_end = '\0';
+						scl_factor = atof (ptr);
+						continue;
+					}
+					if (strncmp (str, "0054 1321", 9) == 0) {
+						ptr_end = strchr (ptr, '\n');
+						if (ptr_end != NULL)
+							*ptr_end = '\0';
+						decay_cor = atof (ptr);
+						continue;
+					}
+					if (strstr (str, "end_of_header") != NULL) {
+						break;
+					}
+				}
+			}
+		}
+		(void) fclose (fhdr);
+
+		for (pln = 1; pln <= ndim3; pln++, scn++) {
+			(void) sprintf (fname, "%06d.dcm", scn);
+			if ((fdcm = fopen (fname, "r")) == 0) {
+				fprintf (stderr, "ERROR [dcmpet2img]: opening DICOM file %s\n", fname);
+				return (ERROR);
+			}
+			if (fseek (fdcm, -dsize, SEEK_END) != 0) {
+				fprintf (stderr, "ERROR [dcmpet2img]: fseek %s\n", fname);
+				return (ERROR);
+			}
+			if (fread (tmp.c, dsize, 1, fdcm) != 1) {
+				fprintf (stderr, "ERROR [dcmpet2img]: fread %ld bytes %s\n", dsize, fname);
+				return (ERROR);
+			}
+			(void) fclose (fdcm);
+			swab (tmp.c, tmp.c, dsize);
+			n = 0;
+			for (j = 1; j <= ndim2; j++) {
+				for (i = ndim1; i >= 1; i--) {
+					val = scl_factor * tmp.s[n] + intercept;
+					image[pln][j][i] = val;
+					if (val > global_max)
+						global_max = val;
+					if (val < global_min)
+						global_min = val;
+					n++;
+				}
+			}
+		}
+
+		indx.frm = fnum;
+		file->sh->start_time = (int) frm_start;
+		file->sh->duration = (int) frm_duration;
+		file->sh->decay_corr = decay_cor;
+		file->sh->max = (int) global_max;
+		file->sh->min = (int) global_min;
+		file->m7->sh->decay_corr_fctr = decay_cor;
+		file->m7->sh->image_max = (int) global_max;
+		file->m7->sh->image_min = (int) global_min;
+		file->m7->sh->frame_start_time = (int) frm_start;
+		file->m7->sh->frame_duration = (int) frm_duration;
+		fprintf (stdout, "%s  frm:%3d  len:%5.1f  max: %.1f  min: %.1f  decay_cor: %.4f\n",
+		      ecatimg, indx.frm, frm_duration / 1000., global_max, global_min, decay_cor);
+		if (writetensor (file, &indx, image) == ERROR) {
+			fprintf (stderr, "ERROR [dcmpet2img]: writing %s frm %d\n", ecatimg, indx.frm);
+			return (ERROR);
+		}
+	}
+
+/*	Free & Exit	*/
+
+	free (file->mh->sw_revision);
+	free (file->mh->filetime);
+	free_imgfile (file);
+	free_f3tensor (image, 1, ndim3, 1, ndim2, 1, ndim1);
+	free (image);
+	free (facility_name);
+	free (model_name);
+	free (serial_number);
+	free (patient_id);
+	free (isotope);
+	free (compound);
+	free (oname);
+	return (OK);
+}
+@
+
+
+1.4
+log
+@correct left/right orientation
+@
+text
+@d1 1
+a1 1
+/* $Id: dcmpet2img.c,v 1.3 2010/04/26 16:25:46 tom Exp $ */
+d3 3
+d22 1
+a22 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmpet2img/RCS/dcmpet2img.c,v 1.3 2010/04/26 16:25:46 tom Exp $";
+d142 3
+a144 3
+	size[0] = 0.232417;
+	size[1] = 0.232417;
+	size[2] = 0.2027;
+d387 1
+a387 1
+	fprintf (stdout, "dim: %ldx%ldx%ld  frames: %ld  pixel_size: %f x %f x %f cm   datatype: %d\n",
+d563 1
+a563 1
+	file->mh->slicesep = size[2];
+d570 3
+a572 3
+	file->sh->sample_size_1 = size[0];
+	file->sh->sample_size_2 = size[0];
+	file->sh->sample_size_3 = size[2];
+d609 1
+a609 1
+	file->m7->mh->plane_separation = size[2];
+d618 3
+a620 3
+	file->m7->sh->x_pixel_size = size[0];
+	file->m7->sh->y_pixel_size = size[0];
+	file->m7->sh->z_pixel_size = size[2];
+@
+
+
+1.3
+log
+@convert CT images
+@
+text
+@d1 1
+a1 1
+/* $Id: dcmpet2img.c,v 1.2 2010/04/23 19:41:48 tom Exp tom $ */
+d3 3
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmpet2img/RCS/dcmpet2img.c,v 1.2 2010/04/23 19:41:48 tom Exp tom $";
+d506 1
+a506 1
+			for (i = 1; i <= ndim1; i++) {
+d741 2
+a742 2
+				for (i = 1; i <= ndim1; i++) {
+					val = scl_factor * tmp.s[n];
+@
+
+
+1.2
+log
+@add fields to header
+@
+text
+@d1 1
+a1 1
+/* $Id: dcmpet2img.c,v 1.1 2010/04/23 18:33:19 tom Exp tom $ */
+d3 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmpet2img/RCS/dcmpet2img.c,v 1.1 2010/04/23 18:33:19 tom Exp tom $";
+d37 2
+a38 2
+		short           s[128 * 128];
+		char            c[128 * 128 * 2];
+d57 1
+a57 1
+	char            runstamp[40];		 /* version, date and userid info */
+d64 1
+d83 2
+d86 1
+d90 1
+a90 1
+
+a94 1
+
+a108 1
+	float           dpix[3];		 /* input DICOM pixel sizes (mm) */
+d116 2
+a117 2
+	if (argc != 11) {
+		(void) printf ("Usage: dcmpet2img first dumpname ecat.v\n");
+d123 2
+d126 1
+a126 1
+	n = 4;
+d130 1
+a130 1
+/* line free */
+d134 1
+a134 1
+	dim[2] = 109;
+d147 1
+d160 1
+a160 1
+	(void) strcpy (command, "dcm_dump_file -t ");
+d246 1
+a246 1
+				if (strncmp (str, "0008 1040", 9) == 0) {
+d257 7
+a263 1
+					model = atoi (ptr);
+d350 2
+a351 2
+					dpix[0] = atof (ptr2 + 1);
+					dpix[1] = atof (ptr2 + 1);
+d355 1
+a355 1
+					dpix[2] = atof (ptr);
+d430 7
+d485 4
+d495 1
+a495 1
+			fprintf (stderr, "ERROR [dcm2analyze]: fread %ld bytes %s\n", dsize, fname);
+d504 2
+a505 2
+				val = scl_factor * tmp.s[n];
+				image[pln][j][i] = val;
+d731 1
+a731 1
+				fprintf (stderr, "ERROR [dcm2analyze]: fread %ld bytes %s\n", dsize, fname);
+d771 2
+d777 2
+d782 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/* $Id$ */
+/* $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmpet2img/RCS/dcmpet2img.c,v 1.1 2010/04/23 14:22:43 tom Exp $";
+d25 1
+d38 1
+a38 1
+	struct tm       t;
+d52 3
+a54 3
+	char            serial_number[10];
+	char            subject_id[16];
+    char            runstamp[40];    /* version, date and userid info */
+d66 1
+d69 4
+a72 1
+	int             i, j, n;
+d78 1
+a78 1
+	int             first;		 /* first file number to convert */
+d82 1
+a82 1
+	int				version = 0;
+a94 1
+
+d96 3
+d119 3
+a121 3
+    n = 4;
+    (void) sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n + 1], argv[n + 2],
+            argv[n + 4], argv[n + 5], argv[n + 6]);
+d123 2
+d132 7
+d140 2
+d200 3
+d228 1
+a228 1
+					version = atoi(ptr);
+d256 1
+a256 1
+					(void) strcpy (subject_id, ptr);
+d266 23
+d296 13
+d317 8
+d365 1
+d513 2
+d566 7
+d574 3
+d579 7
+d593 1
+a593 1
+    (void) save_rcs (file, rcsid, runstamp);
+d750 1
+@

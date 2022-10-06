@@ -1,0 +1,506 @@
+head	1.7;
+access;
+symbols;
+locks
+	tom:1.7
+	tom:1.4; strict;
+comment	@c @;
+
+
+1.7
+date	93.07.26.22.07.02;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.07.26.18.59.25;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.07.26.15.04.31;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.07.26.14.47.06;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.07.22.22.30.15;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.07.16.22.19.48;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.07.16.20.21.57;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@avi's src
+@
+
+
+1.7
+log
+@fixed imgrots to use NROW and NCOL
+@
+text
+@      SUBROUTINE IMGROTE (IMAGE, MASK, NSLICE, NCOL, NROW, FOV, MMPPIX, PARAM, DEL, JAXIS, SCALE, ERR)
+
+C		For the current PARAM, computes the averaged squared asymmetry of the image, ERR,
+C		(within the mask) about JAXIS
+
+      REAL*4		IMAGE(NCOL,NROW,NSLICE)
+      INTEGER*2 MASK(NCOL,NROW,NSLICE)
+			INTEGER*2	NSLICE
+			INTEGER*2	NCOL
+			INTEGER*2	NROW
+      REAL*4 		FOV(3)
+      REAL*4		MMPPIX(3)
+      REAL*4 		PARAM(12)
+      REAL*4    DEL					! sampling interval in the virtual image
+      INTEGER*4 JAXIS
+			REAL*4 		SCALE
+			REAL*4		ERR
+
+      REAL*4 		V(2)
+      REAL*4 		X(3)
+      REAL*4 		XP(3)
+      REAL*4 		TROT(4,4)
+      REAL*4		C(4,4)
+      REAL*4 		T(4,4)
+			INTEGER*4	N1
+			INTEGER*4	N4
+      LOGICAL*4 LVALID(2)
+			CHARACTER*256	RCSHEADER
+
+			DATA N1, N4 /1,4/
+
+			RCSHEADER = "$Id: imgrote.f,v 1.6 1993/07/26 18:59:25 tom Exp tom $"
+      IF (JAXIS.LT.1 .OR. JAXIS.GT.3) STOP 'IMGROTE: JAXIS BAD'
+      NX = NINT(.5*FOV(1)/DEL)
+      NY = NINT(.5*FOV(2)/DEL)
+      NZ = NINT(.5*FOV(3)/DEL)
+      IF (JAXIS.EQ.1) THEN
+        NX0 = 1
+      ELSE
+        NX0 = -NX + 1
+      ENDIF
+      IF (JAXIS.EQ.2) THEN
+        NY0 = 1
+      ELSE
+        NY0 = -NY + 1
+      ENDIF
+      IF (JAXIS.EQ.3) THEN
+        NZ0 = 1
+      ELSE
+        NZ0 = -NZ + 1
+      ENDIF
+
+C		Translate from virtual -> image coordinates  (PARAM (7:9) are put in C
+
+      CALL VRT2IMG (MMPPIX, PARAM(7), C)
+
+C		The nudge & rotation about the origin, PARAM(1:6), are put in TROT
+
+      CALL TROTCAL (N1, PARAM, TROT)
+
+C		The 2 matrices are multipled to create the new position matrix, T
+
+			CALL MATMUL (C, TROT, T, N4)
+
+C		Compute the noise for this position
+
+      ERR = 0.
+      N = 0
+      DO 400 KX=NX0,NX
+      	DO 300 KY=NY0,NY
+      		DO 200 KZ=NZ0,NZ
+      			DO 100 JSIGN=1,2
+      				X(1) = (FLOAT(KX)-.5)*DEL
+      				X(2) = (FLOAT(KY)-.5)*DEL
+      				X(3) = (FLOAT(KZ)-.5)*DEL
+      				IF (JSIGN.EQ.2) X(JAXIS) = -X(JAXIS)
+      				DO L=1,3
+     				   XP(L) = T(L,1)*X(1) + T(L,2)*X(2) + T(L,3)*X(3) + T(L,4)
+      				ENDDO
+      				IX = NINT(XP(1)-.5)
+      				WX = XP(1) - FLOAT(IX)
+      				IY = NINT(XP(2)-.5)
+      				WY = XP(2) - FLOAT(IY)
+      				IZ = NINT(XP(3)-.5)
+      				WZ = XP(3) - FLOAT(IZ)
+      				IF (IZ.EQ.0 .AND. WZ.GT.0.999) THEN
+        				IZ = 1
+        				WZ = 0.
+      				ENDIF
+      				IF (IZ.EQ.NSLICE .AND. WZ.LT.0.001) THEN
+        				IZ = NSLICE-1
+        				WZ = 1.
+      				ENDIF
+
+      				IF (IX.LE.1 .OR. IX.GE.NCOL) THEN
+								LVALID(JSIGN) = .FALSE.
+
+      				ELSE IF (IY.LE.1 .OR. IY.GE.NROW) THEN
+								LVALID(JSIGN) = .FALSE.
+
+      				ELSE IF (IZ.LT.1 .OR. IZ.GE.NSLICE) THEN
+								LVALID(JSIGN) = .FALSE.
+
+      				ELSE IF  (MASK(IX,  IY  ,IZ)  .EQ.0
+     &					 	 .OR. MASK(IX+1,IY  ,IZ)  .EQ.0
+     &						 .OR. MASK(IX,  IY+1,IZ)  .EQ.0
+     &						 .OR. MASK(IX+1,IY+1,IZ)  .EQ.0
+     &						 .OR. MASK(IX,  IY  ,IZ+1).EQ.0
+     &						 .OR. MASK(IX+1,IY  ,IZ+1).EQ.0
+     &						 .OR. MASK(IX,  IY+1,IZ+1).EQ.0
+     &						 .OR. MASK(IX+1,IY+1,IZ+1).EQ.0) THEN
+								LVALID(JSIGN) = .FALSE.
+
+							ELSE
+      					V(JSIGN) = SCALE * (
+     &						(1.-WZ) * ((1.-WY)* ((1.-WX)*IMAGE(IX, IY  ,IZ)   + WX*IMAGE(IX+1,IY  ,IZ))
+     &          	          +    WY * ((1.-WX)*IMAGE(IX, IY+1,IZ)   + WX*IMAGE(IX+1,IY+1,IZ)))
+     &    				+  WZ   * ((1.-WY)* ((1.-WX)*IMAGE(IX, IY  ,IZ+1) + WX*IMAGE(IX+1,IY  ,IZ+1))
+     &          	          +    WY * ((1.-WX)*IMAGE(IX, IY+1,IZ+1) + WX*IMAGE(IX+1,IY+1,IZ+1))))
+      					LVALID(JSIGN) = .TRUE.
+
+							ENDIF
+100 				CONTINUE
+      			IF (.NOT.(LVALID(1) .AND. LVALID(2))) GOTO 200
+      			N = N+1
+      			ERR = ERR + (V(1) - V(2))**2
+200				CONTINUE
+300			CONTINUE
+400		CONTINUE
+      ERR = ERR/FLOAT(N)
+
+      RETURN
+      END
+@
+
+
+1.6
+log
+@working c/fortran
+@
+text
+@d32 1
+a32 1
+			RCSHEADER = "$Id$"
+@
+
+
+1.5
+log
+@working c/fortran
+@
+text
+@d25 2
+a26 2
+			INTEGER*4	N1	/1/
+			INTEGER*4	N4	/4/
+d28 1
+d30 2
+a31 1
+			CHARACTER*256	RCSHEADER
+a32 1
+
+@
+
+
+1.4
+log
+@working c/fortran
+@
+text
+@d25 2
+a26 2
+			INTEGER*4	N1
+			INTEGER*4	N4
+d29 2
+a30 1
+			DATA N1, N4 /1,4/
+@
+
+
+1.3
+log
+@working c/fortran
+@
+text
+@d1 1
+a1 1
+      SUBROUTINE IMGROTE (IMAG, MASK, NSLICE, NCOL, NROW, FOV, MMPPIX, PARAM, DEL, JAXIS, SCALE, ERR)
+d3 4
+a6 1
+      REAL*4		IMAG(NCOL,NROW,NSLICE)
+d14 1
+a14 1
+      REAL*4    DEL
+d51 2
+d54 3
+d58 3
+d63 2
+a83 2
+      				IF (IX.LE.1 .OR. IX.GE.100) GOTO 90
+      				IF (IY.LE.1 .OR. IY.GE.100) GOTO 90
+a91 1
+      				IF (IZ.LT.1 .OR. IZ.GE.NSLICE) GOTO 90
+d93 2
+a94 8
+      				IF  (MASK(IX,  IY  ,IZ)  .EQ.0
+     &				.OR. MASK(IX+1,IY  ,IZ)  .EQ.0
+     &				.OR. MASK(IX,  IY+1,IZ)  .EQ.0
+     &				.OR. MASK(IX+1,IY+1,IZ)  .EQ.0
+     &				.OR. MASK(IX,  IY  ,IZ+1).EQ.0
+     &				.OR. MASK(IX+1,IY  ,IZ+1).EQ.0
+     &				.OR. MASK(IX,  IY+1,IZ+1).EQ.0
+     &				.OR. MASK(IX+1,IY+1,IZ+1).EQ.0) GOTO 90
+d96 2
+a97 5
+      				V(JSIGN) = SCALE * (
+     &					(1.-WZ) * ((1.-WY)* ((1.-WX)*IMAG(IX, IY  ,IZ)   + WX*IMAG(IX+1,IY  ,IZ))
+     &                    +    WY * ((1.-WX)*IMAG(IX, IY+1,IZ)   + WX*IMAG(IX+1,IY+1,IZ)))
+     &    			+  WZ   * ((1.-WY)* ((1.-WX)*IMAG(IX, IY  ,IZ+1) + WX*IMAG(IX+1,IY  ,IZ+1))
+     &                    +    WY * ((1.-WX)*IMAG(IX, IY+1,IZ+1) + WX*IMAG(IX+1,IY+1,IZ+1))))
+d99 22
+a120 3
+      				LVALID(JSIGN) = .TRUE.
+      				GOTO 100
+90	 					LVALID(JSIGN) = .FALSE.
+@
+
+
+1.2
+log
+@revision
+@
+text
+@d1 23
+a23 9
+      SUBROUTINE IMGROTE(FOV,MMPPIX,NSLICE,IMAG,MASK,PARAM,DEL,JAXIS,ROT,SCALE,ERR)
+      REAL*4 FOV(3),MMPPIX(3),PARAM(12)
+      PARAMETER (NROW=100)
+      PARAMETER (NCOL=100)
+      PARAMETER (NPIX=10112)
+      INTEGER*2 IMAG(NPIX,NSLICE)
+      INTEGER*2 MASK(NPIX,NSLICE)
+      REAL*4 V(2),X(3),XP(3),TROT(4,4),C(4,4),T(4,4)
+			REAL*4 SCALE
+d26 8
+a33 6
+      IF(JAXIS.LT.1.OR.JAXIS.GT.3)STOP 'IMGROTE: JAXIS BAD'
+      NX=NINT(.5*FOV(1)/DEL)
+      NY=NINT(.5*FOV(2)/DEL)
+      NZ=NINT(.5*FOV(3)/DEL)
+      IF(JAXIS.EQ.1)THEN
+        NX0=1
+d35 1
+a35 1
+        NX0=-NX+1
+d37 2
+a38 2
+      IF(JAXIS.EQ.2)THEN
+        NY0=1
+d40 1
+a40 1
+        NY0=-NY+1
+d42 2
+a43 2
+      IF(JAXIS.EQ.3)THEN
+        NZ0=1
+d45 1
+a45 1
+        NZ0=-NZ+1
+d48 3
+a50 3
+      CALL vrt2img(MMPPIX,PARAM(7),C)
+      CALL TROTCAL(+1,PARAM,TROT,ROT)
+      CALL MATMUL(C,TROT,T,4)
+d52 30
+a81 67
+      ERR=0.
+      N=0
+      DO 41 KX=NX0,NX
+      DO 41 KY=NY0,NY
+      DO 41 KZ=NZ0,NZ
+      DO 11 JSIGN=1,2
+      X(1)=(FLOAT(KX)-.5)*DEL
+      X(2)=(FLOAT(KY)-.5)*DEL
+      X(3)=(FLOAT(KZ)-.5)*DEL
+      IF(JSIGN.EQ.2)X(JAXIS)=-X(JAXIS)
+      DO L=1,3
+        XP(L)=T(L,1)*X(1)+T(L,2)*X(2)+T(L,3)*X(3)+T(L,4)
+      ENDDO
+      IX=NINT(XP(1)-.5)
+      WX=XP(1)-FLOAT(IX)
+      IY=NINT(XP(2)-.5)
+      WY=XP(2)-FLOAT(IY)
+      IZ=NINT(XP(3)-.5)
+      WZ=XP(3)-FLOAT(IZ)
+      IF(IX.LE.1.OR.IX.GE.100)GOTO 9
+      IF(IY.LE.1.OR.IY.GE.100)GOTO 9
+      IF(IZ.EQ.0.AND.WZ.GT.0.999)THEN
+        IZ=1
+        WZ=0.
+      ENDIF
+      IF(IZ.EQ.NSLICE.AND.WZ.LT.0.001)THEN
+        IZ=NSLICE-1
+        WZ=1.
+      ENDIF
+      IF(IZ.LT.1.OR.IZ.GE.NSLICE)GOTO 9
+      IF(
+     &    MASK(IX+0+100*(IY+0-1),IZ+0).EQ.0
+     &.OR.MASK(IX+1+100*(IY+0-1),IZ+0).EQ.0
+     &.OR.MASK(IX+0+100*(IY+1-1),IZ+0).EQ.0
+     &.OR.MASK(IX+1+100*(IY+1-1),IZ+0).EQ.0
+     &.OR.MASK(IX+0+100*(IY+0-1),IZ+1).EQ.0
+     &.OR.MASK(IX+1+100*(IY+0-1),IZ+1).EQ.0
+     &.OR.MASK(IX+0+100*(IY+1-1),IZ+1).EQ.0
+     &.OR.MASK(IX+1+100*(IY+1-1),IZ+1).EQ.0
+     &)GOTO 9
+      V(JSIGN)=SCALE*(
+     & +(1.-WZ)*((1.-WY)*(
+     &               (1.-WX)*FLOAT(IMAG(IX+0+100*(IY+0-1),IZ+0))
+     &                   +WX*FLOAT(IMAG(IX+1+100*(IY+0-1),IZ+0)))
+     &               +WY*(
+     &               (1.-WX)*FLOAT(IMAG(IX+0+100*(IY+1-1),IZ+0))
+     &                   +WX*FLOAT(IMAG(IX+1+100*(IY+1-1),IZ+0))))
+     &      +WZ*((1.-WY)*(
+     &               (1.-WX)*FLOAT(IMAG(IX+0+100*(IY+0-1),IZ+1))
+     &                   +WX*FLOAT(IMAG(IX+1+100*(IY+0-1),IZ+1)))
+     &               +WY*(
+     &               (1.-WX)*FLOAT(IMAG(IX+0+100*(IY+1-1),IZ+1))
+     &                   +WX*FLOAT(IMAG(IX+1+100*(IY+1-1),IZ+1))))
+     &)
+      LVALID(JSIGN)=.TRUE.
+      GOTO 11
+    9 LVALID(JSIGN)=.FALSE.
+   11 CONTINUE
+      IF(.NOT.(LVALID(1).AND.LVALID(2)))GOTO 41
+      N=N+1
+      ERR=ERR+(V(1)-V(2))**2
+   41 CONTINUE
+      ERR=ERR/FLOAT(N)
+C      NK=4*NX*NY*NZ
+C      type "('npix',2i6,F10.4)",NK,N,FLOAT(N)/FLOAT(NK)
+      RETURN
+      END
+d83 8
+a90 10
+      SUBROUTINE IMGROTS(MMPPIX,NSLICE,IMAG,MASK,PARAM,IMAGNEW,ROT)
+      REAL*4 MMPPIX(3),PARAM(12)
+      PARAMETER (NROW=100)
+      PARAMETER (NCOL=100)
+      PARAMETER (NPIX=10112)
+      INTEGER*2 IMAG(NPIX,NSLICE)
+      INTEGER*2 MASK(NPIX,NSLICE)
+      INTEGER*2 IMAGNEW(NPIX,NSLICE)
+      REAL*4 X(3),XP(3),TROT(4,4),A(4,4),B(4,4),C(4,4),T(4,4)
+      LOGICAL*4 LVALID
+d92 5
+a96 9
+      CALL vrt2img(MMPPIX,PARAM(1),C)
+      CALL vrt2img(MMPPIX,PARAM(7),C)
+      CALL img2vrt(MMPPIX,PARAM(7),B)
+      CALL TROTCAL(+0,PARAM,TROT,ROT)
+      CALL TROTCAL(+1,PARAM,TROT,ROT)
+      CALL imgrotrl(TROT)
+      CALL MATMUL(C,TROT,A,4)
+      CALL MATMUL(A,B,T,4)
+      CALL imgrotrl(T)
+d98 12
+a109 58
+      N=0
+      DO 41 K=1,NSLICE
+      DO 41 J=1,100
+      DO 41 I=1,100
+      X(1)=FLOAT(I)
+      X(2)=FLOAT(J)
+      X(3)=FLOAT(K)
+      DO L=1,3
+        XP(L)=T(L,1)*X(1)+T(L,2)*X(2)+T(L,3)*X(3)+T(L,4)
+      ENDDO
+      IX=NINT(XP(1)-.5)
+      WX=XP(1)-FLOAT(IX)
+      IY=NINT(XP(2)-.5)
+      WY=XP(2)-FLOAT(IY)
+      IZ=NINT(XP(3)-.5)
+      WZ=XP(3)-FLOAT(IZ)
+      IF(IX.LE.1.OR.IX.GE.100)GOTO 9
+      IF(IY.LE.1.OR.IY.GE.100)GOTO 9
+      IF(IZ.EQ.0.AND.WZ.GT.0.999)THEN
+        IZ=1
+        WZ=0.
+      ENDIF
+      IF(IZ.EQ.NSLICE.AND.WZ.LT.0.001)THEN
+        IZ=NSLICE-1
+        WZ=1.
+      ENDIF
+      IF(IZ.LT.1.OR.IZ.GE.NSLICE)GOTO 9
+      IF(
+     &    MASK(IX+0+100*(IY+0-1),IZ+0).EQ.0
+     &.OR.MASK(IX+1+100*(IY+0-1),IZ+0).EQ.0
+     &.OR.MASK(IX+0+100*(IY+1-1),IZ+0).EQ.0
+     &.OR.MASK(IX+1+100*(IY+1-1),IZ+0).EQ.0
+     &.OR.MASK(IX+0+100*(IY+0-1),IZ+1).EQ.0
+     &.OR.MASK(IX+1+100*(IY+0-1),IZ+1).EQ.0
+     &.OR.MASK(IX+0+100*(IY+1-1),IZ+1).EQ.0
+     &.OR.MASK(IX+1+100*(IY+1-1),IZ+1).EQ.0
+     &)GOTO 9
+      V=(
+     & +(1.-WZ)*((1.-WY)*(
+     &               (1.-WX)*FLOAT(IMAG(IX+0+100*(IY+0-1),IZ+0))
+     &                   +WX*FLOAT(IMAG(IX+1+100*(IY+0-1),IZ+0)))
+     &               +WY*(
+     &               (1.-WX)*FLOAT(IMAG(IX+0+100*(IY+1-1),IZ+0))
+     &                   +WX*FLOAT(IMAG(IX+1+100*(IY+1-1),IZ+0))))
+     &      +WZ*((1.-WY)*(
+     &               (1.-WX)*FLOAT(IMAG(IX+0+100*(IY+0-1),IZ+1))
+     &                   +WX*FLOAT(IMAG(IX+1+100*(IY+0-1),IZ+1)))
+     &               +WY*(
+     &               (1.-WX)*FLOAT(IMAG(IX+0+100*(IY+1-1),IZ+1))
+     &                   +WX*FLOAT(IMAG(IX+1+100*(IY+1-1),IZ+1))))
+     &)
+      LVALID=.TRUE.
+      N=N+1
+      GOTO 41
+    9 V=0.
+      LVALID=.FALSE.
+   41 IMAGNEW(I+100*(J-1),K)=V
+      type "('number of non-zero pixles saved',i8)",N
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+      SUBROUTINE IMGROTE(FOV,MMPPIX,NSLICE,IMAG,MASK,PARAM,DEL,JAXIS,ERR)
+d9 1
+a10 1
+      COMMON/ACOM/SCALE
+d33 1
+a33 1
+      CALL TROTCAL(+1,PARAM,TROT)
+d104 1
+a104 1
+      SUBROUTINE IMGROTS(MMPPIX,NSLICE,IMAG,MASK,PARAM,IMAGNEW)
+d118 2
+a119 2
+      CALL TROTCAL(+0,PARAM,TROT)
+      CALL TROTCAL(+1,PARAM,TROT)
+@

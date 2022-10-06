@@ -1,0 +1,213 @@
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      TISCRV.FTN
+C
+C  Author:       Tom Videen
+C  Date:         04-Jun-92
+C  Written For:  Bill Powers tissue activity curve generation
+C
+C  History
+C     Modified version of RPOTISC 04-Jun-92 TOV:
+C       1) Read  SPIDERAM .REG files
+C       2) Eliminate calls to parameter estimation routines
+C     Modified for Unix 20-Oct-93 TOV:
+C
+C  Intent:
+C     Generates a tissue activity curve from:
+C       1) regions of interest file (.REG)
+C       2) list of scans (.RPO)
+C
+C  Logical Units:
+C     1 = REG file
+C     2 = RPO file
+C     3 = TSC file
+C     4 = user input
+C     5 = user output
+C     6 = PET images
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM TISCRV
+C
+      REAL*4       TISCURVS(100,100), HALFLIFE
+      INTEGER*4    TIME1(100),TIME2(100)
+      INTEGER*2    IN(128,128) ! image file
+      INTEGER*2    HDR(128)    ! header
+      INTEGER*4    SLICE       ! slice no.
+      INTEGER*4    REGLU       ! lu for REG input
+      INTEGER*4    RPOLU       ! lu for RPO input
+      INTEGER*4    TSCLU       ! lu for TSC output
+      INTEGER*4    PETLU       ! lu for PET image input
+      INTEGER*4    USERIN      ! lu for user input
+      INTEGER*4    USEROUT     ! lu for user output
+      INTEGER*4    NUMSLCS     ! number of slices from GETIMAGE
+      INTEGER*4    NUMPETT     ! PETT number
+      LOGICAL*1    HDRONLY     ! read header only
+      LOGICAL*1    ERROR       ! error reading image
+C
+      REAL*4       NX(100),NY(100),NZ(100)
+      INTEGER*4    NZX(100),NZY(100)
+      INTEGER*4    NMAX
+      INTEGER*4    ORDER(100)
+      CHARACTER*10 REG(100)
+      CHARACTER*256 REGNAME, RPONAME, TSCNAME, PETNAME, AT, BLANK
+      CHARACTER*256 RCSHEADER
+      CHARACTER*80 Q, STR
+
+      COMMON /USRIO/ USERIN, USEROUT
+C
+      DATA USERIN, USEROUT /5,6/
+      DATA REGLU, RPOLU, TSCLU, PETLU /1,2,3,6/
+C
+C  Initializations
+C
+			RCSHEADER = "$Id$"
+      BLANK = ' '
+      HDRONLY = .FALSE.
+      ERROR   = .FALSE.
+      DO 10 I=1,100
+        NX(I) = 0.
+        NY(I) = 0.
+        NZ(I) = 0.
+        NZX(I) = 0
+        NZY(I) = 0
+        REG(I) = ' '
+10    CONTINUE
+C
+			call getarg (1,REGNAME)
+			call getarg (2,RPONAME)
+      call getarg (3,TSCNAME)
+C
+C  Open files
+C
+      OPEN (REGLU, FILE=REGNAME, STATUS='OLD', ERR=15)
+				GO TO 20
+15			WRITE (USEROUT,*) "ERROR opening region file ",REGNAME
+				STOP
+20    OPEN (RPOLU, FILE=RPONAME, STATUS='OLD', ERR=25)
+				GO TO 30
+25			WRITE (USEROUT,*) "ERROR opening rpo file ",RPONAME
+				STOP
+30    OPEN (TSCLU, FILE=TSCNAME, STATUS='NEW', ERR=35)
+				GO TO 40
+35			WRITE (USEROUT,*) "ERROR opening tissue curve file ",TSCNAME
+				STOP
+40		CONTINUE
+C
+C  Call regional data subroutine program to get regions-of-interest
+C
+      CALL RDATA (NX,NY,NZ,NZX,NZY,NMAX,REG,AT,REGLU,USEROUT)
+C
+C  Now obtain PET scan data file
+C
+8000  FORMAT(A80)
+      NPOINT=0
+      READ(RPOLU,8000,ERR=9000) STR
+      WRITE(USEROUT,*) STR
+      READ(RPOLU,*,ERR=9000) HALFLIFE
+C
+C  If halflife = 0 , this is flag to do no decay correction
+C
+      IF (HALFLIFE.EQ.0.) THEN
+      WRITE(USEROUT,*) 'Zero half-life selected, no decay correction'
+      ELSE
+        WRITE(USEROUT,*) 'Halflife = ',HALFLIFE
+      END IF
+
+8100  FORMAT(A20)
+100   READ(RPOLU,8100) PETNAME
+      IF (PETNAME.EQ.BLANK) GOTO 200
+
+      READ(RPOLU,*,ERR=9000) TSTART,TLEN,PSLOPE
+      READ(RPOLU,*,ERR=9000)
+
+      NPOINT = NPOINT+1
+      TIME1(NPOINT) = TSTART
+      TIME2(NPOINT) = TSTART+TLEN-1
+C
+C  CALCULATE CONSTANT FOR DECAY CORRECTION
+C
+      IF (HALFLIFE.EQ.0.0) THEN
+        AL = 0.
+        A  = 1.0
+      ELSE
+        AL = .693/HALFLIFE
+        A = EXP(TSTART*AL)*AL*TLEN/(1.-EXP(-AL*TLEN))
+      END IF
+      A = A*60.*PSLOPE
+C
+C  LOAD REGION VALUES INTO TISCURVS
+C
+8400  FORMAT(I3,3X,A20)
+      WRITE(USEROUT,8400) NPOINT, PETNAME
+      DO 150 J=1,NMAX
+        SLICE = NINT(NZ(J))
+        CALL GETIMG (IN,HDR,PETNAME,SLICE,NUMSLCS,NUMPETT,PETLU,USEROUT,HDRONLY,ERROR)
+        IF (ERROR) GO TO 9100
+        CALL REGVAL(PETCNT,NX(J),NY(J),NZX(J),NZY(J),IN)
+        TISCURVS(NPOINT,J) = PETCNT*A
+150   CONTINUE
+      GOTO 100
+C
+200   WRITE(TSCLU,*) 'PET/DATA FILE: ',RPONAME,' REGION FILE: ',REGNAME
+      WRITE(TSCLU,*) NPOINT,(NMAX+2)
+C
+      WRITE(USEROUT,*) 'Region Names:'
+      DO 300 J=1,NMAX
+        WRITE(USEROUT,*)'   ',J,':  ',REG(J)
+300   CONTINUE
+      DO 400 I=1,NMAX
+        J = I
+        Q = 'Save region '//REG(I)//' as number'
+        CALL GETINT(Q,J,1,NMAX)
+        ORDER(I) = J
+400   CONTINUE
+
+      DO 500 I=1,NPOINT
+        T1 = TIME1(I)
+        T2 = TIME2(I)-TIME1(I)+1
+        WRITE(TSCLU,*) T1,T2,(TISCURVS(I,ORDER(N)),N=1,NMAX)
+500   CONTINUE
+      DO 600 I=1,NMAX
+        WRITE(TSCLU,*) REG(ORDER(I))
+600   CONTINUE
+C
+      STOP
+
+9000  WRITE(USEROUT,*) 'ERROR: error reading ',RPONAME
+      STOP
+9100  WRITE(USEROUT,*) 'ERROR: cannot read ',PETNAME
+      STOP
+      END
+
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   REGVAL.FTN
+C
+C  Intent:  Compute mean regional PET value.
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE REGVAL(REGVALUE,XC,YC,XS,YS,IN)
+
+      REAL*4    XC, YC, REGVALUE
+      INTEGER*4 XS, YS
+      INTEGER*2 IN(128,128)
+C
+      INTEGER*4 I,J,SUM,TOT
+      INTEGER*4 X0, Y0
+C
+      X0 = INT(XC) - XS/2
+      Y0 = INT(YC) - YS/2
+      SUM = 0
+      TOT = 0
+      DO 20 I=0,XS-1
+        DO 10 J=0,YS-1
+          SUM = SUM + IN(X0+I,Y0+J)
+          TOT = TOT + 1
+10      CONTINUE
+20    CONTINUE
+      REGVALUE = FLOAT(SUM)/FLOAT(TOT)
+C
+      RETURN
+      END

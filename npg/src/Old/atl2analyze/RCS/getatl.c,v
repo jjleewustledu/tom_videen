@@ -1,0 +1,190 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	94.04.08.20.48.46;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.04.08.19.31.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@original
+@
+
+
+1.2
+log
+@mm to cm
+@
+text
+@/*$Id: getatl.c,v 1.1 1994/04/08 19:31:07 tom Exp tom $*/
+/*$Log: getatl.c,v $
+ * Revision 1.1  1994/04/08  19:31:07  tom
+ * Initial revision
+ **/
+/*  ===============================================================================
+ *  Module:       getatl.c
+ *  Date:         08-Apr-94
+ *  Author:       Tom Videen
+ *  Description:  Read a Talairach atlas tracing file into global array **atl
+ *  ===============================================================================
+ */
+
+#include <stdio.h>
+#include <unistd.h>		/* SEEK_SET */
+#include <petutil/package.h>	/* MAXLINE */
+#include "atlas.h"		/* ATLAS_HEADER, SCALE_HEADER */
+
+static char rcsid [] = "$Header: /home/petsun2/tom/src/atl2analyze/RCS/getatl.c,v 1.1 1994/04/08 19:31:07 tom Exp tom $";
+
+int getatl (atlas_filename, header, pixel_size)
+char  *atlas_filename;
+SCALE_HEADER	*header;
+float *pixel_size;
+{
+	extern short *atl;
+	ATLAS_HEADER atlas_header;
+  FILE    *atlasfp;   								/* file pointer to atlas file */
+  char    label [MAXLINE];   					/* text label in header file */
+  char    temp_str [MAXLINE];  				/* text label in header file */
+  char    atlasz [MAXLINE]; 			 		/* text label in header file */
+	long		slice_size;									/* bytes per slice */
+	int			dimension;									/* pixels per slice */
+  int   	index;
+  int   	pet_slice_num;
+  int   	z_value;
+	int			num_slices;
+  int   	i;
+ 
+/*
+ * Read the atlas header file
+ * --------------------------
+ */
+
+  atlasfp = fopen (atlas_filename, "r");
+  if (atlasfp == (FILE *) NULL) {
+		fprintf (stderr, "Cannot open Atlas %s\n", atlas_filename);
+    exit (FAIL);
+  }
+   if (fgets (label, MAXLINE, atlasfp) == NULL ) {
+    fprintf (stderr, "File %s is empty\n", atlas_filename);
+    exit (FAIL);
+  }
+
+/* Scale 0.25 */
+
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_025_header.width);
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_025_header.height);
+  fscanf (atlasfp, "%s %f", label, &atlas_header.scale_025_header.pixel_size);
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_025_header.centerx);
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_025_header.centery);
+  fscanf (atlasfp, "%s %s", label, atlas_header.scale_025_header.image_name);
+  fscanf (atlasfp, "%s %s", label, atlas_header.scale_025_header.mask_name);
+  fscanf (atlasfp, "%s %s", label, temp_str);
+ 
+/* Scale 0.50 */
+
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_050_header.width);
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_050_header.height);
+  fscanf (atlasfp, "%s %f", label, &atlas_header.scale_050_header.pixel_size);
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_050_header.centerx);
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_050_header.centery);
+  fscanf (atlasfp, "%s %s", label, atlas_header.scale_050_header.image_name);
+  fscanf (atlasfp, "%s %s", label, atlas_header.scale_050_header.mask_name);
+  fscanf (atlasfp, "%s %s", label, temp_str);
+ 
+/* Scale 1.00 */
+
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_100_header.width);
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_100_header.height);
+  fscanf (atlasfp, "%s %f", label, &atlas_header.scale_100_header.pixel_size);
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_100_header.centerx);
+  fscanf (atlasfp, "%s %d", label, &atlas_header.scale_100_header.centery);
+  fscanf (atlasfp, "%s %s", label, atlas_header.scale_100_header.image_name);
+  fscanf (atlasfp, "%s %s", label, atlas_header.scale_100_header.mask_name);
+  fscanf (atlasfp, "%s %s %s", label, temp_str, atlasz);
+ 
+/* Index Table from PET slice -> atlas slice */
+
+  i = 0;
+  while (fscanf (atlasfp, "%d %d %d", &pet_slice_num, &index, &z_value) != EOF)
+    atlas_header.index_table[i++]  = (char) index;
+	num_slices = i;
+  atlas_header.scale_025_header.any_scale_flag = FALSE;
+  atlas_header.scale_050_header.any_scale_flag = FALSE;
+  atlas_header.scale_100_header.any_scale_flag = FALSE;
+  fclose (atlasfp);
+
+/*
+ *	Select one scale for header image
+ */
+
+  header->width = atlas_header.scale_025_header.width;
+  header->height = atlas_header.scale_025_header.height;
+  header->pixel_size = atlas_header.scale_025_header.pixel_size;
+  header->centerx = atlas_header.scale_025_header.centerx;
+  header->centery = atlas_header.scale_025_header.centery;
+  strcpy (header->image_name, atlas_header.scale_025_header.image_name);
+  strcpy (header->mask_name, atlas_header.scale_025_header.mask_name);
+
+  *pixel_size = header->pixel_size;
+
+/*
+ * Read the atlas image
+ * --------------------
+ */
+
+	atlasfp = fopen (header->image_name, "rb");
+	if (atlasfp == (FILE *) NULL) {
+		fprintf (stderr, "Cannot open Atlas header %s\n", header->image_name);
+		exit(FAIL);
+	}
+ 
+	dimension  = header->width * header->height;
+	slice_size  = sizeof(short) * dimension;
+ 
+  if (NULL == (atl = (short *) calloc(num_slices, slice_size))) {
+    printf("Could not calloc memory for *atl\n");
+    exit(FAIL);
+  }
+
+	for (i=0; i<num_slices; i++) {
+  	index = (int) atlas_header.index_table[i] - 1;
+		if (fseek (atlasfp, index * slice_size, SEEK_SET) != 0) {
+			fprintf (stderr, "Seek Error in getatl\n");
+			exit(FAIL);
+		}
+ 		if (fread (&atl[i * dimension], slice_size, 1, atlasfp) != 1) {
+			fprintf(stderr,"Read Error in getatl\n");
+			exit(FAIL);
+		}
+	}
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d19 1
+a19 1
+static char rcsid [] = "$Header$";
+d111 1
+a111 1
+  *pixel_size = 0.1 * header->pixel_size;
+@

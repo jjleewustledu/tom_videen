@@ -1,0 +1,224 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	2000.05.19.15.44.51;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.04.17.15.04.35;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.04.14.17.34.32;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@PRO CORRELIMG
+@@IMAGE_UTILS.h
+
+   on_error, 2
+   list = ''
+   outfile = ''
+   voifile = ''
+   name = ''
+   msg = ''
+
+   list    = getenv('INFILE')
+   outfile = getenv('OUTFILE')
+   voifile = getenv('VOIFILE')
+   name    = getenv('VOINAME')
+   cortype = getenv('CORTYPE')
+
+   ;; Read image list
+
+   openr,lu1, list, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: Cannot open ',list
+      RETURN
+   ENDIF
+   nimg = 0L
+   fname = ''
+   readf, lu1, nimg
+   IF (nimg LT 2) THEN BEGIN
+      PRINT,'ERROR [vstat]: ',list,' has only ',nimg,' files'
+      RETURN
+   ENDIF
+
+   out = {VIMAGE}
+   img = replicate({VIMAGE}, nimg)
+   
+   FOR i=0,nimg-1 DO BEGIN
+      readf, lu1, fname
+      out.fname = fname
+      out.ff = 1
+      out.lf = 1
+      out.fp = 1
+      out.lp = 256
+      IF (getframe(out, msg) NE 0) THEN BEGIN
+         PRINT,'ERROR [vstat]: reading ',fname
+         RETURN
+      ENDIF
+      img[i] = out
+      print, format = '("Image File:  ",A)', fname
+      img[i].data = ptr_new(*out.data)
+   ENDFOR
+   close,lu1
+   free_lun,lu1
+
+   out.fname = img[0].fname
+   out.ff = 1
+   out.lf = 1
+   out.fp = 1
+   out.lp = 256
+   IF (getframe(out, msg) NE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: reading ',fname
+      RETURN
+   ENDIF
+
+   len =  img[0].dim[0] * img[0].dim[1] * img[0].dim[2]
+
+   ;; Read VOI definition
+
+   voi = ptr_new({VOI})
+   (*voi).id = 'VOI'
+   IF (VOI_READ(voi, voifile, msg) NE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: reading ',voifile
+      RETURN
+   ENDIF
+   roi = VOI_LOCATE(voi, name)
+   IF (NOT ptr_valid(roi)) THEN BEGIN
+      PRINT,'ERROR [vstat]: cannot locate ',name,' in ',voifile
+      RETURN
+   ENDIF
+   IF ((*roi).num LE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: reading ',name,' in ',voifile
+      RETURN
+   ENDIF
+
+   ;; Get pixels comprising VOI
+
+   pixels = VOI_COORDS(voi, name, out.dim, msg)
+   IF ((size(pixels))[2] LE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: VOI ',roi,' has no defined pixels'
+      RETURN
+   ENDIF
+   pixels = pixels[sort(pixels)]
+   pixels = pixels[uniq(pixels)]
+   n = n_elements(pixels)
+   IF (n LE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: VOI ',roi,' has no defined pixels'
+      RETURN
+   ENDIF
+   print, format = '("VOI:  ",A,3X,I0," voxels  (",A,")")', name, n, voifile
+
+   ;; Compute mean voi value for each image
+
+   v = fltarr(nimg)
+   FOR i=0,nimg-1 DO BEGIN
+      val = (*img[i].data)[pixels]
+      v[i] = (moment(val))[0]
+   ENDFOR
+   
+   ;; Compute correlation coefficient for each pixel
+
+   flen = len/80
+   print, FORMAT = '($,"|")'
+   FOR n=1,80 DO print, FORMAT = '($,"_")'
+   print,"|"
+
+   q = fltarr(nimg)
+   IF (cortype EQ 'linear') THEN BEGIN
+      FOR n=0L,len-1 DO BEGIN
+         IF (n MOD flen EQ 0) THEN print, FORMAT = '($,"^")'
+         FOR i=0,nimg-1 DO q[i] = (*img[i].data)[n]
+         (*out.data)[n] = fix(1000 * correlate(v,q))
+      ENDFOR
+   ENDIF ELSE IF (cortype EQ 'rank') THEN BEGIN
+      FOR n=0L,len-1 DO BEGIN
+         IF (n MOD flen EQ 0) THEN print, FORMAT = '($,"^")'
+         FOR i=0,nimg-1 DO q[i] = (*img[i].data)[n]
+         val = (r_correlate(v,q))[0]
+         (*out.data)[n] = fix(1000 * val)
+      ENDFOR
+   ENDIF ELSE BEGIN
+      PRINT,'ERROR [correlimg]: type must be linear or rank'
+      RETURN
+   ENDELSE
+   print
+   print,'Max = ',max (*out.data)
+
+   ;; Write output image
+
+   extra = strarr(4)
+   extra[0] = 'program name       := correlimg'
+   extra[1] = 'program version    := 1.0'
+   extra[2] = 'program date       := 2000:05:19'
+   extra[3] = 'input file 1       := '+fname+'
+   out.fname = outfile
+   print,'Writing '+out.fname+'... '
+   IF (PUTINTERFILE(out, outfile, type(0), msg, EXTRA=extra) NE 0) THEN message, msg
+   print,'(ignore message -- "Floating illegal operand")'
+
+END 
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d11 1
+a11 1
+   list = getenv('INFILE')
+d14 2
+a15 1
+   name = getenv('VOINAME')
+d115 17
+a131 7
+   FOR n=0L,len-1 DO BEGIN
+      IF (n MOD flen EQ 0) THEN print, FORMAT = '($,"^")'
+      FOR i=0,nimg-1 DO q[i] = (*img[i].data)[n]
+      ;;val = (r_correlate(v,q))[0]
+      ;;(*out.data)[n] = fix(1000 * val)
+      (*out.data)[n] = fix(1000 * correlate(v,q))
+   ENDFOR
+d137 1
+a137 1
+   extra = strarr(5)
+d140 1
+a140 1
+   extra[2] = 'program date       := 2000:04:14'
+a141 1
+   extra[4] = 'input file 2       := '+fname+'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d115 1
+a115 1
+      IF (n MOD flen EQ 0) THEN print, FORMAT = '($,".")'
+d117 2
+d135 1
+@

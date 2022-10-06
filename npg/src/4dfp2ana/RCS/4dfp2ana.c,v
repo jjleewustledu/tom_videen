@@ -1,0 +1,297 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	2010.02.11.16.46.01;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2009.03.25.21.34.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@add scaler
+@
+text
+@/*	$Log: 4dfp2ana.c,v $
+ * Revision 1.1  2009/03/25  21:34:47  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			4dfp2ana.c
+ *	Date:			Mar 2009
+ *	Author:			Tom Videen
+ *	Description:	Reorient a 4dfp file to standard Analyze orientation
+ *					(Right->Left, Post->Ant, Inf->Sup)
+ *					and convert to short integers.
+ *	===============================================================================
+ */
+/*@@unused@@*/ 
+static char     rcsid[] = "$Header: /home/npggw/tom/src/4dfp2ana/RCS/4dfp2ana.c,v 1.1 2009/03/25 21:34:47 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <myvalues.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <dbh.h>
+
+/*	----------------------------
+ *	Function:			4dfp2ana
+ *	----------------------------
+ */
+int             main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;
+	FILE           *fd_hdr;			 /* file for hdr */
+	FILE           *fd_img;			 /* file for image */
+	char           *in_hdr;			 /* input header filename  */
+	char           *in_img;			 /* input image filename */
+	char           *out_hdr;		 /* input header filename  */
+	char           *out_img;		 /* input image filename */
+	int             orient;
+
+	int             global_max;
+	int             global_min;
+
+	float			scaler;
+	float           temp1, temp2, temp3;
+	int             i, j, k;
+
+	short           idim1, idim2, idim3;	 /* dimensions of simg */
+	short           odim1, odim2, odim3;	 /* dimensions of somg */
+
+	short           val;
+	short        ***simg;			 /* short output image */
+	short          *srow;			 /* short row of input image */
+	float        ***fimg;			 /* float input image */
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 7) {
+		fprintf (stderr, "Usage: 4dfp2ana in_img in_hdr out_img out_hdr orientation scaler\n");
+		return (ERROR);
+	}
+	in_img = argv[1];
+	in_hdr = argv[2];
+	out_img = argv[3];
+	out_hdr = argv[4];
+	orient = atoi (argv[5]);
+	scaler = atof (argv[6]);
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (in_hdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [4dfp2ana]: opening %s\n", in_hdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [4dfp2ana]: reading %s\n", in_hdr);
+		return (ERROR);
+	}
+
+/*	4dfp files don't set this proper
+	if (hdr.dime.dim[0] < 4) {
+		fprintf (stderr, "ERROR [4dfp2ana]: reading %s\n", in_hdr);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+*/
+	if (hdr.dime.datatype != 16 && hdr.dime.bitpix != 32) {
+		fprintf (stderr, "ERROR [4dfp2ana]: reading %s\n", in_hdr);
+		fprintf (stderr, "Datatype = %d and Bits/pixel = %d\n", hdr.dime.datatype, hdr.dime.bitpix);
+		return (ERROR);
+	}
+	idim1 = hdr.dime.dim[1];
+	idim2 = hdr.dime.dim[2];
+	idim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+	if (orient == 2) {
+		odim1 = idim1;
+		odim2 = idim2;
+		odim3 = idim3;
+	} else if (orient == 4) {
+		odim1 = idim3;
+		odim2 = idim1;
+		odim3 = idim2;
+	} else {
+		fprintf (stderr, "ERROR [4dfp2ana]: uncoded orientation %d\n", orient);
+		return (ERROR);
+	}
+	fprintf (stdout, "Orientation = %d\n", orient);
+	fprintf (stdout, "Input Dimensions:  %d %d %d\n", (int) idim1, (int) idim2, (int) idim3);
+	fprintf (stdout, "Output Dimensions: %d %d %d\n", (int) odim1, (int) odim2, (int) odim3);
+
+/*
+ *	Read input image
+ */
+
+	if ((fd_img = fopen (in_img, "r")) == 0) {
+		fprintf (stderr, "ERROR [4dfp2ana]: opening %s\n", in_img);
+		return (ERROR);
+	}
+	fimg = f3tensor (1, idim3, 1, idim2, 1, idim1);
+	if (fimg == NULL) {
+		fprintf (stderr, "ERROR [4dfp2ana]: malloc fimg\n");
+		return (ERROR);
+	}
+	fprintf (stdout, "Reading %s\n", in_img);
+	for (i = 1; i <= idim3; i++) {
+		for (j = 1; j <= idim2; j++) {
+			if ((fread (&fimg[i][j][1], sizeof (float), idim1, fd_hdr)) != idim1) {
+				fprintf (stderr, "ERROR [4dfp2ana]: reading: %s\n", in_img);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+
+	simg = s3tensor (1, odim3, 1, odim2, 1, odim1);
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [4dfp2ana]: malloc simg\n");
+		return (ERROR);
+	}
+	global_max = 0;
+	global_min = 32000;
+
+	fprintf (stdout, "Reorient and convert to short\n");
+	if (orient == 2) {
+		for (i = 1; i <= odim3; i++) {
+			for (j = 1; j <= odim2; j++) {
+				for (k = 1; k <= odim1; k++) {
+					val = scaler * fimg[i][odim2 - j + 1][k];
+					simg[i][j][k] = val;
+					if (val > global_max)
+						global_max = val;
+					if (val < global_min)
+						global_min = val;
+				}
+			}
+		}
+
+	} else if (orient == 4) {
+		for (i = 1; i <= odim3; i++) {
+			for (j = 1; j <= odim2; j++) {
+				for (k = 1; k <= odim1; k++) {
+					val = scaler * fimg[odim1-k+1][odim3 - i + 1][odim2 - j + 1];
+					simg[i][j][k] = val;
+					if (val > global_max)
+						global_max = val;
+					if (val < global_min)
+						global_min = val;
+				}
+			}
+		}
+	}
+	fprintf (stdout, "Min,Max = %d, %d\n", global_min, global_max);
+
+	if ((fd_img = fopen (out_img, "w")) == 0) {
+		fprintf (stderr, "ERROR [4dfp2ana]: opening %s\n", out_img);
+		return (ERROR);
+	}
+	fprintf (stdout, "Writing %s\n", out_img);
+
+	srow = (short *) calloc (odim1, sizeof (short));
+	if (srow == NULL) {
+		fprintf (stderr, "ERROR [4dfp2ana]: malloc srow\n");
+		return (ERROR);
+	}
+	for (i = 1; i <= odim3; i++) {
+		for (j = 1; j <= odim2; j++) {
+			for (k = 1; k <= odim1; k++)
+				srow[k - 1] = simg[i][j][k];
+			if ((fwrite (srow, sizeof (short), odim1, fd_img)) != odim1) {
+				fprintf (stderr, "ERROR [4dfp2ana]: writing %s\n", out_img);
+				return (ERROR);
+			}
+		}
+	}
+/*
+ * Modify Analyze hdr file and write
+ */
+
+	if ((fd_hdr = fopen (out_hdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [4dfp2ana]: opeing %s\n", out_hdr);
+		return (ERROR);
+	}
+	hdr.dime.dim[1] = odim1;
+	hdr.dime.dim[2] = odim2;
+	hdr.dime.dim[3] = odim3;
+	hdr.dime.datatype = 4;
+	hdr.dime.bitpix = 16;
+	if (orient == 4) {
+		temp1 = hdr.dime.pixdim[1];
+		temp2 = hdr.dime.pixdim[2];
+		temp3 = hdr.dime.pixdim[3];
+		hdr.dime.pixdim[1] = temp3;
+		hdr.dime.pixdim[2] = temp1;
+		hdr.dime.pixdim[3] = temp2;
+	}
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+	hdr.hist.orient = 0;
+
+	(void) strcpy (hdr.hist.originator, "4dfp2ana");
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [4dfp2ana]: writing %s\n", out_hdr);
+		return (ERROR);
+	}
+	fprintf (stdout, "Successful conversion to %s\n", out_img);
+	free_f3tensor (fimg, 1, idim3, 1, idim2, 1, idim1);
+	free_s3tensor (simg, 1, odim3, 1, odim2, 1, odim1);
+	free (srow);
+
+	(void) fclose (fd_hdr);
+	(void) fclose (fd_img);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 2
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/4dfp2ana/RCS/4dfp2ana.c,v 2.3 2008/08/07 20:03:33 tom Exp tom $";
+d46 1
+d62 2
+a63 2
+	if (argc != 6) {
+		fprintf (stderr, "Usage: 4dfp2ana in_img in_hdr out_img out_hdr orientation\n");
+d71 1
+d85 2
+d92 1
+d156 1
+a156 1
+					val = fimg[i][odim2 - j + 1][k];
+d170 1
+a170 1
+					val = fimg[odim1-k+1][odim3 - i + 1][odim2 - j + 1];
+@

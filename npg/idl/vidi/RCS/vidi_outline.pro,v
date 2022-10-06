@@ -1,0 +1,612 @@
+head	2.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+2.1
+date	2005.06.23.20.57.03;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2004.02.03.16.33.49;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	2004.02.03.16.31.10;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	2002.08.08.17.51.08;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	2001.02.09.21.07.41;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2001.02.07.19.19.51;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2001.02.06.17.41.41;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2000.10.31.21.36.24;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2000.10.09.19.12.20;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2000.07.19.16.52.38;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2000.06.05.17.39.04;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.06.02.19.54.17;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.04.21.20.32.05;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.04.18.20.51.03;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.1
+log
+@*** empty log message ***
+@
+text
+@PRO VIDI_OUTLINE, s, i, uv, bot, top, indx, remove
+   ;; s   = SEGMENT_STATE structure (from vidi_segment.pro)
+   ;; i   = index to image
+   ;; uv
+   ;; bot, top = lower and upper thresholds
+   ;; indx  = indices to masked points
+   ;; remove  = zero pixels in image
+
+   COMMON VIDI
+   COMMON IMAGE_UTILS
+   
+   editval = uv.wid.editval
+   img = uv.img[i]
+   IF (img.data NE ptr_new()) THEN BEGIN
+      slice = img.p - img.fp
+      frame = img.f - img.ff
+      CASE orient OF
+         0: BEGIN
+            x0 = 0
+            y0 = 1
+            z0 = 2
+            image = reform((*img.data)[*,*,slice,frame])
+         END
+         1: BEGIN
+            x0 = 0
+            y0 = 2
+            z0 = 1
+            image = reform((*img.data)[*,slice,*,frame])
+         END
+         2: BEGIN
+            x0 = 1
+            y0 = 2
+            z0 = 0
+            image = reform((*img.data)[slice,*,*,frame])
+         END
+      ENDCASE
+      xsize = img.dim[x0] * dsp[i].zoom
+      ysize = img.dim[y0] * dsp[i].zoom
+      stype = 1
+      IF (img.pdim[y0] GT img.pdim[x0]) THEN BEGIN 
+         fact = (img.pdim[y0])/(img.pdim[x0])
+         ysize = fact * img.dim[y0] * dsp[i].zoom
+      ENDIF ELSE IF (img.pdim[0] GT img.pdim[y0]) THEN BEGIN 
+         fact = (img.pdim[x0])/(img.pdim[y0])
+         xsize = fact * img.dim[x0] * dsp[i].zoom
+      ENDIF ELSE stype = 0
+      voxvol = img.pdim[0]*img.pdim[1]*img.pdim[2]
+      npix_img = img.dim[0]*img.dim[1]*img.dim[2]
+
+      widget_control, /hourglass
+      count = 0
+      CASE connect_type OF
+         0: BEGIN
+            CASE mask_type OF
+               1: indx = where (image GE bot AND image LE top, count)
+               2: indx = where (image LE bot OR image GE top, count)
+               ELSE: count=0
+            ENDCASE
+            str = 'Pixels Identified for Removal (this plane) = '+string(count)
+            ;;widget_control, s.msg, set_value=str
+            IF (count GT 0) THEN BEGIN
+               image(indx) = editval
+               IF (remove) THEN BEGIN
+                  CASE orient OF
+                     0: (*img.data)[*,*,slice,frame] = image
+                     1: (*img.data)[*,slice,*,frame] = image
+                     2: (*img.data)[slice,*,*,frame] = image
+                  ENDCASE
+               ENDIF
+            ENDIF
+         ENDCASE
+         1: BEGIN
+            IF (mask_type EQ 0) THEN BEGIN
+               count = 0
+            ENDIF ELSE BEGIN
+               testval = image[seed[x0,0], seed[y0,0]]
+               IF ((testval LT bot) OR (testval GT top)) THEN BEGIN
+                  count = 0
+                  str = 'Seed pixel value is not within thresholds: '+string(testval)
+                  widget_control, s.msg, set_value=str
+               ENDIF ELSE BEGIN
+                  indx = SEARCH2D (image, seed[x0,0], seed[y0,0], bot, top)
+                  IF (nseeds GT 0) THEN FOR sn = 1, nseeds DO BEGIN
+                     testval = image[seed[x0,sn], seed[y0,sn]]
+                     IF ((testval GE bot) AND (testval LE top)) THEN BEGIN
+                        indx1 = SEARCH2D (image, seed[x0,sn], seed[y0,sn], bot, top)
+                        indx = [indx, indx1]
+                     ENDIF
+                  ENDFOR
+                  count = n_elements (indx)
+                  IF (mask_type EQ 2 AND count GT 0) THEN BEGIN
+                     val = max(image) + 1
+                     nimg = image 
+                     nimg[indx] = val
+                     indx = where(nimg NE val)
+                  ENDIF
+                  count = n_elements (indx)
+                  IF (count EQ 1) THEN IF (indx[0] LT 0) THEN count = 0
+                  str = 'Pixels filled on this plane = '+string(count)
+                  widget_control, s.msg, set_value=str
+               ENDELSE
+            ENDELSE
+            IF (count GT 0) THEN BEGIN
+               image(indx) = editval
+               IF (remove) THEN BEGIN
+                  CASE orient OF
+                     0: (*img.data)[*,*,slice,frame] = image
+                     1: (*img.data)[*,slice,*,frame] = image
+                     2: (*img.data)[slice,*,*,frame] = image
+                  ENDCASE
+               ENDIF
+            ENDIF
+         ENDCASE
+         2: BEGIN
+            image = (*img.data)[*,*,*,frame]
+            IF (remove) THEN BEGIN
+               count = n_elements (indx)
+               str = 'Removing pixels from entire volume... '+string(count)
+               widget_control, s.msg, set_value=str
+               IF (count GT 0) THEN BEGIN
+                  image(indx) = editval
+                  (*img.data)[*,*,*,frame] = image
+               ENDIF
+            ENDIF ELSE BEGIN
+               IF (mask_type EQ 0) THEN BEGIN
+                  count = 0
+               ENDIF ELSE BEGIN
+                  str = '3D-connected pixel search... WARNING: Moving cursor into Image Windows before Remove cancels 3D'
+                  widget_control, s.msg, set_value=str
+                  testval = image[seed[0,0], seed[1,0], seed[2,0]]
+                  IF (testval LT bot OR testval GT top) THEN BEGIN
+                     count = 0
+                  ENDIF ELSE BEGIN
+                     indx = SEARCH3D (image, seed[0,0], seed[1,0], seed[2,0], bot, top)
+                     IF (nseeds GT 0) THEN FOR sn = 1, nseeds DO BEGIN
+                        testval = image[seed[x0,sn], seed[y0,sn]]
+                        IF ((testval GE bot) AND (testval LE top)) THEN BEGIN
+                           indx1 = SEARCH3D (image, seed[0,sn], seed[1,sn], seed[2,sn],bot, top)
+                           indx = [indx, indx1]
+                        ENDIF
+                     ENDFOR
+                     count = n_elements (indx)
+                     IF (mask_type EQ 2 AND count GT 0) THEN BEGIN
+                        val = max(image)+1
+                        nimg = image 
+                        nimg[indx] = val
+                        indx = where(nimg NE val)
+                     ENDIF
+                     count = n_elements (indx)
+                     IF (count EQ 1) THEN IF (indx[0] LT 0) THEN count = 0
+                  ENDELSE
+               ENDELSE
+               npix_diff = count - npix_removed
+               vspared = 0.001 * voxvol*(npix_img - count)
+               str = 'Pixels Identified for Removal = '+strcompress(string(count)) $
+                  + '     Last ='+strcompress(string(npix_removed)) $
+                  + '  Diff ='+strcompress(string(npix_diff)) $
+                  + '     Volume Spared ='+strcompress(string(vspared))+ 'cc'
+               npix_removed = count
+               widget_control, s.msg, set_value=str
+               IF (count GT 0) THEN image(indx) = editval
+            ENDELSE
+            CASE orient OF
+               0: image = reform(image[*,*,slice])
+               1: image = reform(image[*,slice,*])
+               2: image = reform(image[slice,*,*])
+            ENDCASE
+         ENDCASE
+      ENDCASE
+   ENDIF 
+   temp2 = VIDI_DISPLAY_SCALE (image, img.itype, i, xsize, ysize, 0, stype)
+   temp2 = temp2 + dsp[i].bot
+   wset, dsp[i].id
+   tv, temp2
+
+   IF ((i EQ 1) AND dsp[2].set) THEN BEGIN
+      img0 = uv.img[0]
+      CASE orient OF
+         0:  image0 = reform((*img0.data)[*,*,slice,frame])
+         1:  image0 = reform((*img0.data)[*,slice,*,frame])
+         2:  image0 = reform((*img0.data)[slice,*,*,frame])
+      ENDCASE
+      temp1 = VIDI_DISPLAY_SCALE (image0, img0.itype, 0, xsize, ysize, sample, stype)
+
+      IF (segshow_type EQ 0) THEN BEGIN
+         temp2 = VIDI_DISPLAY_SCALE (image, img.itype, i, xsize, ysize, 0, stype)
+      ENDIF ELSE BEGIN
+         CASE orient OF
+            0:  image1 = reform((*img.data)[*,*,slice,frame])
+            1:  image1 = reform((*img.data)[*,slice,*,frame])
+            2:  image1 = reform((*img.data)[slice,*,*,frame])
+         ENDCASE
+         indx2 = where (image1 EQ image, count1)
+         IF (count1 GT 0) THEN image0(indx2) = 0
+         temp2 = VIDI_DISPLAY_SCALE (image0, img.itype, i, xsize, ysize, 0, stype)
+      ENDELSE
+      
+      IF (dsp[1].range EQ 2) THEN BEGIN
+         uthresh =  (0.5 + (0.005 * dsp[0].cut)) * dsp[1].nc
+         lthresh =  (0.5 - (0.005 * dsp[0].cut)) * dsp[1].nc
+         idx1 = where((temp2 LT uthresh) AND (temp2 GT lthresh), count1)
+         idx2 = where((temp2 GE uthresh) OR (temp2 LE lthresh), count2)
+      ENDIF ELSE BEGIN
+         thresh =  0.01 * dsp[0].cut * dsp[1].nc
+         idx1 = where(temp2 LT thresh, count1)
+         idx2 = where(temp2 GE thresh, count2)
+      ENDELSE
+      IF (count1 GT 0) THEN temp2[idx1] = 0 ; temp = temp1
+      IF (count2 GT 0) THEN temp1[idx2] = dsp[0].nc ; temp = nc + temp2
+      temp = temp1 + temp2      ; combine
+      wset, dsp[2].id
+      tv, temp
+   ENDIF
+   
+END
+@
+
+
+2.0
+log
+@03 Feb 2004
+@
+text
+@d128 1
+a128 1
+                  str = '3D-connected pixel search... '
+@
+
+
+1.12
+log
+@3 Feb 2004
+@
+text
+@@
+
+
+1.11
+log
+@add Last, Diff, Volume Spared
+@
+text
+@@
+
+
+1.10
+log
+@add nseeds and permit up to 10 seeds
+@
+text
+@d47 2
+d153 7
+a159 1
+               str = 'Pixels Identified for Removal = '+string(count)
+@
+
+
+1.9
+log
+@fix bug in duplicate reference to indx
+@
+text
+@d21 1
+d27 1
+d33 1
+d74 1
+a74 1
+               testval = image[seed[x0], seed[y0]]
+d80 8
+a87 1
+                  indx = SEARCH2D (image, seed[x0], seed[y0], bot, top)
+d128 1
+a128 1
+                  testval = image[seed[0], seed[1], seed[2]]
+d132 8
+a139 1
+                     indx = SEARCH3D (image, seed[0], seed[1], seed[2], bot, top)
+@
+
+
+1.8
+log
+@option to show pixels which will be removed or spared
+@
+text
+@d168 2
+a169 2
+         indx = where (image1 EQ image, count1)
+         IF (count1 GT 0) THEN image0(indx) = 0
+@
+
+
+1.7
+log
+@fix bugs in referencing indx
+@
+text
+@d1 1
+a1 1
+PRO VIDI_OUTLINE, s, i, img, bot, top, indx, remove, editval
+d4 1
+a4 1
+   ;; img = image
+d12 2
+d146 2
+a147 2
+   temp1 = VIDI_DISPLAY_SCALE (image, img.itype, i, xsize, ysize, 0, stype)
+   temp1 = temp1 + dsp[i].bot
+d149 40
+a188 1
+   tv, temp1
+@
+
+
+1.6
+log
+@check count
+@
+text
+@d44 1
+d53 1
+a53 1
+            ;widget_control, s.msg, set_value=str
+d70 1
+a70 1
+               IF (testval LT bot OR testval GT top) THEN BEGIN
+d72 2
+a73 2
+            	str = 'Seed pixel value is not within thresholds: '+string(testval)
+            	widget_control, s.msg, set_value=str
+d76 3
+a78 2
+                  IF (mask_type EQ 2) THEN BEGIN
+                     val = max(image)+1
+d84 3
+a86 3
+                  IF (count EQ 1) THEN IF (indx LT 0) THEN count = 0
+            	str = 'Pixels filled on this plane = '+string(count)
+            	widget_control, s.msg, set_value=str
+d121 2
+a122 1
+                     IF (mask_type EQ 2) THEN BEGIN
+d129 1
+a129 1
+                     IF (count EQ 1) THEN IF (indx LT 0) THEN count = 0
+@
+
+
+1.5
+log
+@fix bug in seed location
+@
+text
+@d82 1
+d126 1
+@
+
+
+1.4
+log
+@add fill value
+@
+text
+@d71 2
+d82 2
+a85 2
+            str = 'Pixels Removed (this plane) = '+string(count)
+            ;widget_control, s.msg, set_value=str
+d113 1
+a113 1
+                  testval = image[seed[x0], seed[y0]]
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+PRO VIDI_OUTLINE, s, i, img, bot, top, indx, remove
+d54 1
+a54 1
+               image(indx) = 0
+d85 1
+a85 1
+               image(indx) = 0
+d102 1
+a102 1
+                  image(indx) = 0
+d127 1
+a127 1
+               IF (count GT 0) THEN image(indx) = 0
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d68 13
+a80 8
+               indx = SEARCH2D (image, seed[x0], seed[y0], bot, top)
+               IF (mask_type EQ 2) THEN BEGIN
+                  val = max(image)+1
+                  nimg = image 
+                  nimg[indx] = val
+                  indx = where(nimg NE val)
+               ENDIF
+               count = n_elements (indx)
+d111 13
+a123 8
+                  indx = SEARCH3D (image, seed[0], seed[1], seed[2], bot, top)
+                  IF (mask_type EQ 2) THEN BEGIN
+                     val = max(image)+1
+                     nimg = image 
+                     nimg[indx] = val
+                     indx = where(nimg NE val)
+                  ENDIF
+                  count = n_elements (indx)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 3
+PRO VIDI_OUTLINE, uv, i, s, bot, top, indx, remove
+   ;; uv  = info structure for this display (WIDGETS and images from vidi.pro)
+   ;; i   = index to img
+d3 2
+d12 3
+a14 3
+   IF (uv.img[i].data NE ptr_new()) THEN BEGIN
+      slice = uv.img[i].p - uv.img[i].fp
+      frame = uv.img[i].f - uv.img[i].ff
+d19 1
+a19 1
+            image = reform((*uv.img[i].data)[*,*,slice,frame])
+d24 1
+a24 1
+            image = reform((*uv.img[i].data)[*,slice,*,frame])
+d29 1
+a29 1
+            image = reform((*uv.img[i].data)[slice,*,*,frame])
+d32 2
+a33 2
+      xsize = uv.img[i].dim[x0] * dsp[i].zoom
+      ysize = uv.img[i].dim[y0] * dsp[i].zoom
+d35 6
+a40 6
+      IF (uv.img[i].pdim[y0] GT uv.img[i].pdim[x0]) THEN BEGIN 
+         fact = (uv.img[i].pdim[y0])/(uv.img[i].pdim[x0])
+         ysize = fact * uv.img[i].dim[y0] * dsp[i].zoom
+      ENDIF ELSE IF (uv.img[i].pdim[0] GT uv.img[i].pdim[y0]) THEN BEGIN 
+         fact = (uv.img[i].pdim[x0])/(uv.img[i].pdim[y0])
+         xsize = fact * uv.img[i].dim[x0] * dsp[i].zoom
+d47 3
+a49 2
+               0: indx = where (image GE bot AND image LE top, count)
+               ELSE: indx = where (image LE bot OR image GE top, count)
+d51 2
+a52 2
+            str = 'Pixels Removed (this plane) = '+string(count)
+            widget_control, s.msg, set_value=str
+d57 3
+a59 3
+                     0: (*uv.img[i].data)[*,*,slice,frame] = image
+                     1: (*uv.img[i].data)[*,slice,*,frame] = image
+                     2: (*uv.img[i].data)[slice,*,*,frame] = image
+d65 12
+a76 8
+            indx = SEARCH2D (image, seed[x0], seed[y0], bot, top)
+            IF (mask_type EQ 1) THEN BEGIN
+               val = max(image)+1
+               nimg = image 
+               nimg[indx] = val
+               indx = where(nimg NE val)
+            ENDIF
+            count = n_elements (indx)
+d78 1
+a78 1
+            widget_control, s.msg, set_value=str
+d83 3
+a85 3
+                     0: (*uv.img[i].data)[*,*,slice,frame] = image
+                     1: (*uv.img[i].data)[*,slice,*,frame] = image
+                     2: (*uv.img[i].data)[slice,*,*,frame] = image
+d91 1
+a91 1
+            img = (*uv.img[i].data)[*,*,*,frame]
+d97 2
+a98 2
+                  img(indx) = 0
+                  (*uv.img[i].data)[*,*,*,frame] = img
+d101 15
+a115 1
+               str = '3D pixel search... '
+d117 1
+a117 11
+               indx = SEARCH3D (img, seed[0], seed[1], seed[2], bot, top)
+               IF (mask_type EQ 1) THEN BEGIN
+                  val = max(img)+1
+                  nimg = img 
+                  nimg[indx] = val
+                  indx = where(nimg NE val)
+               ENDIF
+               count = n_elements (indx)
+               str = 'Pixels Removed (all planes) = '+string(count)
+               widget_control, s.msg, set_value=str
+               IF (count GT 0) THEN img(indx) = 0
+d120 3
+a122 3
+               0: image = reform(img[*,*,slice])
+               1: image = reform(img[*,slice,*])
+               2: image = reform(img[slice,*,*])
+d127 1
+a127 1
+   temp1 = VIDI_DISPLAY_SCALE (image, uv.img[i].itype, i, xsize, ysize, 0, stype)
+@

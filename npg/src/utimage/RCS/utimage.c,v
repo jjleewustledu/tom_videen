@@ -1,0 +1,811 @@
+head	3.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+3.0
+date	2004.02.20.16.19.52;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	97.01.10.18.47.02;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	97.01.10.18.43.30;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.10.05.15.14.25;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@original
+@
+
+
+3.0
+log
+@Feb 2004
+@
+text
+@/* $Log: utimage.c,v $
+ * Revision 2.1  1997/01/10  18:47:02  tom
+ * clean up messages
+ *
+ * Revision 2.0  1997/01/10  18:43:30  tom
+ * *** empty log message ***
+ * */
+/*	===============================================================================
+ *	Module:			utimage
+ *	Date:			Jan 1997
+ *	Author:			Tom Videen
+ *	Description:	Create an unpaired t image
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/utimage/RCS/utimage.c,v 2.1 1997/01/10 18:47:02 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <libimage.h>
+#include <imgutil.h>
+#include <nrutil.h>
+
+#define SCALER 1000.
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	FILE           *recfp;
+	ImageFile      *file1;
+	Index           indx;
+
+	char            program[MAXFNAME];
+	char            version[MAXFNAME];
+	char            runstamp[40];		 /* version, date and userid info */
+
+	char           *m1file;
+	char           *m2file;
+	char           *sd1file;
+	char           *sd2file;
+	char           *n1file;
+	char           *n2file;
+	char           *outfile;
+	char           *recfile;
+	int             pdim[3];		 /* image dimensions in pixels */
+	int             i, j, k;		 /* array indices */
+	double          s1, s2;
+	double          n1, n2;
+	double          dif;
+	double          sed;
+	float        ***mean1;
+	float        ***mean2;
+	float        ***sd1;
+	float        ***sd2;
+	float        ***num1;
+	float        ***num2;
+	float        ***t;
+
+	if (argc != 17) {
+		printf ("Usage: utimage mean1 sd1 n1 mean2 sd2 n2 out recfile date uid\n");
+		return (ERROR);
+	}
+	m1file = argv[1];
+	sd1file = argv[2];
+	n1file = argv[3];
+	m2file = argv[4];
+	sd2file = argv[5];
+	n2file = argv[6];
+	outfile = argv[7];
+	recfile = argv[8];
+	i = 9;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[i], argv[i + 1], argv[i + 2], argv[i + 4], argv[i + 5], argv[i + 7]);
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [utimage]: cannot open %s\n", recfile);
+		return (ERROR);
+	}
+	(void) sscanf (rcsid, "%s %s", program, version);
+	(void) strcat (program, " ");
+	(void) strcat (program, version);
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file1 = make_imgfile (m1file);
+    if (file1 == NULL) {
+        fprintf (stderr, "ERROR [utimage]: making file1\n");
+        return (ERROR);
+    }
+    if (get_imgh (file1, &indx) == ERROR) {
+        fprintf (stderr, "ERROR [utimage]: Cannot open %s\n", m1file);
+        return (ERROR);
+    }
+
+	pdim[0] = file1->sh->dim1;
+	pdim[1] = file1->sh->dim2;
+	pdim[2] = file1->sh->dim3;
+	(void) save_rcs (file1, rcsid, runstamp);
+
+	if ((mean1 = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [utimage]: Cannot malloc mean1 image\n");
+		return (ERROR);
+	}
+	if ((mean1 = rdtensor (file1, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [utimage]: Cannot read %s\n", m1file);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+	recout (recfp, m1file);
+	printf ("Mean1 = %s\n", m1file);
+
+	if ((sd1 = rdtensor1 (sd1file, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [utimage] Cannot read %s\n", sd1file);
+		return (ERROR);
+	}
+	recout (recfp, sd1file);
+	printf ("SD1   = %s\n", sd1file);
+
+	if ((num1 = rdtensor1 (n1file, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [utimage] Cannot read %s\n", n1file);
+		return (ERROR);
+	}
+	recout (recfp, n1file);
+	printf ("N1    = %s\n", n1file);
+
+	if ((mean2 = rdtensor1 (m2file, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [utimage]: Cannot read %s\n", m2file);
+		return (ERROR);
+	}
+	recout (recfp, m2file);
+	printf ("Mean2 = %s\n", m2file);
+
+	if ((sd2 = rdtensor1 (sd2file, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [utimage] Cannot read %s\n", sd2file);
+		return (ERROR);
+	}
+	recout (recfp, sd2file);
+	printf ("SD2   = %s\n", sd2file);
+
+	if ((num2 = rdtensor1 (n2file, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [utimage] Cannot read %s\n", n2file);
+		return (ERROR);
+	}
+	recout (recfp, n2file);
+	printf ("N2    = %s\n", n2file);
+
+	if ((t = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [utimage]: Cannot malloc t-image\n");
+		return (ERROR);
+	}
+	for (i = 1; i <= pdim[2]; i++) {
+		for (j = 1; j <= pdim[1]; j++) {
+			for (k = 1; k <= pdim[0]; k++) {
+				n1 = num1[i][j][k];
+				n2 = num2[i][j][k];
+				s1 = sd1[i][j][k];
+				s2 = sd2[i][j][k];
+				if (n1 > 0 && n2 > 0 && s1 > 0 && s2 > 0) {
+					dif = mean1[i][j][k] - mean2[i][j][k];
+					sed = sqrt ((s1 * s1 / n1) + (s2 * s2 / n2));
+					t[i][j][k] = SCALER * dif / sed;
+				} else {
+					t[i][j][k] = 0.;
+				}
+			}
+		}
+	}
+
+	file1->name = outfile;
+	(void) strcpy (file1->mode, "w");
+	printf ("Writing %s\n", outfile);
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [utimage]: Cannot open %s\n", outfile);
+		return (ERROR);
+	}
+	file1->mh->nframe = indx.frm;
+	file1->mh->orientation = 0;
+	if (put_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [utimage] writing %s\n", outfile);
+		return (ERROR);
+	}
+	if (writetensor (file1, &indx, t) == ERROR) {
+		fprintf (stderr, "ERROR [utimage] writing %s\n", outfile);
+		return (ERROR);
+	}
+	(void) fclose (recfp);
+	close_imgfile (file1);
+
+	free_imgfile (file1);
+	free_f3tensor (t, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (mean1, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (sd1, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (num1, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_imgfile (file1);
+	return (0);
+}
+@
+
+
+2.1
+log
+@clean up messages
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jan-97
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/utimage/RCS/utimage.c,v 2.0 1997/01/10 18:43:30 tom Exp tom $";
+d34 2
+a35 2
+	ImageFile      *file1;			 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+a62 2
+	printf ("Copyright 1991-1997, Washington University\n");
+	printf ("All rights reserved. Unauthorized reproduction prohibited.\n");
+d76 1
+a76 1
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[i], argv[i + 1], argv[i + 2], argv[i + 4], argv[i + 5], argv[i + 7]);
+d83 3
+a85 3
+	sscanf (rcsid, "%s %s", program, version);
+	strcat (program, " ");
+	strcat (program, version);
+d93 9
+a101 19
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [utimage]: Cannot open %s\n", m1file);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [utimage]: Cannot get MainHeader from %s\n", m1file);
+		return (ERROR);
+	}
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [utimage]: Cannot read scan %s frame %d\n", m1file, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [utimage]: Cannot read file subheader in %s\n", m1file);
+		return (ERROR);
+	}
+d105 1
+a105 2
+	save_rcs (file1, rcsid, runstamp);
+	close_imgfile (file1);
+d109 1
+a109 1
+		exit (ERROR);
+d111 1
+a111 1
+	if ((mean1 = rdtensor (m1file, &indx, pdim)) == NULL) {
+d115 1
+d119 1
+a119 5
+	if ((sd1 = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [utimage]: Cannot malloc sd1 image\n");
+		exit (ERROR);
+	}
+	if ((sd1 = rdtensor (sd1file, &indx, pdim)) == NULL) {
+d126 1
+a126 5
+	if ((num1 = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [utimage]: Cannot malloc n1 image\n");
+		exit (ERROR);
+	}
+	if ((num1 = rdtensor (n1file, &indx, pdim)) == NULL) {
+d133 1
+a133 5
+	if ((mean2 = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [utimage]: Cannot malloc mean2 image\n");
+		exit (ERROR);
+	}
+	if ((mean2 = rdtensor (m2file, &indx, pdim)) == NULL) {
+d140 1
+a140 5
+	if ((sd2 = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [utimage]: Cannot malloc sd2 image\n");
+		exit (ERROR);
+	}
+	if ((sd2 = rdtensor (sd2file, &indx, pdim)) == NULL) {
+d147 1
+a147 5
+	if ((num2 = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [utimage]: Cannot malloc n2 image\n");
+		exit (ERROR);
+	}
+	if ((num2 = rdtensor (n2file, &indx, pdim)) == NULL) {
+d156 1
+a156 1
+		exit (ERROR);
+d177 1
+a177 1
+	strcpy (file1->mode, "w");
+d181 1
+a181 1
+		exit (ERROR);
+d187 1
+a187 1
+		exit (ERROR);
+d191 1
+a191 1
+		exit (ERROR);
+d193 1
+d196 1
+a201 1
+	fclose (recfp);
+@
+
+
+2.0
+log
+@*** empty log message ***
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imean/RCS/imean.c,v 2.19 1996/12/26 19:03:58 tom Exp tom $";
+d63 1
+a63 1
+		printf ("Usage: utimage mean1 sd1 n1 mean2 sd2 n2 out recfile date\n");
+d79 1
+a79 1
+		fprintf (stderr, "ERROR [imean]: cannot open %s\n", recfile);
+d93 1
+a93 1
+		fprintf (stderr, "ERROR [imean]: Cannot open %s\n", m1file);
+d97 1
+a97 1
+		fprintf (stderr, "ERROR [imean]: Cannot get MainHeader from %s\n", m1file);
+d103 1
+a103 1
+			fprintf (stderr, "ERROR [imean]: Cannot read scan %s frame %d\n", m1file, indx.frm);
+d108 1
+a108 1
+		fprintf (stderr, "ERROR [imean]: Cannot read file subheader in %s\n", m1file);
+d118 1
+a118 1
+		fprintf (stderr, "ERROR [imean]: Cannot malloc mean1 image\n");
+d122 1
+a122 1
+		fprintf (stderr, "ERROR [imean]: Cannot read %s\n", m1file);
+d129 1
+a129 1
+		fprintf (stderr, "ERROR [imean]: Cannot malloc sd1 image\n");
+d133 1
+a133 1
+		fprintf (stderr, "ERROR [imean] Cannot read %s\n", sd1file);
+d140 1
+a140 1
+		fprintf (stderr, "ERROR [imean]: Cannot malloc n1 image\n");
+d144 1
+a144 1
+		fprintf (stderr, "ERROR [imean] Cannot read %s\n", n1file);
+d151 1
+a151 1
+		fprintf (stderr, "ERROR [imean]: Cannot malloc mean2 image\n");
+d155 1
+a155 1
+		fprintf (stderr, "ERROR [imean]: Cannot read %s\n", m2file);
+d162 1
+a162 1
+		fprintf (stderr, "ERROR [imean]: Cannot malloc sd2 image\n");
+d166 1
+a166 1
+		fprintf (stderr, "ERROR [imean] Cannot read %s\n", sd2file);
+d173 1
+a173 1
+		fprintf (stderr, "ERROR [imean]: Cannot malloc n2 image\n");
+d177 1
+a177 1
+		fprintf (stderr, "ERROR [imean] Cannot read %s\n", n2file);
+d184 1
+a184 1
+		fprintf (stderr, "ERROR [imean]: Cannot malloc t-image\n");
+d209 1
+a209 1
+		fprintf (stderr, "ERROR [imean]: Cannot open %s\n", outfile);
+d215 1
+a215 1
+		fprintf (stderr, "ERROR [imean] writing %s\n", outfile);
+d219 1
+a219 1
+		fprintf (stderr, "ERROR [imean] writing %s\n", outfile);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+/* $Log */
+d3 2
+a4 2
+ *	Module:			utimage.c
+ *	Date:			05-Oct-94
+d6 1
+a6 12
+ *	Description:	Compute an unpaired t-image from 2 mean, sd, and n-images
+ *	History:
+ *	Algorithm:
+ *		1) Read input command line parameters.
+ *		2) Open 1 image file to determine file size (all images must be same size).
+ *		3) Allocate memory for all images.
+ *		4) Read in the 6 required images (2 means, 2 sd, and 2 n) and optional mask image.
+ *		5) Compute t = SCALER * (mean1-mean2) / sqrt((sd1*sd1/n1) + (sd2*sd2/n2))
+ *		   (only compute within the mask if a mask image was specified).
+ *		6) Write the rcsid and date to the output file header.
+ *		7) Write the output t-image file.
+ *		8) Free memory.
+d9 1
+a13 1
+#include <fcntl.h>
+d15 5
+a19 2
+#include <petutil/matrix.h>
+#include <petutil/petutil.h>
+d21 1
+a21 2
+#define DIM		128
+#define SCALER	1000.
+a22 5
+typedef float   REAL_SLICE[DIM][DIM];
+
+static char     rcsid[] = "$Id$";
+char            list[] = "*;*;*;*";	/* any frame plane gate bed */
+
+a26 5
+	Image_subheader **subheader0;
+	Main_header    *main_header0;
+	Image_subheader **subheader;
+	Main_header    *main_header;
+	MatrixFile     *fptr;
+d28 2
+d31 10
+a40 6
+	BOOLEAN         encoded_flag;
+	BOOLEAN         use_mask = 0;
+	char           *mean1, *mean2;
+	char           *stdev1, *stdev2;
+	char           *numsubs1, *numsubs2;
+	char           *maskfile;
+d43 13
+a55 25
+	char            date[40];
+	char           *today;
+	char           *userid;
+	int             fd;
+	int             zdim;
+	int             i, j, k, m;	/* array indices */
+	float           sd1, sd2;
+	float           num1, num2;
+	float           sed;
+	float           diff;
+	float           pixel_size;
+	float           plane_separation;
+	int             scanner;/* 6 = PETT VI;  10 = 953B */
+	short           nx;
+	short           ny;
+	short           num_slices;
+	struct Matval   matval;
+	REAL_SLICE     *mean1_image;	/* mean image test group */
+	REAL_SLICE     *sd1_image;	/* standard deviation image test group */
+	REAL_SLICE     *n1_image;	/* number of subjects image test group */
+	REAL_SLICE     *mean2_image;	/* mean image control group */
+	REAL_SLICE     *sd2_image;	/* standard deviation image control group */
+	REAL_SLICE     *n2_image;	/* number of subjects image control group */
+	REAL_SLICE     *t_image;/* t-image */
+	REAL_SLICE     *mask_image;	/* mask image */
+d57 5
+a61 15
+	matval.frame = 1;	/* default values for matval */
+	matval.plane = 1;
+	matval.gate = 1;
+	matval.data = 0;
+	matval.bed = 0;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ *	---------------------------------------------------
+ */
+
+	if (argc != 18) {
+		printf ("Usage: utimage mean1 stdev1 numsubs1 mean2 stdev2 numsubs2 ",
+			"outfile maskfile recfile date\n");
+		exit (FAIL);
+d63 6
+a68 6
+	mean1 = argv[1];
+	stdev1 = argv[2];
+	numsubs1 = argv[3];
+	mean2 = argv[4];
+	stdev2 = argv[5];
+	numsubs2 = argv[6];
+d70 3
+a72 6
+	maskfile = argv[8];
+	recfile = argv[9];
+	sprintf (date, "%s %s %s %s %s %s", argv[10], argv[11], argv[12], argv[13],
+		 argv[14], argv[15]);
+	today = argv[16];
+	userid = argv[17];
+d76 2
+a77 2
+		fprintf (stderr, "Error: cannot open %s\n", recfile);
+		exit (FAIL);
+d79 8
+a86 4
+/*
+ *	Determine image file size and allocate/initialize arrays
+ *	--------------------------------------------------------
+ */
+d88 4
+a91 4
+	fd = open (mean1, O_RDONLY, 0);
+	if (fd == -1) {
+		fprintf (stderr, "Error opening %s\n", mean1);
+		exit (FAIL);
+d93 3
+a95 5
+	scanner = getimage_type (fd, mean1, &encoded_flag, &num_slices);
+	close (fd);
+	if (scanner != ECAT_SCANNER) {
+		fprintf (stderr, "Error: cannot open %s as an ECAT image file\n", mean1);
+		exit (FAIL);
+d97 16
+a112 3
+	fptr = OpenEcat (mean1, &num_slices, &nx, &ny, &pixel_size, &plane_separation, matval);
+	matrix_close (fptr);
+	zdim = num_slices;
+d114 3
+a116 12
+	main_header = (Main_header *) calloc (1, sizeof (Main_header));
+	subheader = (Image_subheader **) malloc (zdim * sizeof (caddr_t));
+	mean1_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	sd1_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	n1_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	mean2_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	sd2_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	n2_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	t_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	if (strcmp (maskfile, "NONE") != 0) {
+		use_mask = 1;
+		mask_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+d118 3
+a120 8
+/*
+ *	Read mean1
+ *	-------------
+ */
+	if (getrealimg (mean1, scanner, matval, nx, ny, num_slices, mean1_image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", mean1);
+		exit (FAIL);
+d122 2
+a123 7
+	if (nx != DIM || ny != DIM) {
+		fprintf (stderr, "Dimensions %d x %d of %s are wrong size\n", nx, ny, mean1);
+		exit (FAIL);
+	}
+	printf ("Test Mean Difference    = %s\n", mean1);
+	fprintf (recfp, "Test Mean Difference    = %s\n", mean1);
+	recout (recfp, mean1);
+d125 3
+a127 8
+/*
+ *	Read stdev1
+ *	----------
+ */
+	if (getrealimg (stdev1, scanner, matval, nx, ny, num_slices, sd1_image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", stdev1);
+    exit (FAIL);
+d129 3
+a131 3
+	if (nx != DIM || ny != DIM) {
+		fprintf (stderr, "Dimensions %d x %d of %s are wrong size\n", nx, ny, stdev1);
+    exit (FAIL);
+d133 2
+a134 3
+	printf ("Test Standard Deviation = %s\n", stdev1);
+	fprintf (recfp, "Test Standard Deviation = %s\n", stdev1);
+	recout (recfp, stdev1);
+d136 3
+a138 8
+/*
+ *	Read numsubs1
+ *	------------
+ */
+	if (getrealimg (numsubs1, scanner, matval, nx, ny, num_slices, n1_image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", numsubs1);
+    exit (FAIL);
+d140 3
+a142 3
+	if (nx != DIM || ny != DIM) {
+		fprintf (stderr, "Dimensions %d x %d of %s are wrong size\n", nx, ny, numsubs1);
+    exit (FAIL);
+d144 2
+a145 3
+	printf ("Test Number of Subjects = %s\n", numsubs1);
+	fprintf (recfp, "Test Number of Subjects = %s\n", numsubs1);
+	recout (recfp, numsubs1);
+d147 3
+a149 8
+/*
+ *	Read mean2
+ *	-------------
+ */
+	if (getrealimg (mean2, scanner, matval, nx, ny, num_slices, mean2_image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", mean2);
+        exit (FAIL);
+d151 3
+a153 3
+	if (nx != DIM || ny != DIM) {
+		fprintf (stderr, "Dimensions %d x %d of %s are wrong size\n", nx, ny, mean2);
+    exit (FAIL);
+d155 2
+a156 3
+	printf ("Control Mean Difference    = %s\n", mean2);
+	fprintf (recfp, "Control Mean Difference    = %s\n", mean2);
+	recout (recfp, mean2);
+d158 3
+a160 8
+/*
+ *	Read stdev2
+ *	----------
+ */
+	if (getrealimg (stdev2, scanner, matval, nx, ny, num_slices, sd2_image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", stdev2);
+    exit (FAIL);
+d162 3
+a164 3
+	if (nx != DIM || ny != DIM) {
+		fprintf (stderr, "Dimensions %d x %d of %s are wrong size\n", nx, ny, stdev2);
+    exit (FAIL);
+d166 2
+a167 3
+	printf ("Control Standard Deviation = %s\n", stdev2);
+	fprintf (recfp, "Control Standard Deviation = %s\n", stdev2);
+	recout (recfp, stdev2);
+d169 3
+a171 8
+/*
+ *	Read numsubs2
+ *	-------------
+ */
+	if (getrealimg (numsubs2, scanner, matval, nx, ny, num_slices, n2_image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", numsubs2);
+    exit (FAIL);
+d173 3
+a175 3
+	if (nx != DIM || ny != DIM) {
+		fprintf (stderr, "Dimensions %d x %d of %s are wrong size\n", nx, ny, numsubs2);
+    exit (FAIL);
+d177 2
+a178 3
+	printf ("Control Number of Subjects = %s\n", numsubs2);
+	fprintf (recfp, "Control Number of Subjects = %s\n", numsubs2);
+	recout (recfp, numsubs2);
+d180 3
+a182 16
+/*
+ *	Read maskfile
+ *	-------------
+ */
+	if (use_mask) {
+		if (getrealimg (maskfile, scanner, matval, nx, ny, num_slices, mask_image,
+				main_header, subheader) == FAIL) {
+			fprintf (stderr, "Error reading %s\n", maskfile);
+      exit (FAIL);
+		}
+		if (nx != DIM || ny != DIM) {
+			fprintf (stderr, "Dimensions %d x %d of %s are wrong size\n", nx, ny, maskfile);
+  	  exit (FAIL);
+		}
+		recout (recfp, maskfile);
+		printf ("Mask      = %s\n", maskfile);
+d184 13
+a196 21
+/*
+ *	Compute t
+ *	---------
+ */
+
+	if (use_mask) {
+		for (m = 0; m < zdim; ++m) {
+			for (j = 0; j < DIM; ++j) {
+				for (k = 0; k < DIM; ++k) {
+					if (mask_image[m][j][k] > 0) {
+						num1 = n1_image[m][j][k];
+						num2 = n2_image[m][j][k];
+						sd1 = sd1_image[m][j][k];
+						sd2 = sd2_image[m][j][k];
+						if (num1 > 0 && num2 > 0 && sd1 > 0 && sd2 > 0) {
+							diff = mean1_image[m][j][k] - mean2_image[m][j][k];
+							sed = sqrt ((sd1 * sd1 / num1) + (sd2 * sd2 / num2));
+							t_image[m][j][k] = SCALER * diff / sed;
+						} else
+							t_image[m][j][k] = 0.;
+					}
+a199 17
+	} else {
+		for (m = 0; m < zdim; ++m) {
+			for (j = 0; j < DIM; ++j) {
+				for (k = 0; k < DIM; ++k) {
+					num1 = n1_image[m][j][k];
+					num2 = n2_image[m][j][k];
+					sd1 = sd1_image[m][j][k];
+					sd2 = sd2_image[m][j][k];
+					if (num1 > 0 && num2 > 0 && sd1 > 0 && sd2 > 0) {
+						diff = mean1_image[m][j][k] - mean2_image[m][j][k];
+						sed = sqrt ((sd1 * sd1 / num1) + (sd2 * sd2 / num2));
+						t_image[m][j][k] = SCALER * diff / sed;
+					} else
+						t_image[m][j][k] = 0.;
+				}
+			}
+		}
+d202 6
+a207 11
+/*
+ *	Write outfile
+ *	-------------
+ */
+
+	strncpy (main_header->physician_name, &rcsid[5], sizeof (main_header->physician_name) - 1);
+	strncpy (main_header->operator_name, date, sizeof (main_header->operator_name) - 1);
+
+	if (writerealimg (outfile, matval, DIM, DIM, zdim, t_image, main_header, subheader)
+	    == FAIL) {
+		fprintf (stderr, "Error writing %s\n", outfile);
+d209 11
+d221 5
+a225 13
+	for (i = 0; i < zdim; i++)
+		free (subheader[i]);
+	free (subheader);
+	free (main_header);
+	free (mean1_image);
+	free (mean2_image);
+	free (sd1_image);
+	free (sd2_image);
+	free (n1_image);
+	free (n2_image);
+	free (t_image);
+	if (use_mask)
+		free (mask_image);
+d227 1
+a227 1
+	exit (0);
+@

@@ -1,0 +1,185 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	93.07.15.14.36.04;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial release
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@C$Log$
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:       PETT6CNTS.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         15-Jul-93
+C  Intent:
+C     Read all of the header records of a PETT 6 data file
+C     and write the total counts in each slice to the terminal.
+C			Port of HEADER6A.FTN
+C
+C  Uses:
+C     SYSIO
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM  PETT6CNTS
+C
+      INTEGER*2  HREC(128)
+      INTEGER*2  REC(7)
+      INTEGER*2  SCANTIME
+C
+      INTEGER*4  LOC(7)
+      INTEGER*4  IOREAD
+      INTEGER*4  INPUT
+      INTEGER*4  OUT
+      INTEGER*4  COUNTS       ! total raw events
+      INTEGER*4  RANDOMS      ! total estimated randoms
+      INTEGER*4  TRUES        ! total true + scatter
+      INTEGER*4  MIN          !
+      INTEGER*4  SCOUNTS(7)   ! slice total counts
+      INTEGER*4  SRANDOMS(7)  ! slice randoms
+      INTEGER*4  STRUES(7)    ! slice trues
+      INTEGER*4  STIME(7)     ! slice time
+      INTEGER*4  ETOTAL       ! total raw events for all slices
+      INTEGER*4  RTOTAL       ! total random events for all slices
+      INTEGER*4  TTOTAL       ! total true events for all slices
+      INTEGER*4  NBYTES       ! Number of bytes in SYSIO operation
+      INTEGER*4  PBLK(6)      ! SYSIO parameter block
+      INTEGER*4  RAD          ! SYSIO random access record number
+C
+      REAL*4     RATESUM      ! total counts/sec
+      REAL*4     RATE
+      REAL*4     TRATESUM     ! true counts/sec
+      REAL*4     TRATE
+C
+      CHARACTER*2  SDATE(3)
+      CHARACTER*6  RUN
+      CHARACTER*8  SUBJID
+      CHARACTER*10 ENCODED
+      CHARACTER*12 FILTER
+      CHARACTER*256 FNAME, RCSHEADER
+C
+      EQUIVALENCE (HREC(1), ENCODED)
+      EQUIVALENCE (HREC(2) ,RUN)
+      EQUIVALENCE (HREC(8) ,SCANTIME)
+      EQUIVALENCE (HREC(9) ,SUBJID)
+      EQUIVALENCE (HREC(10),REC(1))
+      EQUIVALENCE (HREC(13),SDATE(1))
+      EQUIVALENCE (HREC(41),FILTER)
+      EQUIVALENCE (HREC(51),COUNTS)
+      EQUIVALENCE (HREC(53),RANDOMS)
+      EQUIVALENCE (HREC(55),TRUES)
+C
+      DATA  INPUT, OUT  /1,6/
+      DATA  IOREAD /92/        ! binary read random wait
+      DATA  NBYTES /256/
+C
+			RCSHEADER = "$Header$"
+			CALL GETARG(1,FNAME)
+			OPEN (INPUT,FILE=FNAME,STATUS="OLD",ERR=5)
+			GO TO 6
+5			WRITE(USEROUT,*) "Cannot open ",FNAME( : LNBLNK(FNAME))
+			STOP	
+C
+6     PBLK(6) = 0
+      RAD = 0
+      CALL SYSIO(PBLK,IOREAD,INPUT,HREC,NBYTES,RAD)
+C
+C  Get record number of header for each of 7 slices
+C
+      IF (ENCODED.EQ.'ENCODED   ') THEN
+        DO 10 I=1,7
+          LOC(I) = I
+10      CONTINUE
+      ELSE
+        DO 20 I=1,7
+          LOC(I) = (I-1)*80
+20      CONTINUE
+      END IF
+C
+C  Write to Output File
+C
+      RAD = LOC(1)
+      CALL SYSIO(PBLK,IOREAD,INPUT,HREC,NBYTES,RAD)
+      WRITE (OUT,8000) SUBJID, RUN, SDATE(1), SDATE(2), SDATE(3)
+      WRITE (OUT,8020) FILTER
+C
+C  Check for old file in which counts, randoms and trues are not defined
+C
+      IF (HREC(52).EQ.0 .AND. HREC(54).EQ.0 .AND. HREC(56).EQ.0) THEN
+        WRITE(OUT,8100)
+        STOP
+      END IF
+C
+      WRITE (OUT,8030)
+      STIME(1) = INT(SCANTIME)
+      SCOUNTS(1)  = COUNTS
+      SRANDOMS(1) = RANDOMS
+      STRUES(1)   = TRUES
+      ETOTAL = COUNTS
+      RTOTAL = RANDOMS
+      TTOTAL = TRUES
+      MIN = STIME(1)
+C
+C  Get other slices
+C
+      DO 100 I=2,7
+        RAD = LOC(I)
+        CALL SYSIO(PBLK,IOREAD,INPUT,HREC,NBYTES,RAD)
+        STIME(I) = INT(SCANTIME)
+        SCOUNTS(I)  = COUNTS
+        SRANDOMS(I) = RANDOMS
+        STRUES(I)   = TRUES
+        ETOTAL = ETOTAL + COUNTS
+        RTOTAL = RTOTAL + RANDOMS
+        TTOTAL = TTOTAL + TRUES
+        IF (STIME(I).LT.MIN) MIN=STIME(I)
+100   CONTINUE
+C
+C  Write slice values
+C
+      RATESUM = 0.
+      TRATESUM = 0.
+      DO 300 I=1,7
+        RATE = FLOAT(SCOUNTS(I))/STIME(I)
+        RATESUM = RATESUM + RATE
+        TRATE = FLOAT(STRUES(I))/STIME(I)
+        TRATESUM = TRATESUM + TRATE
+        WRITE (OUT,8040) I,SCOUNTS(I),SRANDOMS(I),STRUES(I),
+     &    STIME(I),NINT(RATE),NINT(TRATE)
+300   CONTINUE
+      WRITE (OUT,8050) NINT(FLOAT(ETOTAL)/7.), NINT(FLOAT(TTOTAL)/7.),
+     &  NINT(RATESUM/7.), NINT(TRATESUM/7.)
+      WRITE (OUT,8060) ETOTAL, RTOTAL, TTOTAL, NINT(RATESUM),
+     &  NINT(TRATESUM)
+C
+8000  FORMAT(1X,'Subject ID = ',A10,2X,'Run Name = ',A10,2X
+     &  'Date = ',A2,'/',A2,'/',A2)
+8020  FORMAT(1X,'Filter: ',A8)
+8030  FORMAT(1X,'Slice    Total     Randoms     Trues    Scan Time  ',
+     &  'Total CPS   True CPS')
+8040  FORMAT(1X,I3,I12,I11,I11,I7,' sec',I10,I12)
+8050  FORMAT(/1X,'Mean',I11,11X,I11,11X,I10,I12)
+8060  FORMAT(1X,'Total',I10,I11,I11,11X,I10,I12)
+8100  FORMAT(1X,'Count totals are not stored for images reconstructed ',
+     &  'before 07-Nov-89')
+C
+      STOP
+      END
+@

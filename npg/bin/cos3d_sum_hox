@@ -1,0 +1,153 @@
+#!/bin/csh
+#   Name:   cos3d_sum_hox
+#   Author: Tom Videen
+#   Date:   Dec 2004
+#   Created for: COSS PET Processing
+#   Intent: View time-activity curve and determine frames to sum for 40-sec water;
+#   	Activity plotted as mean counts/pixel/sec.
+
+if ($#argv != 3) then
+	echo "Usage:  cos3d_sum_ho X Y Z"
+	exit 1
+endif
+
+set X = $1
+set Y = $2
+set Z = $3
+
+set VER      = 1.0
+set DIAMETER = 80
+
+set PREFIX = cs$SITE-
+set GAUSS = _g3
+set FNAME = $STUDY-$HO
+set IN    = $FNAME.v
+set FIL   = $FNAME$GAUSS.v
+set LST   = $FNAME.lst
+set PRM   = $FNAME.prm
+set REG   = $FNAME.reg
+set RGT   = $FNAME.rgt
+set PLT   = $FNAME.plt
+set START = $FNAME.start
+set DURA  = $FNAME.duration
+set CNTS  = $FNAME.cnts
+set TMP   = cos3d_sum_ho$$.tmp
+
+if (! -e $IN) then
+	echo "ERROR: file not found: $IN"
+	exit 1
+endif
+if (! -e $PLT) then
+	echo "ERROR: file not found: $PLT"
+	exit 1
+endif
+
+# Compare choice of Z to image size
+
+set PLANE_SEP = `imghdr $FNAME.v | grep Plane_separation | cut -f2 -d= | cut -f1 -dc`
+set NPLANES = `imghdr $FNAME.v | grep slices | cut -f1 -ds`
+set RADIUS = `echo $DIAMETER / 20 / $PLANE_SEP | bc`
+set MAX_Z = `echo $NPLANES - $RADIUS - 1 | bc`
+set MIN_Z = `echo $RADIUS + 2 | bc`
+if ($Z < $MIN_Z) then
+    echo ">>> ================================================================================" 
+	echo ">>> WARNING: Z-coordinate may be too low and place the VOI partly outside the image"
+	echo ">>>          Z should be between $MIN_Z and $MAX_Z"
+    echo ">>> ================================================================================" 
+else if ($Z > $MAX_Z) then
+    echo ">>> ================================================================================" 
+	echo ">>> WARNING: Z-coordinate may be too high and place the VOI partly outside the image"
+	echo ">>>          Z should be between $MIN_Z and $MAX_Z"
+    echo ">>> ================================================================================" 
+endif
+
+echo "==========================================================================" >>! $LOGFILE
+echo "cos3d_sum_ho  Version:" $VER `whoami` `date` >> $LOGFILE
+echo $0 $1 $2 $3 >> $LOGFILE
+
+imgfrms $IN | cut -c1-3 >! $TMP
+set FIRST = `head -5 $TMP | tail -1`
+set LAST  = `tail -1 $TMP`
+set NFRMS = `echo $LAST - $FIRST + 1 | bc`
+set MISSING = `echo $FIRST - 1 | bc`
+echo "$IN    Frames $FIRST to $LAST   Missing = $MISSING"
+if ($LAST <= 10) then
+	set NFRAMES  = 5
+else
+	set NFRAMES  = 10
+endif
+
+# Skip voistat and plot .plt file
+
+set TIME = `cat $START`
+set DURATION = `cat $DURA`
+set COUNTS = `cat $CNTS`
+
+echo "================================================================="
+echo " 1) Print the plot."
+echo " 2) Note the first frame with counts above background"
+echo "   (to be used as the first frame of 40-sec integration)"
+echo "================================================================="
+set STRING = "$DIAMETER-mm sphere at $X,$Y,$Z"
+cos3d_plot $PLT $FIRST $LAST $FNAME.v $STRING
+
+echo "$IN    Frames $FIRST to $LAST"
+set STR = 'y'
+prompt1:
+echo "================================================================="
+echo "First frame of 40-sec integration?"
+set FIRSTFRM = `line`
+if ($STR == 'n' || $STR == 'N') then
+	echo "Last frame number?"
+	set LASTFRM = `line`
+else
+	set LASTFRM = `echo $FIRSTFRM + $NFRAMES - 1 | bc`
+endif
+
+set INDX1 = `echo $FIRSTFRM - $FIRST + 1 | bc`
+set INDX2 = `echo $LASTFRM - $MISSING | bc`
+
+set T1 = $TIME[$INDX1]
+set T2 = $TIME[$INDX2]
+set T3 = $DURATION[$INDX2]
+set TOT = `echo $T2 - $T1 + $T3 | bc -l`
+prompt2:
+echo "Integration time for frames $FIRSTFRM-$LASTFRM = $TOT sec"
+echo "Use this range? <y/n>"
+set STR = `line`
+if ($STR == 'n' || $STR == 'N') goto prompt1
+if ($STR != 'y' && $STR != 'Y') goto prompt2
+
+set OUT  = ${FNAME}_f${FIRSTFRM}to${LASTFRM}.v
+echo "Summing frames $FIRSTFRM to $LASTFRM --> $OUT"
+set ffrm = `firstfrm $IN | head -1`
+set time0 = `imghdr $IN $ffrm | grep Start | cut -f2 -d= | cut -f1 -ds`
+set time1 = `imghdr $IN $FIRSTFRM | grep Start | cut -f2 -d= | cut -f1 -ds`
+set starttime = `echo $time1 - $time0 | bc`
+sumimgframes $IN $OUT $FIRSTFRM $LASTFRM $starttime
+gauss $OUT $FIL 0.3
+
+# scale to reasonable short-integer range
+set maxval = `imghdr $FIL | grep Max | cut -f2 -d= | cut -f1 -d.`
+set scaler = `echo 30000 / $maxval | bc -l | cut -c1-10`
+scaleimage $FIL $scaler
+
+unalias rm
+if (-e idl.ps) rm idl.ps
+rm $LST
+rm $PRM
+rm $RGT
+rm $START
+rm $DURA
+rm $CNTS
+rm $TMP
+
+echo
+echo "Gaussian filter:       0.3 cycles/cm" | tee -a $LOGFILE
+echo "Max: $maxval      Scaler: $scaler" | tee -a $LOGFILE
+echo "VOI Coordinates:       X= $X   Y= $Y   Z= $Z" | tee -a $LOGFILE
+echo "VOI Diameter for TAC:  $DIAMETER mm" | tee -a $LOGFILE
+echo "Integration frames:  40-sec image filename" | tee -a $LOGFILE
+echo "   HO:    $FIRSTFRM - $LASTFRM     $FIL" | tee -a $LOGFILE
+echo "================================================================="
+

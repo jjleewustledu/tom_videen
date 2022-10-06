@@ -1,0 +1,1244 @@
+head	1.15;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.15
+date	95.05.17.21.49.08;	author ty7777;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	95.05.09.15.34.46;	author ty7777;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	95.05.08.20.15.34;	author ty7777;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	95.05.08.19.15.36;	author ty7777;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	95.05.01.16.12.15;	author ty7777;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.04.28.18.08.25;	author ty7777;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.04.26.21.33.36;	author ty7777;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.04.25.21.52.40;	author ty7777;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.04.14.15.32.40;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.04.14.15.07.23;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.04.12.20.21.32;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.04.12.20.02.30;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.04.11.19.56.49;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.04.07.14.44.16;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.03.29.20.16.32;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version with debugging messages.
+@
+
+
+1.15
+log
+@Same as the last version, just check in.
+@
+text
+@/*$Id: af3d_par.c,v 1.14 1995/05/09 15:34:46 ty7777 Exp ty7777 $*/
+/*$Log: af3d_par.c,v $
+ * Revision 1.14  1995/05/09  15:34:46  ty7777
+ * Read real numbers.
+ *
+ * Revision 1.13  1995/05/08  20:15:34  ty7777
+ * Read data as real array.
+ *
+ * Revision 1.12  1995/05/08  19:15:36  ty7777
+ * Changed variable names.
+ *
+ * Revision 1.11  1995/05/01  16:12:15  ty7777
+ * Deleted debugging messages.
+ *
+ * Revision 1.10  1995/04/28  18:08:25  ty7777
+ * Put the prmfile in the .3sp and .3sn files.
+ *
+ * Revision 1.9  1995/04/26  21:33:36  ty7777
+ * Same as the last one.
+ *
+ * Revision 1.8  1995/04/25  21:52:40  ty7777
+ * Use prm file.
+ *
+ * Revision 1.7  1995/04/14  15:32:40  ty7777
+ * Final release.
+ *
+ * Revision 1.6  1995/04/14  15:07:23  ty7777
+ * Added sphere_center for average.c
+ *
+ * Revision 1.5  1995/04/12  20:21:32  ty7777
+ * Use ROUND ().
+ *
+ * Revision 1.4  1995/04/12  20:02:30  ty7777
+ * Working version.
+ *
+ * Revision 1.3  1995/04/11  19:56:49  ty7777
+ * sphere_center = 0 means centerd on pixel.
+ *
+ * Revision 1.2  1995/04/07  14:44:16  ty7777
+ * Used real radii.
+ *
+ * Revision 1.1  1995/03/29  20:16:32  ty7777
+ * Initial revision
+ **/
+
+/*_________________________________________________________________
+Description:	This program finds the activation foci (or focus) in a 49 or 75 slice 
+		pet study using local maximum as criterium or it can be used to find 
+		the absolute regional values for a given set of regions. The algorithm 
+		is jointly developed by Tom Yang and Gordon Shulman.
+
+		While O-15 water (CBF) is the usual protocal, the technique will accomadate 
+		O-15 carbon-monoxide, and unprocessed studies as well. Note that we assume 
+		100 x 100 SARP array.						      
+
+Algorithm:	Filter the input image with filter_radius with sphere defined by real distance. 
+			If the filter_radius is an integer, use predefined table.
+		Find local peaks by comparing a pixel value with its 26 neighbors.
+		For each local peak, find the biggest contagious area from the local peaks 
+			with the same peak value. Pick one peak that is closest to all the 
+			other peaks with the same value. The other local peaks are rejected as 
+			local peaks.
+		Sort the local peak array with descending magnitude.
+		Get rid of adjacent peaks
+			Start with the biggest peak from the sorted array
+			Check to see if the peaks that have smaller magnitude fall inside the 
+			sphere defined by adjpeak_radius. The peaks that are the neighbors of 
+			bigger peaks are thrown away. The sphere is defined by real distance.
+		Adjust the peak coordinates by computing the centers of mass with real distance. 
+			If cmass_radius is an integer, use predefined table to define spheres.
+		Find new peak values by using the magnitude_radius and center at the center of 
+			mass. If magnitude_radius is an integer and sphere_center, use predefined 
+			table; otherwise, use real distance to define spheres.
+		Save the peak coordinates and magnitudes
+
+Authors:	Tom Yang, Gordon Shulman, March, 1995.
+
+History:	Created 03/29/95 by Tom Yang and Gordon Shulman. 
+_________________________________________________________________*/
+
+
+#include <petutil/matrix.h>
+#include <unistd.h>
+#include "af3d_par.h"
+
+#define	MAX_SLICES		75
+#define	INITIAL_LIST_SIZE	1000
+#define	MAX_IRADIUS		10
+
+float	filtered_image [MAX_SLICES][ENCODED_SLICE_HEIGHT][ENCODED_SLICE_WIDTH];
+float	input_image [MAX_SLICES][ENCODED_SLICE_HEIGHT][ENCODED_SLICE_WIDTH];
+float	mask_image [MAX_SLICES][ENCODED_SLICE_HEIGHT][ENCODED_SLICE_WIDTH];
+
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.14 1995/05/09 15:34:46 ty7777 Exp ty7777 $";
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	BOOLEAN		average_flag;
+	BOOLEAN		sphere_center;
+	BOOLEAN		use_header;
+	BOOLEAN		use_table_centermass;
+	BOOLEAN		use_table_filter;
+	BOOLEAN		use_table_magnitude;
+	COMMENT_INFO	comment_info_data;
+	FILE		*rgnfp;
+	FLOAT_POINT3D	*center_list;
+	Image_subheader	**subheader_list;
+	Main_header	*main_header;
+	POINT3D		*peak_list;
+	POINT3D		*region_location_centermass;
+	POINT3D		*region_location_filter;
+	POINT3D		*region_location_magnitude;
+	PRM_DATA	parameter_data;
+	char		atlas_out [MAXLINE];
+	char		average_out [MAXLINE];
+	char		date [MAXLINE];
+	char		*header_file;
+	char		*input_list;
+	char		image_encoded;	
+	char		*image_file;
+	char		line [MAXLINE];
+	char		mask_encoded;	
+	char		mask_file [MAXPATH];
+	char		*output;
+	char		*out_ext;
+	char		output_file [MAXLINE];
+	char		*prmfile;
+	char		*region_file;
+	char		*uid;
+	float		adjpeak_radius;
+	float		centermass_radius;
+	float		filter_radius;
+	float		magnitude_radius;
+	int		i;
+	int		image_type;
+	int		image_zorigin;
+	int		imgfd;
+	int		input_list_size;
+	int		j;
+	int		k;
+	int		listp;
+	int		list_size;
+	int		location_num_centermass;
+	int		location_num_filter;
+	int		location_num_magnitude;
+	int		maskfd;
+	int		mask_type;
+	int		mask_zorigin;
+	int		n;
+	int		sign;
+	float		cutoff;
+	float		image_voxel_depth;
+	float		image_voxel_width;
+	float		mask_voxel_depth;
+	float		mask_voxel_width;
+	float		*value_list;
+	float		x, y, z;
+	long		dimension;
+	short		image_height;
+	short		image_num_slices;
+	short		image_width;
+	short		mask_height;
+	short		mask_num_slices;
+	short		mask_width;
+	struct Matval	matval;
+
+	/*
+	 * Get command line optional parameters and initializes variables.
+	 */
+	image_file		= argv [1];
+	prmfile			= argv [2];
+	header_file		= argv [3];
+	input_list		= argv [4];
+	output			= argv [5];
+	sign			= atoi (argv [6]);
+	region_file		= argv [7];
+	use_header		= atoi (argv [8]);
+	average_flag		= atoi (argv [9]);
+	sprintf (date, "%s %s %s %s %s %s", 
+		argv [10], argv [11], argv [12], argv [13], argv [14], argv [15]);
+	uid			= argv [16];
+
+	/*
+	 * Read the prmfile.
+	 */
+	if (readprm (prmfile, &parameter_data) == FAIL) 
+	{
+		fprintf (stderr, "Error in reading parameter file %s\n", prmfile);
+		exit (FAIL);
+	}
+
+	filter_radius		= parameter_data.af3d_filter_rad;
+	adjpeak_radius		= parameter_data.af3d_adjpeak_rad;
+	centermass_radius	= parameter_data.af3d_centermass_rad;
+	magnitude_radius	= parameter_data.af3d_mag_rad;
+	sphere_center		= parameter_data.af3d_sphere_center;
+	cutoff			= parameter_data.af3d_cutoff;
+	strcpy (mask_file, parameter_data.af3d_mask);
+
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+	/*
+	 * Generate output file root.
+	 */
+	out_ext	= strrchr (output, '.');	
+	if (out_ext != NULL)
+		memcpy (output_file, output, strlen (output) - strlen (out_ext));
+	else
+		strcpy (output_file, output);
+
+	/*
+	 * Read in data and build 3-D input image array.
+	 */
+	if (getimagedim (image_file, matval, &image_type, &image_width, &image_height, 
+	&image_num_slices, &image_voxel_width, &image_voxel_width, &image_voxel_depth) == FAIL) 
+	{
+		fprintf (stderr, "Error: image file %s cannot be found\n", image_file);
+		exit (FAIL);
+	}
+
+	dimension	= ( (long) image_width * image_height) * image_num_slices;
+/*
+	input_image	= (float *) pkg_malloc (dimension * sizeof (float), "af3d_par", "image3d");
+*/
+	subheader_list	= (Image_subheader **) pkg_malloc (image_num_slices * sizeof (caddr_t), 
+			"af3d_par", "subheader_list");
+	main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+
+	if (getrealimg (image_file, image_type, matval, image_width, image_height, 
+	image_num_slices, input_image, main_header, subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in getrealimg ().\n");
+		exit (FAIL);
+	}
+
+	/*
+	 * Find out the zorigin of the image.
+	 */
+	if (image_type == ECAT_SCANNER)
+	{
+		comment_info (main_header->study_description, &comment_info_data);
+		image_zorigin	= comment_info_data.zorigin;
+
+		if (image_zorigin == 0)
+		{
+			fprintf (stderr, "Error: There is no z0 slice in your image %s.\n",
+				image_file);
+			fprintf (stderr, 
+			"       You can set the z0 slice by using the program setz0.\n");
+
+			exit (FAIL);
+		}
+	}
+	else
+	{
+		image_zorigin	= DEFAULT_ZORIGIN;
+	}
+
+	for (i = 0; i < image_num_slices; i++)
+	{
+		free (subheader_list [i]);
+	}
+	free (subheader_list);
+	free (main_header);
+
+	/*
+	 * Find out the zorigin of the image.
+	 */
+
+	/*
+	 * Process 3D image if necessary.
+	 */
+	if (use_header)
+		process (header_file, ENCODED_SLICE_WIDTH, ENCODED_SLICE_HEIGHT, 
+		image_num_slices, input_image);
+
+	/*
+	 * Read in data from cmrad.dat if necessary.
+	 */
+  	rgnfp	= fopen (region_file, "r");
+  	if (rgnfp == (FILE *) NULL) 
+	{
+		fprintf (stderr, "Can't Open %s\n", region_file);
+		exit (FAIL);
+  	}
+
+	use_table_filter	= FALSE;
+	use_table_centermass	= FALSE;
+	use_table_magnitude	= FALSE;
+
+	if (pkg_abs (filter_radius - ROUND (filter_radius)) < ERROR_BOUND 
+	&& ROUND (filter_radius) <= MAX_IRADIUS)
+	{
+		use_table_filter	= TRUE;
+		location_num_filter	= getlocn (rgnfp, ROUND (filter_radius));
+		region_location_filter	= (POINT3D *) malloc (location_num_filter * sizeof (POINT3D));
+		if (region_location_filter == (POINT3D *) NULL)
+		{
+			fprintf (stderr, "Memory allocation error for region_location_filter.\n");
+			exit (FAIL);
+		}
+		readrgn (rgnfp, location_num_filter, region_location_filter);
+	}
+
+	if (pkg_abs (centermass_radius - ROUND (centermass_radius)) < ERROR_BOUND 
+	&& ROUND (centermass_radius) <= MAX_IRADIUS)
+	{
+		use_table_centermass	= TRUE;
+		fseek (rgnfp, 0L, SEEK_SET);
+		location_num_centermass	= getlocn (rgnfp, ROUND (centermass_radius));
+		region_location_centermass	
+			= (POINT3D *) malloc (location_num_centermass * sizeof (POINT3D));
+		if (region_location_centermass == (POINT3D *) NULL)
+		{
+			fprintf (stderr, "Memory allocation error for region_location_centermass.\n");
+			exit (FAIL);
+		}
+		readrgn (rgnfp, location_num_centermass, region_location_centermass);
+	}
+
+	if (pkg_abs (magnitude_radius - ROUND (magnitude_radius)) < ERROR_BOUND 
+	&& ROUND (magnitude_radius) <= MAX_IRADIUS && sphere_center == 0)
+	{
+		use_table_magnitude	= TRUE;
+		fseek (rgnfp, 0L, SEEK_SET);
+		location_num_magnitude	= getlocn (rgnfp, ROUND (magnitude_radius));
+		region_location_magnitude	
+			= (POINT3D *) malloc (location_num_magnitude * sizeof (POINT3D));
+		if (region_location_magnitude == (POINT3D *) NULL)
+		{
+			fprintf (stderr, "Memory allocation error for region_location_magnitude.\n");
+			exit (FAIL);
+		}
+		readrgn (rgnfp, location_num_magnitude, region_location_magnitude);
+	}
+
+	fclose (rgnfp);
+
+	/*
+	 * Read in input list and compute the averages.
+	 */
+	if (average_flag)
+	{
+		/*
+		 * Compute number of data points.
+		 */
+		rgnfp	= fopen (input_list, "r");
+
+		list_size	= 0;
+		while (fgets (line, MAXLINE, rgnfp) != NULL)
+		{
+			if (sscanf (line, "%f %f %f", &x, &y, &z) == 3) 
+				list_size++;
+		}
+		fclose (rgnfp);
+
+		if (list_size == 0)
+		{
+			fprintf (stderr, "Error: There are no regions in %s to average.\n", input_list); 
+			exit (FAIL);
+		}
+
+		/*
+		 * Allocation point array.
+		 */
+		center_list	= (FLOAT_POINT3D *) malloc (list_size * sizeof (FLOAT_POINT3D));
+		value_list	= (float *) malloc (list_size * sizeof (float));
+
+		/*
+		 * Read in input.
+		 */
+		rgnfp	= fopen (input_list, "r");
+
+		i	= 0;
+		while (fgets (line, MAXLINE, rgnfp) != NULL)
+		{
+			if (sscanf (line, "%f %f %f", &x, &y, &z) == 3) 
+			{
+				center_list [i].x	= x;
+				center_list [i].y	= y;
+				center_list [i].z	= z;
+				i++;
+			}
+		}
+		fclose (rgnfp);
+
+		average (input_image, ENCODED_SLICE_WIDTH, ENCODED_SLICE_HEIGHT, image_num_slices, 
+			magnitude_radius, use_table_magnitude, sphere_center, region_location_magnitude, 
+			location_num_magnitude, list_size, center_list, value_list, image_zorigin);
+
+		strcpy (average_out, output_file);
+		strcat (average_out, ".avg");
+		savelist (average_out, center_list, value_list, list_size, sign, 
+			centermass_radius, 0, image_file, average_flag, image_zorigin, 
+			date, uid);
+
+		free (center_list);
+		free (value_list);
+
+		exit (SUCCEED);
+	}
+
+	/*
+	 * Read in mask data and build 3-D mask image array.
+	 */
+	if (getimagedim (mask_file, matval, &mask_type, &mask_width, &mask_height, 
+	&mask_num_slices, &mask_voxel_width, &mask_voxel_width, &mask_voxel_depth) == FAIL) 
+	{
+		fprintf (stderr, "Error: mask file %s cannot be found\n", mask_file);
+		exit (FAIL);
+	}
+
+	subheader_list	= (Image_subheader **) pkg_malloc (image_num_slices * sizeof (caddr_t), 
+			"af3d_par", "subheader_list");
+	main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+
+	if (getrealimg (mask_file, mask_type, matval, mask_width, mask_height, 
+	mask_num_slices, mask_image, main_header, subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in getrealimg ().\n");
+		exit (FAIL);
+	}
+
+	if (mask_num_slices < image_num_slices)
+	{
+		fprintf (stderr, "Mask %s has fewer slices than the image %s.\n", 
+		mask_file, image_file);
+		exit (FAIL);
+	}
+
+	/*
+	 * Find out the zorigin of the image.
+	 */
+	if (mask_type == ECAT_SCANNER)
+	{
+		comment_info (main_header->study_description, &comment_info_data);
+		mask_zorigin	= comment_info_data.zorigin;
+
+		if (mask_zorigin == 0)
+		{
+			fprintf (stderr, "Error: There is no z0 slice in your image %s.\n",
+				mask_file);
+			fprintf (stderr, 
+			"       You can set the z0 slice by using the program setz0.\n");
+
+			exit (FAIL);
+		}
+	}
+	else
+	{
+		mask_zorigin	= DEFAULT_ZORIGIN;
+	}
+
+	for (i = 0; i < mask_num_slices; i++)
+	{
+		free (subheader_list [i]);
+	}
+	free (subheader_list);
+	free (main_header);
+
+	if (image_type == ECAT_SCANNER && mask_type == ECAT_SCANNER &&
+	(mask_width != image_width || mask_height != image_height 
+	|| pkg_abs (mask_voxel_width - image_voxel_width) > ERROR_BOUND
+	|| pkg_abs (mask_voxel_depth - image_voxel_depth) > ERROR_BOUND))
+	{
+		fprintf (stderr, "Error: Image w = %d h = %d voxel_w = %f voxel_h = %f\n", 
+			image_width, image_height, image_voxel_width, image_voxel_depth);
+		fprintf (stderr, "Error: Mask w = %d h = %d voxel_w = %f voxel_h = %f\n", 
+			mask_width, mask_height, mask_voxel_width, mask_voxel_depth);
+		exit (FAIL);
+	}
+
+	/*
+	 * Convolute image data with a delta-function.
+	 */
+	if (use_table_filter)
+		ifilter (input_image, image_num_slices, image_zorigin, mask_image, 
+		mask_num_slices, mask_zorigin, region_location_filter, location_num_filter, 
+		sign, filtered_image);
+	else
+		rfilter (input_image, image_num_slices, image_zorigin, mask_image, 
+		mask_num_slices, mask_zorigin, filter_radius, sign, filtered_image);
+
+	/*
+	 * Search for local maximums.
+	 */
+	list_size	= INITIAL_LIST_SIZE;
+	peak_list	= (POINT3D *) malloc (list_size * sizeof (POINT3D));
+	value_list	= (float *) malloc (list_size * sizeof (float));
+
+	if (peak_list == (POINT3D *) NULL || value_list == (float *) NULL)
+		fprintf (stderr, "Out of memory for list or value_list");
+
+	listp	= 0;
+	search (filtered_image, cutoff, image_num_slices, adjpeak_radius, 
+		peak_list, value_list, &list_size, &listp, FALSE);
+	free (peak_list);
+	free (value_list);
+
+	peak_list       = (POINT3D *) malloc (list_size * sizeof (POINT3D));
+	value_list = (float *) malloc (list_size * sizeof (float));
+	if (peak_list == (POINT3D *) NULL || value_list == (float *) NULL)
+	{
+		fprintf (stderr, "Out of memory for list or value_list");
+		exit (FAIL);
+	}
+
+	listp	= 0;
+	search (filtered_image, cutoff, image_num_slices, adjpeak_radius, 
+		peak_list, value_list, &list_size, &listp, TRUE);
+
+	/*
+	 * Find the center of mass for each point.
+	 */
+	list_size	= listp;
+	center_list	= (FLOAT_POINT3D *) malloc (list_size * sizeof (FLOAT_POINT3D));
+	if (use_table_centermass)
+		icmass (input_image, image_num_slices, peak_list, list_size, 
+		region_location_centermass, location_num_centermass, sign, center_list);
+	else
+		rcmass (input_image, image_num_slices, peak_list, list_size, 
+		centermass_radius, sign, center_list);
+	free (peak_list);
+
+	if (use_table_magnitude)
+		imagfilter (input_image, image_num_slices, region_location_magnitude, 
+		location_num_magnitude, sign, center_list, value_list, list_size);
+	else
+	{
+		rmagfilter (input_image, image_num_slices, magnitude_radius, 
+		sign, sphere_center, center_list, value_list, list_size);
+	}
+
+	/*
+	 * Sort list by magnitude in descending order.
+	 */
+	sort (center_list, value_list, list_size);
+
+	/*
+	 * Write list to file.
+	 */
+	strcpy (atlas_out, output_file);
+
+	if (sign == 1)
+	{
+		strcat (atlas_out, ".3sp");
+	}
+	else
+	{
+		strcat (atlas_out, ".3sn");
+	}
+
+	savelist (atlas_out, center_list, value_list, list_size, sign, 
+		centermass_radius, 1, image_file, average_flag, image_zorigin, 
+		date, uid);
+
+	/*
+	 * Free memories
+	 */
+	if (use_table_filter)
+		free (region_location_filter);
+	if (use_table_centermass)
+		free (region_location_centermass);
+	if (use_table_magnitude)
+		free (region_location_magnitude);
+	free (center_list);
+	free (value_list);
+}
+@
+
+
+1.14
+log
+@Read real numbers.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.13 1995/05/08 20:15:34 ty7777 Exp ty7777 $*/
+d3 3
+d94 1
+a94 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.13 1995/05/08 20:15:34 ty7777 Exp ty7777 $";
+@
+
+
+1.13
+log
+@Read data as real array.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.12 1995/05/08 19:15:36 ty7777 Exp ty7777 $*/
+d3 3
+d91 1
+a91 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.12 1995/05/08 19:15:36 ty7777 Exp ty7777 $";
+a107 1
+	MatrixFile	*fptr;
+d138 2
+d148 1
+d157 1
+d224 4
+a238 10
+	if (image_num_slices > MAX_SLICES)
+	{
+		fprintf (stderr, 
+		"The current version of the program can process at most %d slices.\n",
+		MAX_SLICES);
+		fprintf (stderr, "Please see Tom Yang (ty7777@@petadmin.wustl.edu) to fix it.\n"); 
+		close (imgfd);
+		exit (FAIL);
+	}
+
+d268 4
+@
+
+
+1.12
+log
+@Changed variable names.
+,
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.11 1995/05/01 16:12:15 ty7777 Exp ty7777 $*/
+d3 3
+d85 2
+a86 2
+short	input_image [MAX_SLICES][ENCODED_SLICE_HEIGHT][ENCODED_SLICE_WIDTH];
+short	mask_image [MAX_SLICES][ENCODED_SLICE_HEIGHT][ENCODED_SLICE_WIDTH];
+d88 1
+a88 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.11 1995/05/01 16:12:15 ty7777 Exp ty7777 $";
+d103 2
+d211 18
+a228 2
+	imgfd		= open (image_file, O_RDONLY, 0);
+	image_type	= getimage_type (imgfd, image_file, &image_encoded, &image_num_slices);
+a238 5
+	buildimg (imgfd, image_file, image_encoded, image_num_slices, 
+			image_type, input_image);
+
+	close (imgfd);
+
+d244 1
+a244 9
+		fptr	= OpenEcat (image_file, &image_num_slices, &image_width, &image_height, 
+				&image_voxel_width, &image_voxel_depth, matval);
+		if (fptr == (MatrixFile *) NULL)
+		{
+			fprintf (stderr, "Cannot open image %s.\n", image_file);
+			exit (FAIL);
+		}
+
+		comment_info (fptr->mhptr->study_description, &comment_info_data);
+a245 1
+		matrix_close (fptr);
+d262 7
+d405 18
+a422 2
+	maskfd		= open (mask_file, O_RDONLY, 0);
+	mask_type	= getimage_type (maskfd, mask_file, &mask_encoded, &mask_num_slices);
+d426 1
+a426 1
+		mask_file, input_image);
+a429 4
+	buildimg (maskfd, mask_file, mask_encoded, mask_num_slices, mask_type, mask_image);
+
+	close (maskfd);
+
+d431 1
+a431 1
+	 * Find out the zorigin of the mask.
+d435 1
+a435 9
+		fptr	= OpenEcat (mask_file, &mask_num_slices, &mask_width, &mask_height, 
+				&mask_voxel_width, &mask_voxel_depth, matval);
+		if (fptr == (MatrixFile *) NULL)
+		{
+			fprintf (stderr, "Cannot open image %s.\n", mask_file);
+			exit (FAIL);
+		}
+
+		comment_info (fptr->mhptr->study_description, &comment_info_data);
+a436 1
+		matrix_close (fptr);
+d452 7
+@
+
+
+1.11
+log
+@Deleted debugging messages.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.10 1995/04/28 18:08:25 ty7777 Exp ty7777 $*/
+d3 3
+d85 1
+a85 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.10 1995/04/28 18:08:25 ty7777 Exp ty7777 $";
+a139 1
+	int		start;
+d141 2
+a145 2
+	float		voxel_depth;
+	float		voxel_width;
+d147 1
+a147 1
+	short		height;
+d149 1
+a152 2
+	short		num_slices;
+	short		width;
+d228 2
+a229 2
+		fptr	= OpenEcat (image_file, &num_slices, &width, &height, 
+				&voxel_width, &voxel_depth, matval);
+d437 3
+a439 3
+	(mask_width != width || mask_height != height 
+	|| pkg_abs (mask_voxel_width - voxel_width) > ERROR_BOUND
+	|| pkg_abs (mask_voxel_depth - voxel_depth) > ERROR_BOUND))
+d442 1
+a442 1
+			width, height, voxel_width, voxel_depth);
+@
+
+
+1.10
+log
+@Put the prmfile in the .3sp and .3sn files.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.9 1995/04/26 21:33:36 ty7777 Exp ty7777 $*/
+d3 3
+d82 1
+a82 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.9 1995/04/26 21:33:36 ty7777 Exp ty7777 $";
+a526 1
+printf ("atlas_out = %s list_size = %d\n", atlas_out, list_size);
+@
+
+
+1.9
+log
+@Same as the last one.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.8 1995/04/25 21:52:40 ty7777 Exp ty7777 $*/
+d3 3
+d79 1
+a79 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/tmp1/RCS/af3d_par.c,v 1.8 1995/04/25 21:52:40 ty7777 Exp ty7777 $";
+d524 1
+d526 2
+a527 2
+		centermass_radius, 1, image_file, image_type, average_flag, 
+		image_zorigin, date, uid);
+@
+
+
+1.8
+log
+@Use prm file.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.7 1995/04/14 15:32:40 ty7777 Exp ty7777 $*/
+d3 3
+d76 1
+a76 1
+static char rcsid [] = "$Header: /data/petsun4/src/tmp1/RCS/af3d_par.c,v 1.7 1995/04/14 15:32:40 ty7777 Exp ty7777 $";
+@
+
+
+1.7
+log
+@Final release.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.6 1995/04/14 15:07:23 ty7777 Exp ty7777 $*/
+d3 3
+d73 1
+a73 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.6 1995/04/14 15:07:23 ty7777 Exp ty7777 $";
+d93 1
+d103 1
+a103 1
+	char		*mask_file;
+d107 1
+d149 8
+a156 14
+	filter_radius		= atof (argv [2]);
+	adjpeak_radius		= atof (argv [3]);
+	centermass_radius	= atof (argv [4]);
+	magnitude_radius	= atof (argv [5]);
+	sphere_center		= atoi (argv [6]);	/* 0: center on pixel; 1: fraction */
+	output			= argv [7];
+	cutoff			= atof (argv [8]);
+	mask_file		= argv [9];
+	sign			= atoi (argv [10]);
+	header_file		= argv [11];
+	input_list		= argv [12];
+	region_file		= argv [13];
+	use_header		= atoi (argv [14]);
+	average_flag		= atoi (argv [15]);
+d158 19
+a176 2
+		argv [16], argv [17], argv [18], argv [19], argv [20], argv [21]);
+	uid			= argv [22];
+@
+
+
+1.6
+log
+@Added sphere_center for average.c
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.5 1995/04/12 20:21:32 ty7777 Exp ty7777 $*/
+d3 3
+d23 4
+a26 6
+  Description:	This program finds the activation foci (or focus) 
+		in a 49 or 75 slice pet study using local maximum as 
+		criterium or it can be used to find the absolute 
+		regional values for a given set of regions. The 
+		algorithm is jointly developed by Tom Yang and
+		Gordon Shulman.
+d28 2
+a29 3
+		While O-15 water (CBF) is the usual protocal, the 
+		technique will accomadate O-15 carbon-monoxide, and 
+		unprocessed studies as well. Note that we assume 
+d32 19
+a50 1
+  Author:	Tom Yang, March, 1995.
+d52 3
+a54 1
+  History:	Created 03/29/95 by Tom Yang. 
+d70 1
+a70 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.5 1995/04/12 20:21:32 ty7777 Exp ty7777 $";
+@
+
+
+1.5
+log
+@Use ROUND ().
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.4 1995/04/12 20:02:30 ty7777 Exp ty7777 $*/
+d3 3
+d50 1
+a50 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.4 1995/04/12 20:02:30 ty7777 Exp ty7777 $";
+d327 1
+a327 1
+			magnitude_radius, use_table_magnitude, region_location_magnitude, 
+@
+
+
+1.4
+log
+@Working version.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.3 1995/04/11 19:56:49 ty7777 Exp ty7777 $*/
+d3 3
+d41 1
+d47 1
+a47 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.3 1995/04/11 19:56:49 ty7777 Exp ty7777 $";
+d227 2
+a228 2
+	i	= ROUND (filter_radius);
+	if (pkg_abs (filter_radius - i) < ERROR_BOUND && i <= 10)
+d231 1
+a231 1
+		location_num_filter	= getlocn (rgnfp, i);
+d241 2
+a242 2
+	i	= ROUND (centermass_radius);
+	if (pkg_abs (centermass_radius - i) < ERROR_BOUND && i <= 10)
+d246 1
+a246 1
+		location_num_centermass	= getlocn (rgnfp, i);
+d257 2
+a258 3
+	i	= ROUND (magnitude_radius);
+	if (pkg_abs (magnitude_radius - i) < ERROR_BOUND && i <= 10
+	&& sphere_center == 0)
+d262 1
+a262 1
+		location_num_magnitude	= getlocn (rgnfp, i);
+d325 1
+a325 2
+			location_num_magnitude, sphere_center, list_size, center_list, value_list, 
+			image_zorigin);
+@
+
+
+1.3
+log
+@sphere_center = 0 means centerd on pixel.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.2 1995/04/07 14:44:16 ty7777 Exp ty7777 $*/
+d3 3
+d43 1
+a43 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.2 1995/04/07 14:44:16 ty7777 Exp ty7777 $";
+d254 2
+a255 1
+	if (pkg_abs (magnitude_radius - i) < ERROR_BOUND && i <= 10)
+a435 11
+/*
+if (sign == 1)
+{
+printf ("list_size = %d listp = %d\n", list_size, listp);
+for (i = 0; i < listp; i++)
+{
+	printf ("%d %d %d %.2f\n", peak_list [i].x, peak_list [i].y, peak_list [i].z, value_list [i]);
+}
+}
+*/
+
+d449 4
+a452 3
+	if (pkg_abs (adjpeak_radius - centermass_radius) > ERROR_BOUND 
+	|| pkg_abs (centermass_radius - filter_radius) > ERROR_BOUND 
+	|| pkg_abs (filter_radius - magnitude_radius) > ERROR_BOUND) 
+d454 2
+a455 15
+		if (sphere_center == 0)
+		{
+			for (i = 0; i < list_size; i++)
+			{
+				center_list [i].x	= (int) ROUND (center_list [i].x);
+				center_list [i].y	= (int) ROUND (center_list [i].y);
+				center_list [i].z	= (int) ROUND (center_list [i].z);
+			}
+		}
+		if (use_table_magnitude && sphere_center == 0)
+			imagfilter (input_image, image_num_slices, region_location_magnitude, 
+			location_num_magnitude, sign, center_list, value_list, list_size);
+		else
+			rmagfilter (input_image, image_num_slices, magnitude_radius, 
+			sign, center_list, value_list, list_size);
+d484 6
+@
+
+
+1.2
+log
+@Used real radii.
+@
+text
+@d1 1
+a1 1
+/*$Id: af3d_par.c,v 1.1 1995/03/29 20:16:32 ty7777 Exp ty7777 $*/
+d3 3
+d40 1
+a40 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/af3d_par.c,v 1.1 1995/03/29 20:16:32 ty7777 Exp ty7777 $";
+d49 3
+d57 3
+d63 3
+d71 1
+d73 1
+a73 4
+	char		*out_ext;
+	char		*header_file;
+	char		*input_list;
+	char		image_encoded;	
+d86 3
+d118 1
+a118 1
+	sphere_center		= atoi (argv [6]);
+d125 3
+a127 2
+	use_header		= atoi (argv [13]);
+	average_flag		= atoi (argv [14]);
+d129 2
+a130 2
+		argv [15], argv [16], argv [17], argv [18], argv [19], argv [20]);
+	uid			= argv [21];
+d207 1
+a207 1
+	 * Read in region data.
+d209 62
+d317 2
+a318 1
+			magnitude_radius, sphere_center, list_size, center_list, value_list, 
+d396 6
+a401 1
+	filter (input_image, image_num_slices, image_zorigin, mask_image, 
+d432 11
+d448 5
+a452 1
+	cmass (input_image, image_num_slices, peak_list, list_size, 
+d459 15
+a473 1
+		magfilter (input_image, image_num_slices, magnitude_radius, sphere_center,
+d475 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+a31 1
+#define	ERROR_BOUND		0.01
+d37 1
+a37 1
+static char rcsid [] = "$Header$";
+d43 2
+a45 1
+	BOOLEAN		average_flag;
+a50 3
+	POINT3D		*region_location_centermass;
+	POINT3D		*region_location_filter;
+	POINT3D		*region_location_magnitude;
+a62 1
+	char		*region_file;
+d65 4
+a68 4
+	int		adjpeak_radius;
+	int		centermass_radius;
+	int		filter_radius;
+	int		magnitude_radius;
+a75 3
+	int		location_num_centermass;
+	int		location_num_filter;
+	int		location_num_magnitude;
+d101 11
+a111 11
+	filter_radius		= atoi (argv [2]);
+	adjpeak_radius		= atoi (argv [3]);
+	centermass_radius	= atoi (argv [4]);
+	magnitude_radius	= atoi (argv [5]);
+	output			= argv [6];
+	cutoff			= atof (argv [7]);
+	mask_file		= argv [8];
+	sign			= atoi (argv [9]);
+	header_file		= argv [10];
+	input_list		= argv [11];
+	region_file		= argv [12];
+d114 2
+a115 2
+	sprintf (date, "%s %s %s %s %s %s", argv [15], argv [16], argv [17], 
+						argv [18], argv [19], argv [20]);
+a191 7
+  	rgnfp	= fopen (region_file, "r");
+  	if (rgnfp == (FILE *) NULL) 
+	{
+		fprintf (stderr, "Can't Open %s\n", region_file);
+		exit (FAIL);
+  	}
+
+a192 35
+	 * Find out size of region corresponding to a specific radius and read 
+	 * region data.
+	 */
+	location_num_filter	= getlocn (rgnfp, filter_radius);
+	region_location_filter	= (POINT3D *) malloc (location_num_filter * sizeof (POINT3D));
+	if (region_location_filter == (POINT3D *) NULL)
+	{
+		fprintf (stderr, "Memory allocation error for region_location_filter.\n");
+		exit (FAIL);
+	}
+	readrgn (rgnfp, location_num_filter, region_location_filter);
+
+	fseek (rgnfp, 0L, SEEK_SET);
+	location_num_centermass	= getlocn (rgnfp, centermass_radius);
+	region_location_centermass	= (POINT3D *) malloc (location_num_centermass * sizeof (POINT3D));
+	if (region_location_centermass == (POINT3D *) NULL)
+	{
+		fprintf (stderr, "Memory allocation error for region_location_centermass.\n");
+		exit (FAIL);
+	}
+	readrgn (rgnfp, location_num_centermass, region_location_centermass);
+
+	fseek (rgnfp, 0L, SEEK_SET);
+	location_num_magnitude	= getlocn (rgnfp, magnitude_radius);
+	region_location_magnitude	= (POINT3D *) malloc (location_num_magnitude * sizeof (POINT3D));
+	if (region_location_magnitude == (POINT3D *) NULL)
+	{
+		fprintf (stderr, "Memory allocation error for region_location_magnitude.\n");
+		exit (FAIL);
+	}
+	readrgn (rgnfp, location_num_magnitude, region_location_magnitude);
+
+	fclose (rgnfp);
+
+	/*
+d240 2
+a241 2
+		average (input_image, image_num_slices, location_num_centermass, 
+			region_location_centermass, list_size, center_list, value_list, 
+d320 1
+a320 2
+		mask_num_slices, mask_zorigin, region_location_filter, 
+		location_num_filter, sign, filtered_image);
+d356 2
+a357 1
+		region_location_centermass, location_num_centermass, sign, center_list);
+d359 5
+a363 10
+	if ((adjpeak_radius != centermass_radius) 
+	|| (centermass_radius != filter_radius)
+	|| (filter_radius != magnitude_radius))
+		magfilter (input_image, image_num_slices, region_location_magnitude, 
+		location_num_magnitude, sign, peak_list, value_list, list_size);
+
+	free (peak_list);
+	free (region_location_centermass);
+	free (region_location_filter);
+	free (region_location_magnitude);
+@

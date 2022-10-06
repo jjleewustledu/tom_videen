@@ -1,0 +1,296 @@
+head	2.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.5
+date	2004.02.16.19.39.57;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.06.18.16.31.38;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.01.28.22.13.25;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+2.5
+log
+@Feb 2004
+@
+text
+@C$Id: l1al2pt.f,v 1.2 1998/06/18 16:31:38 tom Exp tom $
+C$Log: l1al2pt.f,v $
+c Revision 1.2  1998/06/18  16:31:38  tom
+c *** empty log message ***
+c
+c Revision 1.1  1994/01/28  22:13:25  ty7777
+c Initial revision
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   L1AL2PT.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         05-May-87
+C  Written for:  LOCATES.FTN
+C
+C  Intent:
+C     This subroutine computes atlas region coordinates from
+C     PET region coordinates.
+C
+C     Order of conversion:
+C       1) Scale
+C       2) Rotate
+C       3) Translate
+C       4) Convert Units
+C
+C  Common Blocks from LOCATES.INC:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **PETDATA  - tomograph parameters;          (read only)
+C     **REGION   - region analysis parameters     (write)
+C     **SXRDATA  - skull xray parameters          (read only)
+C     **ATLDATA  - atlas region parameters        (read only)
+C
+C  Variables Passed:
+C     N = region number (array index); (input)
+C     RLATLS = R-L atlas coordinate;   (input)
+C     APATLS = A-P atlas coordinate;   (input)
+C     ZATLS  = Z atlas coordinate;     (input)
+C     RLPETT = R-L PET coordinate;     (computed and passed back)
+C     APPETT = A-P PET coordinate;     (computed and passed back)
+C     ZPETT  = Z PET coordinate;       (computed and passed back)
+C
+C  Variables:
+C     SLC1,SLC2 = integral slice numbers which are, respectively,
+C       <= and >= the computed slice location;
+C     XRATIO = scaling factor for R-L dimension;
+C     YRATIO = scaling factor for A-P dimension (along AC-PC line);
+C     ZRATIO = scaling factor for Z dimension (perpendicular to AC-PC line);
+C     RL = scaled RL atlas value;
+C     AP = scaled AP atlas value;
+C     ZL = scaled Z atlas value;
+C     RL1 = last value of RL (used in successive approximations);
+C     RLP = best estimate of R-L width of PET slice;
+C     RLC = best estimate of R-L center of PET slice;
+C     P1,P2 = fractions to compute RLP and RLC (range: 0. to 1.0);
+C     DELTAY = delta Y from skull xray times magnification factor;
+C     DELTAZ = delta Z from skull xray times magnification factor;
+C
+C  No Subroutines.
+C
+C  Called by:  L1AL2PET
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE L1AL2PT(N,RLATLS,APATLS,ZATLS,RLPETT,APPETT,ZPETT)
+C
+      INCLUDE 'locates.inc'
+
+      INTEGER*4    N,SLC1,SLC2
+      REAL         RLATLS,APATLS,ZATLS,RLPETT,APPETT,ZPETT,DELTAY,DELTAZ,
+     &             XRATIO,YRATIO,ZRATIO,RL,RL1,AP,ZL,RLP,RLC,P1,P2
+      CHARACTER*1  BELL
+      CHARACTER*256 RCSHEADER
+
+      RCSHEADER = '$Id: l1al2pt.f,v 1.2 1998/06/18 16:31:38 tom Exp tom $'
+
+      BELL = CHAR(7)
+
+      YRATIO = MF*APXRAY/APATLDIM
+      ZRATIO = MF*ZXRAY/ZATLDIM
+      DELTAY = DAP*MF
+      DELTAZ = DZ*MF
+
+C  (Note that the sign of DZ and DELTAZ is reversed from derivation)
+
+C  Scale Z and AP;  estimate RL
+
+      ZL = ZATLS*ZRATIO
+      AP = APATLS*YRATIO
+      RL = RLATLS
+      RL1 = RL
+C
+C  Rotate and Translate Z
+C
+100   ZPETT = ZL*COS(ANGX)*COS(ANGY)
+     &  + AP*(COS(ANGZ)*SIN(ANGX) - SIN(ANGZ)*SIN(ANGY)*COS(ANGX))
+     &  - RL*(COS(ANGZ)*SIN(ANGY)*COS(ANGX) + SIN(ANGZ)*SIN(ANGX)) + DELTAZ
+
+C  Convert units of Z from cm to pixels.  Reference to reference slice.
+C  Note that signs of all coordinates in PET and atlas frames are reversed;
+
+      ZPETT = FLOAT(REFSLICE) - ZPETT/SLCSIZE
+
+C  Best estimate of right-left width (RLP) and right-left center (RLC)
+C    (interpolate if between PET slices)
+
+      SLC1 = NINT(ZPETT)
+      IF (SLC1.GE.1 .AND. SLC1.LE.NSLICES) THEN
+        IF (ZPETT.LE.1.0) THEN
+          RLP = RLPETDIM(1)
+          RLC = RLCTR(1)
+        ELSE IF (ZPETT.GE.FLOAT(NSLICES)) THEN
+          RLP = RLPETDIM(NSLICES)
+          RLC = RLCTR(NSLICES)
+        ELSE
+          SLC1 = INT(ZPETT)
+          SLC2 = SLC1+1
+          P1 = FLOAT(SLC2) - ZPETT
+          P2 = ZPETT - FLOAT(SLC1)
+          RLP = P1*RLPETDIM(SLC1) + P2*RLPETDIM(SLC2)
+          RLC = P1*RLCTR(SLC1) + P2*RLCTR(SLC2)
+        END IF
+        XRATIO = RLP*PIX/RLATLDIM(N)
+
+C  Scale X
+
+        RL = RLATLS*XRATIO
+
+C  Note: XRATIO depends on value of ZPETT, which depends on the value of X.
+C  Hence, this must be done be successive approximations.
+
+        IF (ABS(RL-RL1).GT.0.0001) THEN
+          RL1 = RL
+          GO TO 100
+        END IF
+
+C  Rotate and Translate Y.  Convert units to pixels.
+
+        APPETT = RL*(COS(ANGZ)*SIN(ANGY)*SIN(ANGX)-SIN(ANGZ)*COS(ANGX))
+     &    + AP*(COS(ANGZ)*COS(ANGX) - SIN(ANGZ)*SIN(ANGY)*SIN(ANGX))
+     &    - ZL*COS(ANGY)*SIN(ANGX) - DELTAY
+
+        APPETT = APCTR - APPETT/PIX
+
+C  Rotate X and convert units to pixels.
+
+        RLPETT = RL*COS(ANGZ)*COS(ANGY) + AP*SIN(ANGZ)*COS(ANGY) + ZL*SIN(ANGY)
+        RLPETT = RLC  - RLPETT/PIX
+      ELSE
+        WRITE(USEROUT,*) 'Region #',N,' is beyond PET slices',BELL
+        RLPETT = 0.0
+        APPETT = 0.0
+      END IF
+
+      RETURN
+      END
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+C$Id: l1al2pt.f,v 1.1 1994/01/28 22:13:25 ty7777 Exp tom $
+d3 3
+d74 1
+a74 1
+      RCSHEADER = '$Id: l1al2pt.f,v 1.1 1994/01/28 22:13:25 ty7777 Exp tom $'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 3
+C$Id$
+C$Log$
+C
+a62 4
+C
+C
+C
+C
+d64 1
+a64 1
+C
+d66 2
+a67 3
+      REAL         RLATLS,APATLS,ZATLS,RLPETT,APPETT,ZPETT,
+     2             XRATIO,YRATIO,ZRATIO,RL,RL1,AP,ZL,RLP,RLC,P1,P2,
+     3             DELTAY,DELTAZ
+d70 3
+a72 3
+C
+      RCSHEADER = '$Id$'
+C
+d74 1
+a74 1
+C
+d79 1
+a79 1
+C
+d81 1
+a81 1
+C
+d83 1
+a83 1
+C
+d92 3
+a94 4
+     2  + AP*(COS(ANGZ)*SIN(ANGX) - SIN(ANGZ)*SIN(ANGY)*COS(ANGX))
+     3  - RL*(COS(ANGZ)*SIN(ANGY)*COS(ANGX) + SIN(ANGZ)*SIN(ANGX))
+     4  + DELTAZ
+C
+d97 1
+a97 1
+C
+d99 1
+a99 1
+C
+d102 1
+a102 1
+C
+d120 1
+a120 1
+C
+d122 1
+a122 1
+C
+d124 1
+a124 1
+C
+d127 1
+a127 1
+C
+d132 1
+a132 1
+C
+d134 1
+a134 1
+C
+d136 3
+a138 3
+     2    + AP*(COS(ANGZ)*COS(ANGX) - SIN(ANGZ)*SIN(ANGY)*SIN(ANGX))
+     3    - ZL*COS(ANGY)*SIN(ANGX) - DELTAY
+C
+d140 1
+a140 1
+C
+d142 2
+a143 3
+C
+        RLPETT = RL*COS(ANGZ)*COS(ANGY) + AP*SIN(ANGZ)*COS(ANGY)
+     2    + ZL*SIN(ANGY)
+d150 1
+a150 1
+C
+@

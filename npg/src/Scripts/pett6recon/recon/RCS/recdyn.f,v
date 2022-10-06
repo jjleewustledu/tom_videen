@@ -1,0 +1,149 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.13.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@C**************************************************************
+C
+C     RECDYN.FTN
+C
+C     TAKE DYNAMIC ACQUISITION RAW DATA AND MAKE A FILE THAT                   
+C     CAN BE RECONSTRUCTED                                                     
+C                                                                              
+C     GARY R. HOFFMAN        24 JUN 81                                         
+C                                                                              
+C     LU 0  - INSTRUCTION INPUT                                                
+C     LU 2  - INPUT FILE                                                       
+C     LU 4  - OUTPUT FILE                                                      
+C     LU 6  - MESSAGES/PROMPTS OUTPUT                                          
+C
+C     When porting to HP, added command line arguments and
+C     open and close statements for the SCANNAME and TEMPNAME
+C**************************************************************                
+C
+      PROGRAM RECDYN
+      
+      IMPLICIT INTEGER*2 (I-N)                                                 
+      INTEGER*4 PBLK(5),IORD,IOWRT,IOFR,LU2,LU4,NBYTES,RAD                     
+      INTEGER*4 ZI,ZJ,ZK,I                         
+      INTEGER*2 HREC(128),INARRAY(8192),ADARRAY(147456)                        
+      INTEGER*2 FRAMES,FNUM,FREC
+C  Changed data statement when porting to HP  4-15-91  KMG      
+C      DATA IORD/Y'00000058'/,IOWRT/Y'00000038'/,IOFR/Y'00000090'/             
+      DATA IORD/88/,IOWRT/56/,IOFR/144/               
+      DATA LU2/2/,LU4/4/,RAD/0/
+      CHARACTER*20 SCANNAME,TEMPNAME
+      CHARACTER*2  FRAMENUM
+
+C      FNUM = CTOI(FRAMENUM,2)
+      DECODE(2,'(I2)',FRAMENUM) FNUM
+C      WRITE(6,*) 'FRAMENUM ',FRAMENUM,' FNUM ',FNUM
+C                                                                              
+C  READ HEADER RECORD
+      OPEN(LU2,FILE=SCANNAME)
+      NBYTES=256                                                              
+      CALL SYSIO (PBLK,IORD,LU2,HREC,NBYTES,RAD)                               
+C                                                                              
+C  GET NUMBER OF FRAMES                                                        
+      IF (HREC(22).EQ.0) THEN                                                  
+         WRITE (6,100)                                                         
+ 100     FORMAT (1H ,' *** NOT DYNAMIC ACQUISITION DATA ***')                  
+         GO TO 9900                                                            
+      ENDIF                                                                    
+      FRAMES=HREC(8)/HREC(22)                                                  
+C                                                                              
+C  ZERO-OUT ADDITION ARRAY                                                     
+      DO 140 ZI=1,147456                                                       
+ 140  ADARRAY(ZI)=0                                                            
+C                                                                              
+C  ASK USER WHICH FRAME(S) TO USE                                              
+ 1000 WRITE (6,1100) FRAMES                                                    
+ 1100 FORMAT (1H ,I3,' FRAMES. ADD WHICH FRAME?')
+C Commented out when porting to HP      
+C      READ (0,*) FNUM                                
+      IF (FNUM.EQ.0) GO TO 8000                                                
+      IF (FNUM.GT.FRAMES) THEN                                                 
+         WRITE (6,1110)                                                        
+ 1110    FORMAT (1H ,' *** NO SUCH FRAME ***')                                 
+         GO TO 1000                                                            
+      ENDIF                                                                    
+C                                                                              
+C  POSITION INPUT FILE                                                         
+      REWIND LU2 
+      NBYTES=256
+      CALL SYSIO (PBLK,IORD,LU2,HREC,NBYTES,RAD)
+      IF (FNUM.EQ.1) GO TO 1500                                                
+      FREC=FNUM-1                                                              
+      NBYTES=16384 
+      DO 1300 I=1,FREC                                                         
+         DO 1200 J=1,18          
+            CALL SYSIO (PBLK,IORD,LU2,INARRAY,NBYTES,RAD)                      
+C            write(6,*) 'FRAME ',FREC,' INARRAY(',J,')=',INARRAY(J)
+ 1200    CONTINUE                                                              
+ 1300 CONTINUE                                                                 
+C                                                                              
+C  READ 18 BANK PAIRS, ADD TO ADDITION ARRAY                                   
+ 1500 NBYTES=16384
+      DO 1600 I=1,18                            
+         CALL SYSIO (PBLK,IORD,LU2,INARRAY,NBYTES,RAD)
+         DO 1550 ZJ=1,8192                                                     
+            ZK=ZJ + ((I-1)*8192)
+            ADARRAY(ZK)=INARRAY(ZJ) + ADARRAY(ZK)
+ 1550    CONTINUE
+ 1600 CONTINUE                                                                 
+C                                                                              
+C  GO BACK FOR MORE FRAMES
+C Commented out the following because always entered 0 for the second number
+C  of frames (from RECDYN.CSS)
+C      GO TO 1000                                                              
+C                                                                              
+C  END OF DATA, WRITE TO OUTPUT FILE                                           
+ 8000 CONTINUE
+      OPEN(LU4,FILE=TEMPNAME)
+      NBYTES=256                                                               
+      CALL SYSIO (PBLK,IOWRT,LU4,HREC,NBYTES,RAD)                              
+      DO 8010 I=1,8192                                                         
+ 8010 INARRAY(I)=0                                                             
+      NBYTES=16384  
+      DO 8050 ZI=1,18                                                          
+         ZJ=((ZI-1)*8192)+1                                                    
+         CALL SYSIO (PBLK,IOWRT,LU4,ADARRAY(ZJ),NBYTES,RAD)                    
+         CALL SYSIO (PBLK,IOWRT,LU4,INARRAY,NBYTES,RAD)                        
+ 8050 CONTINUE                                                                 
+C                                                                              
+C  TERMINATE                                                                   
+ 9900 CONTINUE
+      CLOSE(LU2,STATUS='KEEP')
+      CLOSE(LU4,STATUS='KEEP')
+      STOP                                                                     
+      END                                                                      
+
+
+
+
+
+
+
+
+
+
+
+
+@

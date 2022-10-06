@@ -1,0 +1,371 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2008.08.04.15.33.17;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@modification of analyze2img (8/4/2008)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/*	===============================================================================
+ *	Module:			analyze2img_decaycor.c
+ *	Date:			Aug 2008
+ *	Author:			Tom Videen
+ *	Description:	Transform Analyze images into ECAT 7 format.
+ *	Notes:
+ *		reslice16 (AIR package) sets unsampled points to -32768;
+ *			This program resets these to 0.
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/analyze2img/RCS/analyze2img.c,v 2.24 2008/07/01 20:56:17 tom Exp $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>				 /* dsr */
+
+#define MAXSTR 256
+
+/*	----------------------------
+ *	Function:			analyze2img_decaycor
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	ImageFile      *file;
+	Index           indx;
+	struct dsr      hdr;			 /* header for ANALYZE */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	int             stdfrm;
+	char           *stdimg;			 /* image filename for default header values */
+	char           *ecatimg;		 /* output PET image filename */
+	char           *ANALYZE_hdr;	 /* input Analyze header filename  */
+	char           *ANALYZE_img;	 /* input Analyze image filename */
+	char            runstamp[40];	 /* version, date and userid info */
+	long            odim1, odim2, odim3; /* dimensions of img */
+	long            ndim1, ndim2, ndim3; /* dimensions of image */
+	float           ovox1, ovox2, ovox3; /* voxel sizes of input image */
+	long            xoffset, yoffset;	 /* offsets for recutting img */
+	int             bytes;
+	int             keepvox; /* 1 = use input file voxel size; 0 = use std image vox size */
+	int             i, j, k, m, n;
+
+	float        ***img;			 /* intermediate image */
+	float        ***image;			 /* output image */
+	float          *frow;			 /* single row of input image */
+	short          *srow;			 /* single row of input image */
+	unsigned char  *crow;			 /* single row of input image */
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 14) {
+		fprintf (stdout, "Usage: analyze2img_decaycor ANALYZE_img ANALYZE_hdr ecatimg stdimg stdfrm vox\n");
+		return (ERROR);
+	}
+	ANALYZE_img = argv[1];
+	ANALYZE_hdr = argv[2];
+	ecatimg = argv[3];
+	stdimg = argv[4];
+	stdfrm = atoi (argv[5]);
+	keepvox = atoi (argv[6]);
+	n = 7;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n + 1], argv[n + 2],
+			argv[n + 3], argv[n + 5], argv[n + 6]);
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (ANALYZE_hdr, "r")) == NULL) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot open: %s\n", ANALYZE_hdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Reading: %s\n", ANALYZE_hdr);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Reading: %s\n", ANALYZE_hdr);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix == 8)
+		bytes = 1;
+	else if (hdr.dime.bitpix == 16)
+		bytes = 2;
+	else if (hdr.dime.bitpix == 32)
+		bytes = 4;
+	else {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Reading: %s\n", ANALYZE_hdr);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	odim1 = hdr.dime.dim[1];
+	odim2 = hdr.dime.dim[2];
+	odim3 = hdr.dime.dim[3];
+	ovox1 = hdr.dime.pixdim[1];
+	ovox2 = hdr.dime.pixdim[2];
+	ovox3 = hdr.dime.pixdim[3];
+	(void) fclose (fd_hdr);
+
+/*
+ *	Read the img and flip X, Y & Z from Analyze convention
+ */
+
+	if ((fd_img = fopen (ANALYZE_img, "r")) == NULL) {
+		fprintf (stderr, "ERROR [analyze2img]: Cannot open: %s\n", ANALYZE_img);
+		return (ERROR);
+	}
+	if ((img = f3tensor (1, odim3, 1, odim2, 1, odim1)) == NULL) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot malloc img\n");
+		return (ERROR);
+	}
+	if (bytes == 1) {
+		if (NULL == (crow = (unsigned char *) calloc (odim1, sizeof (unsigned char)))) {
+			fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot malloc memory for row\n");
+			return (ERROR);
+		}
+		for (i = odim3; i > 0; i--) {
+			for (j = odim2; j > 0; j--) {
+				if ((fread (crow, sizeof (unsigned char), odim1, fd_img)) != odim1) {
+					fprintf (stderr, "ERROR [analyze2img_decaycor]: Reading: %s\n", ANALYZE_img);
+					return (ERROR);
+				}
+				for (k = 1; k <= odim1; k++)
+					img[i][j][odim1 - (k - 1)] = (float) crow[k - 1];
+			}
+		}
+
+	} else if (bytes == 2) {
+		if (NULL == (srow = (short *) calloc (odim1, sizeof (short)))) {
+			fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot malloc memory for row\n");
+			return (ERROR);
+		}
+		for (i = odim3; i > 0; i--) {
+			for (j = odim2; j > 0; j--) {
+				if ((fread (srow, sizeof (short), odim1, fd_img)) != odim1) {
+					fprintf (stderr, "ERROR [analyze2img_decaycor]: Reading: %s\n", ANALYZE_img);
+					return (ERROR);
+				}
+				for (k = 1; k <= odim1; k++) {
+					if (srow[k - 1] == -32768)
+						img[i][j][odim1 - (k - 1)] = 0.;
+					else
+						img[i][j][odim1 - (k - 1)] = (float) srow[k - 1];
+				}
+			}
+		}
+
+	} else {
+		if (NULL == (frow = (float *) calloc (odim1, sizeof (float)))) {
+			fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot malloc memory for row\n");
+			return (ERROR);
+		}
+		for (i = odim3; i > 0; i--) {
+			for (j = odim2; j > 0; j--) {
+				if ((fread (frow, sizeof (float), odim1, fd_img)) != odim1) {
+					fprintf (stderr, "ERROR [analyze2img_decaycor]: Reading: %s\n", ANALYZE_img);
+					return (ERROR);
+				}
+				for (k = 1; k <= odim1; k++)
+					img[i][j][odim1 - (k - 1)] = frow[k - 1];
+			}
+		}
+	}
+	(void) fclose (fd_img);
+
+/*
+ *	Generate 128x128 slices from img
+ */
+
+	ndim1 = 128;
+	ndim2 = 128;
+	ndim3 = odim3;
+	xoffset = (odim1 - ndim1) / 2;
+	yoffset = (odim2 - ndim2) / 2;
+	if ((image = f3tensor (1, ndim3, 1, ndim2, 1, ndim1)) == NULL) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot malloc image\n");
+		return (ERROR);
+	}
+	for (i = 1; i <= ndim3; i++) {
+		for (j = 1; j <= ndim2; j++) {
+			m = j + yoffset;
+			for (k = 1; k <= ndim1; k++) {
+				n = k + xoffset;
+				if (m > 0 && m <= odim2 && n > 0 && n <= odim1)
+					image[i][j][k] = img[i][m][n];
+				else
+					image[i][j][k] = 0.;
+			}
+		}
+	}
+
+/*
+ *	Create ECAT file
+ */
+
+	file = make_imgfile (ecatimg);
+	if (make_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot make mh for %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (make_sh (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot make sh for %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ *	Define ECAT file properties
+ */
+
+	file->mh->file_format = MATRIX_REV7;
+	file->mh->filetype = PetVolume;
+	file->mh->scanner_type = 0;
+	file->mh->start_time = 0;
+	for (i = 0; i < 8; i++)
+		file->mh->isotope[i] = ' ';
+	for (i = 0; i < 32; i++)
+		file->mh->radiopharmaceutical[i] = ' ';
+	file->mh->bed_elevation = 0;
+	file->mh->wobble_speed = 0;
+	file->mh->calibration_factor = 1;
+	file->mh->sw_revision = (char *) calloc (32, sizeof (char));
+	file->mh->filetime = (char *) calloc (32, sizeof (char));
+	file->mh->nplane = odim3;
+	file->mh->nframe = 1;
+	file->mh->ngate = 1;
+	file->mh->nbed = 1;
+	file->mh->init_bed_pos = 0;
+	for (i = 0; i < 16; i++)
+		file->mh->bed_off[i] = 0;
+	file->mh->slicesep = 0.1 * ovox3;
+
+	file->sh->number_format = SHORT_DATA;
+	file->sh->ndim = 3;
+	file->sh->dim1 = ndim1;
+	file->sh->dim2 = ndim2;
+	file->sh->dim3 = ndim3;
+	file->sh->sample_size_1 = 0.1 * ovox1;
+	file->sh->sample_size_2 = 0.1 * ovox2;
+	file->sh->sample_size_3 = 0.1 * ovox3;
+	file->sh->start_time = 0;
+	file->sh->duration = 1;
+	(void) save_rcs (file, rcsid, runstamp);
+
+	if (make_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot make mh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+	(void) fill_mh7 (file);
+	if (make_sh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot make sh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ *	Read std image
+ */
+	if (stdfrm > 0) {
+		fprintf (stdout, "Using header info from %s frm=%d\n", stdimg, stdfrm);
+		(void) strcpy (file->name, stdimg);
+		if (open_imgfile (file) == ERROR) {
+			fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot open %s\n", stdimg);
+			return (ERROR);
+		}
+		if (get_mh (file) == ERROR) {
+			fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot get MainHeader from %s\n", stdimg);
+			return (ERROR);
+		}
+		indx.frm = stdfrm;
+		if (existimgfrm (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [analyze2img_decaycor]: cannot find %s frame %d\n",
+				 stdimg, stdfrm);
+			return (ERROR);
+		}
+		if (get_sh (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot read file subheader in %s\n", stdimg);
+			return (ERROR);
+		}
+		close_imgfile (file);
+	}
+	if (keepvox > 0) {
+		file->sh->sample_size_1 = 0.1 * ovox1;
+		file->sh->sample_size_2 = 0.1 * ovox2;
+		file->sh->sample_size_3 = 0.1 * ovox3;
+		file->mh->slicesep = 0.1 * ovox3;
+		file->m7->sh->x_pixel_size = ovox1;
+		file->m7->sh->y_pixel_size = ovox2;
+		file->m7->sh->z_pixel_size = ovox3;
+		file->m7->mh->plane_separation = ovox3;
+	}
+	file->mh->nplane = odim3;
+	file->mh->orientation = 0;
+	file->sh->dim3 = odim3;
+	(void) save_rcs (file, rcsid, runstamp);
+
+/*
+ *	Write ECAT image file
+ */
+
+	(void) strcpy (file->name, ecatimg);
+	(void) strcpy (file->mode, "w");
+	indx.frm = 1;
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot open %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot write %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (writetensor (file, &indx, image) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2img_decaycor]: Cannot write %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ *	Free & Exit
+ */
+
+	fprintf (stdout, "Converted: %s to %s\n", ANALYZE_img, ecatimg);
+	free_imgfile (file);
+	if (bytes == 1)
+		free (crow);
+	else if (bytes == 2)
+		free (srow);
+	else
+		free (frow);
+	free_f3tensor (img, 1, odim3, 1, odim2, 1, odim1);
+	free_f3tensor (image, 1, ndim3, 1, ndim2, 1, ndim1);
+	return (OK);
+}
+@

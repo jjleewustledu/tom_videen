@@ -1,0 +1,234 @@
+<PRE><LI><H2>FILE: rts_cmd.c</H2>/* @(#)rtsacs.c	1.2 2/19/93 */
+
+#ifndef	lint
+static char sccsid[]="@(#)rtsacs.c	1.2 2/19/93 Copyright 1991 CTI Pet Systems, Inc.";
+#endif	/* lint */
+
+#include  &lt;<A NAME=7 HREF="sys/types.h.html">sys/types.h</A>&gt; 
+#include  &lt;<A NAME=8 HREF="sys/socket.h.html">sys/socket.h</A>&gt; 
+#include  &lt;<A NAME=9 HREF="rpc/rpc.h.html">rpc/rpc.h</A>&gt; 
+#include  &lt;<A NAME=10 HREF="netdb.h.html">netdb.h</A>&gt; 
+#include  &lt;<A NAME=11 HREF="sys/time.h.html">sys/time.h</A>&gt; 
+#include  &lt;<A NAME=12 HREF="stdio.h.html">stdio.h</A>&gt; 
+#include  &lt;<A NAME=13 HREF="errno.h.html">errno.h</A>&gt; 
+#include  "<A NAME=14 HREF="matrix.h.html">matrix.h</A>" 
+#include  "<A NAME=15 HREF="matrix_xdr.h.html">matrix_xdr.h</A>" 
+#include  "<A NAME=16 HREF="rfa_xdr.h.html">rfa_xdr.h</A>" 
+/*
+ * ACS/1 access
+ */
+
+#define RTS_SERVER 600000032
+#define RTS_SERVER_VERSION 1
+#define RTS_INFO_SERVER 600000036
+#define RTS_INFO_VERSION 1
+
+extern	int	errno ;
+
+static CLIENT *acqClient;
+static struct timeval acqTimeout;
+
+<LI><H3><a name="doAcsAcqCommand">bool_t doAcsAcqCommand (command, inProc, inArg, outProc, outArg)</a></H3>
+int command;
+xdrproc_t inProc, outProc;
+caddr_t inArg, outArg;
+{
+    int status;
+
+    if (!acqClient)
+	<a href="rts_cmd.c.html#initAcqTcpClient">initAcqTcpClient</a> ();
+    status = (int) clnt_call (acqClient, command, inProc, inArg, outProc, outArg, acqTimeout);
+    if ((status != (int) RPC_SUCCESS) && (errno != EINTR))
+    {
+	clnt_perror (acqClient, "acqClient_error");
+	return (FALSE);
+    }
+    return (TRUE);
+}
+
+
+<LI><H3><a name="initAcqTcpClient">int initAcqTcpClient ()</a></H3>
+{
+    struct sockaddr_in sock;
+    struct hostent *hp;
+    char	*host, *getenv() ;
+
+    int channel, status, response;
+/* ACS/1
+    u_long program = RTS_SERVER, version = RTS_SERVER_VERSION;
+*/
+    u_long program = MATRIX_SERVER, version = MATRIX_SERVER_VERSION;
+/*
+    hp = gethostbyname (defaults_get_string ("/Ecat/EcatAcqServer", "localhost", 0));
+*/
+    if ((host = getenv("VXHOST")) == NULL)  host = "acs";
+    hp = gethostbyname (host);
+    memcpy ((caddr_t) & sock.sin_addr, hp-&gt;h_addr, hp->h_length);
+    sock.sin_family = AF_INET;
+    sock.sin_port = 0;
+    channel = RPC_ANYSOCK;
+    acqTimeout.tv_sec = 60;
+    acqTimeout.tv_usec = 0;
+
+    if ((acqClient = clnttcp_create (&sock, program, version, &channel,
+		1024, 1024)) == NULL)
+    {
+	clnt_pcreateerror ("acqClient_error");
+	return (0);
+    }
+    return (1);
+}
+
+<LI><H3><a name="rts_rmhd">int rts_rmhd (file, mh)</a></H3>
+char *file;
+<a href="ecatRts.h.html#XMAIN_HEAD">XMAIN_HEAD</a> *mh;
+{
+    <a href="ecatRts.h.html#RMHD_resp">RMHD_resp</a> rdResp;
+
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (RMHD, xdr_wrapstring, &file, xdr_RMHD_resp, &rdResp)))
+	return (FALSE);
+    memcpy (<a href="_convert.html#mh">mh</a>, &rdResp.xmain_head, sizeof (XMAIN_HEAD));
+    return (rdResp.status);
+}
+
+<LI><H3><a name="rts_wmhd">int rts_wmhd (file, mh)</a></H3>
+char *file;
+<a href="ecatRts.h.html#XMAIN_HEAD">XMAIN_HEAD</a> *mh;
+{
+    <a href="ecatRts.h.html#WMHD_args">WMHD_args</a> wrArgs;
+    int resp;
+
+    wrArgs.file_name = file;
+    memcpy (&wrArgs.xmain_head, <a href="_convert.html#mh">mh</a>, sizeof (XMAIN_HEAD));
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (WMHD, xdr_WMHD_args, &wrArgs, xdr_int, &resp)))
+	resp = FALSE;
+    return (resp);
+}
+
+<LI><H3><a name="rts_rshd">int rts_rshd (file, matnum, buffer)</a></H3>
+char *file;
+int matnum;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#RSHD_args">RSHD_args</a> rdArgs;
+    <a href="ecatRts.h.html#RSHD_resp">RSHD_resp</a> rdResp;
+
+    rdArgs.file_name = file;
+    rdArgs.matnum = matnum;
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (RSHD, xdr_RSHD_args, &rdArgs, xdr_RSHD_resp, &rdResp)))
+	return (FALSE);
+    memcpy (buffer, rdResp.rhdat, 512);
+    return (rdResp.status);
+}
+
+<LI><H3><a name="rts_wshd">int rts_wshd (file, matnum, buffer)</a></H3>
+char *file;
+int matnum;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#WSHD_args">WSHD_args</a> wrArgs;
+    int resp;
+
+    wrArgs.file_name = file;
+    wrArgs.matnum = matnum;
+    memcpy (wrArgs.whdat,buffer, 512);
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (WSHD, xdr_WSHD_args, &wrArgs, xdr_int, &resp)))
+	return (FALSE);
+    return (resp);
+}
+
+<LI><H3><a name="rts_rdat">int rts_rdat (file, matnum, buffer, bufferSize)</a></H3>
+char *file;
+int matnum, *bufferSize;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#RDAT_args">RDAT_args</a> rdArgs;
+    <a href="ecatRts.h.html#RDAT_resp">RDAT_resp</a> rdResp;
+
+    rdArgs.file_name = file;
+    rdArgs.matnum = matnum;
+    rdResp.rdat.rdat_val = (char *) buffer;
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (RDAT, xdr_RDAT_args, &rdArgs, xdr_RDAT_resp, &rdResp)))
+	return (FALSE);
+    *bufferSize = rdResp.rdat.rdat_len;
+    return (rdResp.status);
+}
+
+<LI><H3><a name="rts_wdat">int rts_wdat (file, matnum, dataType, buffer, bufferSize)</a></H3>
+char *file;
+int matnum, dataType, bufferSize;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#WDAT_args">WDAT_args</a> wrArgs;
+    int resp;
+
+    wrArgs.file_name = file;
+    wrArgs.matnum = matnum ;
+    wrArgs.data_type = dataType;
+    wrArgs.wdat.wdat_len = bufferSize;
+    wrArgs.wdat.wdat_val = (char *) calloc (1, bufferSize);
+    memcpy (wrArgs.wdat.wdat_val, buffer, bufferSize);
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (WDAT, xdr_WDAT_args, &wrArgs, xdr_int, &resp)))
+	resp = FALSE;
+    cfree (wrArgs.wdat.wdat_val);
+    return (resp);
+}
+
+<LI><H3><a name="rtsRblk">int rtsRblk (file, blockNumber, buffer)</a></H3>
+char *file;
+int blockNumber;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#RBLK_args">RBLK_args</a> rbArgs;
+    <a href="ecatRts.h.html#RBLK_resp">RBLK_resp</a> rbResp;
+
+    rbArgs.filename = file;
+    rbArgs.block_number = blockNumber;
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (RBLK, xdr_RBLK_args, &rbArgs, xdr_RBLK_resp, &rbResp)))
+	return (FALSE);
+    memcpy (buffer, rbResp.rblk, 512);
+    return (rbResp.status);
+}
+
+<LI><H3><a name="rtsWblk">int rtsWblk (file, blockNumber, buffer)</a></H3>
+char *file;
+int blockNumber;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#WBLK_args">WBLK_args</a> wbArgs;
+    int resp;
+
+    wbArgs.filename = file;
+    wbArgs.block_number = blockNumber;
+    memcpy (wbArgs.wblk, buffer, 512);
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (WBLK, xdr_WBLK_args, &wbArgs, xdr_int, &resp)))
+	return (FALSE);
+    return (resp);
+}
+
+<LI><H3><a name="byte_acs_read">byte_acs_read(file,file_pos,buffer,size)</a></H3>
+char *file;
+int file_pos, size;
+caddr_t buffer;
+{
+	int blk, startblk, offset, endblk;
+	int cc=0, count=0;
+    <a href="ecatRts.h.html#RBLK_args">RBLK_args</a> rbArgs;
+    <a href="ecatRts.h.html#RBLK_resp">RBLK_resp</a> rbResp;
+
+	startblk = file_pos/MatBLKSIZE+1;
+	offset = file_pos%MatBLKSIZE;
+	endblk = ((file_pos+size+(MatBLKSIZE-1))/MatBLKSIZE)+1;
+    rbArgs.filename = file;
+	for (blk=startblk; blk&lt;endblk; blk++) {
+		if ((size-count)&gt;MatBLKSIZE) cc = MatBLKSIZE - offset;
+		else cc = (size-count) - offset;
+    	rbArgs.block_number = blk;
+    	if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (RBLK, xdr_RBLK_args, &rbArgs, xdr_RBLK_resp,
+			&rbResp))) return -1;
+    	memcpy (buffer+count, rbResp.rblk+offset, cc);
+		offset = 0;
+		count += cc;
+	}
+	return count;
+}

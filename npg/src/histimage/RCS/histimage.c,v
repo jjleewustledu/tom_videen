@@ -1,0 +1,287 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2004.02.16.16.16.26;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.26.22.04.52;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.02.15.14.23.53;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@/*	$Log: histimage.c,v $
+ * Revision 1.2  2002/11/26  22:04:52  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/02/15  14:23:53  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			histimage.c
+ *	Date:			Jan 1999
+ *	Author:			Tom Videen
+ *	Description:	Compute histograms and statistics on Analyze image.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/histimage/RCS/histimage.c,v 1.2 2002/11/26 22:04:52 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <math.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			histimage
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	int             fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;		 /* input file */
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+	long            i, j, k;
+	int				bin;
+	short           min, max, val;
+	short        ***img;			 /* image */
+	short          *row;			 /* single row of input image */
+	long            npix;
+	long            maxh;
+	long            n;
+	double           ss, s2, s3, s4;
+	double          nd, diff, g1, g2;
+	long            sum, sumsqr;
+	long			*histo;
+    double           mean, sd;
+    double           plnmean[46];
+    double           minmean = 100.;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 6) {
+		printf ("Usage: histimage hdr image min max binsize\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	min = atoi (argv[3]);
+	max = atoi (argv[4]);
+	bin = atoi (argv[5]);
+    maxh = (max - min + bin) / bin;
+
+/*  Set up histogram */
+ 
+    if (NULL == (histo = (long *) calloc (maxh + 1, sizeof (long)))) {
+        fprintf (stderr, "ERROR [histimage]: Cannot malloc memory for histo\n");
+        return (ERROR);
+    }
+
+/*
+ * Read Analyze hdr and img
+ */
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [histimage]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [histimage]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [histimage]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [histimage]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [histimage]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+	if ((fd_img = open (img1, O_RDONLY, 0444)) < 0) {
+		fprintf (stderr, "ERROR [histimage]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [histimage]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if (NULL == (row = (short *) calloc (dim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [histimage]: Cannot malloc memory for row\n");
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			(void) read (fd_img, row, dim1 * 2);
+			for (k = 1; k <= dim1; k++)
+				img[i][j][dim1 - (k - 1)] = row[k - 1];
+		}
+	}
+	(void) close (fd_img);
+
+/*	Get histogram */
+
+	printf ("Plane    Mean       SD        g1        g2  \n");
+	printf ("-----   ------    ------    ------    ------\n");
+	for (k = 1; k <= dim3; k++) {
+		npix = 0;
+		sum = 0;
+		sumsqr = 0;
+		for (j = 1; j <= dim2; j++) {
+			for (i = 1; i <= dim1; i++) {
+				val = img[k][j][i];
+				if (val >= min && val <= max) {
+					npix++;
+					sum += val;
+					sumsqr += val*val;
+					n = (val - min) / bin + 1;
+					if (n < 1) 
+						++histo[0];
+					else if (n >= maxh)
+						++histo[maxh];
+					else
+						++histo[n];
+				}
+			}
+		}
+		nd = (double) npix;
+		mean = (double) sum / nd;
+		plnmean[k-1] = mean;
+		if (mean < minmean) minmean = mean;
+		sd = sqrt((double) sumsqr/nd - mean*mean);
+		s2 = 0.;
+		s3 = 0.;
+		s4 = 0.;
+		for (j = 1; j <= dim2; j++) {
+			for (i = 1; i <= dim1; i++) {
+				val = img[k][j][i];
+				if (val >= min && val <= max) {
+					diff = ((double) val) - mean;
+					s2 += pow(diff, 2.);
+					s3 += pow(diff, 3.);
+					s4 += pow(diff, 4.);
+				}
+			}
+		}
+		ss = sqrt (s2/nd);
+		s3 = s3/nd;
+		s4 = s4/nd;
+		g1 = s3/ pow(ss,2.);
+		g2 = s4/ pow(ss,4.) - 3.;
+		printf ("%4li %9.2f %9.2f %9.2f %9.2f\n", k, mean, sd, g1, g2);
+	}
+
+	for (k = 1; k <= dim3; k++)
+		printf ("%4li %4i\n", k, (int) (plnmean[k-1] - minmean));
+/*
+	printf ("Total %9d\n", npix);
+	printf ("<%5d %8d\n", min, histo[0]);
+	for (i = 1; i < maxh; i++)
+		printf (" %5d %8d\n", (i - 1) * bin + min, histo[i]);
+	printf (">%5d %8d\n", (maxh - 1) * bin + min, histo[maxh]);
+	free_s3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+*/
+
+	free (row);
+	free (histo);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jan-99
+d15 1
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/histimage/RCS/histimage.c,v 1.1 1999/02/15 14:23:53 tom Exp tom $";
+d112 1
+a112 1
+	fclose (fd_hdr);
+d128 1
+a128 1
+			read (fd_img, row, dim1 * 2);
+d133 1
+a133 1
+	close (fd_img);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/histimage/RCS/histimage.c,v 1.1 1999/01/12 15:44:41 tom Exp tom $";
+d17 2
+a18 1
+#include <string.h>
+a21 1
+#include <libimage.h>
+a23 1
+#include <matrixlib.h>
+d180 1
+a180 1
+		printf ("%4i %9.2f %9.2f %9.2f %9.2f\n", k, mean, sd, g1, g2);
+d184 1
+a184 1
+		printf ("%4i %4i\n", k, (int) (plnmean[k-1] - minmean));
+d195 1
+@

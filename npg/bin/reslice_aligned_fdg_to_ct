@@ -1,0 +1,98 @@
+#!/bin/csh
+#	Module:	reslice_aligned_fdg_to_ct
+#   Date:	Jul 2008
+#   Author:	Tom Videen
+#	Use:	Use pre-existing alignment and create new resliced dynamic image 
+#			using input header values to set output header values (analyze2img)
+#	Requires dynamic fdg image, air files for each frame plus air file for fdg to ct
+
+if ($#argv != 4) then
+	echo "Usage:  reslice_aligned_fdg_to_ct image firstfrm lastfrm fdg_to_ct"
+	echo " e.g.,  reslice_aligned_fdg_to_ct rp7090fdg1.v 2 16 p7090fdg_cp7090ct1"
+	exit 1
+endif
+
+set FDG = rp7090fdg1
+set FM1 = 2
+set FM2 = 31
+set FDG_to_CT = p7090fdg_cp7090ct1
+
+set FDG = $1:r
+set FM1 = $2
+set FM2 = $3
+set FDG_to_CT = $4:r
+
+set SPEC = `echo $FDG | nawk '{FS="[0123456789]+";print $1}'`
+set PID  = `echo $FDG | nawk '{FS="[a-z]*";print $2}'`
+set ROOT = $SPEC$PID
+set OUT  = ${ROOT}fm
+set CPFDG = cp${PID}fdg1
+
+# Check for existence of first and last frames, mask
+# -------------------------------------------------------
+if (! -e $FDG.v) then
+	echo "ERROR [reslice_aligned_fdg_to_ct]: cannot find $FDG.v"
+	exit 1
+else if (-e r$FDG.v) then
+	echo "ERROR [reslice_aligned_fdg_to_ct]: file exists r$FDG.v"
+	exit 1
+endif
+
+imghdr $FDG.v $FM1 > & ! align_$PID.tmp
+set CHK1 = `head -1 align_$PID.tmp | cut -c1-5`
+imghdr $FDG.v $FM2 > & ! align_$PID.tmp
+set CHK2 = `head -1 align_$PID.tmp | cut -c1-5`
+unalias rm
+rm align_$PID.tmp
+if ($CHK1 == ERROR) then
+	echo "ERROR [reslice_aligned_fdg_to_ct]: cannot find frame $FM1 in $FDG.v"
+	exit 1
+else if ($CHK2 == ERROR) then
+	echo "ERROR [reslice_aligned_fdg_to_ct]: cannot find frame $FM2 in $FDG.v"
+	exit 1
+endif
+
+# Check for all AIR files
+# -------------------------------------------------------
+set i = $FM1
+while ($i < $FM2)
+	@ i++
+	set AIR = ${ROOT}f${FM1}_f$i
+	if (! -e $AIR.air) then
+		echo "ERROR [reslice_aligned_fdg_to_ct]: cannot find $AIR.air"
+		exit 1
+	endif
+end
+if (! -e $FDG_to_CT.air) then
+	echo "ERROR [reslice_aligned_fdg_to_ct]: cannot find $FDG_to_CT.air"
+	exit 1
+endif
+
+# Get single frame images, convert to Analyze format,
+# Reslice, and convert to ECAT7 format
+# -------------------------------------------------------
+set i = $FM1
+set IMG = $OUT$i
+separate_dynframes $FDG.v $OUT v $i,$i
+img2analyze $IMG.v a$IMG
+imgreslice a$IMG $FDG_to_CT
+analyze2img ra$IMG r$IMG.v $FDG.v $i
+rm a$IMG.ifh a$IMG.img a$IMG.hdr ra$IMG.img ra$IMG.hdr $IMG.v*
+
+while ($i < $FM2)
+	@ i++
+	set IMG  = $OUT$i
+	set AIR = ${ROOT}f${FM1}_f$i
+	separate_dynframes $FDG.v $OUT v $i,$i
+	img2analyze $IMG.v a$IMG
+	combine_air tmp.air y $FDG_to_CT.air $AIR.air
+	imgreslice a$IMG tmp
+	analyze2img ra$IMG r$IMG.v $FDG.v $i
+	rm a$IMG.ifh a$IMG.img a$IMG.hdr ra$IMG.img ra$IMG.hdr $IMG.v tmp.air
+end
+
+merge_dynframes r$OUT ${FM1}to$FM2 .v $CPFDG.v
+rm *${OUT}*.rec *${OUT}*.v $CPFDG.v.rec
+echo "-----------------------------"
+echo "Resliced dynamic output image:  $CPFDG.v"
+

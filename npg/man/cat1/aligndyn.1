@@ -1,0 +1,264 @@
+
+
+
+User Commands                                         ALIGNDYN(1)
+
+
+
+NAME
+     aligndyn - align frames in a dynamic PET image
+
+
+SYNOPSIS
+     aligndyn root ext ref frms cutoff thresh resample_air inverted_air [peakslices]
+     aligndyn root ext ref frms cutoff thresh resample_air inverted_air [peakslices] [mask]
+
+     where:
+       root         = common root for all input image filenames
+       ext          = extension for input image files
+       ref          = reference image to compute pixel displacement
+       frms         = frames to align
+       cutoff       = cutoff for gauss filter (cycles/cm)
+       thresh       = alignlinear masks at (1/thresh)*maximum value
+       resample_air = air file used to resample image
+       inverted_air = inverse of resample_air
+       peakslices   = slices searched for maximum (optional)
+
+
+DESCRIPTION
+     This script aligns all specified frames of a  dynamic  image
+     to the first of the specified frames.
+
+
+PREPROCESSING STEPS
+     1) Create filtered single-frame images in Analyze-format
+        (use singlefrm_gauss).
+     2) Create a brain mask  for  measuring mean misalignment
+        (e.g., use maskimg on filtered ho with 40% threshold)
+     3) Check that there  is more than  noise counts  in  the
+        first (reference) frame for the realignment.
+
+
+PROCESSING STEPS
+     1) The first frame is aligned to itself to create an air
+        matrix representing no movement (for airdif).
+     2) Each filtered, single-frame image is aligned  to  the
+        previous frame (alignlinear).
+     3) The value  of  the cost function of the aligned image
+        is saved (.fit).
+     4) The product of the current and all prior air matrices
+        is  saved  as  the  air  file  for  the current frame
+        (computed using combine_air).
+     5) An alignment log containing the mean displacement  of
+        each frame from the  composite reference  is computed
+        from the air files and brain mask (airdif).
+
+
+POSTPROCESSING STEPS
+     1) View the alignment log using plot_aligndyn.
+     2) Create resliced,  aligned single-frame images using
+
+
+
+Neuroimaging Lab    Last change: 15-Mar-2001                    1
+
+
+
+
+
+
+User Commands                                         ALIGNDYN(1)
+
+
+
+        reslicedyn.
+     3) Remove the numerous files created during processing
+        use remove_dynfiles.
+
+
+REFERENCES
+     The dynamic realignment uses the algorithms of:
+        Woods et al (1992) JCAT 16:620-633.
+        Andersson (1998) Eur J Nucl Med 25:575-586.
+
+
+RESAMPLING MATRICES
+     There are standard resampling and inverted matrices saved in
+     /usr/local/npg/air.   For 2D 31-slice ECAT 953B images these
+     are scale_953 and iscale_953 which resample the PET images
+        from 128 x 128 x 31 pixels (2.086 x 2.086 x 3.375 mm)
+        to   150 x 150 x 41 pixels (1.780 x 1.780 x 2.552 mm)
+
+     For 2D 47-slice ECAT 961 images these are scale_961 and iscale_961
+     which resample the PET images
+        from 128 x 128 x 47 pixels (2.086 x 2.086 x 3.375 mm)
+        to   150 x 150 x 59 pixels (1.780 x 1.780 x 2.489 mm)
+
+     With the 7.1.1b software upgrade, reported pixel size changed from
+     2.086 to 2.122 (with no physical change in image pixels). However,
+     For 2D 47-slice 961 images after 7.1.1 use scale_961a and iscale_961a
+     which resample the PET images
+        from 128 x 128 x 47 pixels (2.122 x 2.122 x 3.375 mm)
+        to   150 x 150 x 59 pixels (1.811 x 1.811 x 2.489 mm)
+
+     For 2D 21-slice ECAT 961 images these are scale_961_21 and iscale_961_21
+     which resample the PET images
+        from 128 x 128 x 21 pixels (2.086 x 2.086 x 3.125 mm)
+        to   150 x 150 x 26 pixels (1.780 x 1.780 x 2.524 mm)
+
+     For 3D 21-slice ECAT 961 images these are scale_961_21b and iscale_961_21b
+     which resample the PET images
+        from 128 x 128 x 21 pixels (2.888 x 2.888 x 3.125 mm)
+        to   150 x 150 x 26 pixels (2.464 x 2.464 x 2.524 mm)
+
+
+CREATING RESAMPLING MATRICES
+     A pair of resampling matrices (scale_a.air and iscale_a.air)
+     may be created for an image p5000x1.v as follows:
+
+     1) Determine appropriate resampling pixel size (see Ref below).
+        I have used roughly 1.2x sampling of existing image.
+        If p5000x1.v is 128x128x47, I use 150x150x59
+     2) Convert:
+           img2analyze p5000x1.v ap5000x1
+     3) Resample:
+           analyze
+
+
+
+Neuroimaging Lab    Last change: 15-Mar-2001                    2
+
+
+
+
+
+
+User Commands                                         ALIGNDYN(1)
+
+
+
+             Files -> Load Images
+                Files (select ap5000x1)
+                Process -> Load Resized
+                   Cubic Voxels = No
+                   Num X = 150
+                   Num Y = 150
+                   Num Z = 59
+                   Load
+                Back
+             Files -> Save Images
+                File Name = ap5000x1_res
+                Go
+             Exit
+     4) Determine threshold for alignlinear (roughly 20% of Max or 100 in this example):
+           imghdr p5000x1.v | grep Max
+     5) Create transformation matrix and inverse matrix:
+           setanamin ap5000x1 0
+           setanamin ap5000x1_res 0
+           alignlinear ap5000x1_res ap5000x1 scale_a.air -m 6 -t1 100 -p1 1 -t2 100 -p2 1
+           invert_air scale_a.air iscale_a.air
+
+
+ALIGNMENT LOG
+     Each entry in the alignment log has the form:
+
+        Mean           =     0.601 mm  -0.108,-0.230, 0.416 mm
+
+     which gives the mean displacement of all pixels  within  the
+     brain   mask  (0.601  mm)  and  the  mean  x-,  y-,  and  z-
+     displacements (-0.108,-0.230, 0.416 mm).  These  are  useful
+     both  to  assess  the  degree of correction and to alert for
+     possible failures of the alignment.
+
+
+REFERENCE
+     Andersson JLR, Eur J Nucl Med (1998) 25:575-586.
+
+
+EXAMPLES
+     aligndyn m500n img m500ref.img 3to44 0.3 3 scale iscale 10to20 m500mask.img
+     aligndyn /data/p5000fdg1.v p5000ref.v 3to55 3 3 scale_961 iscale_961 1to36
+     aligndyn p2734mb i p2734mb_mask.img 3to44 0.3 3 scale_953 iscale_953
+
+
+SEE ALSO
+     aligning_dynamic(1),                       align_dynamic(1),
+     align_dynamic_mask(1),  singlefrm_gauss(1), airdif(1), mask-
+     ing(1), plot_aligndyn(1), reslicedyn(1), remove_dynfiles(1),
+     air(1)
+
+
+
+
+
+
+Neuroimaging Lab    Last change: 15-Mar-2001                    3
+
+
+
+
+
+
+User Commands                                         ALIGNDYN(1)
+
+
+
+AUTHOR
+     Tom Videen, Oct 1998.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Neuroimaging Lab    Last change: 15-Mar-2001                    4
+
+
+

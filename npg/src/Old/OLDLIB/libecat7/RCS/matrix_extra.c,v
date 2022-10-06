@@ -1,0 +1,2334 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	95.12.01.15.14.05;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.11.10.22.20.32;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.16.18.02.58;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.3
+log
+@TY's Nov 28 1995
+@
+text
+@/*$Id: matrix_extra.c,v 1.2 1995/11/27 20:19:31 ty7777 Exp $*/
+/*$Log: matrix_extra.c,v $
+ * Revision 1.2  1995/11/27  20:19:31  ty7777
+ * Same as before, just to check in the code.
+ *
+ * Revision 1.1  1995/10/16  18:02:58  ty7777
+ * Initial revision
+ **/
+
+/* @@(#)matrix_extra.c	1.13 5/7/93 */
+
+#include	<stdlib.h>
+#include	<fcntl.h>
+#include	<string.h>
+#include	"interfile.h"
+
+static char     sccsid[] = "@@(#)matrix_extra.c	1.13 5/7/93 Copyright 1991,1992 CTI Pet Systems, Inc.";
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libecat7/temp/RCS/matrix_extra.c,v 1.2 1995/11/27 20:19:31 ty7777 Exp $";
+
+#define ERROR   -1
+#define OK 0
+#define TRUE 1
+#define FALSE 0
+
+typedef enum {
+	MAT_OK,
+	MAT_MALLOC_ERR,
+	MAT_MHDREAD_ERR,
+	MAT_ACSDIR_ERR,
+	MAT_ACS_FILE_NOT_FOUND,
+	MAT_NFS_FILE_OPEN_ERR,
+	MAT_INTERFILE_OPEN_ERR,
+	MAT_NFS_CREATE_ERR,
+	MAT_FILE_TYPE_NOT_MATCH,
+	MAT_READ_FROM_NILFPTR,
+	MAT_NOMHD_FILE_OBJECT,
+	MAT_NIL_SHPTR,
+	MAT_NIL_DATA_PTR,
+	MAT_MATRIX_NOT_FOUND,
+	MAT_UNKNOWN_FILE_TYPE,
+	MAT_READ_ACS_SUBHD_ERR,
+	MAT_READ_ACS_DATA_ERR,
+	MAT_ACS_DATA_SIZE_MISMATCH,
+	MAT_NFS_FILE_NOT_FOUND,
+	MAT_ACS_READ_SUBHD_ERR,
+	MAT_NODIRPTR_FILE_OBJECT,
+	MAT_READ_ACS_DIRBLK_ERR,
+	MAT_ACS_CREATE_ERR,
+	MAT_BAD_ATTRIBUTE,
+	MAT_BAD_FILE_ACCESS_MODE,
+	MAT_END_ERRORS
+}
+
+                MatrixErrorCode;
+
+static char    *mat_errors[] =
+{
+	"MAT_NO_ERROR",
+	"MAT_MALLOC_ERR",
+	"MAT_MHDREAD_ERR",
+	"MAT_ACSDIR_ERR",
+	"MAT_ACS_FILE_NOT_FOUND",
+	"MAT_NFS_FILE_OPEN_ERR",
+	"MAT_NFS_CREATE_ERR",
+	"MAT_FILE_TYPE_NOT_MATCH",
+	"MAT_READ_FROM_NILFPTR",
+	"MAT_NOMHD_FILE_OBJECT",
+	"MAT_NIL_SHPTR",
+	"MAT_NIL_DATA_PTR",
+	"MAT_MATRIX_NOT_FOUND",
+	"MAT_UNKNOWN_FILE_TYPE",
+	"MAT_READ_ACS_SUBHD_ERR",
+	"MAT_READ_ACS_DATA_ERR",
+	"MAT_ACS_DATA_SIZE_MISMATCH",
+	"MAT_NFS_FILE_NOT_FOUND",
+	"MAT_ACS_READ_SUBHD_ERR",
+	"MAT_NODIRPTR_FILE_OBJECT",
+	"MAT_READ_ACS_DIRBLK_ERR",
+	"MAT_ACS_CREATE_ERR",
+	"MAT_BAD_ATTRIBUTE",
+	"MAT_BAD_FILE_ACCESS_MODE",
+	"MAT_END_ERRORS"
+};
+
+MatrixErrorCode mat_errno;
+
+
+MatDirBlk      *mat_rdirblk (file, blknum)
+	MatrixFile     *file;
+	int             blknum;
+
+{
+	MatDirBlk      *matdirblk;
+	int             i, j, err, ndirs;
+	int             dirbufr[MatBLKSIZE / 4];
+	FILE           *fptr = file->fptr;
+
+	matdirblk = (MatDirBlk *) malloc (MatBLKSIZE);
+	if (matdirblk == NULL)
+		return (NULL);
+
+	if (file->mhptr->sw_version < V7) {
+		if (file->acs)
+			err = read_raw_acs_data (file->fname,
+						 blknum, 1, (char *) dirbufr, VAX_Ix4);
+		else
+			err = read_matrix_data (fptr, blknum, 1, (char *) dirbufr, VAX_Ix4);
+	} else {
+		if (file->acs)
+			err = read_raw_acs_data (file->fname,
+						 blknum, 1, (char *) dirbufr, SunLong);
+		else
+			err = read_matrix_data (fptr, blknum, 1, (char *) dirbufr, SunLong);
+	}
+	if (err < 0)
+		return (NULL);
+
+
+	matdirblk->nfree = dirbufr[0];
+	matdirblk->nextblk = dirbufr[1];
+	matdirblk->prvblk = dirbufr[2];
+	matdirblk->nused = dirbufr[3];
+
+	ndirs = (MatBLKSIZE / 4 - 4) / 4;
+	for (i = 0; i < ndirs; i++) {
+		matdirblk->matdir[i].matnum = 0;
+		matdirblk->matdir[i].strtblk = 0;
+		matdirblk->matdir[i].endblk = 0;
+		matdirblk->matdir[i].matstat = 0;
+	}
+
+	for (i = 0; i < matdirblk->nused; i++) {
+		j = i + 1;
+		matdirblk->matdir[i].matnum = dirbufr[j * 4 + 0];
+		matdirblk->matdir[i].strtblk = dirbufr[j * 4 + 1];
+		matdirblk->matdir[i].endblk = dirbufr[j * 4 + 2];
+		matdirblk->matdir[i].matstat = dirbufr[j * 4 + 3];
+	}
+	return (matdirblk);
+}
+
+MatDirList     *mat_read_directory (mptr)
+	MatrixFile     *mptr;
+{
+	struct MatDir   matdir;
+	MatDirList     *dirlist;
+	MatDirBlk      *matdirblk;
+	int             i, blknum;
+
+	dirlist = (MatDirList *) calloc (1, sizeof (MatDirList));
+	if (dirlist == NULL)
+		return (NULL);
+
+	blknum = MatFirstDirBlk;
+	do {
+		matdirblk = mat_rdirblk (mptr, blknum);
+		if (matdirblk == NULL)
+			return (NULL);
+		for (i = 0; i < matdirblk->nused; i++) {
+			matdir.matnum = matdirblk->matdir[i].matnum;
+			matdir.strtblk = matdirblk->matdir[i].strtblk;
+			matdir.endblk = matdirblk->matdir[i].endblk;
+			matdir.matstat = matdirblk->matdir[i].matstat;
+			insert_mdir (matdir, dirlist);
+		}
+		blknum = matdirblk->nextblk;
+		free ((char *) matdirblk);
+	}
+	while (blknum != MatFirstDirBlk);
+	return (dirlist);
+}
+
+#ifdef __osf__
+MatrixFile     *matrix_open (const char *fname, int fmode, int mtype)
+#else
+MatrixFile     *matrix_open (fname, fmode, mtype)
+	char           *fname;
+	int             fmode, mtype;
+
+#endif
+{
+	MatrixFile     *mptr;
+	Main_header    *mhead;
+	int             status;
+	char           *omode;
+
+	omode = "r+";				 /* assume READ_WRITE access mode */
+	if (fmode == MAT_READ_ONLY)
+		omode = "r";
+	mat_errno = OK;
+
+	/* allocate space for MatrixFile data structure */
+	mptr = (MatrixFile *) calloc (1, sizeof (MatrixFile));
+	if (mptr == NULL) {
+		mat_errno = MAT_MALLOC_ERR;
+		return (NULL);
+	}
+	/* allocate space for main header data structure and initialize */
+	mptr->mhptr = (Main_header *) calloc (1, sizeof (Main_header));
+	if (mptr->mhptr == NULL) {
+		mat_errno = MAT_MALLOC_ERR;
+		free (mptr);
+		return (NULL);
+	}
+	mptr->acs = is_acs (fname);
+	mptr->fname = strdup (fname);
+
+	/* read the main header from the file */
+
+	if (mptr->acs) {
+		if ((status = rts_rmhd (fname, mptr->mhptr)) == ERROR) {
+			mat_errno = MAT_ACS_FILE_NOT_FOUND;
+			free (mptr->mhptr);
+			free (mptr);
+			return (NULL);
+		}
+	} else {				 /* nfs matrix file */
+		if (is_interfile (fname)) {
+			if (interfile_open (mptr) == ERROR) {
+				mat_errno = MAT_INTERFILE_OPEN_ERR;
+				matrix_close (mptr);
+				return (NULL);
+			}
+		} else {
+			if ((mptr->fptr = fopen (fname, omode)) == NULL) {
+				mat_errno = MAT_NFS_FILE_OPEN_ERR;
+				matrix_close (mptr);
+				return (NULL);
+			} else
+				mat_read_main_header (mptr->fptr, mptr->mhptr);
+		}
+	}
+
+	/*
+	 * if the matrix type doesn't match the requested type, that's an error. Specify matrix
+	 * type NoData to open any type.
+	 */
+	if (mtype != NoData && mtype != mptr->mhptr->file_type) {
+		mat_errno = MAT_FILE_TYPE_NOT_MATCH;
+		matrix_close (mptr);
+		return (NULL);
+	}
+
+	/*
+	 * read and store the matrix file directory.
+	 */
+
+	mptr->dirlist = mat_read_directory (mptr);
+
+	if (mat_errno == OK)
+		return (mptr);
+	else {
+		matrix_close (mptr);
+		return (NULL);
+	}
+}
+
+#ifdef __osf__
+MatrixFile     *matrix_create (const char *fname, int fmode, Main_header * proto_mhptr)
+#else
+MatrixFile     *matrix_create (fname, fmode, proto_mhptr)
+	char           *fname;
+	int             fmode;
+	Main_header    *proto_mhptr;
+
+#endif
+{
+	MatrixFile     *mptr = NULL;
+	FILE           *fptr, *mat_create ();
+
+	mat_errno = MAT_OK;
+	switch (fmode) {
+	case MAT_READ_WRITE:
+	case MAT_OPEN_EXISTING:
+		mptr = matrix_open (fname, MAT_READ_WRITE, proto_mhptr->file_type);
+		if (mptr)
+			break;
+
+		/*
+		 * if (mat_errno != MAT_NFS_FILE_NOT_FOUND) break; if we got an NFS_FILE_NOT_FOUND
+		 * error, then try to create the matrix file.
+		 */
+	case MAT_CREATE:
+	case MAT_CREATE_NEW_FILE:
+		mat_errno = MAT_OK;
+		if (is_acs (fname)) {
+			mat_errno = MAT_ACS_CREATE_ERR;
+			break;
+		}
+		fptr = mat_create (fname, proto_mhptr);
+		if (!fptr) {
+			mat_errno = MAT_NFS_CREATE_ERR;
+			break;
+		}
+		mptr = (MatrixFile *) calloc (1, sizeof (MatrixFile));
+		if (!mptr) {
+			mat_errno = MAT_MALLOC_ERR;
+			break;
+		}
+		mptr->fptr = fptr;
+		mptr->fname = (char *) malloc (strlen (fname) + 1);
+		strcpy (mptr->fname, fname);
+		mptr->mhptr = (Main_header *) malloc (sizeof (Main_header));
+		memcpy (mptr->mhptr, proto_mhptr, sizeof (Main_header));
+		mptr->dirlist = mat_read_directory (mptr);
+		break;
+	default:
+		mat_errno = MAT_BAD_FILE_ACCESS_MODE;
+		break;
+	}
+	return mptr;
+}
+
+matrix_close (mptr)
+	MatrixFile     *mptr;
+{
+	if (mptr == NULL)
+		return;
+	if (mptr->mhptr != NULL)
+		free (mptr->mhptr);
+	if (mptr->dirlist != NULL)
+		matrix_freelist (mptr->dirlist);
+	if (mptr->fptr)
+		fclose (mptr->fptr);
+	if (mptr->fname)
+		free (mptr->fname);
+	free (mptr);
+}
+
+MatrixData     *matrix_read (mptr, matnum, dtype)
+	MatrixFile     *mptr;
+	int             matnum, dtype;
+{
+	int             status;
+	MatrixData     *data;
+
+	mat_errno = OK;
+	if (mptr == NULL)
+		mat_errno = MAT_READ_FROM_NILFPTR;
+	else if (mptr->mhptr == NULL)
+		mat_errno = MAT_NOMHD_FILE_OBJECT;
+	if (mat_errno != OK)
+		return (NULL);
+/* 	call scan3d_read to read single sinogram planes
+	if (mptr->mhptr->file_type == Short3dSinogram )
+		return scan3d_read(mptr,matnum,dtype);
+*/
+	/* allocate space for MatrixData structure and initialize */
+	data = (MatrixData *) calloc (1, sizeof (MatrixData));
+	if (data == NULL) {
+		mat_errno = MAT_MALLOC_ERR;
+		return (NULL);
+	}
+	/* allocate space for subheader and initialize */
+	data->shptr = (caddr_t) calloc (2, MatBLKSIZE);
+	if (data->shptr == NULL) {
+		mat_errno = MAT_MALLOC_ERR;
+		return (NULL);
+	}
+	if (read_z_data (mptr, matnum, data, dtype) != OK) {
+		free_matrix_data (data);
+		data = NULL;
+	} else if (dtype != NoData && data->data_type != dtype)
+		matrix_convert_data (data, dtype);
+	return (data);
+}
+
+
+matrix_write (mptr, matnum, data)
+	MatrixFile     *mptr;
+	MatrixData     *data;
+	int             matnum;
+{
+	int             status;
+
+	mat_errno = OK;
+	if (mptr == NULL)
+		mat_errno = MAT_READ_FROM_NILFPTR;
+	else if (mptr->mhptr == NULL)
+		mat_errno = MAT_NOMHD_FILE_OBJECT;
+	else if (data->shptr == NULL)
+		mat_errno = MAT_NIL_SHPTR;
+	else if (data->data_ptr == NULL)
+		mat_errno = MAT_NIL_DATA_PTR;
+	if (mat_errno != OK)
+		return (ERROR);
+	return write_z_data (mptr, matnum, data);
+}
+
+short           find_smax (sdata, nvals)
+	short          *sdata;
+	int             nvals;
+{
+	short           smax;
+	int             i;
+
+	smax = sdata[0];
+	for (i = 1; i < nvals; i++)
+		if (sdata[i] > smax)
+			smax = sdata[i];
+	return smax;
+}
+
+float           find_fmax (fdata, nvals)
+	float          *fdata;
+	int             nvals;
+{
+	float           fmax;
+	int             i;
+
+	for (fmax = *fdata, i = 1; i < nvals; i++)
+		if (fdata[i] > fmax)
+			fmax = fdata[i];
+	return fmax;
+}
+
+read_host_data (mptr, matnum, data, dtype)
+	MatrixFile     *mptr;
+	MatrixData     *data;
+	int             matnum, dtype;
+
+{
+	struct MatDir   matdir;
+	int             file_pos, slice_blks, nblks, status, data_size;
+	Scan_subheader *scansub;
+	Scan3D_subheader *scan3Dsub;
+	Image_subheader *imagesub;
+	Attn_subheader *attnsub;
+	Norm_subheader *normsub;
+	Norm3D_subheader *norm3d;
+	int             x, y, z, sx, sy, sz;
+	short          *data1, *plane0, *plane1, *line0, *line1;
+	float          *fdata1, *fplane0, *fplane1, *fline0, *fline1;
+	int             datasize;
+
+	if (mptr->interfile_header)		 /* read interfile */
+		return interfile_read (mptr, matnum, data, dtype);
+	if (matrix_find (mptr, matnum, &matdir) == ERROR) {
+		mat_errno = MAT_MATRIX_NOT_FOUND;
+		return (ERROR);
+	}
+	data->matnum = matnum;
+	data->matfile = mptr;
+	data->mat_type = mptr->mhptr->file_type;
+	nblks = matdir.endblk - matdir.strtblk;
+	data_size = data->data_size = 512 * nblks;
+	if (dtype != MAT_SUB_HEADER) {
+		data->data_ptr = (caddr_t) calloc (1, data_size);
+		if (data->data_ptr == NULL) {
+			mat_errno = MAT_MALLOC_ERR;
+			return (ERROR);
+		}
+	}
+	switch (mptr->mhptr->file_type) {
+	case Sinogram:
+		scansub = (Scan_subheader *) data->shptr;
+		mat_read_scan_subheader (mptr, matdir.strtblk, scansub);
+		data->data_type = scansub->data_type;
+		data->xdim = scansub->num_r_elements;
+		data->ydim = scansub->num_angles;
+		data->zdim = scansub->num_z_elements;
+		data->scale_factor = scansub->scale_factor;
+		data->pixel_size = scansub->x_resolution;
+		data->data_max = scansub->scan_max * scansub->scale_factor;
+		if (dtype == MAT_SUB_HEADER)
+			break;
+		if (mptr->acs)
+			read_raw_acs_data (mptr->fname, matdir.strtblk + 1,
+					   nblks, data->data_ptr, scansub->data_type);
+		else
+			read_matrix_data (mptr->fptr, matdir.strtblk + 1, nblks,
+					  data->data_ptr, scansub->data_type);
+		break;
+	case Short3dSinogram:
+		scan3Dsub = (Scan3D_subheader *) data->shptr;
+		mat_read_Scan3D_subheader (mptr, matdir.strtblk, scan3Dsub);
+		data->data_type = scan3Dsub->data_type;
+/* dimesnsions if storage_order = 0  i.e.
+	 (((projs x z_elements)) x num_angles) x Ringdiffs
+*/
+		sx = data->xdim = scan3Dsub->num_r_elements;
+		sz = data->ydim = scan3Dsub->num_angles;
+		sy = data->zdim = scan3Dsub->num_z_elements[0];
+		data->scale_factor = scan3Dsub->scale_factor;
+		data->pixel_size = scan3Dsub->x_resolution;
+		data->data_max = scan3Dsub->scan_max * scan3Dsub->scale_factor;
+		if (dtype == MAT_SUB_HEADER)
+			break;
+/*  read and flip y and z */
+		data1 = (short *) data->data_ptr;
+		file_pos = (matdir.strtblk + 1) * MatBLKSIZE;
+		slice_blks = (sx * sy * sizeof (short) + 511) / 512;
+		plane0 = (short *) malloc (512 * slice_blks);
+		for (z = 0; z < sz; z++) {	 /* for each planar view fixed theta */
+			fseek (mptr->fptr, file_pos, 0);
+			fread (plane0, sizeof (short), sx * sy, mptr->fptr);
+			file_data_to_host (plane0, slice_blks, scan3Dsub->data_type);
+			file_pos += sx * sy * sizeof (short);
+			for (y = 0; y < sy; y++) {	/* for each line fixed plane */
+				line0 = plane0 + (sx * y);
+				plane1 = data1 + (sx * sz * y);
+				line1 = plane1 + (sx * z);
+				memcpy (line1, line0, sx * sizeof (short));
+			}
+		}
+		if (data->data_max < 0)
+			data->data_max = find_smax (data1, sx * sy * sz);
+		free (plane0);
+		break;
+	case ByteVolume:
+	case PetImage:
+	case PetVolume:
+		imagesub = (Image_subheader *) data->shptr;
+		mat_read_image_subheader (mptr, matdir.strtblk, imagesub);
+		data->data_type = imagesub->data_type;
+		data->xdim = imagesub->x_dimension;
+		data->ydim = imagesub->y_dimension;
+		data->scale_factor = imagesub->scale_factor;
+		data->zdim = imagesub->z_dimension;
+		data->pixel_size = imagesub->x_pixel_size;
+		data->data_max = imagesub->image_max * imagesub->scale_factor;
+		if (dtype == MAT_SUB_HEADER)
+			break;
+		read_matrix_data (mptr->fptr, matdir.strtblk + 1, nblks,
+				  data->data_ptr, imagesub->data_type);
+		break;
+	case AttenCor:
+		attnsub = (Attn_subheader *) data->shptr;
+		mat_read_attn_subheader (mptr, matdir.strtblk, attnsub);
+		data->data_type = attnsub->data_type;
+		sx = data->xdim = attnsub->num_r_elements;
+		sz = data->ydim = attnsub->num_angles;
+		sy = data->zdim = attnsub->num_z_elements;
+		data->scale_factor = attnsub->scale_factor;
+		data->pixel_size = attnsub->x_resolution;
+		if (dtype == MAT_SUB_HEADER)
+			break;
+/*  read and flip y and z */
+		fdata1 = (float *) data->data_ptr;
+		file_pos = matdir.strtblk * MatBLKSIZE;
+		slice_blks = (sx * sy * sizeof (float) + 511) / 512;
+		fplane0 = (float *) malloc (512 * slice_blks);
+		for (z = 0; z < sz; z++) {	 /* for each planar view fixed theta */
+			fseek (mptr->fptr, file_pos, 0);
+			fread (fplane0, sizeof (float), sx * sy, mptr->fptr);
+			file_data_to_host (fplane0, slice_blks, attnsub->data_type);
+			file_pos += sx * sy * sizeof (float);
+			for (y = 0; y < sy; y++) {	/* for each line fixed plane */
+				fline0 = fplane0 + (sx * y);
+				fplane1 = fdata1 + (sx * sz * y);
+				fline1 = fplane1 + (sx * z);
+				memcpy (fline1, fline0, sx * sizeof (float));
+			}
+		}
+		data->data_max = find_fmax (fdata1, sx * sy * sz);
+		free (fplane0);
+		break;
+	case Normalization:
+		normsub = (Norm_subheader *) data->shptr;
+		mat_read_norm_subheader (mptr, matdir.strtblk, normsub);
+		data->data_type = normsub->data_type;
+		data->xdim = normsub->num_r_elements;
+		data->ydim = normsub->num_angles;
+		data->zdim = normsub->num_z_elements;
+		data->scale_factor = normsub->scale_factor;
+		if (dtype == MAT_SUB_HEADER)
+			break;
+		read_matrix_data (mptr->fptr, matdir.strtblk + 1, nblks,
+				  data->data_ptr, normsub->data_type);
+		data->data_max = data->scale_factor *
+			find_fmax (data->data_ptr, data->xdim * data->ydim);
+		break;
+	case Norm3d:
+		norm3d = (Norm3D_subheader *) data->shptr;
+		mat_read_norm3d_subheader (mptr, matdir.strtblk, norm3d);
+		data->data_type = norm3d->data_type;
+		data->xdim = norm3d->num_r_elements;	/* 336 */
+		data->ydim = norm3d->crystals_per_ring;	/* 784 */
+		data->zdim = norm3d->num_crystal_rings;	/* 24 */
+		data->scale_factor = 1;
+		if (dtype == MAT_SUB_HEADER)
+			break;
+		datasize = norm3d->num_r_elements *
+			(norm3d->num_geo_corr_planes + norm3d->num_transaxial_crystals) +
+			norm3d->num_crystal_rings * norm3d->crystals_per_ring;
+/*
+		336*(1+7) + 24*784
+		336*(1+7) =
+		radial elements (plane geometry + Crystal Interference) Corrections
+		24*784 = cristals efficiencies
+*/
+		data->data_ptr = malloc (datasize * sizeof (float));
+		read_matrix_data (mptr->fptr, matdir.strtblk + 1, nblks,
+				  data->data_ptr, norm3d->data_type);
+		break;
+	default:
+		mat_errno = MAT_UNKNOWN_FILE_TYPE;
+		return (ERROR);
+		break;
+	}
+	return (OK);
+}
+
+write_host_data (mptr, matnum, data)
+	MatrixFile     *mptr;
+	MatrixData     *data;
+	int             matnum;
+{
+	struct MatDir   matdir, dir_entry;
+	Scan_subheader *scansub;
+	Image_subheader *imagesub;
+	Attn_subheader *attnsub;
+	Norm_subheader *normsub;
+	int             status, blkno, nblks;
+
+	status = OK;
+	nblks = (data->data_size + 511) / 512;
+	if (matrix_find (mptr, matnum, &matdir) == ERROR) {
+		blkno = mat_enter (mptr, matnum, nblks);
+		dir_entry.matnum = matnum;
+		dir_entry.strtblk = blkno;
+		dir_entry.endblk = dir_entry.strtblk + nblks - 1;
+		dir_entry.matstat = 1;
+		insert_mdir (dir_entry, mptr->dirlist);
+		matdir = dir_entry;
+	}
+	switch (mptr->mhptr->file_type) {
+	case Sinogram:
+		scansub = (Scan_subheader *) data->shptr;
+		mat_write_scan_subheader (mptr, matdir.strtblk, data->shptr);
+		status = write_matrix_data (mptr->fptr, matdir.strtblk + 1,
+					    nblks, data->data_ptr, scansub->data_type);
+		break;
+	case ByteVolume:
+	case PetImage:
+	case PetVolume:
+		imagesub = (Image_subheader *) data->shptr;
+		mat_write_image_subheader (mptr, matdir.strtblk, data->shptr);
+		status = write_matrix_data (mptr->fptr, matdir.strtblk + 1,
+					    nblks, data->data_ptr, imagesub->data_type);
+		break;
+	case AttenCor:
+		attnsub = (Attn_subheader *) data->shptr;
+		mat_write_attn_subheader (mptr, matdir.strtblk, data->shptr);
+		status = write_matrix_data (mptr->fptr, matdir.strtblk + 1,
+					    nblks, data->data_ptr, attnsub->data_type);
+		break;
+	case Normalization:
+		normsub = (Norm_subheader *) data->shptr;
+		mat_write_norm_subheader (mptr, matdir.strtblk, data->shptr);
+		status = write_matrix_data (mptr->fptr, matdir.strtblk + 1,
+					    nblks, data->data_ptr, normsub->data_type);
+		break;
+	default:				 /* default treated as sinogram */
+		scansub = (Scan_subheader *) data->shptr;
+		mat_write_scan_subheader (mptr, matdir.strtblk, data->shptr);
+		status = write_matrix_data (mptr->fptr, matdir.strtblk + 1,
+					    nblks, data->data_ptr, scansub->data_type);
+		break;
+	}
+	return (status);
+}
+
+int             matrix_find (matfile, matnum, matdir)
+	MatrixFile     *matfile;
+	int             matnum;
+	struct MatDir  *matdir;
+{
+	MatDirNode     *node;
+
+	if (matfile == NULL)
+		return (ERROR);
+	if (matfile->dirlist == NULL)
+		return (ERROR);
+	node = matfile->dirlist->first;
+	while (node != NULL) {
+		if (node->matnum == matnum) {
+			matdir->matnum = node->matnum;
+			matdir->strtblk = node->strtblk;
+			matdir->endblk = node->endblk;
+			matdir->matstat = node->matstat;
+			break;
+		}
+		node = node->next;
+	}
+	if (node != NULL)
+		return (OK);
+	else
+		return (ERROR);
+}
+
+
+matrix_freelist (matdirlist)
+	MatDirList     *matdirlist;
+
+{
+	MatDirNode     *node, *next;
+
+	if (matdirlist == NULL)
+		return;
+	if (matdirlist->first != NULL) {
+		node = matdirlist->first;
+		do {
+			next = node->next;
+			free (node);
+			node = next;
+		}
+		while (next != NULL);
+	}
+	free (matdirlist);
+}
+
+insert_mdir (matdir, dirlist)
+	MatDirList     *dirlist;
+	struct MatDir   matdir;
+
+{
+	MatDirNode     *node;
+
+	if (dirlist == NULL) {
+		dirlist = (MatDirList *) malloc (sizeof (MatDirList));
+		if (dirlist == NULL)
+			return (ERROR);
+		dirlist->nmats = 0;
+		dirlist->first = NULL;
+		dirlist->last = NULL;
+	}
+	node = (MatDirNode *) malloc (sizeof (MatDirNode));
+	if (node == NULL)
+		return (ERROR);
+
+	node->matnum = matdir.matnum;
+	node->strtblk = matdir.strtblk;
+	node->endblk = matdir.endblk;
+	node->matstat = matdir.matstat;
+	node->next = NULL;
+
+	if (dirlist->first == NULL) {		 /* if list was empty, add first node */
+		dirlist->first = node;
+		dirlist->last = node;
+		dirlist->nmats = 1;
+	} else {
+		(dirlist->last)->next = node;
+		dirlist->last = node;
+		++(dirlist->nmats);
+	}
+}
+
+void            free_matrix_data (data)
+	MatrixData     *data;
+
+{
+	if (data != NULL) {
+		if (data->data_ptr != NULL)
+			free (data->data_ptr);
+		if (data->shptr != NULL)
+			free (data->shptr);
+		free (data);
+	}
+}
+
+
+matrix_convert_data ()
+{
+	return OK;				 /* dummy for now */
+}
+
+
+#include	<sys/types.h>
+#include	<sys/stat.h>
+
+file_exists (filename)				 /* subroutine to see if file exists or not */
+	char           *filename;
+
+{
+	struct stat     stbuf;
+	int             status;
+	Main_header     mhead;
+
+	if (!is_acs (filename)) {
+		if (stat (filename, &stbuf) == -1)
+			return (FALSE);
+		return (TRUE);
+	} else {
+		status = rts_rmhd (filename, &mhead);
+		if (status == OK)
+			return (TRUE);
+		else
+			return (FALSE);
+	}
+}
+
+is_acs (fname)
+	char           *fname;
+
+{
+	if (strindex (fname, "/sd") == 0)
+		return (TRUE);
+	else
+		return (FALSE);
+}
+
+/* subroutine to return starting position of substring within string */
+/* return index of t in s, -1 if none */
+
+strindex (s, t)
+	char            s[], t[];
+
+{
+	int             i, j, k;
+
+	for (i = 0; s[i] != '\0'; i++) {
+		for (j = i, k = 0; t[k] != '\0' && s[j] == t[k]; j++, k++);
+		if (k > 0 && t[k] == '\0')
+			return i;
+	}
+	return -1;
+}
+
+matrix_perror (s)
+	char           *s;
+{
+	fprintf (stderr, "%s: %s\n", s, mat_errors[mat_errno]);
+	exit (-1);
+}
+
+#include <varargs.h>
+
+static int      item_size[] = {0, 1, 2, 4, 4, 4, 2, 4};
+
+MatrixData     *matrix_object_create (va_alist) va_dcl
+{
+
+	va_list         arp;
+	MatrixData     *object, *proto_object = NULL;
+	MatrixObjectAttribute attrib;
+	int             nitems;
+	Scan_subheader *ssh;
+	Image_subheader *ish;
+	Attn_subheader *ash;
+	Norm_subheader *nsh;
+
+	object = (MatrixData *) calloc (1, sizeof (MatrixData));
+	if (!object) {
+		mat_errno = MAT_MALLOC_ERR;
+		return NULL;
+	}
+	va_start (arp);
+	object->mat_type = va_arg (arp, int);
+	while (attrib = va_arg (arp, MatrixObjectAttribute))
+		switch (attrib) {
+		case MAT_XDIM:
+			object->xdim = va_arg (arp, int);
+			break;
+		case MAT_YDIM:
+			object->ydim = va_arg (arp, int);
+			break;
+		case MAT_ZDIM:
+			object->zdim = va_arg (arp, int);
+			break;
+		case MAT_DATA_TYPE:
+			object->data_type = va_arg (arp, int);
+			break;
+		case MAT_SCALE_FACTOR:
+			object->scale_factor = va_arg (arp, double);
+			break;
+		case MAT_PIXEL_SIZE:
+			object->pixel_size = va_arg (arp, double);
+			break;
+		case MAT_Y_SIZE:
+			object->y_size = va_arg (arp, double);
+			break;
+		case MAT_Z_SIZE:
+			object->z_size = va_arg (arp, double);
+			break;
+		case MAT_DATA_MAX:
+			object->data_max = va_arg (arp, double);
+			break;
+		case MAT_DATA_MIN:
+			object->data_min = va_arg (arp, double);
+			break;
+		case MAT_PROTO:
+			proto_object = va_arg (arp, MatrixData *);
+			copy_proto_object (object, proto_object);
+			break;
+		default:
+			mat_errno = MAT_BAD_ATTRIBUTE;
+			return NULL;
+		}
+	nitems = object->xdim * object->ydim;
+	if (object->zdim > 0)
+		nitems *= object->zdim;
+	object->data_size = item_size[(int) object->data_type] * nitems;
+	object->data_ptr = (caddr_t) calloc (1, object->data_size);
+	if (!object->data_ptr) {
+		mat_errno = MAT_MALLOC_ERR;
+		return NULL;
+	}
+	if (!object->shptr)
+		switch (object->mat_type) {
+		case Sinogram:
+			object->shptr = calloc (1, sizeof (Scan_subheader));
+			ssh = (Scan_subheader *) (object->shptr);
+			ssh->data_type = object->data_type;
+			ssh->num_r_elements = object->xdim;
+			ssh->num_angles = object->ydim;
+			ssh->x_resolution = object->pixel_size;
+			ssh->scale_factor = object->scale_factor;
+			break;
+		case PetVolume:
+			object->shptr = calloc (1, sizeof (Image_subheader));
+			ish = (Image_subheader *) (object->shptr);
+			ish->data_type = object->data_type;
+			ish->num_dimensions = 2;
+			ish->x_dimension = object->xdim;
+			ish->y_dimension = object->ydim;
+			ish->x_pixel_size = ish->y_pixel_size = object->pixel_size;
+			ish->scale_factor = object->scale_factor;
+			break;
+		case AttenCor:
+			object->shptr = calloc (1, sizeof (Attn_subheader));
+			ash = (Attn_subheader *) (object->shptr);
+			ash->data_type = object->data_type;
+			ash->num_r_elements = object->xdim;
+			ash->num_angles = object->ydim;
+			ash->x_resolution = object->pixel_size;
+			ash->scale_factor = object->scale_factor;
+			break;
+		case Normalization:
+			object->shptr = calloc (1, sizeof (Norm_subheader));
+			nsh = (Norm_subheader *) (object->shptr);
+			nsh->data_type = object->data_type;
+			nsh->num_r_elements = object->xdim;
+			nsh->num_angles = object->ydim;
+			nsh->scale_factor = object->scale_factor;
+			break;
+		default:
+			mat_errno = MAT_UNKNOWN_FILE_TYPE;
+			return NULL;
+		}
+	return object;
+}
+
+copy_proto_object (new, old)
+	MatrixData     *new, *old;
+{
+	int             sh_size;
+
+	if (new->mat_type == old->mat_type) {
+		switch (new->mat_type) {
+		case Sinogram:
+			sh_size = sizeof (Scan_subheader);
+			break;
+		case PetVolume:
+			sh_size = sizeof (Image_subheader);
+			break;
+		case AttenCor:
+			sh_size = sizeof (Attn_subheader);
+			break;
+		case Normalization:
+			sh_size = sizeof (Norm_subheader);
+			break;
+		}
+		new->shptr = (caddr_t) malloc (sh_size);
+		memcpy (new->shptr, old->shptr, sh_size);
+	}
+	new->xdim = old->xdim;
+	new->ydim = old->ydim;
+	new->zdim = old->zdim;
+	new->data_type = old->data_type;
+	new->scale_factor = old->scale_factor;
+	new->pixel_size = old->pixel_size;
+	new->y_size = old->y_size;
+	new->z_size = old->z_size;
+	new->data_min = old->data_min;
+	new->data_max = old->data_max;
+}
+
+Main_header    *matrix_init_main_header (fname, ftype, mh_proto)
+	char           *fname;
+	DataSetType     ftype;
+	Main_header    *mh_proto;
+{
+	Main_header    *mhptr;
+
+	mhptr = (Main_header *) calloc (1, sizeof (Main_header));
+	if (mh_proto)
+		memcpy (mhptr, mh_proto, sizeof (Main_header));
+	mhptr->file_type = ftype;
+	strncpy (mhptr->original_file_name, fname, 20);
+	return mhptr;
+}
+
+matrix_free (matrix)
+	MatrixData     *matrix;
+{
+	if (matrix->shptr)
+		free (matrix->shptr);
+	if (matrix->data_ptr)
+		free (matrix->data_ptr);
+	free (matrix);
+}
+
+convert_float_scan (scan, fdata)
+	MatrixData     *scan;
+	float          *fdata;
+{
+	int             i, nvals, tot;
+	float           fmax, scale;
+	short int      *sdata;
+	Scan_subheader *ssh;
+
+	if (scan->data_ptr)
+		free (scan->data_ptr);
+	nvals = scan->xdim * scan->ydim;
+	sdata = (short int *) malloc (nvals * sizeof (short int));
+	scan->data_ptr = (caddr_t) sdata;
+	scan->data_size = nvals * sizeof (short int);
+	fmax = *fdata;
+	for (i = 0; i < nvals; i++)
+		if (fdata[i] > fmax)
+			fmax = fdata[i];
+	scale = 1.0;
+	if (fmax > 0.0)
+		scale = 32767. / fmax;
+	tot = 0;
+	for (i = 0; i < nvals; i++) {
+		sdata[i] = scale * fdata[i];
+		tot += sdata[i];
+	}
+	scan->scale_factor = 1.0 / scale;
+	ssh = (Scan_subheader *) scan->shptr;
+	ssh->scan_min = 0;
+	ssh->scan_max = fmax * scale;
+	ssh->num_r_elements = scan->xdim;
+	ssh->num_angles = scan->ydim;
+	ssh->net_trues = tot;
+	ssh->scale_factor = 1.0 / scale;
+	ssh->x_resolution = scan->pixel_size;
+}
+
+convert_long_scan (scan, ldata)
+	MatrixData     *scan;
+	int            *ldata;
+{
+	int             i, nvals, tot, lmax;
+	float           scale;
+	short int      *sdata;
+	Scan_subheader *ssh;
+
+	if (scan->data_ptr)
+		free (scan->data_ptr);
+	nvals = scan->xdim * scan->ydim;
+	sdata = (short int *) malloc (nvals * sizeof (short int));
+	scan->data_ptr = (caddr_t) sdata;
+	scan->data_size = nvals * sizeof (short int);
+	lmax = *ldata;
+	for (i = 0; i < nvals; i++)
+		if (ldata[i] > lmax)
+			lmax = ldata[i];
+	scale = 1.0;
+	if (lmax > 0)
+		scale = 32767. / lmax;
+	tot = 0;
+	for (i = 0; i < nvals; i++) {
+		sdata[i] = scale * ldata[i];
+		tot += sdata[i];
+	}
+	scan->scale_factor = 1.0 / scale;
+	ssh = (Scan_subheader *) scan->shptr;
+	ssh->scan_min = 0;
+	ssh->scan_max = lmax * scale;
+	ssh->num_r_elements = scan->xdim;
+	ssh->num_angles = scan->ydim;
+	ssh->net_trues = tot;
+	ssh->scale_factor = 1.0 / scale;
+	ssh->x_resolution = scan->pixel_size;
+}
+@
+
+
+1.2
+log
+@tom mod
+@
+text
+@d1 1
+a1 1
+/*$Id: matrix_extra.c,v 1.1 1995/10/16 18:02:58 ty7777 Exp tom $*/
+d3 3
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libecat7/RCS/matrix_extra.c,v 1.1 1995/10/16 18:02:58 ty7777 Exp tom $";
+d53 1
+a53 1
+}	MatrixErrorCode;
+d55 4
+a58 1
+static char    *mat_errors[] = {
+d84 1
+a84 1
+};	MatrixErrorCode mat_errno;
+d86 1
+d88 1
+d102 1
+d105 2
+a106 1
+			err = read_raw_acs_data (file->fname, blknum, 1, (char *) dirbufr, VAX_Ix4);
+d111 2
+a112 1
+			err = read_raw_acs_data (file->fname, blknum, 1, (char *) dirbufr, SunLong);
+d119 1
+d169 2
+a170 1
+	} while (blknum != MatFirstDirBlk);
+d193 1
+a193 2
+/* allocate space for MatrixFile data structure */
+
+d199 1
+a199 3
+
+/* allocate space for main header data structure and initialize */
+
+d209 1
+a209 1
+/* read the main header from the file */
+d235 4
+a238 4
+/*
+ * if the matrix type doesn't match the requested type, that's an error. Specify matrix
+ * type NoData to open any type.
+ */
+d245 3
+a248 2
+/* read and store the matrix file directory */
+
+d280 4
+a283 4
+/*
+ * if (mat_errno != MAT_NFS_FILE_NOT_FOUND) break; if we got an NFS_FILE_NOT_FOUND
+ * error, then try to create the matrix file.
+ */
+a344 1
+
+d346 4
+a349 5
+ *	if (mptr->mhptr->file_type == Short3dSinogram )
+ *		return scan3d_read(mptr,matnum,dtype);
+ */
+/* allocate space for MatrixData structure and initialize */
+
+a478 1
+
+d480 2
+a481 2
+ *	 (((projs x z_elements)) x num_angles) x Ringdiffs
+ */
+a490 1
+
+a538 1
+
+a539 1
+
+a586 1
+
+d588 5
+a592 5
+ *		336*(1+7) + 24*784
+ *		336*(1+7) =
+ *		radial elements (plane geometry + Crystal Interference) Corrections
+ *		24*784 = cristals efficiencies
+ */
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d14 1
+a14 1
+static char sccsid[]="@@(#)matrix_extra.c	1.13 5/7/93 Copyright 1991,1992 CTI Pet Systems, Inc.";
+d16 1
+a16 1
+static char rcsid [] = "$Header$";
+d27 24
+a50 25
+		MAT_ACSDIR_ERR,
+		MAT_ACS_FILE_NOT_FOUND,
+		MAT_NFS_FILE_OPEN_ERR,
+		MAT_INTERFILE_OPEN_ERR,
+		MAT_NFS_CREATE_ERR,
+		MAT_FILE_TYPE_NOT_MATCH,
+		MAT_READ_FROM_NILFPTR,
+		MAT_NOMHD_FILE_OBJECT,
+		MAT_NIL_SHPTR,
+		MAT_NIL_DATA_PTR,
+		MAT_MATRIX_NOT_FOUND,
+		MAT_UNKNOWN_FILE_TYPE,
+		MAT_READ_ACS_SUBHD_ERR,
+		MAT_READ_ACS_DATA_ERR,
+		MAT_ACS_DATA_SIZE_MISMATCH,
+		MAT_NFS_FILE_NOT_FOUND,
+		MAT_ACS_READ_SUBHD_ERR,
+		MAT_NODIRPTR_FILE_OBJECT,
+		MAT_READ_ACS_DIRBLK_ERR,
+		MAT_ACS_CREATE_ERR,
+		MAT_BAD_ATTRIBUTE,
+		MAT_BAD_FILE_ACCESS_MODE,
+		MAT_END_ERRORS
+	}
+MatrixErrorCode;
+d52 27
+a78 28
+static char* mat_errors[] =
+	{
+		"MAT_NO_ERROR",
+		"MAT_MALLOC_ERR",
+		"MAT_MHDREAD_ERR",
+		"MAT_ACSDIR_ERR",
+		"MAT_ACS_FILE_NOT_FOUND",
+		"MAT_NFS_FILE_OPEN_ERR",
+		"MAT_NFS_CREATE_ERR",
+		"MAT_FILE_TYPE_NOT_MATCH",
+		"MAT_READ_FROM_NILFPTR",
+		"MAT_NOMHD_FILE_OBJECT",
+		"MAT_NIL_SHPTR",
+		"MAT_NIL_DATA_PTR",
+		"MAT_MATRIX_NOT_FOUND",
+		"MAT_UNKNOWN_FILE_TYPE",
+		"MAT_READ_ACS_SUBHD_ERR",
+		"MAT_READ_ACS_DATA_ERR",
+		"MAT_ACS_DATA_SIZE_MISMATCH",
+		"MAT_NFS_FILE_NOT_FOUND",
+		"MAT_ACS_READ_SUBHD_ERR",
+		"MAT_NODIRPTR_FILE_OBJECT",
+		"MAT_READ_ACS_DIRBLK_ERR",
+		"MAT_ACS_CREATE_ERR",
+		"MAT_BAD_ATTRIBUTE",
+		"MAT_BAD_FILE_ACCESS_MODE",
+		"MAT_END_ERRORS"
+	};
+a79 1
+MatrixErrorCode mat_errno ;
+d81 3
+a84 5
+MatDirBlk *mat_rdirblk(file, blknum)
+
+  MatrixFile *file;
+  int	blknum ;
+
+d86 4
+a89 4
+  MatDirBlk *matdirblk ;
+  int	i, j, err, ndirs ;
+  int	dirbufr[MatBLKSIZE/4] ;
+  FILE	*fptr = file->fptr;
+d91 3
+a93 3
+	matdirblk = (MatDirBlk *) malloc(MatBLKSIZE) ;
+	if (matdirblk == NULL) return(NULL) ;
+
+d95 4
+a98 3
+		if (file->acs) err = read_raw_acs_data(file->fname,
+			blknum,1,(char*)dirbufr,VAX_Ix4);
+		else err = read_matrix_data(fptr,blknum,1,(char*)dirbufr,VAX_Ix4);
+d100 4
+a103 3
+		if (file->acs) err = read_raw_acs_data(file->fname,
+			blknum,1,(char*)dirbufr,SunLong);
+		else err = read_matrix_data(fptr,blknum,1,(char*)dirbufr,SunLong);
+d105 2
+a106 1
+	if (err < 0) return(NULL) ;
+d108 4
+d113 6
+a118 12
+	matdirblk->nfree = dirbufr[0] ;
+	matdirblk->nextblk = dirbufr[1] ;
+	matdirblk->prvblk = dirbufr[2] ;
+	matdirblk->nused = dirbufr[3] ;
+
+	ndirs = (MatBLKSIZE/4-4)/4 ;
+	for (i=0 ; i<ndirs ; i++)
+	{	
+	   matdirblk->matdir[i].matnum = 0 ;
+	   matdirblk->matdir[i].strtblk = 0 ;
+	   matdirblk->matdir[i].endblk = 0 ;
+	   matdirblk->matdir[i].matstat = 0 ;
+d121 6
+a126 7
+	for (i=0; i<matdirblk->nused ; i++)
+	{
+	   j = i+1 ;
+	   matdirblk->matdir[i].matnum = dirbufr[j*4+0] ;
+	   matdirblk->matdir[i].strtblk = dirbufr[j*4+1] ;
+	   matdirblk->matdir[i].endblk = dirbufr[j*4+2] ;
+	   matdirblk->matdir[i].matstat = dirbufr[j*4+3] ;
+d128 1
+a128 1
+	return(matdirblk) ;
+d131 2
+a132 2
+MatDirList *mat_read_directory(mptr)
+MatrixFile *mptr;
+d134 4
+a137 4
+  struct MatDir matdir ;
+  MatDirList	*dirlist ;
+  MatDirBlk	*matdirblk;
+  int		i, blknum ;
+d139 3
+a141 2
+	dirlist = (MatDirList *) calloc(1,sizeof(MatDirList)) ;
+	if (dirlist == NULL) return(NULL) ;
+d143 16
+a158 18
+	blknum = MatFirstDirBlk ;
+	do
+	{
+	   matdirblk = mat_rdirblk(mptr, blknum) ;
+	   if (matdirblk == NULL) return(NULL) ;
+	   for (i=0 ; i<matdirblk->nused ; i++)
+	   {
+		matdir.matnum = matdirblk->matdir[i].matnum ;
+		matdir.strtblk = matdirblk->matdir[i].strtblk ;
+		matdir.endblk = matdirblk->matdir[i].endblk ;
+		matdir.matstat = matdirblk->matdir[i].matstat ;
+		insert_mdir(matdir, dirlist) ;
+	   }
+	   blknum = matdirblk->nextblk ;
+	   free((char *) matdirblk) ;
+	}
+	while (blknum != MatFirstDirBlk) ;
+	return(dirlist) ;
+d162 1
+a162 1
+MatrixFile *matrix_open(const char* fname, int fmode, int mtype)
+d164 4
+a167 3
+MatrixFile *matrix_open(fname, fmode, mtype)
+  char	*fname ;
+  int	fmode, mtype ;
+d170 4
+a173 4
+  MatrixFile *mptr ;
+  Main_header *mhead ;
+  int	status;
+  char *omode;
+d175 4
+a178 3
+	omode = "r+";	/* assume READ_WRITE access mode */
+	if (fmode == MAT_READ_ONLY) omode = "r";
+	mat_errno = OK ;
+d180 6
+a185 6
+	/* allocate space for MatrixFile data structure */
+	mptr = (MatrixFile *) calloc(1, sizeof(MatrixFile)) ;
+	if (mptr == NULL)
+	{
+		 mat_errno = MAT_MALLOC_ERR ;
+		 return(NULL) ;
+d188 7
+a194 7
+	/* allocate space for main header data structure and initialize */
+	mptr->mhptr = (Main_header *) calloc(1, sizeof(Main_header)) ;
+	if (mptr->mhptr == NULL)
+	{
+		 mat_errno = MAT_MALLOC_ERR ;
+		 free( mptr);
+		 return(NULL) ;
+d196 2
+a197 2
+	mptr->acs = is_acs(fname) ;
+	mptr->fname = strdup(fname);
+d199 1
+a199 1
+	/* read the main header from the file */
+d201 6
+a206 8
+	if (mptr->acs)
+	{
+		if ( (status = rts_rmhd(fname, mptr->mhptr)) == ERROR)
+		{
+		  mat_errno = MAT_ACS_FILE_NOT_FOUND ;
+		  free( mptr->mhptr);
+		  free( mptr);
+		  return (NULL);
+d208 3
+a210 5
+	}
+	else	/* nfs matrix file */
+	{
+		if (is_interfile(fname)) {
+			if (interfile_open(mptr) == ERROR) {
+d212 1
+a212 1
+				matrix_close(mptr);
+d216 6
+a221 6
+			if ((mptr->fptr = fopen(fname, omode)) == NULL)
+			{
+		  		mat_errno = MAT_NFS_FILE_OPEN_ERR ;
+		  		matrix_close(mptr);
+		  		return (NULL);
+			} else mat_read_main_header(mptr->fptr, mptr->mhptr) ;
+d225 7
+a231 8
+	/*
+	   if the matrix type doesn't match the requested type, that's
+	   an error. Specify matrix type NoData to open any type.
+	*/
+	if (mtype != NoData && mtype != mptr->mhptr->file_type)
+	{
+		mat_errno = MAT_FILE_TYPE_NOT_MATCH ;
+		matrix_close(mptr);
+d236 1
+a236 3
+	/* 
+		read and store the matrix file directory.
+	*/
+d238 1
+a238 1
+	mptr->dirlist = mat_read_directory( mptr);
+d240 5
+a244 5
+	if (mat_errno ==OK) return(mptr) ;
+	else
+	{
+		matrix_close( mptr);
+		return(NULL) ;
+d249 1
+a249 1
+MatrixFile *matrix_create( const char *fname,int fmode,Main_header *proto_mhptr)
+d251 5
+a255 4
+MatrixFile *matrix_create( fname, fmode, proto_mhptr)
+  char *fname;
+  int fmode;
+  Main_header *proto_mhptr;
+d258 2
+a259 2
+	MatrixFile *mptr=NULL;
+	FILE *fptr, *mat_create();
+d262 13
+a274 13
+	switch( fmode)
+	{
+	  case MAT_READ_WRITE:
+	  case MAT_OPEN_EXISTING:
+		mptr = matrix_open( fname, MAT_READ_WRITE, proto_mhptr->file_type);
+		if (mptr) break;
+	/*
+		if (mat_errno != MAT_NFS_FILE_NOT_FOUND) break;
+	*	if we got an NFS_FILE_NOT_FOUND error, then try to
+	*	create the matrix file.
+	*/
+	  case MAT_CREATE:
+	  case MAT_CREATE_NEW_FILE:
+d276 3
+a278 4
+		if (is_acs(fname))
+		{
+		  mat_errno = MAT_ACS_CREATE_ERR;
+		  break;
+d280 4
+a283 5
+		fptr = mat_create( fname, proto_mhptr);
+		if (!fptr)
+		{
+		  mat_errno = MAT_NFS_CREATE_ERR;
+		  break;
+d285 4
+a288 5
+		mptr = (MatrixFile*) calloc( 1, sizeof(MatrixFile));
+		if (!mptr)
+		{
+		  mat_errno = MAT_MALLOC_ERR;
+		  break;
+d291 5
+a295 5
+		mptr->fname = (char*) malloc( strlen(fname)+1);
+		strcpy( mptr->fname, fname);
+		mptr->mhptr = (Main_header*)malloc(sizeof(Main_header));
+		memcpy(mptr->mhptr,proto_mhptr,sizeof(Main_header));
+		mptr->dirlist = mat_read_directory(mptr);
+d297 1
+a297 1
+	  default:
+d304 2
+a305 3
+matrix_close(mptr)
+
+  MatrixFile *mptr ;
+d307 11
+a317 6
+	if (mptr == NULL) return ;
+	if (mptr->mhptr != NULL) free(mptr->mhptr) ;
+	if (mptr->dirlist != NULL) matrix_freelist(mptr->dirlist) ;
+	if (mptr->fptr) fclose(mptr->fptr);
+	if (mptr->fname) free(mptr->fname);
+	free(mptr) ;
+d320 3
+a322 4
+MatrixData *matrix_read(mptr, matnum, dtype)
+
+  MatrixFile *mptr ;
+  int	matnum, dtype ;
+d324 2
+a325 2
+  int	status ;
+  MatrixData *data ;
+d327 8
+a334 4
+	mat_errno = OK ;
+	if (mptr == NULL) mat_errno = MAT_READ_FROM_NILFPTR ;
+	else if (mptr->mhptr == NULL) mat_errno = MAT_NOMHD_FILE_OBJECT ;
+	if (mat_errno != OK) return(NULL) ;
+d336 9
+a344 9
+	if (mptr->mhptr->file_type == Short3dSinogram )
+		return scan3d_read(mptr,matnum,dtype);
+*/
+	/* allocate space for MatrixData structure and initialize */
+	data = (MatrixData *) calloc( 1, sizeof(MatrixData)) ;
+	if (data == NULL)
+	{
+	   mat_errno = MAT_MALLOC_ERR ;
+	   return(NULL) ;
+a345 1
+
+d347 4
+a350 5
+	data->shptr = (caddr_t) calloc(2, MatBLKSIZE) ;
+	if (data->shptr == NULL)
+	{
+	   mat_errno = MAT_MALLOC_ERR ;
+	   return(NULL) ;
+d352 6
+a357 9
+
+	if (read_z_data(mptr, matnum, data, dtype) != OK)
+	{
+	   free_matrix_data(data) ;
+	   data = NULL ;
+	}
+	else if ( dtype != NoData && data->data_type != dtype)
+	  matrix_convert_data( data, dtype) ;
+	return(data) ;
+a358 1
+	
+a359 1
+matrix_write(mptr, matnum, data)
+d361 4
+a364 3
+  MatrixFile *mptr ;
+  MatrixData *data ;
+  int	matnum;
+d366 1
+a366 1
+  int	status ;
+d368 13
+a380 8
+	mat_errno = OK ;
+	if (mptr == NULL) mat_errno = MAT_READ_FROM_NILFPTR ;
+	else if (mptr->mhptr == NULL) mat_errno = MAT_NOMHD_FILE_OBJECT ;
+	else if (data->shptr == NULL) mat_errno = MAT_NIL_SHPTR ;
+	else if (data->data_ptr == NULL) mat_errno = MAT_NIL_DATA_PTR ;
+	if (mat_errno != OK) return (ERROR) ;
+	return  write_z_data(mptr, matnum, data);
+} 
+d382 3
+a384 3
+short find_smax( sdata, nvals)
+  short *sdata;
+  int nvals;
+d386 2
+a387 2
+	short smax;
+	int i;
+d390 3
+a392 2
+	for (i=1; i<nvals; i++)
+	  if (sdata[i]>smax) smax = sdata[i];
+d396 3
+a398 3
+float find_fmax( fdata, nvals)
+  float *fdata;
+  int nvals;
+d400 2
+a401 2
+	float fmax;
+	int i;
+d403 3
+a405 2
+	for (fmax = *fdata, i=1; i<nvals; i++)
+	  if (fdata[i]>fmax) fmax = fdata[i];
+d409 4
+a412 1
+read_host_data(mptr, matnum, data, dtype) 
+d414 13
+a426 3
+  MatrixFile	*mptr ;
+  MatrixData	*data ;
+  int	matnum , dtype;
+a427 14
+ {
+  struct MatDir matdir;
+  int	file_pos, slice_blks, nblks, status,data_size ;
+  Scan_subheader *scansub ;
+  Scan3D_subheader *scan3Dsub ;
+  Image_subheader *imagesub ;
+  Attn_subheader *attnsub ;
+  Norm_subheader *normsub ;
+  Norm3D_subheader *norm3d;
+  int x,y,z,sx,sy,sz;
+  short *data1, *plane0, *plane1, *line0, *line1;
+  float *fdata1, *fplane0, *fplane1, *fline0, *fline1;
+  int datasize;
+
+d429 4
+a432 5
+		return interfile_read(mptr, matnum, data, dtype);
+	if (matrix_find(mptr,matnum,&matdir) == ERROR)
+	{
+	   mat_errno = MAT_MATRIX_NOT_FOUND ;
+	   return(ERROR) ;
+a433 1
+
+d437 18
+a454 21
+	nblks = matdir.endblk - matdir.strtblk ;
+	data_size = data->data_size = 512*nblks;
+	if (dtype != MAT_SUB_HEADER)
+	{
+	  data->data_ptr = (caddr_t) calloc(1, data_size) ;
+	  if (data->data_ptr == NULL)
+	  {
+		 mat_errno = MAT_MALLOC_ERR ;
+		 return(ERROR) ;
+	  }
+	} 
+	switch(mptr->mhptr->file_type)
+	{
+	   case Sinogram :
+		scansub = (Scan_subheader *) data->shptr ;
+		mat_read_scan_subheader(mptr, matdir.strtblk, scansub) ;
+		data->data_type = scansub->data_type ;
+		data->xdim = scansub->num_r_elements ;
+		data->ydim = scansub->num_angles ;
+		data->zdim = scansub->num_z_elements ;
+		data->scale_factor = scansub->scale_factor ;
+d456 15
+a470 11
+		data->data_max = scansub->scan_max * scansub->scale_factor ;
+		if (dtype == MAT_SUB_HEADER) break;
+		if (mptr->acs) read_raw_acs_data(mptr->fname, matdir.strtblk+1,
+			nblks, data->data_ptr, scansub->data_type);
+		else read_matrix_data(mptr->fptr, matdir.strtblk+1, nblks,
+		  data->data_ptr, scansub->data_type) ;
+		break ;
+	   case Short3dSinogram :
+		scan3Dsub = (Scan3D_subheader *) data->shptr ;
+		mat_read_Scan3D_subheader(mptr, matdir.strtblk, scan3Dsub) ;
+		data->data_type = scan3Dsub->data_type ;
+d472 6
+a477 6
+	 (((projs x z_elements)) x num_angles) x Ringdiffs
+*/
+		sx = data->xdim = scan3Dsub->num_r_elements ;
+		sz = data->ydim = scan3Dsub->num_angles ;
+		sy = data->zdim = scan3Dsub->num_z_elements[0] ;
+		data->scale_factor = scan3Dsub->scale_factor ;
+d479 3
+a481 2
+		data->data_max = scan3Dsub->scan_max * scan3Dsub->scale_factor ;
+		if (dtype == MAT_SUB_HEADER) break;
+d483 15
+a497 14
+		data1 = (short*)data->data_ptr;
+		file_pos = (matdir.strtblk+1)*MatBLKSIZE;
+		slice_blks = (sx*sy*sizeof(short)+511)/512;
+		plane0 = (short*)malloc(512*slice_blks);
+		for (z=0; z<sz; z++) {		/* for each planar view fixed theta */
+			fseek(mptr->fptr,file_pos,0);
+			fread(plane0,sizeof(short),sx*sy,mptr->fptr);
+			file_data_to_host(plane0,slice_blks,scan3Dsub->data_type);
+			file_pos += sx*sy*sizeof(short);
+			for (y=0; y<sy; y++) {		/* for each line fixed plane */
+				line0 =  plane0 + (sx*y);
+				plane1 = data1 + (sx*sz*y);
+				line1 = plane1 + (sx*z);
+				memcpy(line1,line0,sx*sizeof(short));
+d500 14
+a513 14
+		if (data->data_max < 0) 
+			data->data_max = find_smax(data1,sx*sy*sz);
+		free(plane0);
+		break ;
+	   case ByteVolume :
+	   case PetImage :
+	   case PetVolume :
+		imagesub = (Image_subheader *) data->shptr ;
+		mat_read_image_subheader(mptr, matdir.strtblk, imagesub);
+		data->data_type = imagesub->data_type ;
+		data->xdim = imagesub->x_dimension ;
+		data->ydim = imagesub->y_dimension ;
+		data->scale_factor = imagesub->scale_factor ;
+		data->zdim = imagesub->z_dimension ;
+d516 12
+a527 11
+		if (dtype == MAT_SUB_HEADER) break;
+		read_matrix_data(mptr->fptr, matdir.strtblk+1, nblks,
+		  data->data_ptr, imagesub->data_type) ;
+		break ;
+	   case AttenCor :
+		attnsub = (Attn_subheader *) data->shptr ;
+		mat_read_attn_subheader(mptr, matdir.strtblk, attnsub);
+		data->data_type = attnsub->data_type ;
+		sx = data->xdim = attnsub->num_r_elements ;
+		sz = data->ydim = attnsub->num_angles ;
+		sy = data->zdim = attnsub->num_z_elements ;
+d530 3
+a532 1
+		if (dtype == MAT_SUB_HEADER) break;
+d534 15
+a548 14
+		fdata1 = (float*)data->data_ptr;
+		file_pos = matdir.strtblk*MatBLKSIZE;
+		slice_blks = (sx*sy*sizeof(float)+511)/512;
+		fplane0 = (float*)malloc(512*slice_blks);
+		for (z=0; z<sz; z++) {		/* for each planar view fixed theta */
+			fseek(mptr->fptr,file_pos,0);
+			fread(fplane0,sizeof(float),sx*sy,mptr->fptr);
+			file_data_to_host(fplane0,slice_blks,attnsub->data_type);
+			file_pos += sx*sy*sizeof(float);
+			for (y=0; y<sy; y++) {		/* for each line fixed plane */
+				fline0 =  fplane0 + (sx*y);
+				fplane1 = fdata1 + (sx*sz*y);
+				fline1 = fplane1 + (sx*z);
+				memcpy(fline1,fline0,sx*sizeof(float));
+d551 22
+a572 21
+		data->data_max = find_fmax(fdata1,sx*sy*sz);
+		free(fplane0);
+		break ;
+	   case Normalization :
+		normsub = (Norm_subheader *) data->shptr ;
+		mat_read_norm_subheader(mptr, matdir.strtblk, normsub) ;
+		data->data_type = normsub->data_type ;
+		data->xdim = normsub->num_r_elements ;
+		data->ydim = normsub->num_angles ;
+		data->zdim = normsub->num_z_elements ;
+		data->scale_factor = normsub->scale_factor ;
+		if (dtype == MAT_SUB_HEADER) break;
+		read_matrix_data(mptr->fptr, matdir.strtblk+1, nblks,
+		  data->data_ptr, normsub->data_type) ;
+		data->data_max = data->scale_factor * 
+		  find_fmax( data->data_ptr, data->xdim * data->ydim);
+		break ;
+	   case Norm3d :
+		norm3d = (Norm3D_subheader *) data->shptr ;
+		mat_read_norm3d_subheader(mptr, matdir.strtblk, norm3d) ;
+		data->data_type = norm3d->data_type ;
+d577 2
+a578 1
+		if (dtype == MAT_SUB_HEADER) break;
+d582 1
+d584 13
+a596 13
+		336*(1+7) + 24*784
+		336*(1+7) =
+		radial elements (plane geometry + Crystal Interference) Corrections
+		24*784 = cristals efficiencies
+*/
+		data->data_ptr = malloc(datasize*sizeof(float));
+		read_matrix_data(mptr->fptr, matdir.strtblk+1, nblks,
+		  data->data_ptr, norm3d->data_type) ;
+		break ;
+	   default :
+		mat_errno = MAT_UNKNOWN_FILE_TYPE ;
+		return(ERROR) ;
+		break ;
+d598 1
+a598 1
+	return(OK) ;
+d601 4
+a604 5
+write_host_data(mptr, matnum, data)
+
+  MatrixFile *mptr ;
+  MatrixData *data ;
+  int	matnum ;
+d606 6
+a611 19
+  struct MatDir matdir, dir_entry ;
+  Scan_subheader *scansub ;
+  Image_subheader *imagesub ;
+  Attn_subheader *attnsub ;
+  Norm_subheader *normsub ;
+  int	status, blkno, nblks ;
+	
+	status = OK ;
+	nblks = (data->data_size+511)/512;
+	if (matrix_find(mptr, matnum, &matdir) == ERROR)
+	{
+	   blkno = mat_enter(mptr, matnum, nblks) ;
+	   dir_entry.matnum = matnum ;
+	   dir_entry.strtblk = blkno ;
+	   dir_entry.endblk = dir_entry.strtblk + nblks - 1 ;
+	   dir_entry.matstat = 1 ;
+	   insert_mdir(dir_entry, mptr->dirlist) ;
+	   matdir = dir_entry ;
+	}
+d613 10
+a622 34
+	switch(mptr->mhptr->file_type)
+	{
+	   case Sinogram :
+		  scansub = (Scan_subheader *) data->shptr ;
+		  mat_write_scan_subheader(mptr, matdir.strtblk, data->shptr);
+		  status = write_matrix_data(mptr->fptr, matdir.strtblk+1,
+			nblks, data->data_ptr, scansub->data_type) ;
+		  break ;
+	   case ByteVolume :
+	   case PetImage :
+	   case PetVolume :
+		  imagesub = (Image_subheader *) data->shptr ;
+		  mat_write_image_subheader(mptr,matdir.strtblk,data->shptr);
+		  status = write_matrix_data(mptr->fptr, matdir.strtblk+1,
+			nblks, data->data_ptr, imagesub->data_type) ;
+		  break ;
+	   case AttenCor :
+		  attnsub = (Attn_subheader *) data->shptr ;
+		  mat_write_attn_subheader(mptr, matdir.strtblk, data->shptr);
+		  status = write_matrix_data(mptr->fptr, matdir.strtblk+1,
+			nblks, data->data_ptr, attnsub->data_type) ;
+		  break ;
+	   case Normalization :
+		  normsub = (Norm_subheader *) data->shptr ;
+		  mat_write_norm_subheader(mptr, matdir.strtblk, data->shptr);
+		  status = write_matrix_data(mptr->fptr, matdir.strtblk+1,
+			nblks, data->data_ptr, normsub->data_type) ;
+		  break ;
+	   default :	/* default treated as sinogram */
+		  scansub = (Scan_subheader *) data->shptr ;
+		  mat_write_scan_subheader(mptr, matdir.strtblk, data->shptr);
+		  status = write_matrix_data(mptr->fptr, matdir.strtblk+1,
+			nblks, data->data_ptr, scansub->data_type) ;
+		  break ;
+d624 35
+a658 1
+	return(status) ;
+d661 4
+a664 4
+int matrix_find( matfile, matnum, matdir)
+  MatrixFile *matfile ;
+  int	matnum ;
+  struct MatDir *matdir;
+d666 1
+a666 1
+  MatDirNode	*node ;
+d668 14
+a681 14
+	if (matfile == NULL) return(ERROR) ;
+	if (matfile->dirlist == NULL) return(ERROR) ;	
+	node = matfile->dirlist->first ;
+	while (node != NULL)
+	{
+	   if (node->matnum == matnum)
+	   {
+		matdir->matnum = node->matnum ;
+		matdir->strtblk = node->strtblk ;
+		matdir->endblk = node->endblk ;
+		matdir->matstat = node->matstat ;
+		break ;
+	   }
+	   node = node->next ;
+d683 4
+a686 2
+	if (node != NULL) return(OK) ;
+	else return(ERROR) ;
+a687 1
+	
+a688 1
+matrix_freelist(matdirlist)
+d690 2
+a691 1
+  MatDirList	*matdirlist ;
+d694 1
+a694 1
+  MatDirNode	*node, *next ;
+d696 10
+a705 11
+	if (matdirlist == NULL) return ;
+	if (matdirlist->first != NULL)
+	{
+	  node = matdirlist->first ;
+	  do
+	  {
+		next = node->next ;
+		free(node) ;
+		node = next ;
+	  }
+	  while(next != NULL) ;
+d707 1
+a707 1
+	free(matdirlist) ;
+d710 3
+a712 1
+insert_mdir(matdir, dirlist)
+d714 2
+a715 2
+  MatDirList	*dirlist ;
+  struct MatDir	matdir ;
+d717 7
+a723 10
+{
+  MatDirNode	*node ;
+ 
+	if (dirlist == NULL)
+	{
+		dirlist = (MatDirList *) malloc(sizeof(MatDirList)) ;
+		if (dirlist == NULL) return(ERROR) ;
+		dirlist->nmats = 0 ;
+		dirlist->first = NULL ;
+		dirlist->last = NULL ;
+d725 3
+a727 2
+	node = (MatDirNode *) malloc(sizeof(MatDirNode)) ;
+	if (node == NULL) return(ERROR) ;
+d729 3
+a731 3
+	node->matnum = matdir.matnum ;
+	node->strtblk = matdir.strtblk ;
+	node->endblk = matdir.endblk ;
+d733 1
+a733 1
+	node->next = NULL ;
+d735 8
+a742 5
+	if (dirlist->first == NULL)	/* if list was empty, add first node */
+	{
+	   dirlist->first = node ;
+	   dirlist->last = node ;
+	   dirlist->nmats = 1 ;
+a743 6
+	else
+	{
+	   (dirlist->last)->next = node ;
+	   dirlist->last = node ;
+	   ++(dirlist->nmats) ;
+	}
+d746 2
+a747 1
+void free_matrix_data(data)
+a748 2
+  MatrixData	*data ;
+
+d750 6
+a755 5
+	if (data != NULL)
+	{
+	   if (data->data_ptr != NULL) free(data->data_ptr) ;
+	   if (data->shptr != NULL) free(data->shptr) ;
+	   free(data) ;
+a756 1
+
+d760 1
+a760 1
+matrix_convert_data()
+d762 1
+a762 1
+	return OK ;	/* dummy for now */
+d769 2
+a770 1
+file_exists(filename)	/* subroutine to see if file exists or not */
+a771 2
+  char *filename ;
+
+d773 3
+a775 3
+  struct stat stbuf ;
+  int	status ;
+  Main_header mhead ;
+d777 10
+a786 4
+	if (!is_acs(filename))
+	{
+	   if (stat(filename, &stbuf) == -1) return(FALSE) ;
+	   return(TRUE) ;
+a787 6
+	else
+	{
+	   status  = rts_rmhd(filename, &mhead) ;
+	   if (status == OK) return(TRUE) ;
+	   else return(FALSE) ;
+	}
+d790 2
+a791 1
+is_acs(fname)
+a792 2
+  char	*fname ;
+
+d794 2
+a795 2
+ 	if (strindex(fname, "/sd") == 0)
+		return(TRUE) ; 
+d797 1
+a797 1
+	   return(FALSE) ;
+d803 2
+a804 1
+strindex(s, t)
+a805 2
+  char	s[], t[] ;
+
+d807 1
+a807 1
+  int	i, j, k ;
+d809 4
+a812 4
+	for (i=0 ; s[i] !='\0' ; i++)
+	{
+	   for (j=i, k=0 ; t[k] != '\0' && s[j]==t[k] ; j++, k++) ;
+	   if (k > 0 && t[k] == '\0') return i ;
+d814 1
+a814 1
+	return -1 ;
+d817 2
+a818 2
+matrix_perror( s)
+  char *s;
+d820 2
+a821 2
+	fprintf( stderr, "%s: %s\n", s, mat_errors[mat_errno]);
+	exit(-1);
+d826 1
+a826 1
+static int item_size[]={ 0, 1, 2, 4, 4, 4, 2, 4 };
+d828 1
+a828 2
+MatrixData *matrix_object_create( va_alist)
+va_dcl
+d831 2
+a832 2
+	va_list arp;
+	MatrixData *object, *proto_object=NULL;
+d834 1
+a834 1
+	int nitems;
+d840 4
+a843 5
+	object = (MatrixData*) calloc( 1, sizeof(MatrixData));
+	if (!object)
+	{
+	  mat_errno = MAT_MALLOC_ERR;
+	  return NULL;
+d845 4
+a848 5
+	va_start( arp);
+	object->mat_type = va_arg( arp, int);
+	while (attrib = va_arg( arp, MatrixObjectAttribute))
+	  switch( attrib)
+	  {
+d850 1
+a850 1
+			object->xdim = va_arg( arp, int);
+d853 1
+a853 1
+			object->ydim = va_arg( arp, int);
+d856 1
+a856 1
+			object->zdim = va_arg( arp, int);
+d859 1
+a859 1
+			object->data_type = va_arg( arp, int);
+d862 1
+a862 1
+			object->scale_factor = va_arg( arp, double);
+d865 1
+a865 1
+			object->pixel_size = va_arg( arp, double);
+d868 1
+a868 1
+			object->y_size = va_arg( arp, double);
+d871 1
+a871 1
+			object->z_size = va_arg( arp, double);
+d874 1
+a874 1
+			object->data_max = va_arg( arp, double);
+d877 1
+a877 1
+			object->data_min = va_arg( arp, double);
+d880 2
+a881 2
+			proto_object = va_arg( arp, MatrixData*);
+			copy_proto_object( object, proto_object);
+d886 7
+a892 7
+	  }
+	nitems = object->xdim*object->ydim;
+	if (object->zdim>0) nitems *= object->zdim;
+	object->data_size = item_size[(int)object->data_type]*nitems;
+	object->data_ptr = (caddr_t) calloc( 1, object->data_size);
+	if (!object->data_ptr)
+	{
+d896 42
+a937 42
+	if (!object->shptr) switch( object->mat_type)
+	{
+	  case Sinogram:
+		object->shptr = calloc( 1, sizeof(Scan_subheader));
+		ssh = (Scan_subheader*)(object->shptr);
+		ssh->data_type = object->data_type;
+		ssh->num_r_elements = object->xdim;
+		ssh->num_angles = object->ydim;
+		ssh->x_resolution = object->pixel_size;
+		ssh->scale_factor = object->scale_factor;
+		break;
+	  case PetVolume:
+		object->shptr = calloc( 1, sizeof(Image_subheader));
+		ish = (Image_subheader*)(object->shptr);
+		ish->data_type = object->data_type;
+		ish->num_dimensions = 2;
+		ish->x_dimension = object->xdim;
+		ish->y_dimension = object->ydim;
+		ish->x_pixel_size = ish->y_pixel_size = object->pixel_size;
+		ish->scale_factor = object->scale_factor;
+		break;
+	  case AttenCor:
+		object->shptr = calloc( 1, sizeof(Attn_subheader));
+		ash = (Attn_subheader*)(object->shptr);
+		ash->data_type = object->data_type;
+		ash->num_r_elements = object->xdim;
+		ash->num_angles = object->ydim;
+		ash->x_resolution = object->pixel_size;
+		ash->scale_factor = object->scale_factor;
+		break;
+	  case Normalization:
+		object->shptr = calloc( 1, sizeof(Norm_subheader));
+		nsh =  (Norm_subheader*)(object->shptr);
+		nsh->data_type = object->data_type;
+		nsh->num_r_elements = object->xdim;
+		nsh->num_angles = object->ydim;
+		nsh->scale_factor = object->scale_factor;
+		break;
+	  default:
+		mat_errno = MAT_UNKNOWN_FILE_TYPE;
+		return NULL;
+	}
+d941 2
+a942 2
+copy_proto_object( new, old)
+  MatrixData *new, *old;
+d944 1
+a944 1
+	int sh_size;
+d946 2
+a947 4
+	if (new->mat_type == old->mat_type)
+	{
+	  switch (new->mat_type)
+	  {
+d949 1
+a949 1
+			sh_size = sizeof(Scan_subheader);
+d952 1
+a952 1
+			sh_size = sizeof(Image_subheader);
+d955 1
+a955 1
+			sh_size = sizeof(Attn_subheader);
+d958 1
+a958 1
+			sh_size = sizeof(Norm_subheader);
+d960 3
+a962 3
+	  }
+	  new->shptr = (caddr_t) malloc( sh_size);
+	  memcpy(new->shptr, old->shptr, sh_size);
+d976 4
+a979 4
+Main_header *matrix_init_main_header( fname, ftype, mh_proto)
+  char *fname;
+  DataSetType ftype;
+  Main_header *mh_proto;
+d981 1
+a981 1
+	Main_header *mhptr;
+d983 1
+a983 1
+	mhptr = (Main_header*) calloc( 1, sizeof(Main_header));
+d985 1
+a985 1
+	  memcpy(mhptr, mh_proto, sizeof(Main_header));
+d987 1
+a987 1
+	strncpy( mhptr->original_file_name, fname, 20);
+d991 2
+a992 2
+matrix_free( matrix)
+  MatrixData *matrix;
+d994 5
+a998 3
+	if (matrix->shptr) free( matrix->shptr);
+	if (matrix->data_ptr) free( matrix->data_ptr);
+	free( matrix);
+d1001 3
+a1003 3
+convert_float_scan( scan, fdata)
+  MatrixData *scan;
+  float *fdata;
+d1005 3
+a1007 3
+	int i, nvals, tot;
+	float fmax, scale;
+	short int *sdata;
+d1011 3
+a1013 3
+	  free(scan->data_ptr);
+	nvals = scan->xdim*scan->ydim;
+	sdata = (short int*) malloc( nvals*sizeof(short int));
+d1015 1
+a1015 1
+	scan->data_size = nvals*sizeof(short int);
+d1017 3
+a1019 2
+	for (i=0; i<nvals; i++)
+	  if (fdata[i] > fmax) fmax = fdata[i];
+d1021 2
+a1022 1
+	if (fmax > 0.0) scale = 32767./fmax;
+d1024 3
+a1026 4
+	for (i=0; i<nvals; i++)
+	{
+	  sdata[i] = scale*fdata[i];
+	  tot += sdata[i];
+d1028 2
+a1029 2
+	scan->scale_factor = 1.0/scale;
+	ssh = (Scan_subheader*) scan->shptr;
+d1031 1
+a1031 1
+	ssh->scan_max = fmax*scale;
+d1035 2
+a1036 2
+	ssh->scale_factor = 1.0/scale;
+		ssh->x_resolution = scan->pixel_size;
+d1039 3
+a1041 3
+convert_long_scan( scan, ldata)
+  MatrixData *scan;
+  int *ldata;
+d1043 3
+a1045 3
+	int i, nvals, tot, lmax;
+	float scale;
+	short int *sdata;
+d1049 3
+a1051 3
+	  free(scan->data_ptr);
+	nvals = scan->xdim*scan->ydim;
+	sdata = (short int*) malloc( nvals*sizeof(short int));
+d1053 1
+a1053 1
+	scan->data_size = nvals*sizeof(short int);
+d1055 3
+a1057 2
+	for (i=0; i<nvals; i++)
+	  if (ldata[i] > lmax) lmax = ldata[i];
+d1059 2
+a1060 1
+	if (lmax > 0) scale = 32767./lmax;
+d1062 3
+a1064 4
+	for (i=0; i<nvals; i++)
+	{
+	  sdata[i] = scale*ldata[i];
+	  tot += sdata[i];
+d1066 2
+a1067 2
+	scan->scale_factor = 1.0/scale;
+	ssh = (Scan_subheader*) scan->shptr;
+d1069 1
+a1069 1
+	ssh->scan_max = lmax*scale;
+d1073 1
+a1073 1
+	ssh->scale_factor = 1.0/scale;
+@

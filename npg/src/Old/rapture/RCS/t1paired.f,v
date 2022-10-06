@@ -1,0 +1,194 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.2
+date	93.12.22.16.58.46;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.11.17.17.37.21;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@X window version, first release.
+@
+
+
+1.2
+log
+@Moved output from LOGOUT2 to LOGOUT.
+@
+text
+@C$Id: t1paired.f,v 1.1 1993/11/17 17:37:21 ty7777 Exp ty7777 $
+C$Log: t1paired.f,v $
+c Revision 1.1  1993/11/17  17:37:21  ty7777
+c Initial revision
+c
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   T1PAIRED.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         28-Sep-90
+C  Written For:  RAPTURE
+C
+C  History:
+C     Modified 17-Oct-90:
+C        1) to compute power for 2,3,5,10,15%;
+C        2) to compute t for input difference images as well as
+C           two separate images;
+C     Modified 26-Nov-90 to pass OUTPUT as parameter.
+C     Modified 04-Dec-90 to write ALPHA to LOGOUT.
+C     Modified 07-Dec-90 to allow interupt (GETCNW).
+C     Modified 27-Jun-91 to eliminate interupt with GETCNW.
+C     Modified 05-Nov-91 to alter LOGOUT and LOGOUT2 output.
+C     Modified 17-Nov-93 by Tom Yang to port to UNIX machines.
+C     Modified 22-Dec-93 by Tom Yang to change LOGOUT2 to LOGOUT.
+C
+C  Intent:
+C     Process a set of files to compute t for paired data.
+C
+C  Uses:
+C     T1SUM
+C     T1PPOWER
+C     TTABLE
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE T1PAIRED (T, OUTPUT)
+C
+      INCLUDE 'rapture.inc'
+C
+      REAL*4        VAL       ! mean difference between regional values
+      REAL*4        VAL1      ! mean value for region in control image
+      REAL*4        VAL2      ! mean value for region in test image
+      REAL*4        MEAN      ! mean difference
+      REAL*4        VAR       ! variance of difference
+      REAL*4        SDIFF     ! standard error of difference
+      REAL*4        T         ! t-value
+      REAL*4        P1        ! probability that MEAN1=MEAN2 (1-tailed)
+      REAL*4        P2        ! probability that MEAN1=MEAN2 (2-tailed)
+      REAL*4        SUM       ! sum of mean values
+      REAL*4        SUMSQR    ! sum of squares of mean values
+C
+      INTEGER*4     DF        ! degrees of freedom
+      INTEGER*4     NT        ! test values of N1 for estimating power
+C
+      LOGICAL*1     OUTPUT    ! T--> write user messages
+      LOGICAL*1     TWOTAIL   ! true--> 2-tailed probability
+      LOGICAL*1     RETURNP   ! true--> return P for given T
+      LOGICAL*1     ERROR     ! error reading image
+      CHARACTER*256 RCSHEADER
+C
+      RCSHEADER = '$Id: t1paired.f,v 1.1 1993/11/17 17:37:21 ty7777 Exp ty7777 $'
+      ERROR = .FALSE.
+C
+C  Compute mean and variance of difference of regional values
+C
+      T = 0.
+      SUM = 0.
+      SUMSQR = 0.
+      DO 100 FNUM=1,N1
+        CFNAME = FNAME(FNUM)
+        CALL T1SUM(VAL1,ERROR)
+        IF (ERROR) RETURN
+        IF (DIFF) THEN
+          VAL = VAL1
+        ELSE
+          CFNAME = FNAME(FNUM + N1)
+          CALL T1SUM(VAL2,ERROR)
+          IF (ERROR) RETURN
+          VAL = VAL2 - VAL1
+        END IF
+        SUM = SUM + VAL
+        SUMSQR = SUMSQR + VAL**2
+100   CONTINUE
+C
+      MEAN = SUM/FLOAT(N1)
+      VAR = (SUMSQR - (SUM**2/FLOAT(N1)))/FLOAT(N1-1)
+C
+      SDIFF = SQRT(VAR/FLOAT(N1))
+      T = MEAN/SDIFF
+      DF = N1 - 1
+C
+C  Get upper bound on probability (i.e., probability < P1)
+C
+      RETURNP = .TRUE.
+      TWOTAIL = .FALSE.
+      CALL TTABLE(T,P1,DF,TWOTAIL,RETURNP)
+      TWOTAIL = .TRUE.
+      CALL TTABLE(T,P2,DF,TWOTAIL,RETURNP)
+C
+      IF (ALPHA.GT.0.0) THEN
+        IF (OUTPUT) WRITE(USEROUT,8300)
+        WRITE(LOGOUT,8300)
+      END IF
+      IF (OUTPUT) THEN
+        WRITE(USEROUT,8100) N1,MEAN,SQRT(VAR),SDIFF,DF,ALPHA
+        WRITE(USEROUT,8200) T,P1,P2
+      END IF
+      IF (ALPHA.GT.0.0) THEN
+        WRITE(LOGOUT,8100)  N1,MEAN,SQRT(VAR),SDIFF,DF,ALPHA
+        WRITE(LOGOUT,8200)  T,P1,P2
+      END IF
+C
+C  SPED-format output to second log file
+C
+      WRITE(LOGOUT,8250) XSEED,YSEED,ZSEED,THRESH,RPIXELS,
+     &   MEAN,SDIFF,T,P1,P2
+8250  FORMAT(4I4,I5,2X,F8,2X,F8,F10.3,2F8.4)
+C
+8100  FORMAT(1X,'N=',I3,'  Mean Diff= ',F8,'  SD= ',F8,
+     &          '  SEDiff= ',F8,' dF=',I3,' a=',F6.3)
+8200  FORMAT(1X,'    T =',F8.3,'  p(1-tail) <= ',F6.4,
+     &  '  P(2-tail) <= ',F6.4)
+C
+C  Power Analysis if critical T > 0.
+C
+CN  dF    p         2%          3%          5%          10%         15%
+C20  1  0.0500   1.00 1.00   1.00 1.00   1.00 1.00   1.00 1.00   1.00 1.00
+C
+8300  FORMAT(1X,'1- and 2-tailed power given N, p, SEDiff, and ',
+     &  'possible differences of means:')
+8400  FORMAT(1X,' N  dF    p         2%          3%          5%',
+     &  '          10%         15%')
+C
+      IF (ALPHA.GT.0.0) THEN
+        IF (OUTPUT) WRITE(USEROUT,8400)
+        WRITE(LOGOUT,8400)
+        DO 400 NT=2,20
+          CALL T1PPOWER(NT,VAR)
+400     CONTINUE
+        WRITE(LOGOUT,*)
+      END IF
+C
+      RETURN
+      END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d26 1
+d63 1
+a63 1
+      RCSHEADER = '$Id$'
+d117 1
+a117 1
+      WRITE(LOGOUT2,8250) XSEED,YSEED,ZSEED,THRESH,RPIXELS,
+@

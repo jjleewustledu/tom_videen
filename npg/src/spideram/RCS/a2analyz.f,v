@@ -1,0 +1,390 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   A2ANALYZ.FTN
+C     Author:       Tom O. Videen
+C     Date:         21-May-87
+C     Intent:
+C     .   This subroutine computes region means selected scan files.
+C     .   If there are no errors, NSCANS is incremented by 1.
+C     History:
+C     .    Modified 14-Oct-91 by TOV to use Unix path names.
+C     
+C     Common Blocks from SPIDERAM:
+C     .   **DISPLAY  - display parameters             (read only)
+C     .   **FILES    - scan file list                 (read only)
+C     .   **REGION   - regions of interest parameters (read only)
+C     .   **REGCOMP  - region analysis parameters     (write)
+C     
+C     Variables Passed:
+C     .   PFILE - file number selected to process (one at a time);
+C     .       If 0, process all files for which PROC(I)=.TRUE.
+C     .   ERRTYPE = type of error in processing images;
+C     .    19 = illegal type of region;
+C     .    20 = too many scans to process (max is 20);
+C     
+C     Local Variables:
+C     .   N = file number to process;
+C     .   MEAN = mean activity of all included points;
+C     .   REG = region number to process;
+C     .   FIRSTR = first region (1-100) on the current slice;
+C     
+C     Uses Subroutines:
+C     .   D2IMAGE  - assemble an image slice from component image files;
+C     .   P2AREAI  - get points within an irregular region;
+C     .   P2AREAR  - get points within a rectangular region;
+C     .   P2MEAN   - get mean on a region;
+C     
+C     Called by:  M2ANALYZ
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: a2analyz.f,v 1.4 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE A2ANALYZ(PFILE,ERRTYPE)
+
+      INTEGER*4    PFILE,ERRTYPE,N,REG,SLCNUM,MAXSLICE,FIRSTR,COL,ROW,L2,I,J
+      REAL         MEAN,NONE
+      LOGICAL*1    SUB,DIVIDE
+
+      INCLUDE 'spideram.inc'
+      DATA  NONE /-5555.0/
+
+
+      ERRTYPE = 0
+      FIRSTR = 0
+
+C     Currently handles only transverse images with no comparisons
+
+      COL = 0
+      ROW = 0
+      SUB = .FALSE.
+      DIVIDE = .FALSE.
+
+C     Process image files 1-20 or PFILE
+
+      DO 700 I=1,20
+
+C     Storage arrays allow for only 20 scan files
+
+         IF (NSCANS.GE.20) THEN
+            ERRTYPE = 20
+            RETURN
+         END IF
+
+C     Get number of scan file to process
+
+         IF (PFILE.GT.0) THEN
+            N = PFILE
+         ELSE IF (PROC(I)) THEN
+            N = I
+         ELSE
+            GO TO 700
+         END IF
+         FILE(1) = N
+         MAXSLICE = NMSLICES
+         NSCANS = NSCANS + 1
+
+C     Regions which are not within the image are given means of -5555.
+
+         DO 100 REG=1,NREGS
+            SLCNUM = INT(SLICE(REG))
+            IF (SLCNUM.LT.1 .OR. SLCNUM.GT.MAXSLICE) THEN
+               REGMEAN(NSCANS,REG) = NONE
+            END IF
+ 100     CONTINUE
+
+C     --------------------------------------------------------------
+C     Process all regions on slice 1 before proceeding to the next slice.
+C     If no more regions on slices in the file, go to next image file.
+
+         SLCNUM = 0
+ 200     SLCNUM = SLCNUM + 1
+         IF (SLCNUM.GT.MAXSLICE) GO TO 600
+
+C     Check if any regions on this slice
+
+         DO 300 J=1,NREGS
+            IF (SLCNUM.EQ.INT(SLICE(J))) THEN
+               FIRSTR = J
+               GO TO 400
+            END IF
+ 300     CONTINUE
+         GO TO 200
+
+C     If there is a region on this slice, read and process the image
+
+ 400     CALL D2IMAGE(SLCNUM,COL,ROW,SUB,DIVIDE,ERRTYPE)
+         IF (ERRTYPE.NE.0) THEN
+            NSCANS = NSCANS-1
+            RETURN
+         END IF
+
+C     Compute statistics for all regions on the slice
+
+         DO 500 REG=FIRSTR,NREGS
+            IF (SLCNUM.EQ.INT(SLICE(REG))) THEN
+               IF (REGTYPE(REG).EQ.'R') THEN
+                  CALL P2AREAR(REG)
+               ELSE IF (REGTYPE(REG).EQ.'I') THEN
+                  CALL P2AREAI(REG)
+               ELSE
+                  ERRTYPE = 19
+                  NSCANS = NSCANS-1
+                  RETURN
+               END IF
+               CALL P2MEAN(MEAN)
+               REGMEAN(NSCANS,REG) = MEAN
+            END IF
+ 500     CONTINUE
+         GO TO 200
+
+C     --------------------------------------------------------------
+C     Store values and file IDs for this region and file
+
+ 600     REGFNAME(NSCANS)  = SCANNAME(1)
+         L2 = IANYL(FILENAME(N),'.') - 1
+         IF (L2.LT.0) L2 = INANYR(FILENAME(N),' ')
+         REGFID(NSCANS) = FILENAME(N)(1:L2)
+         IF (PFILE.GT.0) RETURN
+ 700  CONTINUE
+
+      RETURN
+      END
+@
+
+
+1.4
+log
+@format changes plus fixes for g77
+@
+text
+@d40 1
+a40 1
+C     rcsheader = "$Id: a2analyz.f,v 1.3 1993/10/04 21:55:32 tom Exp tom $"
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d2 37
+a38 42
+C
+C  Subroutine:   A2ANALYZ.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         21-May-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C      Modified 14-Oct-91 by TOV to use Unix path names.
+C  Intent:
+C     This subroutine computes region means selected scan files.
+C     If there are no errors, NSCANS is incremented by 1.
+C
+C  Common Blocks from SPIDERAM:
+C     **DISPLAY  - display parameters             (read only)
+C     **FILES    - scan file list                 (read only)
+C     **REGION   - regions of interest parameters (read only)
+C     **REGCOMP  - region analysis parameters     (write)
+C
+C  Variables Passed:
+C     PFILE - file number selected to process (one at a time);
+C         If 0, process all files for which PROC(I)=.TRUE.
+C     ERRTYPE = type of error in processing images;
+C      19 = illegal type of region;
+C      20 = too many scans to process (max is 20);
+C
+C  Local Variables:
+C     N = file number to process;
+C     MEAN = mean activity of all included points;
+C     REG = region number to process;
+C     FIRSTR = first region (1-100) on the current slice;
+C
+C  Uses Subroutines:
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     D2IMAGE  - assemble an image slice from component image files;
+C     P2AREAI  - get points within an irregular region;
+C     P2AREAR  - get points within a rectangular region;
+C     P2MEAN   - get mean on a region;
+C
+C  Called by:  M2ANALYZ
+C
+d40 2
+a41 1
+C
+d43 2
+a44 3
+C
+      INTEGER*4    PFILE,ERRTYPE,N,REG,SLCNUM,MAXSLICE,FIRSTR,
+     &             COL,ROW,L2,I,J
+d47 1
+a47 2
+      character*256 rcsheader
+C
+d51 1
+a51 2
+      rcsheader = "$Id$"
+C
+d54 3
+a56 3
+C
+C  Currently handles only transverse images with no comparisons
+C
+d61 3
+a63 3
+C
+C  Process image files 1-20 or PFILE
+C
+d65 27
+a91 68
+C
+C  Storage arrays allow for only 20 scan files
+C
+        IF (NSCANS.GE.20) THEN
+          ERRTYPE = 20
+          RETURN
+        END IF
+C
+C  Get number of scan file to process
+C
+        IF (PFILE.GT.0) THEN
+          N = PFILE
+        ELSE IF (PROC(I)) THEN
+          N = I
+        ELSE
+          GO TO 700
+        END IF
+        FILE(1) = N
+        MAXSLICE = NMSLICES
+        NSCANS = NSCANS + 1
+C
+C  Regions which are not within the image are given means of -5555.
+C
+        DO 100 REG=1,NREGS
+          SLCNUM = INT(SLICE(REG))
+          IF (SLCNUM.LT.1 .OR. SLCNUM.GT.MAXSLICE) THEN
+            REGMEAN(NSCANS,REG) = NONE
+          END IF
+100     CONTINUE
+C
+C  --------------------------------------------------------------
+C  Process all regions on slice 1 before proceeding to the next slice.
+C  If no more regions on slices in the file, go to next image file.
+C
+        SLCNUM = 0
+200     SLCNUM = SLCNUM + 1
+        IF (SLCNUM.GT.MAXSLICE) GO TO 600
+C
+C  Check if any regions on this slice
+C
+        DO 300 J=1,NREGS
+          IF (SLCNUM.EQ.INT(SLICE(J))) THEN
+            FIRSTR = J
+            GO TO 400
+          END IF
+300     CONTINUE
+        GO TO 200
+C
+C  If there is a region on this slice, read and process the image
+C
+400     CALL D2IMAGE(SLCNUM,COL,ROW,SUB,DIVIDE,ERRTYPE)
+        IF (ERRTYPE.NE.0) THEN
+          NSCANS = NSCANS-1
+          RETURN
+        END IF
+C
+C  Compute statistics for all regions on the slice
+C
+        DO 500 REG=FIRSTR,NREGS
+          IF (SLCNUM.EQ.INT(SLICE(REG))) THEN
+            IF (REGTYPE(REG).EQ.'R') THEN
+              CALL P2AREAR(REG)
+            ELSE IF (REGTYPE(REG).EQ.'I') THEN
+              CALL P2AREAI(REG)
+            ELSE
+              ERRTYPE = 19
+              NSCANS = NSCANS-1
+              RETURN
+d93 57
+a149 16
+            CALL P2MEAN(MEAN)
+            REGMEAN(NSCANS,REG) = MEAN
+          END IF
+500     CONTINUE
+        GO TO 200
+C  --------------------------------------------------------------
+C
+C  Store values and file IDs for this region and file
+C
+600     REGFNAME(NSCANS)  = SCANNAME(1)
+        L2 = IANYL(FILENAME(N),'.') - 1
+        IF (L2.LT.0) L2 = INANYR(FILENAME(N),' ')
+        REGFID(NSCANS) = FILENAME(N)(1:L2)
+        IF (PFILE.GT.0) RETURN
+700   CONTINUE
+C
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d52 1
+d56 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

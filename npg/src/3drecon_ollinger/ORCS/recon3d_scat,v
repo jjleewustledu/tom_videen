@@ -1,0 +1,342 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	95.02.13.15.52.31;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#! /bin/csh
+#
+# Name:		recon3d
+# Date:	  	03-Feb-93 
+# Author: 	Larry Byars
+#		Script modified 03-Feb-93 by Tom Videen (times are Sparc 2)
+#		09-Mar-93 (TOV)
+# 		Eliminated 'fit_scans' based on Release Notes (Feb 1,1993)
+#			fitp set to 1.0,0.0 (slope and offset)
+#		12-Mar-93 (TOV)
+#			Only append frame number if frame passed to script.
+#			Headers are assumed to be correct (eliminate call to header3drecon).
+#			Check attn_2d for 15 degree rotation; if not, replace.
+#			Check attn_3d before attn_2d and skip bkproj if unnecessary.
+#
+# Intent: Reconstruct a 3d data set using a specified frame.
+#
+# Input files:
+#			3D emission sinogram
+#			3D plane efficiency sinogram (3D emission sinogram of uniform phantom)
+#			2D log transmission sinogram (scale = 1.0) (or 3D attenuation file created from it) 
+
+set argc=$#argv
+if ($argc < 4 ) then
+    echo "Usage: recon3d_scat, path emis3d norm3d trans2d blank2d [-f frame -z zoom"
+    echo "       -scat -eu extend_emis_up -ed extend_emis_down"    
+    echo "       -tu extend_tran_up -td extend_tran_dwn -psix psi_sample_factor"
+    echo "       -outpath output_path -if image_dim_factor]"
+    echo " "
+    echo "-psi_factor: Sampling rate of oblique angles given by 6*psi_factor+1"
+    echo "-scat:       Correct data for scatter before reconstructing."
+    echo "-eu, -ed, -tu -td: Specify distance in mm to copy end-slices of transmission"
+    echo "             and emission images to account for scatter from outside"
+    echo "             the field-of-view. Defaults valid for CBF imaging."
+    echo "             Down refers to the direction towards the feet."
+    echo "-outpath:    Directory where reconstructed image will be written."
+    echo "i.e.,  recon3d_scat /data/recon/3D p2000ho1 normal3d_tr_941013 p2000tr1 941014bl1 "
+  exit
+endif
+
+if($?TABLES < 2) then
+    setenv TABLES /data/pethp3/img2/tables
+endif
+
+set TEMPPATH = .
+set in       = ${1}          # path for input
+set out      = ${1}          # path for output
+set scan3din   = ${in}/${2}.scn
+set scan3d   = ${in}/${2}_corr.scn
+set scatfil   = ${in}/${2}_scat.cub
+set normtrue = ${3}.nrm
+set endtmp = `expr substr $normtrue:t 12 80`
+if($normtrue:h != $normtrue) then
+    set normscat = $normtrue:h\/normal3d_sc$endtmp
+else
+    set normscat = normal3d_sc$endtmp
+endif
+set logattn  = ${in}/${4}l.scn
+set tran  = ${in}/${4}.scn
+set attn_2d  = ${out}/${4}.img
+set attn_3d  = ${out}/${4}_3d.scn
+set blank  = ${in}/${5}.scn
+set frame = 2
+set frameone = 1
+set image3d  = ${in}/${2}.img
+set zoom = 1.5
+set SCL_3D_TO_WOB = .0952   #Scale to same magnitude as equivalent wobbled scan.
+#set SCL_3D_TO_STA = .4900      #Scale to same magnitude as equivalent stationary scan.
+set EXT_TRAN_DWN = 50
+set EXT_TRAN_UP = 7
+set EXT_EMIS_DWN = 0
+set EXT_EMIS_UP = 0
+set IMGDIM_FCTR = 1
+
+set scat = noscat
+set NUM_PSI_FCTR = 1
+set i = 6
+while ($i <= $#argv)
+    switch ($argv[$i])
+        case -f:
+            @@ i++
+	    set frame = $argv[$i]
+        breaksw
+        case -z:
+            @@ i++
+            set zoom = $argv[$i]
+        breaksw
+        case -eu:
+            @@ i++
+            set EXT_EMIS_UP = $argv[$i]
+        breaksw
+        case -ed:
+            @@ i++
+            set EXT_EMIS_DWN = $argv[$i]
+        breaksw
+        case -tu:
+            @@ i++
+            set EXT_TRAN_UP = $argv[$i]
+        breaksw
+        case -td:
+            @@ i++
+            set EXT_TRAN_DWN = $argv[$i]
+        breaksw
+        case -psix:
+            @@ i++
+            set NUM_PSI_FCTR = $argv[$i]
+        breaksw
+        case -outpath:
+            @@ i++
+            set out = $argv[$i]
+        breaksw
+        case -scat:
+            set scat = scat
+        breaksw
+	case -if:
+            @@ i++
+            set IMGDIM_FCTR = $argv[$i]
+        breaksw
+        case --:
+            break
+        breaksw
+        default:
+            echo Invalid argument.
+        breaksw
+    endsw
+    @@ i++
+end
+
+# TEST INPUT CONDITIONS
+
+if (! -e ${scan3din}) then
+	echo ${scan3din} does not exist
+	exit
+else if (! -e ${normtrue}) then
+	echo ${normtrue}, normalization file for trues, does not exist
+	exit
+else if (!(-e ${normscat})) then
+	echo ${normscat}, normalization file for scatters, does not exist
+	exit
+else if (!(-e ${blank})) then
+	echo ${blank} does not exist
+	exit
+else if (-e ${image3d}) then
+	echo ${image3d} exists
+	exit
+else if (!(-e ${attn_3d}) && !(-e ${attn_2d}) && !(-e ${logattn})) then
+	echo Must create 2D attenuation file ${logattn}
+	exit
+endif
+
+# SCRATCH FILES
+
+set tmpeff = ${TEMPPATH}/${2}_tmpeff.dat
+set tmpeff = $TABLES/tmpeff.dat		# JMO, substitute fake table. 
+set tmp3d  = ${TEMPPATH}/${2}_tmp3d.scn
+set tmp2d  = ${TEMPPATH}/${2}_tmp2d.scn
+set tmpfit = ${TEMPPATH}/${2}_tmpfit.scn
+set tmpsyn = ${TEMPPATH}/${2}_tmpsyn.scn
+
+# STUDY SPECIFIC CONTROL PARAMETERS
+
+#filter parms - trans_filter_type,trans_cutoff,axial_filter_type,axial_cutoff
+#type=1: rect function, type=3: Hanning window, type=4: modified Hanning.
+set filter3d = 1,1.0,1,.5
+
+# SCANNER SPECIFIC CONTROL PARAMETERS
+
+set vflag = 0		# (sinogram ordering in file; 0 = planes 1 to 256)
+set num_rings = 16	# (16 or 24)
+set nprojs = 128	# (trimmed from 160)
+set nviews = 96		# (96 or 128)
+set num_cs = 2		# (1, 2 or 3)
+set trzoom = 1.0	# (do not alter!)
+set rot_offset = -15.0	# (-15.0 or 0.0)
+set nplanes = 31	# (953B)
+set ring_spacing = 0.675 # (0.3375 produces incorrect slice spacing!)
+set ring_diameter = 76.0 
+
+# GENERAL CONTROL PARAMETERS
+
+set max_rd = 5					# set to 5 in list_singrams
+set rd2 = 11
+set mash = 2
+set trim = 128
+set image_size = 128
+
+# Scatter correction parameters.
+set NUM_ITER = 7
+set MULT_FRAC = .25
+
+set arg1 =
+if($scat == noscat) then
+    echo Normalize only.
+    scatcor $scan3din $scatfil -frame $frame -normscat $normscat \
+		-normtrue $normtrue -o ${scan3d} -normonly
+else
+    echo "Computing scatter."
+    scat.csh ${scan3din} ${tran} ${blank} $normtrue $normscat \
+    	    -iter $NUM_ITER -td $EXT_TRAN_DWN -tu $EXT_TRAN_UP \
+	    -ed $EXT_EMIS_DWN -eu $EXT_EMIS_UP -dim $IMGDIM_FCTR -f $frame \
+	    -np $NUM_PSI_FCTR -dim $IMGDIM_FCTR -scale_tails -correct_data
+endif
+
+# DERIVED CONTROL PARAMETERS
+
+@@ num_planes = 2 * ${num_rings} - 1
+@@ nprojs2 = ${nprojs} / 2
+@@ nviews2 = ${nviews} / 2
+set scan_parms = ${nprojs},${nviews}
+set scan_parms2 = ${nprojs2},${nviews2}
+set rdstr = ${max_rd},${vflag},${num_rings},${ring_spacing},${ring_diameter}
+
+echo "Starting 3d reconstruction of ${scan3d} at `date`"
+
+# COMPUTE 3D ATTENUATION CORRECTION (IF NECESSARY) (15 min)
+
+# CREATE 2-D ATTENUATION IMAGE (IF NECESSARY)
+
+if (!(-e ${attn_3d})) then
+
+# Attenuation image must show rotation as +15 degrees
+#	If not, delete it and use Larry's backprojection to recreate it
+
+	if (-e ${attn_2d}) then
+		check_rotation ${attn_2d}
+	endif
+
+	if (!(-e ${attn_2d})) then
+		set filter2d = 1,.5
+		set size = 128
+		set zoom2d = 1.25
+		set p = 1	
+		while (${p} <= ${nplanes})
+			echo bkproj plane ${p}
+  		bkproj ${logattn},1,${p},1 ${size},${zoom2d} ${attn_2d},1,${p},1 ${filter2d}
+  		@@ p++
+		end
+		echo 2d attenuation image reconstructed at `date`
+	endif
+
+	nice list_sinograms ${rdstr} | grep measured | nice fproj_volume ${attn_2d} ${attn_3d} ${scan_parms2}
+	echo "3D Attenuation correction computed at `date`"
+endif
+
+# COMPUTE 3D EFFICIENCY (0.1 min)
+#Use phoney tmpeff.dat in $TABLES.
+###nice compute_3d_eff ${scan3din} ${tmpeff} ${vflag},${num_rings}
+###echo "Efficiency computed at `date`"
+
+# IMPORT 3D FRAME (1.5 min)
+
+if(`echo ${scan3d} | grep corr` == ${scan3d}) then
+    echo \*\*\* Assuming data are pre-normalized. \*\*\*
+    echo ${scan3d} ${tmpeff} ${tmp3d} ${rd2},${mash},${trim} ${frame}
+    nice import_3dscan_nonorm ${scan3d} ${tmpeff} ${tmp3d} ${rd2},${mash},${trim} ${frameone} > /dev/null
+    echo "Frame ${frameone} imported at `date`"
+else
+    nice import_3dscan ${scan3d} ${tmpeff} ${tmp3d} ${rd2},${mash},${trim} ${frame} > /dev/null
+    echo "Frame ${frame} imported at `date`"
+endif
+
+# APPLY 3D ATTENUATION (1.2 min)
+
+nice list_sinograms ${rdstr} | grep measured | apply_fp_attn ${tmp3d} ${attn_3d}
+echo "Attenuation correction applied at `date`"
+
+# EXTRACT 2D PLANES (0.1 min)
+
+nice extract_summed_planes -o ${vflag} -r ${num_rings} -m 4 ${tmp3d} ${tmp2d}
+echo "2D sinograms extracted at `date`"
+
+# GENERATE 2D VOLUME (2.2 min)
+
+set p=0
+while ( ${p} < ${num_planes})
+@@ p++
+nice bkproj ${tmp2d},1,${p},1 128,${trzoom} ${tmp2d}.img,1,${p},1 1,.5
+end
+echo "2D images finished at `date`"
+
+# FORWARD PROJECT DIRECT PLANES (8 min)
+
+nice list_sinograms ${rdstr} | grep direct | nice fproj_volume ${tmp2d}.img ${tmpfit} ${scan_parms}
+echo "Direct planes forward projected at `date`"
+
+# COMPUTE SYNTHETIC FIT PARAMETERS 
+
+set fitp=1.0,0.0
+echo "Fit parameters (${fitp}) at `date`"
+
+# FORWARD PROJECT SYNTHETIC SINOGRAMS (94 min)
+
+nice list_sinograms ${rdstr} | grep synthetic | nice fproj_volume ${tmp2d}.img ${tmpsyn} ${scan_parms}
+echo "Synthetic sinograms forward projected at `date`"
+
+# PERFORM 3D BACKPROJECTION (196 min)
+
+nice list_sinograms ${rdstr} | nice bkproj3d ${tmp3d} ${tmpsyn} ${fitp},${num_rings} ${image3d} ${filter3d} ${image_size},${zoom},${rot_offset} 
+echo "3D images reconstructed at `date`"
+
+ctiscl ${image3d} $SCL_3D_TO_WOB
+
+# Create .rec file
+set recFile    = ${image3d}.rec
+if (-e ${recFile}) then
+	/bin/rm -f ${recFile}
+endif
+ 
+echo "rec ${image3d} `date` `whoami` `hostname` `uname`" > ${recFile}
+echo "bkproj3d ${tmp3d} ${tmpsyn} ${fitp},${num_rings} ${image3d} ${filter3d} ${image_size},${zoom},${rot_offset}"
+echo "recon3d_scat $1 $2 $3 $4 $5 $6 $7 $8 $9 $10" >> ${recFile}
+ident /usr/local/bin/bkproj3d | grep bkproj3d.c | cut -f2- -d: >> ${recFile}
+echo "endrec" >> ${recFile}
+
+# CLEAN UP
+
+/bin/rm -rf ${tmp3d} ${tmpfit} ${tmpsyn} ${tmp2d} ${tmp2d}.img ${scan3d}
+echo "Temporary files deleted at `date`"
+@

@@ -1,0 +1,222 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.20.16.22.00;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.12.05.17.46.52;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: voiratio.c,v $
+ * Revision 1.1  2003/12/05  17:46:52  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			voiratio.c
+ *	Date:			Dec 2003
+ *	Author:			Tom Videen
+ *	Description:	Compute means and right/left ratios for VOIs in an image
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voiratio/RCS/voiratio.c,v 1.1 2003/12/05 17:46:52 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <imgutil.h>
+#include <voistat.h>
+#include <nrutil.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+
+#define MAXLIST 1000
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	int             writeout ();
+	ImageFile      *file1;
+	Index           indx;
+	PARAMETER_DATA  prm;			 /* processing parameters */
+	RGTDATA         rgtlist;		 /* list of region processing output */
+	VOIDATA        *voilist;		 /* list of VOI definitions */
+	char           *fname;			 /* image name */
+	char           *reg;			 /* region file */
+	char           *rgt;		 	 /* output file */
+	float        ***img;			 /* image */
+	float           mean;
+	float           diam;			 /* VOI diameter in mm */
+	float           adim[3];		 /* voxel dimensions in mm */
+	int             pdim[3];		 /* image dimensions in pixels (128x128) */
+	int             npixels;		 /* number of pixels in VOI */
+	int             k;
+	int             nvoi = 0;		 /* number of VOIs */
+
+/* Initializations */
+
+	if (argc != 5) {
+		fprintf (stderr, "Usage: voiratio imgfile voi output diameter\n");
+		return (ERROR);
+	}
+	fname = argv[1];
+	reg = argv[2];
+	rgt = argv[3];
+	diam = atof (argv[4]);
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	npixels = 0;
+
+	prm.voi_shape = VOI_NEW_SPHERE;
+	prm.voi_xdim = diam;
+	prm.voi_ydim = diam;
+	prm.voi_zdim = diam;
+	prm.voi_zero_chk = 1;
+
+/* Read the region file	*/
+
+	voilist = (VOIDATA *) malloc (sizeof (VOIDATA) * MAXLIST);
+	if (voilist == NULL)
+		return (ERROR);
+	if (readvoi (reg, &nvoi, voilist) == ERROR) {
+		fprintf (stderr, "ERROR [voiratio]: Reading VOIs from %s\n", reg);
+		return (ERROR);
+	}
+
+/* Read image */
+
+	file1 = make_imgfile (fname);
+    if (file1 == NULL) {
+        fprintf (stderr, "ERROR [voiratio]: making file1\n");
+        return (ERROR);
+    }
+    if (get_imgh (file1, &indx) == ERROR) {
+        fprintf (stderr, "ERROR [voiratio]: Cannot open %s\n", fname);
+        return (ERROR);
+    }
+
+	adim[0] = 10.0 * file1->sh->sample_size_1;
+	adim[1] = 10.0 * file1->sh->sample_size_2;
+	adim[2] = 10.0 * file1->sh->sample_size_3;
+	if (file1->sh->dim1 <= 128 && file1->sh->dim2 <= 128) {
+		pdim[0] = 128;
+		pdim[1] = 128;
+	} else {
+		pdim[0] = file1->sh->dim1;
+		pdim[1] = file1->sh->dim2;
+	}
+	pdim[2] = file1->sh->dim3;
+	fprintf (stdout, "Reading = %s  frame %d\n", fname, indx.frm);
+	if ((img = rdtensor (file1, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [voiratio] Cannot read %s\n", fname);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+
+/* Compute means and write output file */
+
+	rgtlist.nvoi = nvoi;
+	rgtlist.mean = (float **) malloc (sizeof (float *));
+	rgtlist.mean[0] = (float *) calloc (nvoi, sizeof (float));
+	for (k = 0; k < nvoi; k++) {
+		rgtmean (img, pdim, adim, k, voilist, prm, &mean, &npixels);
+		rgtlist.mean[0][k] = mean;
+	}
+	if (writeout (rgt, nvoi, voilist, rgtlist) == ERROR)
+		fprintf (stderr, "ERROR [voiratio] in writing rgt data to file %s\n", rgt);
+
+	free_imgfile (file1);
+	free_f3tensor (img, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free (rgtlist.mean[0]);
+	free (rgtlist.mean);
+	free (voilist);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 2
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/voicoss.c,v 1.1 2000/12/05 16:17:03 tom Exp $";
+d31 2
+a32 2
+	ImageFile      *file = NULL;	 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+a44 1
+	int             firstfrm;		 /* first valid frame */
+d75 2
+d84 14
+a97 29
+	if (file == NULL)
+		file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [voiratio]: Cannot open %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [voiratio]: Cannot get MainHeader from %s\n", fname);
+		return (ERROR);
+	}
+	firstfrm = firstimgfrm (file);
+	if (firstfrm > 0) {
+		indx.frm = firstfrm;
+		if (existimgfrm (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [voiratio]: Cannot read %s frame %d\n", fname, indx.frm);
+			return (ERROR);
+		}
+	} else {
+		fprintf (stderr, "ERROR [voiratio]: Cannot read %s frame %d\n", fname, indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [voiratio]: Cannot read file subheader in %s\n", fname);
+		return (ERROR);
+	}
+	adim[0] = 10.0 * file->sh->sample_size_1;
+	adim[1] = 10.0 * file->sh->sample_size_2;
+	adim[2] = 10.0 * file->sh->sample_size_3;
+	if (file->sh->dim1 <= 128 && file->sh->dim2 <= 128) {
+d101 2
+a102 2
+		pdim[0] = file->sh->dim1;
+		pdim[1] = file->sh->dim2;
+d104 1
+a104 1
+	pdim[2] = file->sh->dim3;
+d106 1
+a106 1
+	if ((img = rdtensor (fname, &indx, pdim)) == NULL) {
+d110 1
+d124 1
+@

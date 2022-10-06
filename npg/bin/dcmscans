@@ -1,0 +1,122 @@
+#!/bin/csh
+#	Name:	dcmscans
+#	Date:	Sep 2003
+#	Author:	Tom Videen
+#	Use:	Get basic info on multiple DICOM MRI images 
+
+if ($#argv != 1) then
+	echo "Usage:  dcmscans first"
+	echo " e.g.,  dcmscans 1"
+	echo "   or,  dcmscans 0"
+	exit 1
+endif
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+set hdr = dcmscans$$.hdr
+set tmp = dcmscans$$.tmp
+set Log = Scans.lst
+touch $Log
+if ($#argv == 0) then
+	set n = 1
+else
+	set n = $1 
+endif
+
+set nfiles = `ls | grep \.dcm | wc | cut -c1-8`
+set lastnum = `echo $n + $nfiles - 1 | bc`
+if ($n < 10) then
+	set first = 0000$n.dcm
+else if ($n < 100) then
+	set first = 000$n.dcm
+else if ($n < 1000) then
+	set first = 00$n.dcm
+endif
+
+# Check DICOM format
+${NPG}/bin/dcm_dump_element -t 0008 0033 $first $tmp >& /dev/null
+if ($status == 0) then
+	set type = "-t"
+else 
+	${NPG}/bin/dcm_dump_element 0008 0033 $first $tmp >& /dev/null
+	if ($status == 0) then
+		set type = ""
+	else
+		echo "$first is not DICOM format"
+		exit 1
+	endif
+endif
+
+# Get time and acquisition name of first scan
+${NPG}/bin/dcm_dump_element $type 0008 0031 $first $tmp >& /dev/null
+set tim = `cat $tmp`
+${NPG}/bin/dcm_dump_element $type 0018 0024 $first $tmp >& /dev/null
+set chk = `grep \* $tmp | wc | cut -c16-16`
+if ($chk == 0) then
+	set nam = `cat $tmp`
+else
+	set nam = `cat $tmp | cut -c2-`
+endif
+set nam2 = ''
+set last = $first
+set num = 0
+while ($n <= $lastnum)
+	if ($n < 10) then
+		set prefix = "0000"
+	else if ($n < 100) then
+		set prefix = "000"
+	else if ($n < 1000) then
+		set prefix = "00"
+	else if ($n < 10000) then
+		set prefix = "0"
+	else
+		set prefix = ""
+	endif
+	set file = "$prefix$n.dcm"
+	if (-e $file) then
+		${NPG}/bin/dcm_dump_element $type 0008 0031 $file $tmp >& /dev/null
+		set chk = `cat $tmp`
+		if ($chk != $tim) then
+			${NPG}/bin/dcm_dump_file $type $first >! $hdr
+			${NPG}/bin/dcmscans.bin $first $num $hdr $last >> $Log
+			if ($nam2 != '') echo "	$nam2	(dual-acquisition)" >> $Log
+			set first = $file
+			set num = 0
+			set tim = $chk
+			set nam2 = ''
+			${NPG}/bin/dcm_dump_element $type 0018 0024 $file $tmp >& /dev/null
+			set chk = `grep \* $tmp | wc | cut -c16-16`
+			if ($chk == 0) then
+				set nam = `cat $tmp`
+			else
+				set nam = `cat $tmp | cut -c2-`
+			endif
+		endif
+		${NPG}/bin/dcm_dump_element $type 0018 0024 $file $tmp >& /dev/null
+		set chk = `grep \* $tmp | wc | cut -c16-16`
+		if ($chk == 0) then
+			set chk2 = `cat $tmp`
+		else
+			set chk2 = `cat $tmp | cut -c2-`
+		endif
+		if ($chk2 != $nam) then
+			set nam2 = $chk2
+			echo $file $nam2
+		else
+			echo $file $nam
+		endif
+	else
+		echo $file NOT FOUND
+	endif
+	@ n++
+	set last = $file
+end
+
+${NPG}/bin/dcm_dump_file $type $first >! $hdr
+${NPG}/bin/dcmscans.bin $first $num $hdr $last >> $Log
+if ($nam2 != '') echo "	$nam2	(dual-acquisition) " >> $Log
+
+/usr/bin/rm $hdr
+/usr/bin/rm $tmp
+cat $Log
+echo saved in $Log

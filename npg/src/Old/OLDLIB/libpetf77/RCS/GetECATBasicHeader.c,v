@@ -1,0 +1,216 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.10.13.16.01.21;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.09.17.23.15;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.2
+log
+@use matrix7.h.
+@
+text
+@/*$Id: GetECATBasicHeader.c,v 1.1 1995/10/09 17:23:15 ty7777 Exp ty7777 $*/
+/*$Log: GetECATBasicHeader.c,v $
+ * Revision 1.1  1995/10/09  17:23:15  ty7777
+ * Initial revision
+ **/
+
+/*___________________________________________________________________________________
+ *
+ *	File Name:	GetECATBasicHeader.c
+ *	Function Name:	GetECATBasicHeader
+ *	Arguments:	ecat_image_file:	ECAT image file name.	
+ *			basic_header:		structure containing basic header 
+ *						information.
+ *	Return Value:	SUCCED:	sucessful;
+ *			FAIL:	fail.
+ *	Description:	Get the baisc header information from an ECAT image file.
+ *			Used in archive software.
+ *	Called by:	
+ *	Calling:	matrix_open (), matrix_read ().
+ *	Author:		Tom Yang
+ *	History:	Created by Tom Yang on 02/03/1993
+ *
+___________________________________________________________________________________*/
+
+#include <petutil/petutil.h>
+#include <petutil/matrix7.h>
+
+/*
+ * Basic header information.
+ */
+#define ECAT_DATA_TYPE		3000
+#define ECAT_SCANNER_TYPE	10
+#define FNAME_LENGTH		64
+#define FB_CODE			1000
+#define ML_CODE			2000
+#define PIXEL_SIZE1		0.260777
+#define PIXEL_SIZE2		0.208621
+#define CUTOFF1			0.50
+#define CUTOFF2			0.25
+#define ERROR_BOUND		0.00001
+
+staitc char rcsid [] = "$Header: /data/petsun4/src/libpetutil/RCS/GetECATBasicHeader.c,v 1.1 1995/10/09 17:23:15 ty7777 Exp ty7777 $";
+
+typedef enum 
+{
+	Undefined,
+	Stationary,
+	Wobble,
+	m3D
+} AcquisitionCode;
+
+typedef enum 
+{
+	None,
+	ForwardBackProjection,
+	MaximumLikelyhood
+} ReconstructionMode;
+
+struct BASIC_HEADER 
+{
+	char	Tracer [FNAME_LENGTH];	/* tracer string */
+	char	Id [FNAME_LENGTH];	/* subject's Id string = [p | m] number */
+	char	Date [FNAME_LENGTH];	/* date string */
+	char	Filter [FNAME_LENGTH];	/* filter string */
+	int	Data_Type;		/* pett6 -> 1000, 1010, 1020, 2000, 2010;
+					   ecat  -> 3000 */
+	int	Scanner;		/* pett6 == 6,
+					   spetti == 7,
+					   spettii == 8,
+					   ecat == 10 */
+	char	Resolution [5];		/* low or high for PETT VI; 3d, sta, wob for ECAT */
+	int	Num_Slices;		/* used for determing image type */
+};
+
+int GetECATBasicHeader (ecat_image_file, basic_header)
+	char			*ecat_image_file;
+	struct BASIC_HEADER	*basic_header;
+{
+	AcquisitionCode		acquisition_code;
+	Image_subheader		*image_subheader;
+	Main_header		*main_header;
+	MatrixData		*matrixx_data;
+	MatrixFile		*matfptr;
+	ReconstructionMode	reconstruction_mode;
+	float			cutoff;
+	float			pixel_size;
+	int			filter_code;
+	int			matnum;
+	struct Matval		matval;
+
+	/*
+	 * Assign default values for matval.
+	 */
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+	matfptr	= matrixx_open (ecat_image_file, MAT_READ_ONLY, IMAGE_DATA);
+	if (matfptr == NULL || matfptr->mhptr->file_type != MAT_IMAGE_DATA)
+	{
+		fprintf (stderr, "matrixx opening error in GetECATBasicHeader ().\n");
+		return FAIL;
+	}
+
+	main_header			= matfptr->mhptr;
+
+	/*
+	 * Get the pixel_size and filter_parameters.
+	 */
+	matnum		= mat_numcod (matval.frame, matval.plane, matval.gate, matval.data, matval.bed);
+	matrixx_data	= matrixx_read (matfptr, matnum, main_header->data_type);
+	image_subheader	= (Image_subheader *) matrixx_data->shptr;
+	pixel_size	= image_subheader->pixel_size;
+	filter_code	= image_subheader->filter_code;
+	cutoff		= image_subheader->filter_params [0];
+	free_matrixx_data (matrixx_data);
+
+	if (main_header->acquisition_type == ECAT_SCANNER_TYPE)
+		acquisition_code	= m3D;
+	else if (main_header->wobble_speed == 0)
+		acquisition_code	= Stationary;
+	else if (main_header->wobble_speed > 0)
+		acquisition_code	= Wobble;
+	else
+		acquisition_code	= Undefined;
+
+	if (filter_code < FB_CODE)
+		reconstruction_mode	= ForwardBackProjection;
+	else if (filter_code < ML_CODE)
+		reconstruction_mode	= MaximumLikelyhood;
+
+	strcpy (basic_header->Tracer, main_header->radiopharmaceutical);
+	strcpy (basic_header->Id, main_header->patient_id);
+
+	if (acquisition_code != Undefined && reconstruction_mode == ForwardBackProjection && filter_code == 1)
+	{
+		if ((pkg_abs (cutoff - CUTOFF1) < ERROR_BOUND && 
+			pkg_abs (pixel_size - PIXEL_SIZE1) < ERROR_BOUND) || 
+			(pkg_abs (cutoff - CUTOFF2) < ERROR_BOUND && 
+			pkg_abs (pixel_size - PIXEL_SIZE1) < ERROR_BOUND) || 
+			(pkg_abs (cutoff - CUTOFF1) < ERROR_BOUND && 
+			pkg_abs (pixel_size - PIXEL_SIZE2) < ERROR_BOUND))
+		{
+			strcpy (basic_header->Filter, "ramp");
+		}
+		else
+			strcpy (basic_header->Filter, "unknown");
+	}
+	else
+		strcpy (basic_header->Filter, "unknown");
+
+	sprintf (basic_header->Date, "%d/%d/%d", main_header->scan_start_month,
+			main_header->scan_start_day, main_header->scan_start_year); 
+	basic_header->Data_Type		= ECAT_DATA_TYPE;
+	basic_header->Scanner		= ECAT_SCANNER_TYPE;
+	if (acquisition_code == Stationary)
+		strcpy (basic_header->Resolution, "sta");
+	else if (acquisition_code == Wobble)
+		strcpy (basic_header->Resolution, "wob");
+	else if (acquisition_code == m3D)
+		strcpy (basic_header->Resolution, "3d");
+	basic_header->Num_Slices	= main_header->num_frames * main_header->num_planes; 
+
+	matrixx_close (matfptr);
+
+	return SUCCEED;
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d26 1
+a26 1
+#include <petutil/matrix.h>
+d42 1
+a42 1
+staitc char rcsid [] = "$Header$";
+@

@@ -1,0 +1,67 @@
+#!/bin/csh
+#	Module:	align_tse2mpr
+#	Author:	Tom Videen
+#	Date:	Jan 2002
+#	Use:	Align TSE to MPRAGE image
+
+# Parameters for alignlinear which may affect accuracy of the coregistration
+
+if ($#argv != 2) then
+	echo "Usage: align_tse2mpr tse mpr tse"
+	echo " e.g., align_tse2mpr p5949tse p5949mpr"
+	exit 1
+endif
+
+set TSE  = $1
+set MPR  = $2
+set AIR  = ${TSE}_to_${MPR}
+set LOGFILE = align_tse2mpr.log
+set INIT = air_init
+set MB   = 0
+set PB   = 0
+set THR  = 10
+set PTS  = 16384
+
+set EFILES = "$MPR.img $MPR.hdr $TSE.img $TSE.hdr"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_tse2mpr]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit 1
+set t1 = `t`
+
+setanamin $TSE 0
+setanamin $MPR 0
+if (-e $INIT) then
+	set PRM = "-m 6 -p1 0 -p2 $PTS -t2 $THR -x 1 -v -f $INIT"
+	echo "Aligning $TSE to $MPR using initialization file $INIT ..."
+else
+	set PRM = "-m 6 -p1 0 -p2 $PTS -t2 $THR -x 1 -v"
+	echo "Aligning $TSE to $MPR ..."
+endif
+echo $PRM 
+alignlinear $MPR $TSE $AIR.air $PRM >! log
+
+echo alignlinear $MPR $TSE $AIR.air $PRM >! $LOGFILE
+tail -6 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file ($INIT)"
+	echo $ERROR >> $LOGFILE
+	exit 1
+endif
+
+imgreslice $TSE $AIR
+scanair $AIR.air | tail -6 | head -3
+set t2 = `t`
+echo "[align_tse2mpr] Complete at" `date` "   Elapsed time: " `echo "$t2 - $t1" | bc` " sec"
+echo "----------------------------------"
+echo "Check coregistration using vidi:"
+echo "   Image 1 = $MPR.img"
+echo "   Image 2 = r$TSE.img"
+

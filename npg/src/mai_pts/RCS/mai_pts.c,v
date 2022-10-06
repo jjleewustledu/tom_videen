@@ -1,0 +1,184 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2006.02.02.22.01.19;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	===============================================================================
+ *	Module:			mai_pts.c
+ *	Date:			Oct 2005
+ *	Author:			Tom Videen
+ *	Description:	Fill point
+ *	===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mai_pts/RCS/mai_pts.c,v 1.2 2005/08/16 16:51:38 tom Exp $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <imgutil.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+#include <ANALYZE.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* header for Analyze */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* file for Analyze image */
+	char           *hdrfile;
+	char           *imgfile;
+	char           *outhdr;
+	char           *outimg;
+	int             dim[3];
+	float           xx, yy, zz;
+	int             x, y, z, n;
+	int             x1, y1, z1;
+	int             x2, y2, z2;
+	int             i, j, k;
+	short        ***img;
+	short          *row;
+
+	if (argc != 8) {
+		fprintf (stderr, "Usage: mai_pts hdr image outhdr outimg x y z\n");
+		return (ERROR);
+	}
+	hdrfile = argv[1];
+	imgfile = argv[2];
+	outhdr = argv[3];
+	outimg = argv[4];
+	xx = atof (argv[5]);
+	yy = atof (argv[6]);
+	zz = atof (argv[7]);
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (hdrfile, "r")) == 0) {
+		fprintf (stderr, "ERROR [mai_pts]: opening %s\n", hdrfile);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [mai_pts]: reading: %s\n", hdrfile);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [mai_pts]: reading %s\n", hdrfile);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4 && hdr.dime.datatype != 16) {
+		fprintf (stderr, "ERROR [mai_pts]: reading %s\n", hdrfile);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [mai_pts]: reading %s\n", hdrfile);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim[0] = hdr.dime.dim[1];
+	dim[1] = hdr.dime.dim[2];
+	dim[2] = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+/*
+ *	Read the img and flip X, Y & Z from Analyze convention
+ */
+
+	if ((fd_img = fopen (imgfile, "r")) == 0) {
+		fprintf (stderr, "ERROR [mai_pts]: opening %s\n", imgfile);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, dim[2], 1, dim[1], 1, dim[0])) == NULL) {
+		fprintf (stderr, "ERROR [mai_pts]: malloc img\n");
+		return (ERROR);
+	}
+	if ((row = (short *) calloc (dim[0], sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [mai_pts]: malloc row\n");
+		return (ERROR);
+	}
+	for (k = dim[2]; k > 0; k--) {
+		for (j = dim[1]; j > 0; j--) {
+			(void) fread (row, sizeof (short), dim[0], fd_img);
+			for (i = 1; i <= dim[0]; i++) {
+				n = dim[0] - i;
+				img[k][j][i] = row[n];
+			}
+		}
+	}
+	(void) fclose (fd_img);
+
+	x1 = (int) xx - 1;
+	y1 = (int) yy - 1;
+	z1 = (int) zz - 1;
+	x2 = ROUND (xx - 0.6);
+	y2 = ROUND (yy - 0.6);
+	z2 = ROUND (zz - 0.6);
+	fprintf (stderr, "%d %d %d %d %d %d\n", x1, y1, z1, x2, y2, z2);
+
+	if (x1 == 0 && y1 == 0 && z1 == 0) {
+		for (z = 1; z <= dim[2]; z++)
+			for (y = 1; y <= dim[1]; y++)
+				for (x = 1; x <= dim[0]; x++)
+					img[z][y][x] = 0;
+	} else {
+		img[z1][y1][x1] = 10000;
+		img[z1][y1][x2] = 10000;
+		img[z1][y2][x1] = 10000;
+		img[z1][y2][x2] = 10000;
+		img[z2][y1][x1] = 10000;
+		img[z2][y1][x2] = 10000;
+		img[z2][y2][x1] = 10000;
+		img[z2][y2][x2] = 10000;
+	}
+
+	if ((fd_img = fopen (outimg, "w")) == 0) {
+		fprintf (stderr, "ERROR [mai_pts]: opening %s\n", outimg);
+		return (ERROR);
+	}
+	for (k = dim[2]; k > 0; k--) {
+		for (j = dim[1]; j > 0; j--) {
+			for (i = 1; i <= dim[0]; i++) {
+				n = dim[0] - i;
+				row[n] = img[k][j][i];
+			}
+			(void) fwrite (row, sizeof (short), dim[0], fd_img);
+		}
+	}
+	(void) fclose (fd_img);
+	free (row);
+
+	if ((fd_hdr = fopen (outhdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [mai_pts]: opening %s\n", outhdr);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [mai_pts]: writing %s\n", outhdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	free_s3tensor (img, 1, dim[2], 1, dim[1], 1, dim[0]);
+	return (0);
+}
+@

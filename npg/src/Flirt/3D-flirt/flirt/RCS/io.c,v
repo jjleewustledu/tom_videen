@@ -1,0 +1,534 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2008.05.22.14.56.14;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2008.05.20.16.49.51;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2008.05.13.13.53.19;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2008.05.07.14.20.40;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@#include <flirt.h>
+#include <io.h>
+
+// --------------------------------------------------------------------------
+void            readTIFF (char *name, array2D out, int m1, int m2)
+{
+	int             j = 0;
+	int             k1, k2;
+	uint32          w, h;
+	uint16          orient;
+	size_t          npixels;
+	uint32         *raster;
+	TIFF           *tif;
+
+	fprintf (stdout, "readTIFF %s\n", name);
+
+	tif = TIFFOpen (name, "r");
+	if (tif) {
+		TIFFGetField (tif, TIFFTAG_IMAGEWIDTH, &w);
+		TIFFGetField (tif, TIFFTAG_IMAGELENGTH, &h);
+		npixels = w * h;
+		if ((out == NULL) || (w != m1) || (h != m2)) {
+			fprintf (stderr, "ERROR [readTIFF] image not malloced or has illegal shape\n");
+			exit (1);
+		}
+
+		raster = (uint32 *) _TIFFmalloc (npixels * sizeof (uint32));
+		if (raster != NULL) {
+			TIFFGetField (tif, TIFFTAG_ORIENTATION, &orient);	// set origin of image
+			if (TIFFReadRGBAImageOriented (tif, w, h, raster, orient, 0)) {
+				for (k2 = h - 1; k2 > -1; k2--) {
+					for (k1 = 0; k1 < w; k1++) {
+						out[k1][k2] = ((double) TIFFGetR (raster[j]) +
+							(double) TIFFGetG (raster[j]) +
+							(double) TIFFGetB (raster[j])) / 3;
+							j++;
+					}
+				}
+			}
+		}
+		_TIFFfree (raster);
+		TIFFClose (tif);
+	}
+}
+
+
+// --------------------------------------------------------------------------
+void            readTIFFsize (char *name, int *m1, int *m2)
+{
+	uint32          w, h;
+	TIFF           *tif;
+
+	tif = TIFFOpen (name, "r");
+	if (tif) {
+		TIFFGetField (tif, TIFFTAG_IMAGEWIDTH, &w);
+		TIFFGetField (tif, TIFFTAG_IMAGELENGTH, &h);
+		*m1 = w;
+		*m2 = h;
+		TIFFClose (tif);
+	}
+	else {
+		fprintf (stderr, "ERROR [readTIFFsize]: opening %s\n", name);
+		exit (1);
+	}
+}
+
+
+// --------------------------------------------------------------------------
+void            writeTIFF (char *name, array2D in, int m1, int m2)
+{
+	TIFF           *out;
+	int             sampleperpixel = 1;
+	char           *image;
+	tsize_t         linebytes = sampleperpixel * m1;	// length of one row of pixels in image
+	unsigned char  *buf = NULL;				  			// buffer to store row of pixel info for writing to file
+	int             j1, j2, tmp = 0;
+	uint32          row;
+
+	if ((out = TIFFOpen (name, "w")) == NULL) {
+		fprintf (stderr, "ERROR [writeTIFF]: opening %s\n", name);
+		exit (1);
+	}
+	image = (char *) malloc (m1 * m2 * sampleperpixel * sizeof (char));
+	if (image == NULL) {
+		fprintf (stderr, "ERROR [writeTIFF]: malloc image\n");
+		exit (1);
+	}
+
+	// Copy data from double in to char image
+
+	for (j2 = 0; j2 < m2; j2++)
+		for (j1 = 0; j1 < m1; j1++)
+		image[tmp++] = (char) in[j1][j2];
+
+		TIFFSetField (out, TIFFTAG_IMAGEWIDTH, m1);						// set width of image
+		TIFFSetField (out, TIFFTAG_IMAGELENGTH, m2);					// set height of image
+		TIFFSetField (out, TIFFTAG_SAMPLESPERPIXEL, sampleperpixel);	// set number of channels per pixel
+		TIFFSetField (out, TIFFTAG_BITSPERSAMPLE, 8);					// set size of channels
+		TIFFSetField (out, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);	// set origin of image
+		TIFFSetField (out, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+		TIFFSetField (out, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+
+	// Allocate memory to store the pixels of current row
+
+		if (TIFFScanlineSize (out) < linebytes)
+			buf = (unsigned char *) _TIFFmalloc (linebytes);
+		else
+			buf = (unsigned char *) _TIFFmalloc (TIFFScanlineSize (out));
+
+	// We set the strip size of the file to be size of one row of pixels
+
+		TIFFSetField (out, TIFFTAG_ROWSPERSTRIP, TIFFDefaultStripSize (out, m1 * sampleperpixel));
+
+	// Write image to the file one strip at a time
+	// Check the index here, and figure out why not using h * linebytes
+
+	for (row = 0; row < m2; row++) {
+		memcpy (buf, &image[(m2 - row - 1) * linebytes], linebytes);
+		if (TIFFWriteScanline (out, buf, row, 0) < 0)
+			break;
+	}
+
+	TIFFClose (out);
+	if (buf)
+		_TIFFfree (buf);
+	free (image);
+}
+
+
+// --------------------------------------------------------------------------
+// Convert each digit char and add into result
+int             string2int (char *digit)
+{
+	int             result = 0;
+
+	while (*digit >= '0' && *digit <= '9') {
+		result = (result * 10) + (*digit - '0');
+		digit++;
+	}
+	return (result);
+}
+
+
+// --------------------------------------------------------------------------
+double          string2double (char *digit)
+{
+	double          result = 0;
+	double          factor = 1.0;
+
+	// Convert each digit char and add into result
+
+	while (*digit >= '0' && *digit <= '9') {
+		result = (result * 10) + (*digit - '0');
+		digit++;
+	}
+
+	// Convert each digit chad and add into result
+
+	if (*digit == '.') {
+		digit++;
+		while (*digit >= '0' && *digit <= '9') {
+			factor *= 0.1;
+			result += factor * (*digit - '0');
+			digit++;
+		}
+	}
+	return (result);
+}
+
+
+// --------------------------------------------------------------------------
+void            getMainParameters (char *fileName,
+									int *m1,
+									int *m2,
+									double *h1,
+									double *h2,
+									char *fileNameT,
+									char *fileNameR,
+									char *fileNameOut,
+									char *fileNameU,
+									char *smootherName,
+									int *maxIter,
+									double *alpha,
+									double *tau,
+									double *mu,
+									double *lambda)
+{
+	FILE           *ptr;
+	char            puffer[255];
+	char           *varName, *varValue;
+
+	strncpy (fileName, fileName, strlen (fileName) - 1);
+	fprintf (stdout, "getMainParameters from: %s", fileName);
+
+	if ((ptr = fopen (fileName, "r")) == NULL) {
+		fprintf (stderr, "ERROR [getMainParameters]: opening %s\n", fileName);
+		exit (1);
+	}
+
+	while (fgets (puffer, 255, ptr)) {
+		if (puffer[0] != '%') {
+			varName = strtok (puffer, " \t=:\n");
+
+			if (varName != NULL) {
+				varValue = strtok (NULL, " \t=:\n");
+				if (varValue != NULL) {
+					if (!strncmp (varName, "h1", strlen (varName)))
+						*h1 = string2double (varValue);
+					else if (!strncmp (varName, "h2", strlen (varName)))
+						*h2 = string2double (varValue);
+					else if (!strncmp (varName, "fileNameT", strlen (varName)))
+						strncpy (fileNameT, varValue, strlen (varValue));
+					else if (!strncmp (varName, "fileNameR", strlen (varName)))
+						strncpy (fileNameR, varValue, strlen (varValue));
+					else if (!strncmp (varName, "fileNameOut", strlen (varName)))
+						strncpy (fileNameOut, varValue, strlen (varValue));
+					else if (!strncmp (varName, "fileNameU", strlen (varName)))
+						strncpy (fileNameU, varValue, strlen (varValue));
+					else if (!strncmp (varName, "regType", strlen (varName)))
+						strncpy (smootherName, varValue, strlen (varValue));
+					else if (!strncmp (varName, "maxIter", strlen (varName)))
+						*maxIter = string2int (varValue);
+					else if (!strncmp (varName, "alpha", strlen (varName)))
+						*alpha = string2double (varValue);
+					else if (!strncmp (varName, "tau", strlen (varName)))
+						*tau = string2double (varValue);
+					else if (!strncmp (varName, "mu", strlen (varName)))
+						*mu = string2double (varValue);
+					else if (!strncmp (varName, "lambda", strlen (varName)))
+						*lambda = string2double (varValue);
+					else
+						fprintf (stderr, "Warning [getMainParameters]: unknown parameter %s\n", varName);
+				}
+			}
+		}
+	}
+	fclose (ptr);
+	readTIFFsize (fileNameR, m1, m2);
+}
+@
+
+
+1.3
+log
+@May 20 version
+@
+text
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 1
+/* -------------------------------------------------------------------------- */
+d15 1
+a15 1
+	/* printf ("%s\n", name); */
+d23 1
+a23 3
+			fprintf (stderr,
+				 "\n\nStorage for image is not malloced"
+				 " or has illegal shape!\n\n");
+a25 3
+#if 0
+		*m1 = w;
+		*m2 = h;
+a26 11
+		if (*out != NULL) {
+			/* dummy = (double *)calloc(w*h,sizeof(double)); (*out) = (double
+			 * **)calloc(w,sizeof(double*)); if ((*out) == NULL) printf("can't allocate
+			 * memory\n"); for (j=0;j<w;j++) (*out)[j] = &(dummy[j*h]);
+			 */
+		} else {
+			fprintf (stderr, "\n\nStorage for image not malloced!!!\n\n");
+			exit (1);
+		}
+#endif
+
+d29 1
+a29 2
+			TIFFGetField (tif, TIFFTAG_ORIENTATION, &orient); /* set origin of image */
+			/* printf ("Orientation: %x\n", orient); */
+d34 3
+a36 3
+							       (double) TIFFGetG (raster[j]) +
+							       (double) TIFFGetB (raster[j])) / 3;
+						j++;
+d46 2
+a47 1
+/* -------------------------------------------------------------------------- */
+d60 5
+a64 2
+	} else
+		printf ("readTIFFsize: Cannot open file: %s\n", name);
+d68 1
+a68 1
+/* -------------------------------------------------------------------------- */
+d74 2
+a75 2
+	tsize_t         linebytes = sampleperpixel * m1;	/* length of one row of pixels in image */
+	unsigned char  *buf = NULL;	/* buffer to store row of pixel info for writing to file */
+d80 2
+a81 2
+		printf ("Could not open file %s for writing\n", name);
+		return;
+d84 4
+d89 2
+a90 1
+	/* copy data from double in to char image */
+d93 1
+a93 1
+			image[tmp++] = (char) in[j1][j2];
+d95 7
+a101 8
+	TIFFSetField (out, TIFFTAG_IMAGEWIDTH, m1);	/* set width of the image */
+	TIFFSetField (out, TIFFTAG_IMAGELENGTH, m2); /* set height of the image */
+	TIFFSetField (out, TIFFTAG_SAMPLESPERPIXEL, sampleperpixel);	/* set number of channels per pixel */
+	TIFFSetField (out, TIFFTAG_BITSPERSAMPLE, 8);	/* set of the channels */
+	TIFFSetField (out, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);	/* set origin of the image */
+	/* Some other essential fields to set that you do not have to understand for now */
+	TIFFSetField (out, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+	TIFFSetField (out, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+d103 1
+a103 5
+	/* Allocating memory to store the pixels of current row */
+	if (TIFFScanlineSize (out) < linebytes)
+		buf = (unsigned char *) _TIFFmalloc (linebytes);
+	else
+		buf = (unsigned char *) _TIFFmalloc (TIFFScanlineSize (out));
+d105 4
+a108 2
+	/* We set the strip size of the file to be size of one row of pixels */
+	TIFFSetField (out, TIFFTAG_ROWSPERSTRIP, TIFFDefaultStripSize (out, m1 * sampleperpixel));
+d110 7
+a116 2
+	/* Now writing image to the file one strip at a time */
+	/* check the index here, and figure out why not using h * linebytes */
+d129 3
+a131 2
+/* -------------------------------------------------------------------------- */
+/* Convert each digit char and add into result */
+d143 2
+a144 1
+/* -------------------------------------------------------------------------- */
+d150 2
+a151 1
+	/* Convert each digit char and add into result */
+d156 3
+a158 1
+	/* Convert each digit chad and add into result */
+d170 2
+a171 1
+/* -------------------------------------------------------------------------- */
+d173 14
+a186 13
+				                   int *m1,
+				                   int *m2,
+				                   double *h1,
+				                   double *h2,
+				                   char *fileNameT,
+				                   char *fileNameR,
+				                   char *fileNameOut,
+				                   char *smootherName,
+				                   int *maxIter,
+				                   double *alpha,
+				                   double *tau,
+				                   double *mu,
+				                   double *lambda)
+a190 1
+	int             pf = 0;				/* print flag */
+d193 1
+a193 1
+	printf (" NP Reading parameter file '%s'...", fileName);
+d196 2
+a197 2
+		fprintf (stderr, "can't open file '%s'\n", fileName);
+		exit (0);
+a199 3
+	if (pf)
+		printf ("\n");
+
+a200 2
+		if (pf)
+			printf ("puffer=\"%s\"\n", puffer);
+a201 1
+
+d207 1
+a207 4
+					if (pf)
+						printf ("varName=\"%s\", varValue=\"%s\"\n", varName, varValue);
+
+					if (!strncmp (varName, "h1", strlen (varName))) {
+d209 1
+a209 3
+						if (pf)
+							printf ("h1 -- %f\n", *h1);
+					} else if (!strncmp (varName, "h2", strlen (varName))) {
+d211 1
+a211 3
+						if (pf)
+							printf ("h2 -- %f\n", *h2);
+					} else if (!strncmp (varName, "fileNameT", strlen (varName))) {
+d213 1
+a213 3
+						if (pf)
+							printf ("fileNameT -- \"%s\"\n", fileNameT);
+					} else if (!strncmp (varName, "fileNameR", strlen (varName))) {
+d215 1
+a215 3
+						if (pf)
+							printf ("fileNameR -- \"%s\"\n", fileNameR);
+					} else if (!strncmp (varName, "fileNameOut", strlen (varName))) {
+d217 3
+a219 3
+						if (pf)
+							printf ("fileNameOut -- \"%s\"\n", fileNameOut);
+					} else if (!strncmp (varName, "regType", strlen (varName))) {
+d221 1
+a221 3
+						if (pf)
+							printf ("regType -- \"%s\"\n", smootherName);
+					} else if (!strncmp (varName, "maxIter", strlen (varName))) {
+d223 1
+a223 3
+						if (pf)
+							printf ("maxIter -- %i\n", *maxIter);
+					} else if (!strncmp (varName, "alpha", strlen (varName))) {
+d225 1
+a225 3
+						if (pf)
+							printf ("alpha -- %f\n", *alpha);
+					} else if (!strncmp (varName, "tau", strlen (varName))) {
+d227 1
+a227 3
+						if (pf)
+							printf ("tau -- %f\n", *tau);
+					} else if (!strncmp (varName, "mu", strlen (varName))) {
+d229 1
+a229 3
+						if (pf)
+							printf ("mu -- %f\n", *mu);
+					} else if (!strncmp (varName, "lambda", strlen (varName))) {
+d231 2
+a232 4
+						if (pf)
+							printf ("lambda -- %f\n", *lambda);
+					} else
+						printf ("\nunknown parameter <<%s>>\n", varName);
+a236 1
+
+a237 2
+	printf ("done.\n");
+	printf ("read image sizes from file %s...", fileNameR);
+a238 1
+	printf (" done.\n");
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d33 1
+a33 3
+
+			/*
+			 * dummy = (double *)calloc(w*h,sizeof(double)); (*out) = (double
+a63 1
+
+a134 1
+
+a147 1
+
+d190 1
+a190 1
+	int             pf = 0;	/* print flag */
+d193 1
+a193 1
+	printf (" NP opening/reading parameter file '%s'...", fileName);
+a198 2
+	/* printf ("done.\n"); */
+	/* printf ("reading parameter file..."); */
+d261 1
+a261 1
+						printf ("\n\nunknown parameter <<%s>>\n\n", varName);
+a266 2
+	/* printf (" done.\n"); */
+	/* printf ("closing parameter file..."); */
+d268 1
+a268 1
+	printf (" done.\n");
+@

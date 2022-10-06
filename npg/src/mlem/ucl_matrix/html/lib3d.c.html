@@ -1,0 +1,461 @@
+<PRE><LI><H2>FILE: lib3d.c</H2>/* @(#)lib3d.c	1.19 10/4/93 */
+
+static char sccsid[]="@(#)lib3d.c	1.19 10/4/93 Copyright 1991-92 CTI Pet Systems, Inc.";
+
+#include  "<A NAME=5 HREF="matrix.h.html">matrix.h</A>" 
+#include  "<A NAME=6 HREF="matpkg.h.html">matpkg.h</A>" 
+#include  "<A NAME=7 HREF="fproj3d.h.html">fproj3d.h</A>" 
+#include  &lt;<A NAME=8 HREF="math.h.html">math.h</A>&gt; 
+
+<LI><H3><a name="max">#define max(a,b) ((a&gt;b)?a:b)</a></H3>
+<LI><H3><a name="min">#define min(a,b) ((a&lt;b)?a:b)</a></H3>
+<LI><H3><a name="abs">#define abs(a) ((a&lt;-a)?-a:a)</a></H3>
+
+static int *mat_xlate=NULL;
+
+<LI><H3><a name="matnumfx">int matnumfx( a, b, flag, frame, dflag)</a></H3>
+  int a, b, flag, frame, dflag;
+{
+	int plane, i;
+
+	switch(flag)
+	{
+	  case -1:
+		return <a href="matrix.c.html#mat_numcod">mat_numcod</a>( frame, a+b+1, 1, dflag, 0);
+	  case 0:	/* New ACS numbering (2048 planes 0-2047) */
+		plane = ((a&0x10)&lt;<5)+((a&0x08)<<4)+(a&7)+
+			((b&0x10)&lt;<4)+((b&15)<<3)+1;
+		return <a href="matrix.c.html#mat_numcod">mat_numcod</a>( frame, plane, 1, dflag, 0);
+	  case 1:	/* Pre-ACS sinogram numbering */
+	  	return matnum_3d( a, b);
+	  case 2:	/* RPT numbering */
+	  	return matnum_3dfx( a, b, frame);
+	  case 3:	/* Old 256 plane ACS sinogram numbering */
+		plane = (1+(a&lt;<3)+(b&0x07)+((b&0x08)<<4))%256;
+		return <a href="matrix.c.html#mat_numcod">mat_numcod</a>( frame, plane, 1, dflag, 0);
+	  case 4:	/* Actual 921 3-ring numbering */
+		if (!mat_xlate)
+		{
+		  mat_xlate = (int*) malloc( 1024*sizeof(int));
+		  for (plane=i=0; i&lt;1024; i++)
+		  {
+			mat_xlate[i] = -1;
+			if ((i &gt;=   0 && i &lt; 320) ||
+			    (i &gt;= 384 && i &lt; 448) ||
+			    (i &gt;= 512 && i &lt; 640) ||
+			    (i &gt;= 768 && i &lt; 832)) mat_xlate[i] = plane++;
+		  }
+		}
+		plane = ((a&0x10)&lt;<5)+((a&0x08)<<4)+(a&7)+
+			((b&0x10)&lt;<4)+((b&15)<<3);
+		return <a href="matrix.c.html#mat_numcod">mat_numcod</a>( frame, mat_xlate[plane]+1, 1, dflag, 0);
+	  case 5:	/* Reversed ACS numbering (2048 planes 0-2047) */
+		plane = ((b&0x10)&lt;<5)+((b&0x08)<<4)+(b&7)+
+			((a&0x10)&lt;<4)+((a&15)<<3)+1;
+		return <a href="matrix.c.html#mat_numcod">mat_numcod</a>( frame, plane, 1, dflag, 0);
+
+	}
+}
+
+<LI><H3><a name="matnumx">matnumx( a, b, flag)</a></H3>
+  int a, b, flag;
+{
+	return <a href="lib3d.c.html#matnumfx">matnumfx</a>( a, b, flag, 1, 0);
+}
+
+int matnum_3d( ring_a, ring_b)
+  int ring_a, ring_b;
+{
+	int frame, plane;
+
+	frame = 1+((ring_b&0x8)&gt;>2)+((ring_a&0x8)>>3);
+	plane = 1+((ring_a&0x7)&lt;<3)+(ring_b&0x7);
+	return <a href="matrix.c.html#mat_numcod">mat_numcod</a>( frame, plane, 1, 0, 0);
+}
+
+int matnum_3dx( ring_a, ring_b)
+  int ring_a, ring_b;
+{
+	int frame, plane;
+
+	frame = 1+((ring_b&0x8)&gt;>2)+((ring_a&0x8)>>3);
+	plane = 1+((ring_a&0x7)&lt;<3)+(ring_b&0x7);
+	return <a href="matrix.c.html#mat_numcod">mat_numcod</a>( frame, plane, 0, 0, 0);
+}
+
+int matnum_3dfx( ring_a, ring_b, fr)
+  int ring_a, ring_b, fr;
+{
+	int frame, plane;
+
+	frame = 1+4*(fr-1)+((ring_b&0x8)&gt;>2)+((ring_a&0x8)>>3);
+	plane = 1+((ring_a&0x7)&lt;<3)+(ring_b&0x7);
+	return <a href="matrix.c.html#mat_numcod">mat_numcod</a>( frame, plane, 0, 0, 0);
+}
+
+struct tslice			/* temporary slice data */
+	{ int matnum;
+	  float scale_factor,
+		max_pixel,
+		zloc;
+	};
+
+#define MAX_SLICES 256
+
+load_stack3d( sinfo, sdata, file, matstr)
+  Stack3d_info sinfo;
+  float *sdata;
+  char *file, *matstr;
+{
+	<a href="matrix.h.html#Main_header">Main_header</a> mhead;		/* holds file main header */
+	<a href="matrix.h.html#Image_subheader">Image_subheader</a> h;		/* holds 1 image sub-header */
+	Mat_dir dir, <a href="matrix.c.html#mat_read_dir">mat_read_dir</a>();	/* holds file directory */
+	short int *b1;
+	FILE *fptr;
+	int i,j,k,plane,bed,dtype;
+	int ranges[2][5];
+	float max_voxel, zloc, plane_separation;
+	int nvoxels, npixels, xdim, ydim, zdim, nslices;
+	float *vp;
+	struct <a href="matrix.h.html#Matval">Matval</a> matval;
+	float bed_pos[16];
+	struct tslice slice[MAX_SLICES];
+
+	fptr = <a href="matrix.c.html#mat_open">mat_open</a>( file, "r");	/* Open the file for reading */
+	if (!fptr) return 0;
+	<a href="matrix.c.html#decode_selector">decode_selector</a>( matstr, ranges);
+	dir = <a href="matrix.c.html#mat_read_dir">mat_read_dir</a>( fptr, matstr);
+	<a href="matrix.c.html#mat_read_main_header">mat_read_main_header</a>( fptr, &mhead);
+	bed_pos[0] = 0.0;
+	for (i=1; i&lt;mhead.num_bed_pos; i++)
+	  bed_pos[i] = mhead.bed_offset[i-1];
+	max_voxel = 0.0;
+	nslices = 0;
+	plane_separation = mhead.plane_separation;
+	if (plane_separation &lt;= 1.0e-3) plane_separation = 0.675;
+		/* old 931 image? */
+	if (plane_separation &gt; 10.0) plane_separation = 0.675;
+	for (i=0; i&lt;dir-&gt;nmats; i++)
+	{ if (!<a href="matrix.c.html#matrix_selector">matrix_selector</a>(dir-&gt;entry[i].matnum, ranges)) continue;
+	  <a href="matrix.c.html#mat_read_image_subheader">mat_read_image_subheader</a>( fptr, dir-&gt;entry[i].strtblk, &h);
+	  dtype = h.data_type;
+	  slice[nslices].scale_factor = h.quant_scale;
+	  slice[nslices].max_pixel = h.quant_scale * h.image_max;
+	  slice[nslices].matnum = dir-&gt;entry[i].matnum;
+	  if (slice[nslices].max_pixel &gt; max_voxel)
+		max_voxel = slice[nslices].max_pixel;
+	  sinfo-&gt;xy_size = h.pixel_size;
+	  sinfo-&gt;z_size = plane_separation;
+	  sinfo-&gt;xdim=sinfo->ydim=h.dimension_1;
+	  <a href="matrix.c.html#mat_numdoc">mat_numdoc</a>( slice[nslices].matnum, &matval);
+	  plane = matval.plane;
+	  bed = matval.bed;
+	  slice[nslices].zloc = bed_pos[bed]+(plane-1)*plane_separation;
+	  nslices++;
+	}
+	if (nslices==0)
+	{ <a href="matrix.c.html#mat_close">mat_close</a>(fptr);
+	  return 0;
+	}
+	<a href="lib3d.c.html#sort_by_zloc">sort_by_zloc</a>( slice, nslices);
+	sinfo-&gt;zdim = nslices;
+	npixels = sinfo-&gt;xdim*sinfo->ydim;
+	nvoxels = npixels * sinfo-&gt;zdim;
+	b1 = (short int*) malloc( npixels*sizeof(short int));
+	vp = sdata;
+	for (i=0; i&lt;nslices; i++)
+	{
+	  <a href="lib3d.c.html#read_slice_data">read_slice_data</a>( fptr, &slice[i], b1, npixels, dir, dtype);
+	  for (j=0; j&lt;npixels; j++)
+	    *vp++ = slice[i].scale_factor*b1[j];
+	}
+	for (j=0; j&lt;npixels; j++)
+	  *vp++ = 0.0;
+	<a href="matrix.c.html#mat_close">mat_close</a>(fptr);
+	free(b1);
+	return 1;
+}
+
+
+load_vol3d( vinfo, vdata, file, matstr)
+  Vol3d_info vinfo;
+  float *vdata;
+  char *file, *matstr;
+{
+	<a href="matrix.h.html#Main_header">Main_header</a> mhead;		/* holds file main header */
+	<a href="matrix.h.html#Image_subheader">Image_subheader</a> h;		/* holds 1 image sub-header */
+	Mat_dir dir, <a href="matrix.c.html#mat_read_dir">mat_read_dir</a>();	/* holds file directory */
+	short int *b1, *b2, *p1, *p2;	/* image data pointers */
+	FILE *fptr;
+	int i,j,k,plane,bed,dtype;
+	int ranges[2][5];
+	float max_voxel, w1, w2, zloc, plane_separation;
+	int nvoxels, npixels, xdim, ydim, zdim, nslices;
+	float *vp;
+	struct <a href="matrix.h.html#Matval">Matval</a> matval;
+	float bed_pos[16];
+	struct tslice slice[MAX_SLICES];
+	int iw1, iw2;
+	char msg[256];
+
+	fptr = <a href="matrix.c.html#mat_open">mat_open</a>( file, "r");	/* Open the file for reading */
+	if (!fptr) return 0;
+	<a href="matrix.c.html#decode_selector">decode_selector</a>( matstr, ranges);
+	dir = <a href="matrix.c.html#mat_read_dir">mat_read_dir</a>( fptr, matstr);
+	<a href="matrix.c.html#mat_read_main_header">mat_read_main_header</a>( fptr, &mhead);
+	bed_pos[0] = 0.0;
+	for (i=1; i&lt;mhead.num_bed_pos; i++)
+	  bed_pos[i] = mhead.bed_offset[i-1];
+	max_voxel = 0.0;
+	nslices = 0;
+	plane_separation = mhead.plane_separation;
+	if (plane_separation &lt;= 1.0e-3) plane_separation = 0.675;
+		/* old 931 image? */
+	if (plane_separation &gt; 10.0) plane_separation = 0.675;
+	for (i=0; i&lt;dir-&gt;nmats; i++)
+	{ if (!<a href="matrix.c.html#matrix_selector">matrix_selector</a>(dir-&gt;entry[i].matnum, ranges)) continue;
+	  <a href="matrix.c.html#mat_read_image_subheader">mat_read_image_subheader</a>( fptr, dir-&gt;entry[i].strtblk, &h);
+	  dtype = h.data_type;
+	  slice[nslices].scale_factor = h.quant_scale;
+	  slice[nslices].max_pixel = h.quant_scale * h.image_max;
+	  slice[nslices].matnum = dir-&gt;entry[i].matnum;
+	  if (slice[nslices].max_pixel &gt; max_voxel)
+		max_voxel = slice[nslices].max_pixel;
+	  vinfo-&gt;voxel_size = h.pixel_size;
+	  vinfo-&gt;xdim=vinfo->ydim=h.dimension_1;
+	  <a href="matrix.c.html#mat_numdoc">mat_numdoc</a>( slice[nslices].matnum, &matval);
+	  plane = matval.plane;
+	  bed = matval.bed;
+	  slice[nslices].zloc = bed_pos[bed]+(plane-1)*plane_separation;
+	  nslices++;
+	}
+	if (nslices==0)
+	{ <a href="matrix.c.html#mat_close">mat_close</a>(fptr);
+	  return 0;
+	}
+	<a href="lib3d.c.html#sort_by_zloc">sort_by_zloc</a>( slice, nslices);
+	vinfo-&gt;zdim = 2 +
+	  (int)(0.5+slice[nslices-1].zloc/vinfo-&gt;voxel_size);
+	npixels = vinfo-&gt;xdim*vinfo->ydim;
+	nvoxels = npixels * vinfo-&gt;zdim;
+	b1 = (short int*) malloc( npixels*sizeof(short int));
+	b2 = (short int*) malloc( npixels*sizeof(short int));
+	i = 1;
+	<a href="lib3d.c.html#read_slice_data">read_slice_data</a>( fptr, &slice[0], b1, npixels, dir, dtype);
+	<a href="lib3d.c.html#read_slice_data">read_slice_data</a>( fptr, &slice[1], b2, npixels, dir, dtype);
+	vp = vdata;
+	for (j=0; j&lt;vinfo-&gt;zdim;j++)
+	{ zloc = j*vinfo-&gt;voxel_size;
+	  if (zloc &gt; slice[i].zloc)
+	  { p1=b1;b1=b2;b2=p1;
+	    if (i+1&lt;nslices)
+	    {
+	      <a href="lib3d.c.html#read_slice_data">read_slice_data</a>( fptr, &slice[i+1], b2, npixels, dir, dtype);
+	      i++;
+	    }
+	  }
+	  w2=(zloc-slice[i-1].zloc)/(slice[i].zloc-slice[i-1].zloc);
+	  w1=1.0-w2;
+	  w1=w1*slice[i-1].scale_factor;
+	  w2=w2*slice[i].scale_factor;
+	  p1 = b1; p2 = b2;
+	  for (k=0; k&lt;npixels; k++)
+	    *vp++ = w1*(*p1++)+w2*(*p2++);
+
+	} /* <a href="dfilter.html#make">make</a> next slice */
+	<a href="matrix.c.html#mat_close">mat_close</a>(fptr);
+	free(b1);
+	free(b2);
+	return 1;
+}
+
+<a href="load_volume.h.html#compare_zloc">compare_zloc</a>( a, b)
+  struct tslice *a, *b;
+{	if (a-&gt;zloc &lt; b->zloc) return (-1);
+	else if (a-&gt;zloc > b->zloc) return (1);
+	else return 0;
+}
+
+<LI><H3><a name="sort_by_zloc">sort_by_zloc( slices, n)</a></H3>
+  struct tslice slices[]; int n;
+{
+	qsort( slices, n, sizeof(struct tslice), <a href="load_volume.h.html#compare_zloc">compare_zloc</a>);
+}
+
+<LI><H3><a name="read_slice_data">read_slice_data( fptr, slice, bufr, npixels, dir, dtype)</a></H3>
+  FILE *fptr;
+  struct tslice *slice;
+  short int *bufr;
+  int npixels, dtype;
+  Mat_dir dir;
+{	int i, strtblk, endblk;
+
+	for (i=0;i&lt;dir-&gt;nmats;i++)
+	  if (dir-&gt;entry[i].matnum == slice->matnum) break;
+	strtblk = dir-&gt;entry[i].strtblk;
+	endblk = dir-&gt;entry[i].endblk;
+	<a href="matrix.c.html#mat_read_data">mat_read_data</a>( fptr, strtblk+1, 512*(endblk-strtblk), bufr, dtype);
+}
+
+<LI><H3><a name="read_slice_zdata">read_slice_zdata( fptr, slice, bufr, npixels, dir, dtype)</a></H3>
+  FILE *fptr;
+  struct tslice *slice;
+  short int *bufr;
+  int npixels, dtype;
+  Mat_dir dir;
+{	int i, strtblk, endblk;
+
+	for (i=0;i&lt;dir-&gt;nmats;i++)
+	  if (dir-&gt;entry[i].matnum == slice->matnum) break;
+	strtblk = dir-&gt;entry[i].strtblk;
+	endblk = dir-&gt;entry[i].endblk;
+	<a href="matrix.c.html#mat_read_data">mat_read_data</a>( fptr, strtblk+1, 512*(endblk-strtblk), bufr, dtype);
+	for (i=0;i&lt;npixels;i++)
+	  if (bufr[i] &lt; 0) bufr[i] = 0;
+}
+
+
+<LI><H3><a name="byte">typedef unsigned char byte;</a></H3>
+
+<LI><H3><a name="compute_swap_lors">int * compute_swap_lors( nprojs, nviews, nptr)</a></H3>
+  int nprojs, nviews, *nptr;
+{
+	static <a href="lib3d.c.html#byte">byte</a> fix951[8][3] = {
+		{0,5,0}, {0,6,0}, {0,7,1}, {1,6,1},
+		{10,15,0}, {9,15,0}, {8,15,2}, {9,14,2}};
+	static <a href="lib3d.c.html#byte">byte</a> fix953[8][3] = {
+		{0,3,0}, {0,4,0}, {0,5,1}, {1,4,1},
+		{8,11,0}, {7,11,0}, {7,10,2}, {6,11,2}};
+	int deta, detb, v, e, a, b, *list, i, n, m;
+	<a href="lib3d.c.html#byte">byte</a> *fixer;
+
+	if (nviews%2 == 0) fixer = (<a href="lib3d.c.html#byte">byte</a> *)fix951;
+	if (nviews%3 == 0) fixer = (<a href="lib3d.c.html#byte">byte</a> *)fix953;
+	n = 0;
+	list = (int*) malloc( 32*32*8*sizeof(int));
+	for (i=0; i&lt;8; i++)
+	{
+	  a = fixer[3*i];
+	  b = fixer[3*i+1];
+	  m = fixer[3*i+2];
+	  for (deta=0; deta&lt;32; deta++)
+	    for (detb=0; detb&lt;32; detb++)
+	    {
+		<a href="sino_dets.c.html#dets_to_ve">dets_to_ve</a>( a*32+deta, b*32+detb, &v, &e, nviews*2);
+		e += nprojs/2;
+		if (m==1 && v&lt;nviews/2) continue;
+		if (m==2 && v&gt;nviews/2) continue;
+		if ((e+1&gt;0) && (e&lt;nprojs)) list[n++] = v*nprojs+e;
+	    }
+	}
+	*nptr = n;
+	return (list);
+}
+#ifdef TEST
+
+<LI><H3><a name="plane_matrix">Matrix plane_matrix( vol, zoff, theta, phi, size)</a></H3>
+  Vol3d vol;
+  float zoff, theta, phi, size;
+{
+	<a href="11.html#Matrix">Matrix</a> m[4], result;
+	int i,w,h,l;
+	double sint, cost;
+	float max_dim;
+
+	result = matrix(4,4);
+	for (i=0; i&lt;4; i++)
+	{
+	  m[i] = matrix(4,4);
+	  <a href="matpkg.c.html#mat_unity">mat_unity</a>(m[i]);
+	}
+	w = vol-&gt;xdim;
+	h = vol-&gt;ydim;
+	l = vol-&gt;zdim;
+	<a href="lib3d.c.html#max">max</a>_dim = (float)
+	m[0]-&gt;data[3] = -size/2.0;
+	m[0]-&gt;data[7] = -size/2.0;
+	m[0]-&gt;data[11] = zoff;
+	m[0]-&gt;data[0] = size;
+	m[0]-&gt;data[5] = size;
+	<a href="sincos.h.html#sincos">sincos</a>((double)phi*M_PI/180., &sint, &cost);
+	m[1]-&gt;data[5] = cost;
+	m[1]-&gt;data[10] = cost;
+	m[1]-&gt;data[6] = sint;
+	m[1]-&gt;data[9] = -sint;
+	<a href="sincos.h.html#sincos">sincos</a>((double)theta*M_PI/180., &sint, &cost);
+	m[2]-&gt;data[0] = cost;
+	m[2]-&gt;data[5] = cost;
+	m[2]-&gt;data[1] = sint;
+	m[2]-&gt;data[4] = -sint;
+	m[3]-&gt;data[3] = (float)w/max_dim/2.0;
+	m[3]-&gt;data[7] = (float)h/max_dim/2.0;
+	m[3]-&gt;data[11] = (float)(l-2)/max_dim/2.0;
+	<a href="matpkg.c.html#matmpy">matmpy</a>(result, m[0], m[1]);
+	<a href="matpkg.c.html#matmpy">matmpy</a>(m[0], result, m[2]);
+	<a href="matpkg.c.html#matmpy">matmpy</a>(result, m[0], m[3]);
+	for (i=0; i&lt;4; i++)
+	  <a href="matpkg.c.html#mat_free">mat_free</a>(m[i]);
+	return result;
+}
+
+<LI><H3><a name="make_slice">View2d make_slice( vol, slice_mx)</a></H3>
+  Vol3d vol;
+  <a href="11.html#Matrix">Matrix</a> slice_mx;
+{
+/*
+*	produce an oblique slice of the volume as specified by slice_mx.
+*	1. <a href="matpkg2.c.html#transform">transform</a> corners of the slice [[0,1,0],[0,0,0],[1,0,0]]
+*	   using the slice_mx transformation matrix.
+*	2. compute the coordinates of points on this plane (s,t)=&gt;(x,y,z)
+*	   and interpolate the value of the volume at each point.
+*/
+	float x, y, z, v, *optr, *p;
+	int i,j,k,s,t;
+	int w,h,l;
+	float wx, wy, wz;
+	float max_dim;
+	View2d slice;
+	int slice_size;
+
+	w = vol-&gt;xdim;
+	h = vol-&gt;ydim;
+	l = vol-&gt;zdim;
+	slice_size = <a href="lib3d.c.html#max">max</a>(w,
+	max_dim = (float) slice_size;
+	slice = (View2d) malloc( sizeof(struct view2d));
+	slice-&gt;xdim = slice->ydim = slice_size;
+	slice-&gt;data = (float*) malloc( slice_size*slice_size*sizeof(float));
+	optr = slice-&gt;data;
+	for (t=0; t&lt;slice_size; t++)
+	{
+	  x = slice_mx-&gt;data[3]*max_dim+slice_mx->data[1]*t;
+	  y = slice_mx-&gt;data[7]*max_dim+slice_mx->data[5]*t;
+	  z = slice_mx-&gt;data[11]*max_dim+slice_mx->data[9]*t;
+	  for (s=0; s&lt;slice_size; s++)
+	  {
+	    i=x, j=y, k=z, v=0.0;
+	    if ((i+1&gt;0)&&(i&lt;w-1) &&
+		(j+1&gt;0)&&(j&lt;h-1) &&
+		(k+1&gt;0)&&(k&lt;l-1))
+	    {
+		wx=x-i, wy=y-j, wz=z-k;
+		p=vol-&gt;data+i+j*w+k*w*h;
+		v = (*(p))*(1.-wx)*(1.-wy)*(1.-wz) +
+		    (*(p+1))*wx*(1.-wy)*(1.-wz) +
+		    (*(p+w))*(1.-wx)*wy*(1.-wz) +
+		    (*(p+w+1))*wx*wy*(1.-wz) +
+		    (*(p+w*h))*(1.-wx)*(1.-wy)*wz +
+		    (*(p+w*h+1))*wx*(1.-wy)*wz +
+		    (*(p+w*h+w))*(1.-wx)*wy*wz +
+		    (*(p+w*h+w+1))*wx*wy*wz;
+	    }
+	    *optr++ = v;
+	    x += slice_mx-&gt;data[0];
+	    y += slice_mx-&gt;data[4];
+	    z += slice_mx-&gt;data[8];
+	  }
+	}
+	return slice;
+}
+
+#endif TEST

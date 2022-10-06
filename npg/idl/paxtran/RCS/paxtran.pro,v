@@ -1,0 +1,572 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	99.12.29.21.28.08;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.10.12.16.26.09;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.10.11.19.14.51;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.10.11.15.04.58;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.10.08.19.53.12;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.10.08.18.02.37;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@all ALLin, ALLout
+@
+text
+@; $Id: paxtran.pro,v 1.5 1999/10/12 16:26:09 tom Exp tom $
+;
+;+
+; NAME:
+;   PAXTRAN
+;
+; PURPOSE:
+;   Compute principle axis transformation of an object
+;
+; CATEGORY:
+;   Image processing.
+;
+; CALLING SEQUENCE:
+;   paxtran
+;
+; INPUTS:	(passed as environmental variables)
+;	OBJin:		object input filename
+;	OBJout:		object output filename (transformed)
+;	Threshold:	pixel value which defines object
+;	PETin:		PET input filename
+;	PETout:		PET output filename (transformed)
+;	MRin:		MR input filename
+;	MRout:		MR output filename (transformed)
+;	ALLin:		Composite Objects input filename
+;	ALLout:		Composite Objectsoutput filename (transformed)
+;
+; OUTPUTS:
+;	Transformed image
+;
+; RESTRICTIONS:
+;	All images in Analyze format.
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, Oct 1999.
+;   TOV Dec 1999 - added ALLin, ALLout
+;-
+
+PRO PAXTRAN
+
+   on_error,2
+   
+   OBJin = ''
+   OBJout = ''
+   thresh = 0
+   PETin = ''
+   PETout = ''
+   MRin = ''
+   MRout = ''
+   Allin = ''
+   Allout = ''
+   OBJin = getenv('OBJIN')
+   OBJout = getenv('OBJOUT')
+   thresh = getenv('THRESHOLD')
+   PETin = getenv('PETIN')
+   PETout = getenv('PETOUT')
+   MRin = getenv('MRIN')
+   MRout = getenv('MROUT')
+   Allin = getenv('ALLIN')
+   Allout = getenv('ALLOUT')
+
+   IF (thresh EQ 0) THEN message,'Threshold is undefined ' + thresh
+
+; Determine image array size & type
+
+   asize = intarr(3)
+   pixsize = fltarr(3)
+   analyze_dim, OBJin, asize, dsize, pixsize
+   
+   IF (pixsize[0] LE 0 OR pixsize[1] LE 0 OR pixsize[2] LE 0) THEN BEGIN
+      message,'Pixel sizes of '+OBJin+' must not be zero!'
+      help, pixsize
+      return 
+   END
+   IF (dsize NE 16) THEN BEGIN
+      message,'16-bit integers only'
+      help, dsize
+      return 
+   END
+   
+   object = intarr(asize(0), asize(1), asize(2))
+   pet = intarr(asize(0), asize(1), asize(2))
+   mri = intarr(asize(0), asize(1), asize(2))
+   all = intarr(asize(0), asize(1), asize(2))
+   
+; Read images
+
+   openr,lu,OBJin, /get_lun
+   readu,lu,object,TRANSFER_COUNT=count
+   close,lu
+   
+   openr,lu,PETin
+   readu,lu,pet,TRANSFER_COUNT=count
+   close,lu
+   
+   openr,lu,MRin
+   readu,lu,mri,TRANSFER_COUNT=count
+   close,lu
+   
+   openr,lu,ALLin
+   readu,lu,all,TRANSFER_COUNT=count
+   close,lu
+   free_lun,lu
+   
+; Create coordinate tensors
+
+   tdat = object GT thresh
+   s = size(tdat)
+   nx = s[1]
+   ny = s[2]
+   nz = s[3]
+   x0 = (nx-1)/2
+   y0 = (ny-1)/2
+   z0 = (nz-1)/2
+   x = findgen(nx)-x0
+   y = findgen(ny)-y0
+   xa = rebin(x, nx, ny, nz)
+   ya = rebin(transpose(y), nx, ny, nz)
+   za = fltarr(nx, ny, nz)
+   FOR i=0, nz-1 DO za[*,*,i] = i-z0
+;   print,xa[0,0,0], ya[0,0,0],za[0,0,0]
+;   print,xa[x0,y0,z0], ya[x0,y0,z0],za[x0,y0,z0]
+;   print,xa[5,10,15], ya[5,10,15],za[5,10,15]
+   
+; Transform to center of volume
+   
+   n = total(tdat)
+   sx = total(xa*tdat)
+   sy = total(ya*tdat)
+   sz = total(za*tdat)
+   xm = sx/n
+   ym = sy/n
+   zm = sz/n
+   print, xm, ym, zm, format='("COM:",F8.2,F9.2,F9.2)'
+   
+   xt = findgen(nx) + xm
+   yt = findgen(ny) + ym
+   zt = findgen(nz) + zm  
+   object = interpolate(object, xt, yt, zt, /grid, missing=0)
+   pet = interpolate(pet, xt, yt, zt, /grid, missing=0)
+   mri = interpolate(mri, xt, yt, zt, /grid, missing=0)
+   all = interpolate(all, xt, yt, zt, /grid, missing=0)
+   
+; Compute moments to find the principal axes
+
+   tdat = object GT thresh
+   sx = total(xa*tdat)
+   sy = total(ya*tdat)
+   sz = total(za*tdat)
+   xn = sx/n
+   yn = sy/n
+   zn = sz/n
+   print, xn, yn, zn, format='("COM2:",F7.2,F9.2,F9.2)'
+
+   Sxx = total(xa^2*tdat)
+   Syy = total(ya^2*tdat)
+   Szz = total(za^2*tdat)
+   Sxy = total(xa*ya*tdat)
+   Sxz = total(xa*za*tdat)
+   Syz = total(ya*za*tdat)
+   
+; Central moments
+   
+   Ixx = Syy + Szz
+   Ixy = -Sxy
+   Ixz = -Sxz
+   Iyx = -Sxy
+   Iyy = Sxx + Szz
+   Iyz = -Syz
+   Izx = -Sxz
+   Izy = -Syz
+   Izz = Sxx + Syy
+   
+   I = [[Ixx, Ixy, Ixz], $
+        [Iyx, Iyy, Iyx], $
+        [Izx, Izy, Izz]]
+   trired, i, d, e
+   triql, d, e, i
+;  print, "I:"
+;  print, i
+   
+; Reorder and change signs
+   
+   a = where(abs(i[0,*]) EQ max(abs(i[0,*])))
+   t = max(i[0,a])
+   IF (t LT 0) THEN i[*,a] = -i[*,a]
+   t = i[*,a]
+   i[*,a] = i[*,0]
+   i[*,0] = t
+   
+   b = 1 + (where(abs(i[1,1:*]) EQ max(abs(i[1,1:*]))))
+   t = max(i[1,b])
+   IF (t LT 0) THEN i[*,b] = -i[*,b]
+   t = i[*,b]
+   i[*,b] = i[*,1]
+   i[*,1] = t
+   
+   t = max(i[2,2])
+   IF (t LT 0) THEN i[*,2] = -i[*,2]
+
+   print, "I:"
+   print, i
+   m = invert(i)
+   print, "M:"
+   print, m  
+
+   transform_3d, m, object, xa, ya, za
+   transform_3d, m, pet, xa, ya, za
+   transform_3d, m, mri, xa, ya, za
+   transform_3d, m, all, xa, ya, za
+   
+; Finding bounding box
+   
+   data = object GT (max(object)/2)
+   s = size(data)
+   bounds = lonarr(s[1])
+   for i=0,s[1]-1 do bounds[i]=max(data[i,*,*])
+   minx = min(where(bounds gt 0))
+   maxx = max(where(bounds gt 0))
+   bounds = lonarr(s[2])
+   for i=0,s[2]-1 do bounds[i]=max(data[*,i,*])
+   miny = min(where(bounds gt 0))
+   maxy = max(where(bounds gt 0))
+   bounds = lonarr(s[3])
+   for i=0,s[3]-1 do bounds[i]=max(data[*,*,i])
+   minz = min(where(bounds gt 0))
+   maxz = max(where(bounds gt 0))
+;  print, minx,maxx,miny,maxy,minz,maxz,format='("X:",I4,"-",I3,"  Y:",I4,"-",I3,"  Z:",I4,"-",I3)'
+   xrange = maxx-minx
+   yrange = maxy-miny
+   zrange = maxz-minz
+   i = 0
+   p = 0
+   WHILE (i NE -1) DO BEGIN
+      i = strpos(OBJin,'/',p)
+      IF (i GE 0) THEN p=i+1
+   ENDWHILE
+   name = strmid(OBJin,p,5)
+   print,""
+   print, name,float(xrange)/2.,float(yrange)/2.,float(zrange)/2.,format='(A5," (XYZ mm):",F9.1,F9.1,F9.1)'
+
+; Interpolate pixels in box to specified size (in Y only)
+
+   yr0 = 88
+   yf = float (yrange)/float (yr0)
+   yt = yf * (findgen(ny) - ny/2) + ny/2
+   xt = findgen(nx)
+   zt = findgen(nz)
+   object = interpolate(object, xt, yt, zt, /grid, missing=0)
+   pet = interpolate(pet, xt, yt, zt, /grid, missing=0)
+   mri = interpolate(mri, xt, yt, zt, /grid, missing=0)
+   all = interpolate(all, xt, yt, zt, /grid, missing=0)
+
+; Interpolate pixels in 3D box to specified size 
+;  xr0 = 34
+;  yr0 = 88
+;  zr0 = 48
+;  xf = float (xrange)/float (xr0)
+;  yf = float (yrange)/float (yr0)
+;  zf = float (zrange)/float (zr0)
+;  print,"     Std   Cur    Ratio"
+;  print, xr0, xrange, xf, format='("X:",I6,I6,F9.3)'
+;  print, yr0, yrange, yf, format='("Y:",I6,I6,F9.3)'
+;  print, zr0, zrange, zf, format='("Z:",I6,I6,F9.3)'
+;  xt = xf * (findgen(nx) - nx/2) + nx/2
+;  yt = yf * (findgen(ny) - ny/2) + ny/2
+;  zt = zf * (findgen(nz) - nz/2) + nz/2
+;  object = interpolate(object, xt, yt, zt, /grid, missing=0)
+;  pet = interpolate(pet, xt, yt, zt, /grid, missing=0)
+;  mri = interpolate(mri, xt, yt, zt, /grid, missing=0)
+;  all = interpolate(all, xt, yt, zt, /grid, missing=0)
+
+; Write to output files
+   
+   object = fix(object)
+   openw, lu, OBJout, /get_lun
+   writeu, lu, object
+   close, lu
+   
+   pet = fix(pet)
+   openw, lu, PETout
+   writeu, lu, pet
+   close, lu
+
+   mri = fix(mri)
+   openw, lu, MRout
+   writeu, lu, mri
+   close, lu
+
+   all = fix(all)
+   openw, lu, ALLout
+   writeu, lu, all
+   close, lu
+   free_lun,lu
+
+END 
+@
+
+
+1.5
+log
+@constrain stretch to 1-D (along y-axis)
+@
+text
+@d1 1
+a1 1
+; $Id: paxtran.pro,v 1.4 1999/10/11 19:14:51 tom Exp $
+d24 2
+d35 1
+d49 2
+d58 2
+d83 1
+d99 5
+d141 1
+d209 1
+d251 1
+d270 1
+d280 1
+a280 1
+   openw, lu, PETout, /get_lun
+a281 1
+   
+d283 1
+d285 1
+a285 1
+   openw, lu, MRout, /get_lun
+d288 5
+@
+
+
+1.4
+log
+@add 3D stretch in x-, y-, z- along principle axes
+maintaining COM at 80,80,50
+@
+text
+@d1 1
+a1 1
+; $Id: paxtran.pro,v 1.3 1999/10/11 15:04:58 tom Exp tom $
+d120 1
+a120 1
+   print, xm, ym, zm, format='("COM: ",F9.3,F9.3,F9.3)'
+d138 1
+a138 1
+   print, xn, yn, zn, format='("COM2:",F9.3,F9.3,F9.3)'
+d164 2
+a165 2
+   print, "I:"
+   print, i
+d212 1
+a212 1
+   print, minx,maxx,miny,maxy,minz,maxz,format='("X:",I4,"-",I3,"  Y:",I4,"-",I3,"  Z:",I4,"-",I3)'
+d216 9
+d226 1
+a226 1
+; Interpolate pixels in box to specified size
+a227 1
+   xr0 = 34
+a228 2
+   zr0 = 48
+   xf = float (xrange)/float (xr0)
+a229 7
+   zf = float (zrange)/float (zr0)
+   print,"     Std   Cur    Ratio"
+   print, xr0, xrange, xf, format='("X:",I6,I6,F9.3)'
+   print, yr0, yrange, yf, format='("Y:",I6,I6,F9.3)'
+   print, zr0, zrange, zf, format='("Z:",I6,I6,F9.3)'
+   
+   xt = xf * (findgen(nx) - nx/2) + nx/2
+d231 2
+a232 1
+   zt = zf * (findgen(nz) - nz/2) + nz/2
+d237 18
+a270 1
+
+@
+
+
+1.3
+log
+@added PET and MR to transform
+@
+text
+@d1 1
+a1 1
+; $Id: paxtran.pro,v 1.2 1999/10/08 19:53:12 tom Exp tom $
+d72 1
+a72 1
+      
+d120 1
+a120 1
+   print, "COM:", xm, ym, zm
+d138 1
+a138 1
+   print, "COM':", xn, yn, zn
+d175 1
+a175 1
+      
+d196 41
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+; $Id: paxtran.pro,v 1.1 1999/10/08 18:02:37 tom Exp tom $
+d17 2
+a18 2
+;	Infile:		input filename for PET
+;	Outfile:	output filename
+d20 4
+d39 2
+a40 2
+   infile = ''
+   outfile = ''
+d42 6
+a47 2
+   infile = getenv('INFILE')
+   outfile = getenv('OUTFILE')
+d49 4
+a52 3
+;   infile = 'p2719lput_g10.img'
+;   outfile = 'new.img'
+;   thresh = 200
+d60 1
+a60 1
+   analyze_dim, infile, asize, dsize, pixsize
+d63 1
+a63 1
+      message,'Pixel sizes of '+infile+' must not be zero!'
+d67 9
+d77 1
+a77 7
+   IF (dsize EQ 8) THEN BEGIN
+      type = 1
+      data = bytarr(asize(0), asize(1), asize(2))
+   ENDIF ELSE BEGIN
+      type = 2
+      data = intarr(asize(0), asize(1), asize(2))
+   ENDELSE
+d79 2
+a80 4
+; Read array 
+
+   openr,lu,infile, /get_lun
+   readu,lu,data,TRANSFER_COUNT=count
+d83 8
+d93 1
+a93 1
+   tdat = data GT thresh
+d125 3
+a127 1
+   data = interpolate(data, xt, yt, zt, /grid, missing=0)
+d131 1
+a131 1
+   tdat = data GT thresh
+d170 2
+a171 2
+   t = max(i[0,a] LT 0)
+   IF (t GE 0) THEN i[*,a] = -i[*,a]
+d177 2
+a178 2
+   t = max(i[1,b] LT 0)
+   IF (t GE 0) THEN i[*,b] = -i[*,b]
+d186 2
+d192 3
+a194 1
+   transform_3d, m, data, xa, ya, za
+d196 1
+a196 1
+; Write to outfile
+d198 3
+a200 7
+   IF (type EQ 1) THEN BEGIN
+      data = byte(data)
+   ENDIF ELSE BEGIN
+      data = fix(data)
+   ENDELSE
+   openw, lu, outfile, /get_lun
+   writeu, lu, data
+d202 11
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+; $Id$
+a82 1
+;   print,x0,y0,z0
+d102 1
+a102 1
+   print, "Center of Mass:", xm, ym, zm
+d107 1
+a107 1
+   ndata = interpolate(data, xt, yt, zt, /grid, missing=0)
+d111 1
+a111 1
+   tdat = ndata GT thresh
+d115 4
+a118 4
+   xm = sx/n
+   ym = sy/n
+   zm = sz/n
+   print, "New Center of Mass:", xm, ym, zm
+d170 1
+a170 1
+   transform_3d, m, ndata, xa, ya, za
+d175 1
+a175 1
+      ndata = byte(ndata)
+d177 1
+a177 1
+      ndata = fix(ndata)
+d180 1
+a180 1
+   writeu, lu, ndata
+@

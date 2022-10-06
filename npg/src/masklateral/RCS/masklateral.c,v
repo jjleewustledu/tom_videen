@@ -1,0 +1,302 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2004.02.16.20.50.15;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.09.06.19.35.36;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.12.30.16.31.00;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.07.23.20.12.48;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@/* $Log: masklateral.c,v $
+ * Revision 1.3  2000/09/06  19:35:36  tom
+ * strcpy filename
+ *
+ * Revision 1.2  1999/12/30  16:31:00  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/07/23  20:12:48  tom
+ * Initial revision
+ * */
+/*	=========================================================================
+ *	Module:			masklateral.c
+ *	Author:			Tom Videen
+ *	Description:	Mask one image using another image.
+ *					Threshold is reduced by 0.0001.
+ *	=================================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: masklateral.c,v 1.3 2000/09/06 19:35:36 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	char           *imgname;		 /* input image filename */
+	char           *mskname;		 /* mask image filename */
+	char           *outname;		 /* output image filename */
+	float           threshold;		 /* mask all pixels >= this value */
+	long            npixels = 0;
+	long            mdim2, mdim3;     /* dimensions of tensors */
+	long            dim1, dim2, dim3;	 /* dimensions of tensors */
+	long            i, j, pln, m, zoffset;
+	float        ***image = NULL;		 /* input image tensor */
+	float        ***mask = NULL;		 /* mask image tensor */
+	int             setflag;
+	float           setval;
+
+/*
+ *	Get command line arguments.
+ */
+	imgname = argv[1];
+	mskname = argv[2];
+	outname = argv[3];
+	threshold = atof (argv[4]) - .0001;
+	setval = atof (argv[5]);
+	setflag = atoi (argv[6]);
+	(void) fprintf (stdout,"Threshold = %f\n", threshold);
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ *	Read mask
+ */
+	file = make_imgfile (mskname);
+	if (open_imgfile (file) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot open %s\n", mskname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot get MainHeader from %s\n", mskname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot read file subheader in %s\n", mskname);
+		return (ERROR);
+	}
+	mdim2 = (long) file->sh->dim2;
+	mdim3 = (long) file->sh->dim3;
+	if (mdim3 > 1) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Lateral image should be 1 plane\n");
+		return (ERROR);
+	}
+	if ((mask = readtensor (file, &indx)) == NULL) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot read %s\n", mskname);
+		return (ERROR);
+	}
+	close_imgfile (file);
+
+/*
+ *	Read image to mask
+ */
+	file = make_imgfile (imgname);
+	if (open_imgfile (file) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot open %s\n", imgname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot get MainHeader from %s\n", imgname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	indx.pln = 1;
+	if (indx.frm <= 0) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot find %s frame 1-%d\n", imgname, -indx.frm);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot find %s frame %d\n", imgname, indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot read file subheader in %s\n", imgname);
+		return (ERROR);
+	}
+	if ((image = readtensor (file, &indx)) == NULL) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot read %s\n", imgname);
+		return (ERROR);
+	}
+	dim1 = (long) file->sh->dim1;
+	dim2 = (long) file->sh->dim2;
+	dim3 = (long) file->sh->dim3;
+
+/*	Mask the image */
+
+	zoffset = (mdim2 - dim3) / 2;
+	for (pln = 1; pln <= dim3; pln++) {
+		m = pln + zoffset;
+		for (j = 1; j <= dim2; j++) {
+			for (i = 1; i <= dim1; i++) {
+				if (mask[1][m][j] < threshold)
+					image[pln][j][i] = 0;
+				else {
+					if (setflag > 0)
+						image[pln][j][i] = setval;
+					npixels++;
+				}
+			}
+		}
+	}
+
+/*	Write the masked image */
+
+	(void) fprintf (stdout, "Writing masked image %s\n", outname);
+	(void) fprintf (stdout, "Pixels in mask = %d\n", (int) npixels);
+	close_imgfile (file);
+	(void) strcpy (file->name, outname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot open %s\n", outname);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot write %s\n", outname);
+		return (ERROR);
+	}
+	if (writetensor (file, &indx, image) == ERROR) {
+		(void) fprintf (stderr, "ERROR [masklateral]: Cannot write %s\n", outname);
+		return (ERROR);
+	}
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.3
+log
+@strcpy filename
+@
+text
+@d2 3
+d18 1
+d20 1
+a20 1
+static char     rcsid[] = "$Id: masklateral.c,v 1.2 1999/12/30 16:31:00 tom Exp tom $";
+d31 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Id: masklateral.c,v 1.1 1999/07/23 20:12:48 tom Exp tom $";
+d147 1
+a147 2
+	free (file->name);
+	file->name = outname;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Id: masklateral.c,v 2.8 1997/05/20 13:20:52 tom Exp $";
+d51 1
+a51 1
+	printf ("Threshold = %f\n", threshold);
+d64 1
+a64 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot open %s\n", mskname);
+d68 1
+a68 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot get MainHeader from %s\n", mskname);
+d72 1
+a72 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot read file subheader in %s\n", mskname);
+d78 1
+a78 1
+		fprintf (stderr, "ERROR [masklateral]: Lateral image should be 1 plane\n");
+d82 1
+a82 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot read %s\n", mskname);
+d92 1
+a92 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot open %s\n", imgname);
+d96 1
+a96 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot get MainHeader from %s\n", imgname);
+d102 1
+a102 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot find %s frame 1-%d\n", imgname, -indx.frm);
+d106 1
+a106 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot find %s frame %d\n", imgname, indx.frm);
+d110 1
+a110 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot read file subheader in %s\n", imgname);
+d114 1
+a114 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot read %s\n", imgname);
+d141 2
+a142 2
+	printf ("Writing masked image %s\n", outname);
+	printf ("Pixels in mask = %d\n", npixels);
+d146 1
+a146 1
+	strcpy (file->mode, "w");
+d148 1
+a148 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot open %s\n", outname);
+d152 1
+a152 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot write %s\n", outname);
+d156 1
+a156 1
+		fprintf (stderr, "ERROR [masklateral]: Cannot write %s\n", outname);
+@

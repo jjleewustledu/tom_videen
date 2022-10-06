@@ -1,0 +1,197 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2004.02.17.13.58.33;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.07.18.14.28.35;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.07.14.16.45.00;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@/*	$Log: metcalc_pvc_hemi.c,v $
+ * Revision 1.2  2000/07/18  14:28:35  tom
+ * add metcalc values to end of output file
+ *
+ * Revision 1.1  2000/07/14  16:45:00  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			metcalc_pvc_hemi.c
+ *	Date:			Jun 2000
+ *	Author:			Tom Videen
+ *	Description:	Compute pvc-corrected CBF, CBV, OEF, CMRO2
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/metcalc_pvc_hemi/RCS/metcalc_pvc_hemi.c,v 1.2 2000/07/18 14:28:35 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <imgutil.h>
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	FILE           *fp;
+	HEADER_DATA     hdr;
+	char           *fname;
+	char            fid[4][3];
+	char            hdrname[3][256];
+	char            str[256];
+	float           counts[2][3][4];	 /* [large,small] [global,left,right] [cbf,cbv,oef,tis] */
+	float           npix[2][3][4];
+	float           cbfcnts, cbvcnts, oefcnts, tiscnts, pixels;	
+	float           cbf[3], cbv[3], oef[3], cmro2[3];	/* [global,left,right] */
+	float           tmp0, tmp1, tmp2;
+	int             proc;
+	int             i, j, k;
+
+	if (argc != 2) {
+		fprintf (stderr, "Usage: metcalc_pvc_hemi hemidat_file\n");
+		return (ERROR);
+	}
+	fname = argv[1];
+
+	(void) strcpy(fid[0],"ho");
+	(void) strcpy(fid[1],"oc");
+	(void) strcpy(fid[2],"oo");
+	(void) strcpy(fid[3],"tis");
+
+	fp = fopen (fname, "r+");
+	if (fp == NULL) {
+		fprintf (stderr, "Unable to open %s\n", fname);
+		return (ERROR);
+	}
+	for (i = 0; i < 2; i++) {
+		for (k = 0; k < 4; k++) {
+			if (fscanf (fp, "%s", str) == 0) {
+				fprintf (stderr, "ERROR reading %s hdr from %s\n", fid[k], fname);
+				return (ERROR);
+			} else if (strstr (str, fid[k]) == 0) {
+				fprintf (stderr, "ERROR %s hdr is %s\n", fid[k], str);
+				return (ERROR);
+			} else if (i == 0 && k < 3)
+				(void) strcpy (hdrname[k], str);
+			if (fscanf (fp, "%f %f %f", &tmp0, &tmp1, &tmp2) != 3) {
+				fprintf (stderr, "ERROR reading %s counts from %s\n", fid[k], fname);
+				return (ERROR);
+			} else {
+				counts[i][0][k] = tmp0;
+				counts[i][1][k] = tmp1;
+				counts[i][2][k] = tmp2;
+			}
+			if (fscanf (fp, "%f %f %f", &tmp0, &tmp1, &tmp2) != 3) {
+				fprintf (stderr, "ERROR reading %s npix from %s\n", fid[k], fname);
+				return (ERROR);
+			} else {
+				npix[i][0][k] = tmp0;
+				npix[i][1][k] = tmp1;
+				npix[i][2][k] = tmp2;
+			}
+		}
+	}
+
+	for (j = 0; j < 3; j++) {
+		pixels = npix[0][j][3] - npix[1][j][3];
+		cbfcnts = counts[0][j][0] * npix[0][j][0] - counts[1][j][0] * npix[1][j][0];
+		cbvcnts = counts[0][j][1] * npix[0][j][1] - counts[1][j][1] * npix[1][j][1];
+		oefcnts = counts[0][j][2] * npix[0][j][2] - counts[1][j][2] * npix[1][j][2];
+		tiscnts = counts[0][j][3] * npix[0][j][3] - counts[1][j][3] * npix[1][j][3];
+		tiscnts = (tiscnts/pixels) * 0.001;
+		cbfcnts = cbfcnts/(pixels * tiscnts);
+		cbvcnts = cbvcnts/(pixels * tiscnts);
+		oefcnts = oefcnts/(pixels * tiscnts);
+		proc = PROC_CBF;
+		cbf[j] = procPET (cbfcnts, proc, hdrname[0], &hdr, fp);
+		proc = PROC_CBV;
+		cbv[j] = procPET (cbvcnts, proc, hdrname[1], &hdr, fp);
+		proc = PROC_OEF;
+		oef[j] = procOxygen (oefcnts, cbfcnts, cbvcnts, proc, hdrname[2], hdrname[0], hdrname[1], &hdr, fp);
+		proc = PROC_CMRO2;
+		cmro2[j] = procOxygen (oefcnts, cbfcnts, cbvcnts, proc, hdrname[2], hdrname[0], hdrname[1], &hdr, fp);
+	}
+
+	fprintf (stdout, "\n");
+	fprintf (stdout, "%8s %8s %8s %8s", "gCBF", "gCBV", "gOEF", "gCMRO2");
+	fprintf (stdout, "%8s %8s %8s %8s", "lCBF", "lCBV", "lOEF", "lCMRO2");
+	fprintf (stdout, "%8s %8s %8s %8s\n", "rCBF", "rCBV", "rOEF", "rCMRO2");
+	fprintf (stdout, "%8.3f %8.3f %8.3f %8.3f", cbf[0], cbv[0], oef[0], cmro2[0]);
+	fprintf (stdout, "%8.3f %8.3f %8.3f %8.3f", cbf[1], cbv[1], oef[1], cmro2[1]);
+	fprintf (stdout, "%8.3f %8.3f %8.3f %8.3f\n", cbf[2], cbv[2], oef[2], cmro2[2]);
+
+	(void) fseek (fp, 0, SEEK_END);
+	fprintf (fp, "\n");
+	fprintf (fp, "%8s %8s %8s %8s", "gCBF", "gCBV", "gOEF", "gCMRO2");
+	fprintf (fp, "%8s %8s %8s %8s", "lCBF", "lCBV", "lOEF", "lCMRO2");
+	fprintf (fp, "%8s %8s %8s %8s\n", "rCBF", "rCBV", "rOEF", "rCMRO2");
+	fprintf (fp, "%8.3f %8.3f %8.3f %8.3f", cbf[0], cbv[0], oef[0], cmro2[0]);
+	fprintf (fp, "%8.3f %8.3f %8.3f %8.3f", cbf[1], cbv[1], oef[1], cmro2[1]);
+	fprintf (fp, "%8.3f %8.3f %8.3f %8.3f\n", cbf[2], cbv[2], oef[2], cmro2[2]);
+	(void) fclose (fp);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@add metcalc values to end of output file
+@
+text
+@d2 3
+d15 2
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/metcalc_pvc_hemi/RCS/metcalc_pvc_hemi.c,v 1.1 2000/07/14 16:45:00 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/metcalc_pvc_hemi/RCS/metcalc_pvc_hemi.c,v 1.1 2000/06/20 14:18:23 tom Exp $";
+d44 4
+a47 4
+	strcpy(fid[0],"ho");
+	strcpy(fid[1],"oc");
+	strcpy(fid[2],"oo");
+	strcpy(fid[3],"tis");
+d49 1
+a49 1
+	fp = fopen (fname, "r");
+d63 1
+a63 1
+				strcpy (hdrname[k], str);
+d110 10
+@

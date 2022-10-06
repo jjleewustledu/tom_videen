@@ -1,0 +1,134 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: inflate_norm.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $*/
+
+/*--------------------------------------------------------------------
+
+Program: inflate_norm
+
+Purpose: Reconstitute normalization files.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string.h>
+#include <scatter.h>
+#include <imagio.h>
+#include <cti_proto.h>
+
+#define TRUE 1
+#define FALSE 0
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/inflate_norm.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+NormData	*nrm,*read_norm();
+MainHeader     	*mh;
+SubHeader	*sh;
+
+int	i,stat,length,plane=1,frame=1,gate=1,data=0,bed=0,rsq,
+	numray,numang,iang,ray,rayoff;
+
+float	*sino,raysiz,*ctr,y,**norm,*geo,
+	**inflate_norm();
+
+char	*normfil,normtrfil[MAXNAME],normscfil[MAXNAME],*dot,
+	*geofil;
+
+if(argc < 3) {
+        fprintf(stderr,"Usage: inflate_norm normfil geofil\n");
+	fprintf(stderr,"       Reconstitute full norm file from compressed version.\n");
+        exit(-1);
+        }
+
+normfil  = argv[1];
+geofil  = argv[2];
+strcpy(normscfil,normfil);
+dot = strrchr(normscfil,(int)'.');
+*dot = NULL;
+strcpy(normtrfil,normscfil);
+strcat(normtrfil,"_tr.ifs");
+strcat(normscfil,"_sc.ifs");
+
+if((mh=getmhdr(geofil)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",geofil);
+    exit(ERROR);
+    }
+
+mh->nframe = 1;
+for(plane=1;plane<=mh->nplane;plane++) {
+    if((nrm=read_norm(normfil,plane)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",normfil,plane);
+        exit(ERROR);
+        }
+    if((sh=getsbhdr(geofil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read main header., %s\n",geofil);
+        exit(ERROR);
+        }
+    if((geo=rdimg(geofil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",geofil,plane);
+        exit(ERROR);
+        }
+
+    norm = inflate_norm(nrm,geo);
+
+    sh->dim1 = NUMRAY;
+    sh->dim2 = NUMANG;
+    mh->file_format = INTERFILE;
+    for(i=0;i<sh->dim1*sh->dim2;i++)
+	norm[0][i] *= nrm->true_plane_eff;
+    if((stat=wrimg(normtrfil,norm[0],mh,sh,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",normtrfil,plane);
+        exit(ERROR);
+        }
+    for(i=0;i<sh->dim1*sh->dim2;i++)
+	norm[1][i] *= nrm->scat_plane_eff;
+    if((stat=wrimg(normscfil,norm[1],mh,sh,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",normtrfil,plane);
+        exit(ERROR);
+        }
+
+    free(geo);
+    free(sh);
+    free(norm[0]);
+    free(norm[1]);
+    free(norm);
+    }
+
+}
+@

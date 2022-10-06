@@ -1,0 +1,96 @@
+#	$Log: Makefile,v $
+# Revision 1.1  1992/11/02  16:25:44  tom
+# Initial revision
+#
+#
+#		Makefile:	fastproc
+#		Author:		Tom Videen
+#		Date:			28-Oct-92
+#		Modified to read files directly from RCS and to use libpetutil
+
+.SUFFIXES: .o .f .f,v
+VPATH		= RCS						#	Sun OS 'make' does not search VPATH for suffixes
+												# but does use VPATH for prerequisites
+FFLAGS= -O -e +E0
+
+PET_LIB = -lpe -lpetutil
+CTI_LIB	= -ldc -llibrary -lnil
+SUNVIEW	= -lsuntool -lsunwindow -lpixrect -lm
+
+OBJS =	fastproc.o \
+				bloodflw.o \
+				bloodvol.o \
+				convolve.o \
+				getfactr.o \
+				getimage.o \
+				intconv.o \
+				integrat.o \
+				interpie.o \
+				o2util.o \
+				piescale.o \
+				read_piefile.o \
+				readdta.o \
+				writehdr.o \
+				writercd.o
+
+#UTIL = /home/petsun7/tom/lib.dir
+#				${UTIL}/terminal.o\
+#				${UTIL}/os32.o
+
+fastproc: $(OBJS)
+	f77 -O -o fastproc ${OBJS} ${PET_LIB} ${CTI_LIB} ${SUNVIEW}
+
+.f.o :
+	f77 ${FFLAGS} -c $<
+
+fastproc.f: fastproc.f,v
+	co $@
+ 
+bloodflw.f : bloodflw.f,v
+	co $@
+
+bloodvol.f : bloodvol.f,v
+	co $@
+
+convolve.f : convolve.f,v
+	co $@
+
+getfactr.f : getfactr.f,v
+	co $@
+
+getimage.f : getimage.f,v
+	co $@
+  
+intconv.f : intconv.f,v
+	co $@
+
+integrat.f : integrat.f,v
+	co $@
+
+interpie.f : interpie.f,v
+	co $@
+
+o2util.f : o2util.f,v
+	co $@
+
+piescale.f : piescale.f,v
+	co $@
+
+read_piefile.f : read_piefile.f,v
+	co $@
+
+readdta.f : readdta.f,v
+	co $@
+
+writehdr.f : writehdr.f,v
+	co $@
+
+writercd.f : writercd.f,v
+	co $@
+
+release :
+	chmod 755 fastproc
+	mv fastproc /usr/local/bin/fastproc.bin
+
+clean : 
+	rm ${OBJS}

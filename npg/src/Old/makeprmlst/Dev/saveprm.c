@@ -1,0 +1,107 @@
+/*$Id: saveprm.c,v 1.2 1996/08/02 16:32:43 yang Exp $*/
+/*$Log: saveprm.c,v $
+ * Revision 1.2  1996/08/02  16:32:43  yang
+ * Working version.
+ *
+ * Revision 1.1  1994/10/07  14:42:56  ty7777
+ * Initial revision
+ **/
+
+/*_________________________________________________________________________________
+File Name:      saveprm.c
+
+Date:           05-Oct-94
+
+Author:         Tom Yang
+
+Description:    Save the following parameters in a parameter file.
+
+History:	05-Oct-94	Created by Tom Yang
+
+Function:	PUBLIC int saveprm (char *prmfile, PARAMETER_DATA parameter_data)
+
+Arguments:	prmfile		parameter file name.
+		parameter_data:	structure containing parameter data.
+
+Return:		SUCCEED = 0, FAIL = -1.
+
+Calling:	None
+
+Called by:	main in makeprmlst.c.
+
+Algorithm:	Clear from the code.
+_________________________________________________________________________________*/
+
+#include "makeprmlst.h"
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makeprmlst/tmp/RCS/saveprm.c,v 1.2 1996/08/02 16:32:43 yang Exp $";
+
+PUBLIC int      saveprm (prmfile, parameter_data)
+	char           *prmfile;
+	PARAMETER_DATA  parameter_data;
+{
+	FILE           *prmfp;
+	char            sbuffer[MAXNAME];
+	char            sbuffer1[MAXNAME];
+
+	prmfp = fopen (prmfile, "w");
+	if (prmfp == (FILE *) NULL) {
+		fprintf (stderr, "Error in opening file %s\n", prmfile);
+		return FAIL;
+	}
+	memset (sbuffer, 0, MAXNAME);
+	memset (sbuffer1, 0, MAXNAME);
+
+	fprintf (prmfp, "# Created by makeprmlst\n\n");
+
+	fprintf (prmfp, "category:       individual\n");
+	fprintf (prmfp, "datatype:       pet_image\n");
+	fprintf (prmfp, "species:        %s\n", parameter_data.species);
+	fprintf (prmfp, "tracer:         %s\n", parameter_data.tracer);
+	fprintf (prmfp, "scanner:        %s\n", parameter_data.scanner);
+	fprintf (prmfp, "extension:      %s\n", parameter_data.extension);
+
+	strcpy (sbuffer1, parameter_data.acquisition);
+	if (strncmp (sbuffer1, "sta", 3) == 0)
+		strcpy (sbuffer, "stationary");
+	else if (strncmp (sbuffer1, "wob", 3) == 0)
+		strcpy (sbuffer, "wobble");
+	else if (strncmp (sbuffer1, "3d", 2) == 0)
+		strcpy (sbuffer, "3d");
+	else if (strncmp (sbuffer1, "low", 3) == 0)
+		strcpy (sbuffer, "low_resolution");
+	else if (strncmp (sbuffer1, "high", 4) == 0)
+		strcpy (sbuffer, "high_resolution");
+	fprintf (prmfp, "acquisition:    %s\n", sbuffer);
+
+	strcpy (sbuffer1, parameter_data.reconstruction);
+	if (strncmp (sbuffer1, "fb", 2) == 0)
+		strcpy (sbuffer, "filtered_backprojection");
+	else if (strncmp (sbuffer1, "3dbp", 4) == 0)
+		strcpy (sbuffer, "3d_filtered_backprojection");
+	else if (strncmp (sbuffer1, "fbold", 5) == 0)
+		strcpy (sbuffer, "filtered_backprojection_old");
+	else if (strncmp (sbuffer1, "ml", 2) == 0)
+		strcpy (sbuffer, "maximum_likelihood");
+	else if (strncmp (sbuffer1, "fbdgp", 5) == 0)
+		strcpy (sbuffer, "filtered_backprojection_Dave_Politte");
+	fprintf (prmfp, "reconstruction: %s\n", sbuffer);
+
+	fprintf (prmfp, "recfilter:      %s\n", parameter_data.recfilter);
+
+	memset (sbuffer, 0, MAXNAME);
+	if (parameter_data.imgfilter_type == FILTER_GAUSS)
+		sprintf (sbuffer, "gauss %.1f", parameter_data.imgfilter_cutoff);
+	else if (parameter_data.imgfilter_type == FILTER_BUTTERWORTH)
+		sprintf (sbuffer, "butterworth %.1f %d", parameter_data.imgfilter_cutoff,
+			 parameter_data.imgfilter_order);
+	else
+		strcpy (sbuffer, "none");
+	fprintf (prmfp, "imgfilter:      %s\n", sbuffer);
+
+	fprintf (prmfp, "smg_compute:    no\n");
+
+	fclose (prmfp);
+
+	return SUCCEED;
+}

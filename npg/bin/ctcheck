@@ -1,0 +1,118 @@
+#!/usr/local/bin/perl
+
+# $Id: ctcheck.prl,v 1.2 1997/02/25 22:40:12 jane Exp $
+# $Log: ctcheck.prl,v $
+# Revision 1.2  1997/02/25  22:40:12  jane
+# Error-checking added: case of -a but no *.ima's in directory
+#
+# Revision 1.1  1997/02/24  22:21:01  jane
+# Initial revision
+#
+
+# Name:         ctcheck
+# Date:         24feb97
+# Author:       Jane Dunford-Shore
+# Purpose:      
+# Note:         This script calls the scripts ctdup and cttable, which in
+#               turn call ctheader, directly or indirectly. If the output of
+#               ctdup, cttable, or ctheader is modified, this script may need 
+#               to be modified also.
+
+$~ = USAGE;       # format for currently-selected filehandle (STDOUT)
+
+if ($#ARGV == 1) {
+    $first = $ARGV[0];
+    $last = $ARGV[1];
+    $auto = 0;
+    # Parameters $first and $last must be integers
+    if ($first !~ /\d+/ || $last !~ /\d+/) {
+        write STDOUT;
+        exit(0);
+    }
+    # First number must be smaller than second
+    if ($first > $last) {
+         write STDOUT;
+        exit(0);
+    }
+}
+elsif ($#ARGV == 0) {
+    if ($ARGV[0] eq "-a") {
+        $auto = 1;
+    }
+    else {
+        write STDOUT;
+        exit(0);
+    }      
+}
+else {
+    write STDOUT;
+    exit(0);
+}
+ 
+# if "-a" specified, get first and last *.ima file numbers
+if ($auto) {
+    $ima_wc = `ls *.ima | wc`;
+    $ima_wc =~ /\s*(\d+)/;
+    $last = $1;
+    ($last > 0) || die "No *.ima files in this directory\n";
+    $first = 1;
+    print "Checking files 1 through $last\n";
+}
+
+# Check to see that files exist
+foreach $scan_no ($first..$last) {
+    if ($scan_no < 10) {
+        $scan_no = "0" . "$scan_no";
+    }
+    $filename = "000" . "$scan_no" . ".ima";
+    (-e $filename) || die "File does not exist: $filename\n";
+}
+
+# Check for scouts
+@cth_out = `ctheader $first $last`;
+foreach $line (@cth_out) {
+    if ($line =~ /(\d+.ima)/) {
+        push (@scouts, $1);
+    }
+}
+
+if ($#scouts >= 0) {
+    print STDOUT "Scouts:\n";
+    foreach $scout (@scouts) {
+        print STDOUT "   $scout\n";
+    }
+}
+else {
+    print STDOUT "Scouts: NONE\n";
+}
+
+# Check for duplicate table positions
+@ctdup_out = `ctdup $first $last`;
+print STDOUT @ctdup_out;
+
+# Check for incorrect table increments
+@ctti_out = `cttabinc $first $last`;
+print STDOUT "Table increments:\n";
+
+foreach $line (@ctti_out) {
+    if ($line =~ /All table increments/) {
+        print $line;
+        exit(0);
+    }
+    elsif ($line =~ /([\-0-9]\d*)\s+([\-0-9]\d*)/) {
+        push(@linestoprint, $line);
+    }
+}
+print STDOUT "   Increment  Number\n";
+print STDOUT "   ---------  ------\n";  
+print STDOUT @linestoprint;    
+
+# --------
+# Formats
+# --------
+
+format USAGE =
+Usage:    ctcheck [<first> <last>] [-a]
+Examples: ctcheck 1 52     # listing for files 00001.ima - 00052.ima
+          ctcheck -a       # listing for all *.ima's in current directory
+.

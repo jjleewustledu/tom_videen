@@ -1,0 +1,182 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.4
+date	2004.02.17.15.10.36;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.06.29.19.20.25;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@joanne version 29-Jun-99
+@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@C$Header: /home/npggw/tom/src/picodcv/RCS/bldenter.f,v 1.1 1999/06/29 19:20:25 tom Exp tom $
+C$Log: bldenter.f,v $
+c Revision 1.1  1999/06/29  19:20:25  tom
+c Initial revision
+c
+c Revision 1.2  1998/07/27  17:51:43  tom
+c automatically subtract 105 sec for added points to CO curve
+c
+c Revision 1.1  1995/10/03  18:37:03  tom
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:	bldenter.f
+C  Author:		Tom O. Videen
+C  Date:		27-Oct-86
+C  Written for:	BLOOD.FTN
+C  Intent:		Get blood curve points from user.
+C
+C  History:
+C     Modified 14-Jan-88 by TOV so decay correction is computed by
+C	  including the average decay during the well counting period.
+C	  This is now always computed through a single subroutine BLDDECOR.
+C			Modified 02-Dec-93 by TOV for betadta.
+C
+C  Common Variables whose values are set in this subroutine:
+C     COUNTS - counts per COUNTIME seconds from well counter;
+C     DRYWEIGHT - dry weight of syringe;
+C     WETWEIGHT - weight of syringe with blood sample;
+C     COUNTIME - seconds summed in well counter (usually 10);
+C     TIMEDRAW - time blood sample was taken (MIN.SEC);
+C     TIMECNT - time blood sample was counted (MIN.SEC);
+C     CORCNTS - decay corrected counts/(ml*sec);
+C	  (corrected to time of injection)
+C     BLOODDEN = density of blood (g/ml);
+C
+C  Uses Function:
+C     SECS in BLDSECS
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+	SUBROUTINE BLDENTER(LAMBDA, LASTTIME, CORCNTS, SCANTYPE)
+
+	REAL*4   LAMBDA
+	REAL*4	 SC1
+	REAL*4	 SC2
+	REAL*4	 BLOODDEN
+	REAL*4	 DRYWEIGHT
+	REAL*4	 WETWEIGHT
+	REAL*4	 WEIGHT
+	REAL*4	 SECS
+	REAL*4	 COUNTIME
+	REAL*4	 LASTTIME
+	REAL*4	 TIMEDRAW
+	REAL*4	 TIMESECS
+	REAL*4	 TIMECNT
+	REAL*4	 TIMECOUNTED
+	REAL*4	 CORCNTS
+	REAL*4	 CORRECTN
+	REAL*4	 COUNTS1
+
+	INTEGER*4    SCANTYPE
+	INTEGER*4    USERIN    ! log unit assigned for terminal input!
+	INTEGER*4    USEROUT   ! log unit for terminal output!
+	INTEGER*4		 COUNTS
+
+	CHARACTER*80 Q
+	CHARACTER*1  BELL
+	CHARACTER*256	RCSHEADER
+
+	COMMON /USRIO/ USERIN,USEROUT
+
+	DATA SC1, SC2 /1.026, -0.0522/		! new caps, 3cc syringes
+	DATA BLOODDEN /1.05/
+	RCSHEADER = "$Id: bldenter.f,v 1.1 1999/06/29 19:20:25 tom Exp tom $"
+	BELL = CHAR(7)
+	DONE = .FALSE.
+
+	Q = 'Dry syringe weight (grams)'
+	CALL GETREAL (Q, DRYWEIGHT, 0.0, 100.0)
+
+	Q = 'Wet syringe weight (grams)'
+	CALL GETREAL (Q, WETWEIGHT, 0.0, 100.0)
+
+	WEIGHT   = WETWEIGHT - DRYWEIGHT
+	IF (WEIGHT .EQ. 0.) THEN
+	  RETURN
+	END IF
+
+	WRITE(USEROUT,*) " "
+	WRITE(USEROUT,*) ">>> NOTE THE FORMAT FOR ENTERING TIME!"
+	IF (SCANTYPE .EQ. 3) THEN
+		WRITE(USEROUT,*) "   (Time will be adjusted by -1:45 for standard CO study)"
+	ENDIF
+	WRITE(USEROUT,*) " "
+10    Q = 'Time Sampled (MIN.SEC)'
+	CALL GETREAL (Q, TIMEDRAW, 0., 120.)
+	TIMESECS = SECS (TIMEDRAW)
+	IF (SCANTYPE .EQ. 3) TIMESECS = TIMESECS - 105
+	IF (TIMESECS .LT. LASTTIME) THEN
+		WRITE(USEROUT,*) "Sample Time must be >= ", LASTTIME,BELL
+		GO TO 10
+	END IF
+
+20    Q = 'Time Counted (MIN.SEC)'
+	CALL GETREAL (Q, TIMECNT, 1., 121.0)
+	TIMECOUNTED = SECS (TIMECNT)
+	IF (SCANTYPE .EQ. 3) TIMECOUNTED = TIMECOUNTED - 105
+	IF (TIMECOUNTED .LT. TIMESECS) THEN
+		WRITE(USEROUT,*) "Count Time must be >= ", TIMESECS,BELL
+		GO TO 20
+	END IF
+
+	Q = 'Well count period (seconds)'
+	COUNTIME = 10.
+	CALL GETREAL (Q, COUNTIME, 1.0, 1000.0)
+
+	Q = 'Number of counts'
+	CALL GETINT (Q, COUNTS, 0, 999999)
+C
+C	Decay correct counts
+C
+	COUNTS1 = FLOAT(COUNTS)*LAMBDA/(1.-EXP(-LAMBDA*COUNTIME))
+	CORCNTS = BLOODDEN*COUNTS1*EXP(LAMBDA*TIMECOUNTED)/WEIGHT
+
+	CORRECTN = SC1 + SC2*WEIGHT
+	IF (CORRECTN.GT.0.) THEN
+	  CORCNTS = CORCNTS/CORRECTN
+	ELSE
+	  WRITE(USEROUT,*)'*** TOO MUCH BLOOD IN SYRINGE ***'
+	  WRITE(USEROUT,*)'*** Number of Counts Estimated ***',BELL
+	  CORCNTS = CORCNTS*10.
+	END IF
+
+	LASTTIME = TIMESECS
+
+	RETURN
+	END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+C$Header: /home/npggw/tom/src/betadcv/RCS/bldenter.f,v 1.2 1998/07/27 17:51:43 tom Exp $
+d3 3
+d75 1
+a75 1
+	RCSHEADER = "$Id: bldenter.f,v 1.2 1998/07/27 17:51:43 tom Exp $"
+@

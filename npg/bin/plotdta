@@ -1,0 +1,125 @@
+#!/bin/csh
+#	Module:	plotdta
+#	Date:	12-Nov-1993
+#	Author:	Dave Carpenter
+#	Use:	Plot the curves from a dta file
+#	History:
+#		Modified 29-Apr-94 TOV to plot arterial curve plus headcurve
+#		Modified Jun 2001 TOV for current dta file format
+
+set argc = $#argv
+if ($argc != 1) then
+	echo "Usage:  plotdta <.DTAfile>"
+	echo " e.g.,  plotdta p2000.dta"
+	exit
+endif
+
+if (! -e $1) then
+	echo "ERROR: incorrect filename or missing dtafile $1"
+	exit
+endif
+
+if (-e $HOME/.Xdefaults) then
+	/usr/openwin/bin/xrdb -merge $HOME/.Xdefaults
+endif
+
+startover:
+
+echo "Do you wish to:	(1)  Plot curves on screen"
+echo "		(2)  Print curves on your default printer?"
+
+set ans1 = $<
+
+if (($ans1 != 1) && ($ans1 != 2)) then
+	goto startover
+endif
+
+set ROOT = $1:r
+
+# First find out how many curves in .DTA file
+#	second line of old dta files
+#	fourth line of new ones
+# remove first 2 (or 4) lines and store the rest in temp file
+
+set dtatype = `head -1 $1 | cut -c1-4`
+if ("$dtatype" != @01@) then
+	set scan_no = `head -2 $argv | tail -1`
+	tail +3 $1 >>! /tmp/$$.dta
+else
+	set scan_no = `head -4 $argv | tail -1`
+	tail +5 $1 >>! /tmp/$$.dta
+endif
+
+echo scan_no = $scan_no
+
+# convert .DTA files to gnuplot format 
+
+unset noclobber
+set counter = 1
+set scan_id = `head /tmp/$$.dta`      #set up "dummy" scan_id's
+
+while ($counter <= $scan_no)
+	set info = `head -5 /tmp/$$.dta`
+	set scan_id[$counter] = $info[2]  
+	set no_points = $info[8]
+	echo e /tmp/$$.dta > /tmp/$$.ed_cmd
+	@ save_to = $no_points + 5
+	@ save_frm = $no_points + 6
+	echo 6,$save_to w /tmp/$$.$scan_id[$counter] >> /tmp/$$.ed_cmd
+	echo $save_frm,$ w /tmp/$$.dta >> /tmp/$$.ed_cmd
+	(/usr/bin/ed </tmp/$$.ed_cmd)>& /dev/null
+	@ counter = $counter + 1
+end
+chmod g+w /tmp/$$.*
+
+# create gnuplot commands, run gnuplot
+# output to printer
+
+if ($ans1 == 2) then
+	print:
+	echo set terminal postscript > /tmp/$$.gnuplot
+	echo set output \"/tmp/$$.printfile\" >> /tmp/$$.gnuplot
+	echo set data style lines >> /tmp/$$.gnuplot
+	set counter = 1
+	set plotn = 1
+	chmod g+w /tmp/$$.*
+	while ($counter <= $scan_no)
+		echo plot \"/tmp/$$.$scan_id[$counter]\" using 1:2 \
+title \"$ROOT$scan_id[$counter]\" >> /tmp/$$.gnuplot
+	@ counter = $counter + 1
+	end
+	gnuplot /tmp/$$.gnuplot
+	lpr /tmp/$$.printfile
+	goto done
+endif
+
+# PLOT
+
+	repeat:
+	set counter = 1
+	echo set data style lines > /tmp/$$.gnuplot
+	chmod g+w /tmp/$$.*
+	while ($counter <= $scan_no)
+		echo plot \"/tmp/$$.$scan_id[$counter]\" using 1:2 title \"$ROOT$scan_id[$counter]\", \
+			\"/tmp/$$.$scan_id[$counter]\" using 1:3 \ title \"headcurve\" \
+			>> /tmp/$$.gnuplot
+		echo pause -1 \"hit return to continue\" >> /tmp/$$.gnuplot
+		@ counter = $counter + 1
+	end
+	gnuplot /tmp/$$.gnuplot
+	echo "Would you like to:"
+	echo "	View plots again? (1)"
+	echo "	Send plots to your default printer? (2)"
+	echo "	Exit? <return>"
+	set ans2 = $<
+	if ($ans2 == 1) then
+		goto repeat
+	else if ($ans2 == 2) then
+		goto print
+	endif
+
+done:
+
+set noclobber
+/bin/rm /tmp/$$*
+exit

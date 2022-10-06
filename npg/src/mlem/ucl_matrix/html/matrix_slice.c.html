@@ -1,0 +1,196 @@
+<PRE><LI><H2>FILE: matrix_slice.c</H2>
+/* static char sccsid[] = "%W% UCL-TOPO %E%"; */
+
+#include	 &lt;<A NAME=4 HREF="stdlib.h.html">stdlib.h</A>&gt; 
+#include	 &lt;<A NAME=5 HREF="fcntl.h.html">fcntl.h</A>&gt; 
+#include	 &lt;<A NAME=6 HREF="string.h.html">string.h</A>&gt; 
+#include	 "<A NAME=7 HREF="matrix.h.html">matrix.h</A>" 
+#include	 "<A NAME=8 HREF="interfile.h.html">interfile.h</A>" 
+
+extern int mat_errno;
+#define ERROR	 -1
+
+<LI><H3><a name="matrix_read_slice">MatrixData *matrix_read_slice(mptr, volume, slice, segment)</a></H3>
+MatrixFile *mptr ;
+MatrixData *volume;
+int	 slice, segment;
+{
+	int	i, group=0, slice_count=0, z_elements;
+	int file_pos, nblks, npixels, data_size ;
+	float *fdata;
+	Scan3D_subheader *scan3Dsub ;
+	struct <a href="matrix.h.html#MatDir">MatDir</a> matdir;
+	struct <a href="matrix.h.html#Matval">Matval</a> val;
+	<a href="matrix.h.html#Attn_subheader">Attn_subheader</a> *attnsub ;
+	<a href="matrix.h.html#Image_subheader">Image_subheader</a> *imagesub;
+	<a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *scansub ;
+	int y, line_size;
+	char *tmp_line, *line, *p;
+	MatrixData *data = NULL;
+	int u_flag = 0;
+	char **ifh;
+
+	if ((ifh=mptr-&gt;interfile_header)!=NULL) {
+		if (ifh[NUMBER_FORMAT] && strstr(ifh[NUMBER_FORMAT], "unsigned")) 
+			u_flag = 1;
+		return <a href="interfile.c.html#interfile_read_slice">interfile_read_slice</a>(mptr-&gt;fptr, volume, slice,u_flag);
+	}
+	if (<a href="matrix_extra.c.html#matrix_find">matrix_find</a>(mptr,volume-&gt;matnum,&matdir) == ERROR)
+		<a href="crash.c.html#crash">crash</a>("matrix not found\n");
+	/* allocate space for MatrixData structure and initialize */
+	data = (MatrixData *) calloc( 1, sizeof(MatrixData)) ;
+	if (!data) return NULL;
+	*data = *volume;
+	data-&gt;xdim = volume->xdim;
+	data-&gt;ydim = volume->ydim;
+	data-&gt;zdim = 1;
+	data-&gt;shptr = NULL;
+	npixels = data-&gt;xdim*data->ydim;
+	group = <a href="lib3d.c.html#abs">abs</a>(segment);
+
+	switch(volume-&gt;mat_type) {
+	case PetImage:
+	case Sinogram:
+		<a href="matrix_extra.c.html#free_matrix_data">free_matrix_data</a>(data);
+		<a href="matrix.c.html#mat_numdoc">mat_numdoc</a>(volume-&gt;matnum, &val);
+		return <a href="matrix_extra.c.html#matrix_read">matrix_read</a>(mptr,
+			<a href="matrix.c.html#mat_numcod">mat_numcod</a>(val.frame,slice+1,val.gate,val.data,val.bed),
+			volume-&gt;mat_type);
+	case Short3dSinogram :
+		data_size = npixels*sizeof(short);
+		file_pos = (<a href="matrix.h.html#matdir">matdir</a>.strtblk+1)*MatBLKSIZE;
+		scan3Dsub = (Scan3D_subheader*)volume-&gt;shptr;
+		z_elements = scan3Dsub-&gt;num_z_elements[group];
+		if (group &gt; 0) z_elements /= 2;
+		if (slice &gt;= z_elements) {
+			<a href="matrix_extra.c.html#free_matrix_data">free_matrix_data</a>(data);
+			return NULL;
+		}
+		for (i=0; i&lt;group; i++)
+			file_pos += scan3Dsub-&gt;num_z_elements[i]*data_size;
+		if (segment &lt; 0) file_pos += z_elements*data_size;
+
+		nblks = (data_size+(MatBLKSIZE-1))/MatBLKSIZE;
+		data-&gt;data_size = nblks * MatBLKSIZE;
+		data-&gt;data_ptr = (caddr_t) calloc(1, data->data_size) ;
+		if (!data-&gt;data_ptr) {
+			<a href="matrix_extra.c.html#free_matrix_data">free_matrix_data</a>(data);
+			return NULL;
+		}
+
+		line_size = data-&gt;xdim*sizeof(short);
+		file_pos += slice*line_size;
+		line = malloc(line_size);
+		data-&gt;zdim = 1;
+		p = data-&gt;data_ptr;
+		for (y=0; y&lt;data-&gt;ydim; y++) {	/* for each planar view fixed theta */
+			if (mptr-&gt;acs) <a href="rts_cmd.c.html#byte_acs_read">byte_acs_read</a>(mptr->fname,file_pos,line,line_size);
+			else {
+					/* skip to planar view and read */
+				if (fseek(mptr-&gt;fptr,file_pos,0) == -1) perror(mptr->fname);
+				if (fread(line,sizeof(short),data-&gt;xdim,mptr->fptr) != 
+					data-&gt;xdim) perror(mptr->fname);
+			}
+			if (ntohs(1) != 1) swab(line,p,line_size);
+			else memcpy(p,line,line_size);
+			p += line_size;
+			file_pos += line_size*z_elements;
+		}
+		data-&gt;data_max = <a href="matrix_extra.c.html#find_smax">find_smax</a>((short*)data->data_ptr, npixels);
+		scansub = (<a href="matrix.h.html#Scan_subheader">Scan_subheader</a>*)calloc(sizeof(
+		data-&gt;shptr = (caddr_t)scansub;
+		scansub-&gt;num_z_elements = 1;
+		scansub-&gt;scan_max = data->data_max;
+		scansub-&gt;<a href="convert_64.c.html#num_angles">num_angles</a> = scan3Dsub->
+		scansub-&gt;num_r_elements = scan3Dsub->num_r_elements;
+		scansub-&gt;x_resolution = scan3Dsub->x_resolution;
+		free(line);
+		return data;
+	case AttenCor:
+		attnsub = (<a href="matrix.h.html#Attn_subheader">Attn_subheader</a>*)volume-&gt;shptr;
+		data-&gt;scale_factor = attnsub->scale_factor ;
+		data_size = npixels*sizeof(float);
+		file_pos = <a href="matrix.h.html#matdir">matdir</a>.strtblk*MatBLKSIZE;
+		z_elements = attnsub-&gt;z_elements[group];
+		if (group &gt; 0) z_elements /= 2;
+		if (slice &gt;= z_elements) {
+			<a href="matrix_extra.c.html#free_matrix_data">free_matrix_data</a>(data);
+			return NULL;
+		}
+		for (i=0; i&lt;group; i++) 
+			file_pos += attnsub-&gt;z_elements[i]*data_size;
+		if (segment &lt; 0) file_pos += z_elements*data_size;
+
+		nblks = (data_size+(MatBLKSIZE-1))/MatBLKSIZE;
+		data_size = data-&gt;data_size = nblks * MatBLKSIZE;
+		if ((data-&gt;data_ptr = malloc(data_size)) == NULL) {
+			<a href="matrix_extra.c.html#free_matrix_data">free_matrix_data</a>(data);
+			return NULL;
+		}
+		fdata = (float*)data-&gt;data_ptr;
+		line_size = data-&gt;xdim*sizeof(float);
+		file_pos += slice*line_size;
+		line = malloc(line_size);
+		tmp_line = malloc(line_size);
+		data-&gt;zdim = 1;
+		p = (char*)fdata;
+		for (y=0; y&lt;data-&gt;ydim; y++) {	/* for each planar view fixed theta */
+			if (mptr-&gt;acs) <a href="rts_cmd.c.html#byte_acs_read">byte_acs_read</a>(mptr->fname,file_pos,line,line_size);
+			else {
+					/* skip to planar view and read */
+				fseek(mptr-&gt;fptr,file_pos,0);
+				fread(line,sizeof(float),data-&gt;xdim,mptr->fptr);
+			}
+			if (ntohs(1) != 1) {
+				swab(line,tmp_line,line_size);
+				<a href="matrix.c.html#swaw">swaw</a>(tmp_line,p,line_size/2);
+			}
+			else memcpy(p,line,line_size);
+			p += line_size;
+			file_pos += line_size*z_elements;
+		}
+		data-&gt;data_max = <a href="matrix_extra.c.html#find_fmax">find_fmax</a>(fdata,npixels);
+		free(line);
+		return data;
+	case ByteVolume:
+	case PetVolume:
+		imagesub = (<a href="matrix.h.html#Image_subheader">Image_subheader</a> *) volume-&gt;shptr ;
+		data-&gt;data_type = imagesub->data_type ;
+		data-&gt;xdim = imagesub->x_dimension ;
+		data-&gt;ydim = imagesub->y_dimension ;
+		data-&gt;zdim = 1;
+		npixels = data-&gt;xdim*data->ydim;
+		imagesub-&gt;z_dimension = 1;
+		file_pos = <a href="matrix.h.html#matdir">matdir</a>.strtblk*MatBLKSIZE;
+		if (data-&gt;data_type == ByteData) data_size = npixels;
+		else data_size = npixels*sizeof(short);
+		file_pos += slice*data_size;
+		nblks = (data_size+(MatBLKSIZE-1))/MatBLKSIZE;
+		data_size = data-&gt;data_size = nblks * MatBLKSIZE;
+		if ((data-&gt;data_ptr = malloc(data_size)) == NULL) {
+			<a href="matrix_extra.c.html#free_matrix_data">free_matrix_data</a>(data);
+			return NULL;
+		}
+		fseek(mptr-&gt;fptr,file_pos,0); /* jump to location of this slice*/
+		if (fread(data-&gt;data_ptr,1,data_size,mptr->fptr) != data_size)
+			perror(mptr-&gt;fname);
+		if (data-&gt;data_type!=ByteData && ntohs(1)!=1) {
+			line = malloc(data_size);
+			swab(data-&gt;data_ptr, line, data_size);
+			memcpy(data-&gt;data_ptr, line, data_size);
+			free(line);
+		} 
+		imagesub = (<a href="matrix.h.html#Image_subheader">Image_subheader</a> *) malloc(sizeof(
+		memcpy(imagesub,volume-&gt;shptr,sizeof(<a href="matrix.h.html#Image_subheader">Image_subheader</a>));
+		imagesub-&gt;z_dimension = 1;
+		data-&gt;shptr = (caddr_t)imagesub;
+		if (data-&gt;data_type==ByteData)
+			imagesub-&gt;image_max = <a href="matrix_extra.c.html#find_bmax">find_bmax</a>((u_char*)data->data_ptr,npixels);
+		else imagesub-&gt;image_max = <a href="matrix_extra.c.html#find_smax">find_smax</a>((short*)data->data_ptr,npixels);
+		data-&gt;data_max = imagesub->image_max * data->scale_factor;
+		return data;
+	default:
+		<a href="crash.c.html#crash">crash</a>("matrix read slice not implemented for this data set\n");
+		return NULL;
+	}
+}

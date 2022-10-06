@@ -1,0 +1,74 @@
+#!/bin/csh
+#   Name:   make_alignmask
+#   Author: Tom Videen
+#   Date:   Dec 2007
+#   Intent: Create brain mask from HO that excludes nose for aligning with OO and OC
+
+if ($#argv != 3) then
+    echo "Usage:  make_alignmask HO MASK slices"
+    echo " e.g.:  make_alignmask p7000ho1 p7000mask 8to35"
+    exit
+endif
+
+set HO   = $1
+set MASK = $2.v
+set SLICES = $3
+set HOA  = ${HO}_all
+set LAT  = ${HO}_lat
+set thr  = 15
+
+if (! -e $HO.v) then
+	echo "ERROR [make_alignmask]: missing $HO.v"
+	exit
+endif
+
+set pln = `imghdr $HO.v | grep slices | cut -f1 -d' '`
+set frmho = `imghdr $HO.v | grep frames | cut -f5 -d' '`
+if (! -e $HOA.v) sumimgframes $HO.v $HOA.v 2 $frmho 0
+if (! -e ${HOA}_g3.v) gauss $HOA.v 0.3
+
+set max = `imghdr ${HOA}_g3.v | grep Max | cut -f2 -d= | cut -f1 -d.`
+set min = `echo "$max / 100" | bc`
+echo $min $max
+maskpct ${HOA}_g3.v $MASK 20 $SLICES
+maskimg ${HOA}_g3.v $MASK $MASK 1
+maskslc $MASK $MASK 1to1
+maskslc $MASK $MASK ${pln}to$pln
+sumlateral $MASK $MASK $min $max
+maskpct $MASK $MASK.tmp $thr
+maskimg $MASK $MASK.tmp $LAT.v 1
+set max = `imghdr $LAT.v | grep Max | cut -f2 -d= | cut -f1 -d.`
+while ($max > 32767)
+    scaleimage $LAT.v 0.1
+    set max = `imghdr $LAT.v | grep Max | cut -f2 -d= | cut -f1 -d.`
+end
+echo $max
+
+prompt1:
+echo "============================================================"
+echo "Use vidi to edit the lateral projection of the mask"
+echo "   Get Files->Image 1:   $LAT.v"
+echo "   Edit->Image 1"
+echo "      Outline nose and tissue below base of cranium"
+echo "      Fill using Fill Value = 0"
+echo "   Save Image:	$LAT.img"
+echo "   Press RETURN to continue (CTRL-C to quit)"
+set data = `line`
+
+if (! -e $LAT.ifh) then
+    echo "ERROR: Save as $LAT.img"
+    goto prompt1
+endif
+if2analyze $LAT
+analyze2img $LAT $LAT.v
+masklateral ${HOA}_g3.v $LAT.v $MASK 10
+maskslc $MASK $MASK 1to1
+maskpct $MASK $MASK 20 $SLICES
+maskimg ${HOA}_g3.v $MASK $MASK 1
+
+rm $LAT.i*
+rm $LAT.h*
+rm $LAT.*rec
+rm *tmp
+rm $MASK.rec
+

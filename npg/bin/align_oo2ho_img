@@ -1,0 +1,138 @@
+#!/bin/csh
+#	Name:	align_oo2ho_img
+#	Author:	Tom Videen
+#	Date:	Sept 2009
+#	Intent: Coregister OO to HO
+#			using 953B images with extension .img
+
+if ($#argv != 3) then
+    echo "Usage:  align_oo2ho_img OO HO AIR"
+    echo " e.g.,  align_oo2ho_img p5000oo1_g3 p5000ho1_g3 p5000oo1_to_ho1"
+    exit 1
+endif
+
+set OO1  = $1
+set HO1  = $2
+set AIR1 = $3
+set MSK  = mask.img
+set AMSK = amask
+set LAT  = lateral_sum
+set THR  = 50
+
+if (! -e $HO1.img) then
+	echo "ERROR [align_oo2ho_img]: cannot find $HO1.img"
+	exit 1
+endif
+if (! -e $OO1.img) then
+	echo "ERROR [align_oo2ho_img]: cannot find $OO1.img"
+	exit 1
+endif
+
+if (-e $MSK) then
+   	echo "Using existing $MSK"
+else
+	# Create mask from HO1:
+	# --------------------
+	set max = `imghdr $HO1.img | grep Max | cut -f2 -d= | cut -f1 -d.`
+	set min = `echo "$max / 100" | bc`
+	set thr = 10
+	set PLANES = `imghdr $HO1.img | grep slices | cut -f1 -d" "`
+	unalias cp
+	cp $HO1.img $MSK
+
+	maskslc $MSK $MSK 1to1
+	maskslc $MSK $MSK ${PLANES}to$PLANES
+	sumlateral $MSK $MSK $min $max
+	maskpct $MSK tmpmsk.img $thr
+	maskimg $MSK tmpmsk.img $LAT.img 1
+	set max = `imghdr $LAT.img | grep Max | cut -f2 -d= | cut -f1 -d.`
+	while ($max > 32767) 
+		scaleimage $LAT.img 0.1
+		set max = `imghdr $LAT.img | grep Max | cut -f2 -d= | cut -f1 -d.`
+	end
+	echo $max
+
+	prompt1:
+	echo "============================================================"
+	echo "Use vidi to edit the lateral projection of the mask"
+	echo "   Get Files->Image 1:   $LAT.img"
+	echo "   Edit->Image 1"
+	echo "      Outline nose and tissue below base of cranium"
+	echo "      Fill using Fill Value = 0"
+	echo "   Save Image->Image 1:  $LAT.img"
+	echo "   Press RETURN to continue (CTRL-C to quit)"
+	set data = `line`
+ 
+	if (! -e $LAT.ifh) then
+		echo "ERROR [align_oo2ho_img]: Save as $LAT.img"
+		goto prompt1
+	endif
+	if2analyze $LAT
+	analyze2img $LAT $LAT.img
+	masklateral $HO1.img $LAT.img $MSK 10
+	maskslc $MSK $MSK 1to1
+	if ($status != 0) exit 1
+endif
+
+# Scale OO1 to HO1 to aid alignment
+# --------------------------------
+set NPLANES = `imghdr $HO1.img | grep slices | cut -f1 -ds`
+set MASK = `echo 2 \* $NPLANES/3 | bc`
+maskslc $HO1.img tmpho.img ${MASK}to${NPLANES}
+maskslc $OO1.img tmpoo.img ${MASK}to${NPLANES}
+set maxHO = `imghdr tmpho.img | grep Max | cut -f2 -d= | cut -f1 -dM`
+set maxOO = `imghdr tmpoo.img | grep Max | cut -f2 -d= | cut -f1 -dM`
+set SCALE = `echo "$maxHO / $maxOO" | bc -l | cut -c1-11`
+set INVSCALE = `echo "1.0 / $SCALE" | bc -l | cut -c1-11`
+echo "$HO1    Max = $maxHO"
+echo "$OO1    Max = $maxOO   Scaler = $SCALE"
+
+
+scaleimage $OO1.img $SCALE
+img2analyze $OO1.img a$OO1
+scaleimage $OO1.img $INVSCALE
+
+img2analyze $MSK $AMSK
+img2analyze $HO1.img a$HO1
+setanamin $AMSK 0
+setanamin a$HO1 0
+setanamin a$OO1 0
+
+# Align OO to HO, then reslice OO:
+# --------------------------------
+echo "Aligning:  a$OO1 to a$HO1"
+
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMSK -e2 $AMSK -x 1 -v"
+
+alignlinear a$HO1 a$OO1 $AIR1.air $PRM >! log
+set ERROR = `grep HESSIAN log`
+if (`echo $ERROR | wc -w` != 0) then
+	echo $ERROR
+	echo "Alignment failed and will require manual processing"
+	exit 1
+endif
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file"
+	exit 1
+endif
+imgreslice a$OO1 $AIR1
+analyze2img ra$OO1 r$OO1.img
+if (! -e null.air) alignlinear a$HO1 a$HO1 null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+
+echo "============================================================"
+echo "Use vidi to check alignment of $OO1 vs. $HO1"
+echo "   Image 1: r$OO1.img   (PET Rainbow)"
+echo "   Image 2: $HO1.img    (Hot Metal)"
+echo "   Press RETURN to cleanup and finish (CTRL-C to quit)"
+set data = `line`
+
+unalias rm
+rm a$OO1* a$HO1* ra$OO1* tmp*
+rm null.air log
+rm $LAT.i* $LAT.hdr
+rm $LAT*rec $MSK*rec 
+rm $AMSK:r.???
+

@@ -1,0 +1,161 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*--------------------------------------------------------------------
+
+Program: cti_scat_extract
+
+Purpose: Extract sinograms corresponding to scatter estimates.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string.h>
+#include <imagio.h>
+#include <cti_proto.h>
+#include <matrix.h>
+
+#define MAXNAME 120
+#define TRUE 1
+#define FALSE 0
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/cti_scat_extract.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+SubHeader	*sh,*scatsh;
+Norm_subheader	*nrm;
+MainHeader     *mh,*scatmh;
+
+FILE	*fp;
+
+int	i,j,k,stat,length,arg,lcforce,*pln,npln=1,
+	outdim,ioff,joff,write_enable=FALSE,dim3,ring1,ring2,pln_3d,
+	plane=1,frame=1,gate=1,data=0,bed=0,
+	jc,ic,dim1,dim2,ijc,koff;
+
+float	*imgin,scale;
+
+char	ans[MAXNAME],*scatfil,*infil,outfil[MAXNAME],*ptr;
+
+if(argc < 3) {
+    fprintf(stderr,"Usage: cti_scat_extract sino_file scat_file\n");
+    exit(-1);
+    }
+
+infil  = argv[1];
+scatfil = argv[2];
+strcpy(outfil,infil);
+ptr = strstr(outfil,".");
+*ptr = NULL;
+
+if((mh=getmhdr(infil)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",infil);
+    exit(ERROR);
+    }
+if(strstr(infil,".scn")) {
+    if((sh=getsbhdr(infil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read subheader., %s\n",infil);
+        exit(ERROR);
+        }
+    dim1 = sh->dim1;
+    dim2 = sh->dim2;
+    length = dim1*dim2;
+    strcat(outfil,"_scat.scn");
+    }
+else if(strstr(infil,".nrm")) {
+fprintf(stderr,".nrm file type not supported.\n");
+/*    if((shnrm=(Norm_subheader *)getsbhdr(infil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read subheader., %s\n",infil);
+        exit(ERROR);
+        }
+    dim1 = shnrm->dim1;
+    dim2 = shnrm->dim2;
+    length = dim1*dim2;
+    strcat(outfil,"_scat.nrm");*/
+    }
+else {
+    fprintf(stderr,"Input must be scan file: %s.\n",infil);
+    exit(-1);
+    }
+
+lcforce = FALSE;
+for(i=1;i<argc;i++) {
+    if(!strcmp(argv[i],"-f"))
+	lcforce = TRUE;
+    }
+
+if((scatmh = getmhdr(scatfil)) == NULL) {
+    fprintf(stderr,"Call to GetCubeHeader failed in get_cube_sino.\n");
+    exit(ERROR);
+    }
+dim3 = scatmh->nplane;
+mh->nplane = dim3;
+for(plane=1;plane<=dim3;plane++) {
+
+    /* Get ring numbers from scatter subheader. */
+    if((scatsh = getsbhdr(scatfil,plane,1)) == NULL) {
+        fprintf(stderr,"Call to getsbhdr failed in cti_scat_extract.\n");
+        exit(ERROR);
+        }
+    sscanf(scatsh->comment,"r%x-%x",&ring1,&ring2);
+    pln_3d = plnnum_f3d(ring1+1,ring2+1,mh->scanner_type);
+
+    if((imgin=rdimg(infil,pln_3d,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",infil,plane);
+        exit(ERROR);
+        }
+    if((sh=getsbhdr(infil,pln_3d,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read main header., %s\n",infil);
+        exit(ERROR);
+        }
+
+    
+    if(strstr(infil,".scn")) {
+	for(i=0;i<length;i++)
+	    imgin[i] /= sh->deadtime_corr;
+	}
+
+    if((stat=wrimg(outfil,imgin,mh,sh,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",outfil,plane);
+        exit(ERROR);
+        }
+
+    }
+
+printf("Extracted sinograms written to %s\n",outfil);
+}
+@

@@ -1,0 +1,143 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@nitial checking in, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*--------------------------------------------------------------------
+
+Program: make_eff_tr
+
+Purpose: Make transmission scan for plane efficiency data.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string.h>
+#include <petutil/matrix.h>
+#include "cti_proto.h"
+
+#define MAXNAME 120
+#define TRUE 1
+#define FALSE 0
+#define CYL_RADIUS (21.2/2)  /* Outer diameter of cylindrical ge-gel phantom. */
+#define MU_H2O .096
+#define MU_GEL MU_H2O	/* This is a guess. */
+
+static char rcsid [] = "$Header$";
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+Scan_subheader	*sh;
+Main_header     *mh;
+
+int	i,stat,length,plane=1,frame=1,gate=1,data=0,bed=0,rsq,
+	numray,numang,iang,ray,rayoff;
+
+float	*sino,*trsino,*blsino,raysiz,*ctr,y;
+
+char	*plnfil,trfil[MAXNAME],*blfil,*dot;
+
+if(argc < 2) {
+        fprintf(stderr,"Usage: make_eff_tr plane_eff_file\n");
+        exit(-1);
+        }
+
+plnfil  = argv[1];
+strcpy(trfil,plnfil);
+dot = strrchr(trfil,(int)'.');
+*dot = NULL;
+strcat(trfil,"_tr.scn");
+blfil = "unit.scn";
+
+if((mh=getmhdr(plnfil)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",plnfil);
+    exit(ERROR);
+    }
+
+/* Find out how many data planes there are. */
+if((sh=getsbhdr(plnfil,plane,frame,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not read subheader for %s\n",plnfil);
+    exit(-1);
+    }
+numray = sh->dimension_1;
+numang = sh->dimension_2;
+raysiz = sh->sample_distance;
+length = numray*numang;
+rsq = (CYL_RADIUS/raysiz)*(CYL_RADIUS/raysiz);
+
+trsino = (float *)malloc(length*sizeof(float));
+blsino = (float *)malloc(length*sizeof(float));
+ctr = (float *)malloc(numang*sizeof(float));
+for(i=0;i<length;i++) blsino[i] = 1.;
+
+mh->num_frames = 1;
+for(plane=1;plane<=mh->num_planes;plane++) {
+    if((sino=rdimg(plnfil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",plnfil,plane);
+        exit(ERROR);
+        }
+    if((sh=getsbhdr(plnfil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read main header., %s\n",plnfil);
+        exit(ERROR);
+        }
+    fit_ctrs(ctr,sino,numray,numang);
+
+    for(iang=0,rayoff=0;iang<numang;iang++,rayoff+=numray) {
+	for(ray=1;ray<numray;ray++) {
+	    y = (float)ray - ((float)ctr[iang] + numray/2.);
+	    y = rsq - y*y;
+	    if(y > 0)
+		trsino[ray+rayoff] = (float)exp(-2.*raysiz*MU_GEL*sqrt((double)y));
+	    else
+		trsino[ray+rayoff] = 1.;
+	    }
+	}
+    sh->loss_correction_fctr = 1.;
+    sh->frame_duration = 1000.;
+    if((stat=wrimg(trfil,trsino,mh,sh,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",trfil,plane);
+        exit(ERROR);
+        }
+/*    if((stat=wrimg(blfil,blsino,mh,sh,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",trfil,plane);
+        exit(ERROR);
+        }*/
+    }
+
+printf("Transmission data written to %s\n",trfil);
+printf("Blank data written to %s\n",blfil);
+
+}
+@

@@ -1,0 +1,428 @@
+head	2.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.2
+date	2004.02.20.16.15.35;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	99.12.17.16.06.32;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.05.10.21.57.25;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.11.10.18.47.47;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	94.10.03.16.17.13;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	94.05.18.15.53.30;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	93.08.26.17.26.35;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.08.20.20.24.07;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.08.19.22.55.48;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.08.13.16.16.13;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@equivalent to hd6mean
+@
+
+
+2.2
+log
+@Feb 2004
+@
+text
+@/* $Log: adjust_markers.c,v $
+ * Revision 2.1  1999/12/17  16:06:32  tom
+ * lint cleaning
+ *
+ * Revision 2.0  1996/05/10  21:57:25  tom
+ * new libimage
+ * indexing from 1 on images and atlas
+ *
+ * Revision 1.10  1995/11/10  18:47:47  tom
+ * remove petutil parent directory from include statements
+ *
+ * Revision 1.9  1994/10/03  16:17:13  tom
+ * Changed atlas_transform to compute the x-scaling factor from the nearest slice
+ * to the AC-PC plane if no slice contains the AC-PC plane;
+ * The transformation matrix (and scaling factors) are written to the rec file;
+ * Change calling parameters to sxr_center;
+ * Separate functions atlas_scalers and matrix_transform;
+ *
+ * Revision 1.8  1994/05/18  15:53:30  tom
+ * changed $Id: adjust_markers.c,v 2.1 1999/12/17 16:06:32 tom Exp tom $ to $Header: /home/npggw/tom/src/t88mean/RCS/adjust_markers.c,v 2.1 1999/12/17 16:06:32 tom Exp tom $
+ *
+ * Revision 1.7  1993/08/26  17:26:35  tom
+ * changed atlas y-dim to used 5 mm between brain and skull
+ *
+ * Revision 1.6  1993/08/20  20:24:07  tom
+ * first version with Talairach 1988 atlas
+ *
+ * Revision 1.5  1993/08/19  22:55:48  tom
+ * a corrected hd6mean-atlas version of t88mean
+ *
+ * Revision 1.4  1993/08/13  16:16:13  tom
+ * equivalent to hd6mean
+ *
+ * Revision 1.3  1993/08/06  15:16:49  tom
+ * reads prm and list files
+ *
+ * Revision 1.1  1993/06/24  18:57:01  tom
+ * Initial revision
+ *
+ */
+/*	========================================================================
+ *	Module:			adjust_markers.c
+ *	Date:			Apr 1993
+ *	Author:			Tom Videen
+ *	Description:	Adjust sxr.magnification_factor and sxr.dz for differences in the
+ *		geometry of the skull xray and variations in the computation of
+ *		sxr.magnification_factor over the years. (PETT VI only)
+ *
+ *	Input:
+ *		sxr
+ *	Output:
+ *		sxr     (possibly altered sxr.magnification_factor and/or sxr.dz)
+ *	History:
+ *		Aug 1993	Finally agrees with structure SXR_DATA!
+ *
+ *	SXR file notes:
+ *    type = 1
+ *       If the magnification factor is 0.93, then the OLD cassette
+ *       holder was used with the slice markers between the head and the
+ *       xray source, AND the PET was in the old room with the xray
+ *       source closer to the head.  It is further assumed that the
+ *       reference slice position for xrays with a single slice marker
+ *       (7) was measured using the slice spacing of xrays with 7-slice
+ *       markers (and therefore is uncorrected and must be adjusted by
+ *       mag_markers).
+ *          P < P987
+ *          sxr.magnification_factor = 0.93
+ *          mag_markers = 0.89
+ *
+ *    type = 2
+ *       If the magnification factor is 0.94, then the OLD cassette
+ *       holder was used with the slice markers between the head and the
+ *       xray source.
+ *          P987 <= P < P1575
+ *          sxr.magnification_factor = 0.945
+ *          mag_markers = 0.910
+ *
+ *    type = 3
+ *       If the magnification factor is 0.945 and the SXR file does NOT
+ *       contain an 'incorrect delta-z' message, then the NEW (1988)
+ *       cassette holder was used with the old slice markers between the
+ *       head and the xray source.
+ *          P1575 < P <= P1611
+ *          sxr.magnification_factor = 0.947
+ *          mag_markers = 0.913
+ *
+ *    type = 4 (no changes in values!)
+ *       If the magnification factor is 0.945 and the SXR file contains
+ *       an 'incorrect delta-z' message, then the NEW (1988) cassette
+ *       holder was used with the slice markers against the cassette.
+ *          P >= P1575
+ *          sxr.magnification_factor is not changed
+ *          mag_markers = 1.0 (but is not used)
+ *	========================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/adjust_markers.c,v 2.1 1999/12/17 16:06:32 tom Exp tom $";
+#endif
+
+#include <imgutil.h>
+
+#define	LASER_ALIGNED_SLICE		7	 /* Slice number which is in true position on xray */
+
+/*	-----------------------
+ *	Function adjust_markers
+ *	-----------------------
+ */
+void            adjust_markers (sxr)
+	SXR_DATA        sxr;			 /* information from sxr file */
+
+{
+	float           mag_markers;		 /* xray magnification factor for slice markers */
+
+/* PETT VI type 1 */
+
+	if (sxr.magnification_factor <= 0.931 && sxr.magnification_factor >= 0.929) {
+		mag_markers = 0.89;
+		sxr.dz = (sxr.dz * sxr.magnification_factor) + ((sxr.magnification_factor / mag_markers) - 1)
+			* sxr.slice_separation * (float) (LASER_ALIGNED_SLICE - sxr.reference_slice);
+
+/* PETT VI type 2 */
+
+	} else if (sxr.magnification_factor <= 0.941 && sxr.magnification_factor >= 0.939) {
+		sxr.magnification_factor = 0.945;
+		mag_markers = 0.910;
+		sxr.dz = (sxr.dz * sxr.magnification_factor) + ((sxr.magnification_factor / mag_markers) - 1)
+			* sxr.slice_separation * (float) (LASER_ALIGNED_SLICE - sxr.reference_slice);
+
+/* PETT VI type 3 */
+
+	} else if (sxr.magnification_factor <= 0.946 && sxr.magnification_factor >= 0.944 &&
+		   (sxr.incorrect_dz == 0)) {
+		sxr.magnification_factor = 0.947;
+		mag_markers = 0.913;
+		sxr.dz = (sxr.dz * sxr.magnification_factor) + ((sxr.magnification_factor / mag_markers) - 1)
+			* sxr.slice_separation * (float) (LASER_ALIGNED_SLICE - sxr.reference_slice);
+
+	}
+}
+@
+
+
+2.1
+log
+@lint cleaning
+@
+text
+@d2 3
+d20 1
+a20 1
+ * changed $Id: adjust_markers.c,v 2.0 1996/05/10 21:57:25 tom Exp tom $ to $Header: /home/npggw/tom/src/t88mean/RCS/adjust_markers.c,v 2.0 1996/05/10 21:57:25 tom Exp tom $
+d43 1
+a43 1
+ *	Date:			23-Apr-93
+a50 1
+ *
+a52 1
+ *
+d54 1
+a54 1
+ *		12-Aug-93	Finally agrees with structure SXR_DATA!
+a93 1
+ *
+d96 1
+d98 1
+a98 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/adjust_markers.c,v 2.0 1996/05/10 21:57:25 tom Exp tom $";
+d133 1
+a133 1
+		   !(sxr.incorrect_dz)) {
+@
+
+
+2.0
+log
+@new libimage
+indexing from 1 on images and atlas
+@
+text
+@d2 4
+d17 1
+a17 1
+ * changed $Id: adjust_markers.c,v 1.10 1995/11/10 18:47:47 tom Exp tom $ to $Header: /home/npggw/tom/src/t88mean/RCS/adjust_markers.c,v 1.10 1995/11/10 18:47:47 tom Exp tom $
+d96 4
+a99 1
+#include <stdio.h>
+a103 4
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/adjust_markers.c,v 1.10 1995/11/10 18:47:47 tom Exp tom $";
+#endif
+
+@
+
+
+1.10
+log
+@remove petutil parent directory from include statements
+@
+text
+@d2 3
+d13 1
+a13 1
+ * changed $Id: adjust_markers.c,v 1.9 1994/10/03 16:17:13 tom Exp tom $ to $Header: /export/home/npggw/tom/src/t88mean/RCS/adjust_markers.c,v 1.9 1994/10/03 16:17:13 tom Exp tom $
+d44 1
+a44 1
+ *	 
+d47 1
+a47 1
+ *	
+d49 1
+a49 1
+ *		12-Aug-93	Finally agrees with structure SXR_OUTPUT!
+a91 1
+
+d93 1
+a93 1
+#include <petutil.h>
+d95 1
+a95 1
+#define	LASER_ALIGNED_SLICE		7	/* Slice number which is in true position on xray */
+d97 3
+a99 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/t88mean/RCS/adjust_markers.c,v 1.9 1994/10/03 16:17:13 tom Exp tom $";
+d105 2
+a106 3
+void
+adjust_markers (sxr)
+	SXR_OUTPUT      sxr;	/* information from sxr file */
+d109 1
+a109 1
+	float           mag_markers;	/* xray magnification factor for slice markers */
+@
+
+
+1.9
+log
+@Changed atlas_transform to compute the x-scaling factor from the nearest slice
+to the AC-PC plane if no slice contains the AC-PC plane;
+The transformation matrix (and scaling factors) are written to the rec file;
+Change calling parameters to sxr_center;
+Separate functions atlas_scalers and matrix_transform;
+@
+text
+@d2 7
+d10 1
+a10 1
+ * changed $Id$ to $Header$
+d91 1
+a91 1
+#include <petutil/petutil.h>
+d95 1
+a95 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/t88mean/RCS/adjust_markers.c,v 1.8 1994/05/18 15:53:30 tom Exp tom $";
+@
+
+
+1.8
+log
+@changed $Id$ to $Header$
+@
+text
+@d1 4
+a4 1
+/* $Log:	adjust_markers.c,v $
+d25 6
+a30 6
+ *	Module:				adjust_markers.c
+ *	Date:					23-Apr-93
+ *	Author:				Tom Videen
+ *	Description:	Adjust sxr.magnification_factor and sxr.dz for differences in the 
+ *			geometry of the skull xray and variations in the computation of 
+ *			sxr.magnification_factor over the years. (PETT VI only)
+d32 6
+d39 1
+a39 1
+ *			12-Aug-93	Finally agrees with structure SXR_OUTPUT!
+d86 1
+a86 1
+#define	LASER_ALIGNED_SLICE		7		/* Slice number which is in true position on xray */
+d88 1
+a88 1
+static char rcsid []= "$Header: adjust_markers.c,v 1.1 92/12/30 04:20:12 tom Exp $";
+d94 3
+a96 2
+void adjust_markers (sxr)
+	SXR_OUTPUT	sxr;				/* information from sxr file */
+d99 1
+a99 1
+	float	mag_markers;			/* xray magnification factor for slice markers */
+d105 2
+a106 2
+		sxr.dz  = (sxr.dz * sxr.magnification_factor) + ((sxr.magnification_factor/mag_markers) - 1)
+			 * sxr.slice_separation  * (float) (LASER_ALIGNED_SLICE - sxr.reference_slice );
+d110 1
+a110 1
+	} else 	if (sxr.magnification_factor <= 0.941 && sxr.magnification_factor >= 0.939) {
+d113 2
+a114 2
+		sxr.dz  = (sxr.dz * sxr.magnification_factor) + ((sxr.magnification_factor/mag_markers) - 1)
+			 * sxr.slice_separation  * (float) (LASER_ALIGNED_SLICE - sxr.reference_slice );
+d118 2
+a119 2
+	} else 	if (sxr.magnification_factor <= 0.946 && sxr.magnification_factor >= 0.944 &&
+			 !(sxr.incorrect_dz)) {
+d122 2
+a123 2
+		sxr.dz  = (sxr.dz * sxr.magnification_factor) + ((sxr.magnification_factor/mag_markers) - 1)
+			 * sxr.slice_separation  * (float) (LASER_ALIGNED_SLICE - sxr.reference_slice );
+@
+
+
+1.7
+log
+@changed atlas y-dim to used 5 mm between brain and skull
+@
+text
+@d1 4
+a4 1
+/* $Log: adjust_markers.c,v $
+d79 1
+a79 1
+static char rcsid []= "$Id: adjust_markers.c,v 1.6 1993/08/20 20:24:07 tom Exp tom $";
+@
+
+
+1.6
+log
+@first version with Talairach 1988 atlas
+@
+text
+@d2 3
+d76 1
+a76 1
+static char rcsid []= "$Id: adjust_markers.c,v 1.5 1993/08/19 22:55:48 tom Exp tom $";
+@
+
+
+1.5
+log
+@a corrected hd6mean-atlas version of t88mean
+@
+text
+@d2 3
+d73 1
+a73 1
+static char rcsid []= "$Id: adjust_markers.c,v 1.4 1993/08/13 16:16:13 tom Exp tom $";
+@
+
+
+1.4
+log
+@equivalent to hd6mean
+@
+text
+@d2 3
+d70 1
+a70 1
+static char rcsid []= "$Id: adjust_markers.c,v 1.4 1993/08/12 22:58:02 tom Exp tom $";
+@

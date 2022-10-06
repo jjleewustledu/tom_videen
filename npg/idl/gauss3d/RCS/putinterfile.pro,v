@@ -1,0 +1,178 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.12.12.23.06.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@FUNCTION PUTINTERFILE, uv, i, ntype, suppl, msg, APPEND=append
+   ;; Writes one image frame to a file using Interfile format.
+   ;; Parameters:
+   ;;	uv = image structure
+   ;;   i  = index to image in uv
+   ;;   ntype = number type to use in output file
+   ;;	suppl = array of strings with any additional info for
+   ;;	  to include in the Interfile header
+   ;;	msg = returns error message, if any
+   ;; Keyword APPEND -> used to add image frame to end of file
+   ;;	and increment number of frames in header
+
+   COMMON IMAGE_UTILS
+   
+   fname = uv.img[i].fname
+   IF (strlen(fname) EQ 0) THEN BEGIN
+      msg =  'No filename defined'
+      RETURN, -1
+   ENDIF 
+   IF (uv.img[i].data EQ ptr_new()) THEN BEGIN
+      msg =  'No data defined'
+      RETURN, -1
+   ENDIF 
+   
+   dim = lonarr(4)
+   FOR k=0,3 DO dim[k] = uv.img[i].dim[k]
+   pdim = fltarr(4)
+   FOR k=0,3 DO pdim[k] = uv.img[i].pdim[k]
+   dim[3] = dim[3] > 1
+   
+   CASE ntype OF
+      type(0): BEGIN
+         stype = 'signed integer'
+         sbytes = '2'
+      ENDCASE 
+      type(0L): BEGIN
+         stype = 'signed integer'
+         sbytes = '4'
+      ENDCASE 
+      type(0.0): BEGIN 
+         stype = 'short float'
+         sbytes = '4'
+      ENDCASE 
+      ELSE: BEGIN
+         msg =  'Subroutine does not handle this number type: '+string(ntype)
+         exit
+      ENDCASE
+   ENDCASE
+   
+   k = rstrpos(fname,'.img')
+   hname = fname
+   strput, hname,'.ifh', k
+   
+   IF NOT KEYWORD_SET(APPEND) THEN append = 0 $
+   ELSE BEGIN 
+      openr, lu1, hname, ERR=err, /GET_LUN
+      IF (err NE 0) THEN append = 0 $ ; if file doesn't exist, create a new one
+      ELSE BEGIN 
+         msg = ''
+         str = ''
+         WHILE (NOT eof(lu1)) DO BEGIN
+            readf,lu1,str
+            k = strpos(str,':=')
+            key = strtrim(strmid(str,0,k),2)
+            value = strtrim(strmid(str,k+2,256),2)
+            CASE key OF
+               'number format': IF (value NE stype) THEN $
+                  msg = 'Existing file has a different number format'
+               'number of bytes per pixel': IF (value NE sbytes) THEN $
+                  msg = 'Existing file has a different number of bytes per pixel'
+               'matrix size [1]': IF (long(value) NE dim[0]) THEN $
+                  msg = 'Existing file has a different matrix size'
+               'matrix size [2]': IF (long(value) NE dim[1]) THEN $
+                  msg = 'Existing file has a different matrix size'
+               'matrix size [3]': IF (long(value) NE dim[2]) THEN $
+                  msg = 'Existing file has a different matrix size'
+               'matrix size [4]': dim[3] = long(value)+dim[3]
+               'scaling factor (mm/pixel) [1]': IF (value NE strtrim(string(pdim[0]),2)) THEN $
+                  msg = 'Existing file has a different pixel scaling factor'
+               'scaling factor (mm/pixel) [2]': IF (value NE strtrim(string(pdim[1]),2)) THEN $
+                  msg = 'Existing file has a different pixel scaling factor'
+               'scaling factor (mm/pixel) [3]': IF (value NE strtrim(string(pdim[2]),2)) THEN $
+                  msg = 'Existing file has a different pixel scaling factor'
+               'matrix initial element [1]': IF (value NE 'right') THEN $
+                  msg = 'Existing file has a different orientation'
+               'matrix initial element [2]': IF (value NE 'posterior') THEN $
+                  msg = 'Existing file has a different orientation'
+               'matrix initial element [3]': IF (value NE 'inferior') THEN $
+                  msg = 'Existing file has a different orientation'
+               ELSE:
+            ENDCASE
+         ENDWHILE
+         close,lu1
+         free_lun, lu1
+         IF (msg NE '') THEN RETURN, -1
+      ENDELSE 	
+   ENDELSE 
+
+   openw,lu1, hname, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+hname
+      RETURN, -1
+   ENDIF
+   
+   openw,lu2, fname, ERROR=err, APPEND=append, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+fname
+      close, lu1
+      free_lun, lu1
+      RETURN, -1
+   ENDIF
+   
+   ;; Format the image data amd write it
+   
+   CASE ntype OF
+      type(0): data = fix(*uv.img[i].data)
+      type(0L): data = long(*uv.img[i].data)
+      type(0.0): data = float(*uv.img[i].data)
+   ENDCASE
+   order = uv.img[i].order
+   IF (order EQ 1) THEN BEGIN 
+      data = reverse(data,1)
+      data = reverse(data,2)
+      data = reverse(data,3)
+   ENDIF ELSE BEGIN
+      msg =  'Subroutine does not handle this image order: '+string(order)
+      exit
+   ENDELSE 
+   writeu,lu2,data
+   close,lu2
+   free_lun,lu2
+   
+   printf, lu1, 'INTERFILE :='
+   printf, lu1, 'version of keys    := 3.3'
+   printf, lu1, 'name of data file  := '+strtrim(fname,2)
+   printf, lu1, 'number format      := '+stype
+   printf, lu1, 'number of bytes per pixel  := '+sbytes
+   printf, lu1, 'number of dimensions   := 3'
+   printf, lu1, 'matrix size [1]    := '+strtrim(string(dim[0]),2)
+   printf, lu1, 'matrix size [2]    := '+strtrim(string(dim[1]),2)
+   printf, lu1, 'matrix size [3]    := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'matrix size [4]    := '+strtrim(string(dim[3]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [1]  := '+strtrim(string(pdim[0]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [2]  := '+strtrim(string(pdim[1]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [3]  := '+strtrim(string(pdim[2]),2)
+   printf, lu1, 'matrix initial element [1] := right'
+   printf, lu1, 'matrix initial element [2] := posterior'
+   printf, lu1, 'matrix initial element [3] := inferior'
+   n = (size(suppl))[1]
+   FOR k=0,n-1 DO printf, lu1, suppl[k]
+   close,lu1
+   free_lun,lu1
+   
+   RETURN, 0
+END
+@

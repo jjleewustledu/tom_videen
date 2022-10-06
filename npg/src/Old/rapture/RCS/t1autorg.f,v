@@ -1,0 +1,653 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.8
+date	97.04.24.16.46.33;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.05.24.21.35.35;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.05.24.21.12.56;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.05.03.18.25.44;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.04.22.21.06.33;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.12.22.16.57.40;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.11.26.22.42.51;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.11.17.16.36.45;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@X window version, first release.
+@
+
+
+1.8
+log
+@eliminate slice number check
+@
+text
+@C$Id: t1autorg.f,v 1.7 1995/05/24 21:35:35 ty7777 Exp tom $
+C$Log: t1autorg.f,v $
+c Revision 1.7  1995/05/24  21:35:35  ty7777
+c Get rid of I.
+c
+c Revision 1.6  1995/05/24  21:12:56  ty7777
+c Ask the user for ZORIGIN.
+c
+c Revision 1.5  1994/05/03  18:25:44  ty7777
+c Added processing for getting the zorigin.
+c
+c Revision 1.4  1994/04/22  21:06:33  ty7777
+c Use 75 slice images.
+c
+c Revision 1.3  1993/12/22  16:57:40  ty7777
+c Moved output from LOGOUT2 to LOGOUT.
+c
+c Revision 1.2  1993/11/26  22:42:51  ty7777
+c Before adding the midlines.
+c
+c Revision 1.1  1993/11/17  16:36:45  ty7777
+c Initial revision
+c
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   T1AUTORG.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         27-Nov-90
+C  Written For:  RAPTURE
+C
+C  History:
+C     Modification of T1OPTREG for automatic processing.
+C     Modified 29-Nov-90 to identify CFNAME prior to T1DISP30.
+C     Modified 04-Dec-90:
+C        1) reset THRESH at beginning of loop instead of end;
+C        2) 'proceed' prompt added;
+C     Modified 10-Dec-90 to remove output comment when reading mask.
+C     Modified 28-Feb-91:
+C        1) Zero SETB when region list zeroed.
+C     Modified 27-Jun-91:
+C        1) Add PIXLIMIT for RPIXELS to stop processing.
+C     Modified 05-Nov-91:
+C        1) Option to compute weighted ROIs (WEIGHTVOI);
+C        2) Use T1ZERORG
+C        3) Switch output files LOGOUT <-> LOGOUT2
+C     Modified 17-Nov-93 by Tom Yang to port to UNIX.
+C     Modified 22-Apr-93 by Tom Yang to change from 49 to 75 slice images.
+C     Modified Apr-97 TOV to eliminate 49,75 slice requirement.
+C
+C  Intent:
+C     Determine optimal region size for maximal t.
+C
+C  Uses:
+C     T1DISP30
+C     T1NEXT
+C     T1PAIRED
+C     T1PIXELS
+C     T1SUMSLC
+C     T1THRESH
+C     T1UNPAIR
+C     T1ZERORG
+C
+C  libpetutil.a
+C     GETIMG
+C     GETINT
+C     GTSTRING
+C     YESNO
+C     GETCNW    - requires CALL GETCNW(0) to initiate and CALL GETCNW(1)
+C                 before any routine which might write to the terminal.
+C     RAMRST
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE T1AUTORG
+C
+      INCLUDE 'rapture.inc'
+C
+      REAL*4     T           ! t-value
+C
+      INTEGER*4  PSLICE      ! previous slice
+      INTEGER*4  NUMSLCS     ! number of slices
+      INTEGER*4  NUMPETT     ! PETT number
+      INTEGER*4  SLC         ! local for SLICE
+      INTEGER*4  NEXTSLC     ! next slice
+      INTEGER*4  DPLANE      ! plane to display point in
+      INTEGER*4  STEPSIZE    ! step size to increment threshold
+      INTEGER*4  STOPTHR     ! stop threshold
+      INTEGER*4  LASTSIZE    ! last size of region (#pixels)
+      INTEGER*4  PIXLIMIT    ! maximum #pixels
+C
+      INTEGER*4    getimage_type 
+      INTEGER*4    fd 
+      INTEGER*4    PETTNUM 
+      INTEGER*4    getfd 
+      INTEGER*2    NUMSLICES	 ! number of slices obtained by calling getiamge_type
+      LOGICAL*1    ENCODED
+      external     getimage_type !$pragma C (getimage_type)
+C
+      INTEGER*2  HDR(128)    ! slice header
+C
+      CHARACTER*1   CH       ! character
+      CHARACTER*20  NULL     ! null string
+      CHARACTER*80  Q        ! query
+      CHARACTER*80  STR      ! string
+      CHARACTER*256 RCSHEADER      
+C
+      LOGICAL*1  OUTPUT      ! T--> write user messages
+      LOGICAL*1  DISPLAY     ! true--> display while processing
+      LOGICAL*1  HDRONLY     ! read header only
+      LOGICAL*1  ERROR       ! error reading image
+      LOGICAL*1  A           ! answer
+C
+      RCSHEADER = '$Header: /home/npggw/tom/src/rapture/RCS/t1autorg.f,v 1.7 1995/05/24 21:35:35 ty7777 Exp tom $'
+C
+      DISPLAY = .FALSE.
+      HDRONLY = .FALSE.
+      ERROR   = .FALSE.
+      OUTPUT  = .FALSE.
+      A       = .TRUE.
+      NULL = ' '
+      DPLANE = PLANE
+C
+C  Define region
+C
+      Q = 'File to determine region'
+      STR = SFNAME
+      CALL GTSTRING(Q,STR)
+      SFNAME = STR(1:20)
+C
+      Q = 'Weight pixel values by magnitude'
+      CALL YESNO(Q,WEIGHTVOI)
+C
+      Q = 'ZSEED'
+      CALL GETINT (Q, ZSEED, 1, 75)
+C
+      Q = 'XSEED'
+      CALL GETINT(Q,XSEED,1,128)
+C
+      Q = 'YSEED'
+      CALL GETINT(Q,YSEED,1,128)
+C
+      Q = 'Initial boundary threshold'
+      CALL GETINT(Q,THRESH,-32767,32767)
+C
+      IF (THRESH.GE.0) THEN
+        SIGN = 1
+      ELSE
+        SIGN = -1
+      END IF
+100   Q = 'Direction of Values (-1 or +1)'
+      CALL GETINT(Q,SIGN,-1,1)
+      IF (SIGN.EQ.0) GO TO 100
+C
+      Q = 'Step size for automatic region expansion'
+      CALL GETINT(Q,STEPSIZE,1,100)
+C
+      STOPTHR = THRESH
+      Q = 'Threshold to stop at'
+      IF (SIGN.GT.0) THEN
+        CALL GETINT(Q,STOPTHR,SIGN,THRESH)
+      ELSE
+        CALL GETINT(Q,STOPTHR,THRESH,SIGN)
+      END IF
+C
+      Q = 'Maximum number of pixels in region'
+      CALL GETINT(Q,PIXLIMIT,1,10000)
+C
+      Q = 'Display while processing'
+      CALL YESNO(Q,DISPLAY)
+C
+      Q = 'Proceed'
+      CALL YESNO (Q, A)
+      IF (.NOT. A) RETURN
+C
+8000  FORMAT (1X, 'Thresh  Slices  Pixels      T      Max T   Thresh')
+      WRITE (USEROUT, *) 'Type "S" to stop...'
+      WRITE (USEROUT, *)
+      WRITE (USEROUT, 8000)
+      WRITE (LOGOUT, 8000)
+C
+      IF (DISPLAY) CALL RAMRST (RMD)
+      GO TO 120
+C
+110   THRESH = THRESH - SIGN * STEPSIZE
+C
+C120   CALL GETCNW (0)
+C      CALL GETCNW (CH)
+C      CALL GETCNW (1)
+120      IF (CH .EQ. 'S' .OR. CH .EQ. 's') RETURN
+C
+C  Clear old region parameters
+C
+      CALL T1ZERORG
+      RPIXELS = 0
+      LASTSIZE = 0
+      SLICE = ZSEED
+C
+C  Read mask for this slice
+C
+      IF (MASKNAME .NE. NULL) THEN
+        CALL GETIMG (SETM, HDR, MASKNAME, SLICE, NUMSLCS,
+     &    NUMPETT, MASK, USEROUT, HDRONLY, ERROR)
+        IF (ERROR) THEN
+          WRITE (USEROUT, 8001) MASKNAME (1:20), CHAR (7)
+        END IF
+        IF (SETM (XSEED, YSEED) .EQ. 0) THEN
+          WRITE (USEROUT, 8003) XSEED, YSEED, ZSEED, MASKNAME (1:20), CHAR (7)
+          RETURN
+        END IF
+      END IF
+8001  FORMAT(1X,'*** Error reading ',A,A1)
+8003  FORMAT(1X,'*** ',2I,' is not defined on slice ',I,' of ',A,A1)
+C
+C  Define region on seed slice
+C
+      CFNAME = SFNAME
+      IF (CFNAME .NE. NULL) THEN
+        CALL GETIMG (IMAGE, HDR, CFNAME, SLICE, NUMSLCS, NUMPETT,
+     &  DISK, USEROUT, HDRONLY, ERROR)
+        IF (ERROR) RETURN
+
+C
+C  get the zorigin
+C
+        OPEN (DISK, FILE = CFNAME, STATUS = 'OLD', ERR = 55)
+        GO TO 77
+55      WRITE (USEROUT, *) '*** Error: opening image file ', CFNAME (1:20), ' ***'
+        RETURN
+77      fd = getfd (DISK)		! get the file descriptor
+        PETTNUM = getimage_type (%VAL(fd), CFNAME, ENCODED, NUMSLICES)
+        IF (PETTNUM .EQ. -1) THEN
+	  WRITE (STDOUT, *) 'Wrong image type for ', CFNAME
+	  RETURN
+        ENDIF
+        CLOSE (DISK) 
+      ENDIF
+      XMIN = XSEED
+      XMAX = XSEED
+      YMIN = YSEED
+      YMAX = YSEED
+      SETA(XSEED,YSEED) = .TRUE.
+      IF (DISPLAY) THEN
+        CALL T1DISP1
+        CALL T1POINT(XSEED,YSEED,DPLANE)
+      END IF
+      CALL T1THRESH (DISPLAY)
+      CALL T1PIXELS
+C
+C  Expand region to lower slices
+C
+C200   CALL GETCNW(0)
+C      CALL GETCNW(CH)
+C      CALL GETCNW(1)
+200      IF (CH.EQ.'S' .or. CH.EQ.'s') RETURN
+      IF (RN(SLICE).GT.0) THEN
+        PSLICE = SLICE
+        SLICE = SLICE + 1
+        IF (SLICE .LE. 75) THEN
+          CALL T1NEXT (PSLICE, SLICE, DISPLAY)
+          GO TO 200
+        END IF
+      END IF
+C
+C  Expand region to upper slices
+C
+      SLICE = ZSEED
+C300   CALL GETCNW(0)
+C      CALL GETCNW(CH)
+C      CALL GETCNW(1)
+300      IF (CH.EQ.'S' .or. CH.EQ.'s') RETURN
+      IF (RN(SLICE).GT.0) THEN
+        PSLICE = SLICE
+        SLICE = SLICE - 1
+        IF (SLICE.GE.1) THEN
+          CALL T1NEXT(PSLICE,SLICE,DISPLAY)
+          GO TO 300
+        END IF
+      END IF
+C
+C  Get total pixels, slices
+C
+400   CALL T1SUMSLC
+C
+C  Stop immediately upon exceeding limit
+C
+      IF (RPIXELS.GT.PIXLIMIT) THEN
+        WRITE(USEROUT,8600) THRESH, RSLICES, RPIXELS
+        WRITE(LOGOUT,8600) THRESH, RSLICES, RPIXELS
+        RETURN
+      END IF
+C
+C  Expand region in both directions until no more pixels added
+C
+      IF (RPIXELS.GT.LASTSIZE) THEN
+        LASTSIZE = RPIXELS
+        DO 500 SLC=ZMIN,ZMAX
+C          CALL GETCNW(0)
+C          CALL GETCNW(CH)
+C          CALL GETCNW(1)
+          IF (CH.EQ.'S' .or. CH.EQ.'s') RETURN
+          IF (RN (SLC) .GT. 0 .AND. SLC .LT. 75) THEN
+            NEXTSLC = SLC + 1
+            CALL T1NEXT(SLC,NEXTSLC,DISPLAY)
+          END IF
+500     CONTINUE
+        DO 600 SLC=ZMAX,ZMIN,-1
+C          CALL GETCNW(0)
+C          CALL GETCNW(CH)
+C         CALL GETCNW(1)
+          IF (CH.EQ.'S' .or. CH.EQ.'s') RETURN
+          IF (RN(SLC).GT.0 .AND. SLC.GT.1) THEN
+            NEXTSLC = SLC - 1
+            CALL T1NEXT(SLC,NEXTSLC,DISPLAY)
+          END IF
+600     CONTINUE
+        GO TO 400
+      END IF
+C
+C  Write Region Summary to output log
+C
+      WRITE(LOGOUT,8200)  SFNAME,XSEED,YSEED,ZSEED,THRESH
+      WRITE(LOGOUT,8300)  RSLICES, RPIXELS
+C
+8200  FORMAT(1X,A20,'Seed X,Y,Z: ',I2,',',I2,',',I2,'   Thresh = ',I)
+8300  FORMAT(1X,'Slices:',I3,'   Pixels:',I5)
+C
+C  Alpha=0 --> no power analysis
+C
+      ALPHA = 0.0
+      IF (UNPAIRED) THEN
+        CALL T1UNPAIR(T,OUTPUT)
+      ELSE
+        CALL T1PAIRED(T,OUTPUT)
+      END IF
+C
+      IF (SIGN*T.GT.SIGN*MAXT) THEN
+        MAXT = T
+        THRESHMAXT = THRESH
+        CFNAME = SFNAME
+        CALL T1DISP20
+      END IF
+      WRITE(LOGOUT,8400)  MAXT, THRESHMAXT
+      WRITE(LOGOUT,*)
+C
+      WRITE(USEROUT,8500) THRESH, RSLICES, RPIXELS, T, MAXT,THRESHMAXT
+      WRITE(LOGOUT,8500) THRESH, RSLICES, RPIXELS, T, MAXT,THRESHMAXT
+      IF (RPIXELS.LT.PIXLIMIT.AND.THRESH*SIGN.GT.STOPTHR*SIGN) GO TO 110
+C
+8400  FORMAT(1X,'Max T =',F8.3,'  Thresh = ',I)
+8500  FORMAT(1X,I5,I7,I10,2F9.3,I8)
+8600  FORMAT(1X,I5,I7,I10,'  ROI size limit exceeded!')
+C
+      RETURN
+      END
+@
+
+
+1.7
+log
+@Get rid of I.
+@
+text
+@d1 1
+a1 1
+C$Id: t1autorg.f,v 1.6 1995/05/24 21:12:56 ty7777 Exp ty7777 $
+d3 3
+d48 3
+a50 2
+C     Mofified 17-Nov-93 by Tom Yang to port to UNIX.
+C     Mofified 22-Apr-93 by Tom Yang to change from 49 to 75 slice images.
+d115 1
+a115 1
+      RCSHEADER = '$Header: /data/petsun4/src/rapture/RCS/t1autorg.f,v 1.6 1995/05/24 21:12:56 ty7777 Exp ty7777 $'
+a206 2
+        ELSE IF (NUMSLCS .NE. 49 .AND. NUMSLCS .NE. 75) THEN
+          WRITE (USEROUT, 8002) MASKNAME (1:20), CHAR (7)
+a213 1
+8002  FORMAT(1X,'*** ',A,' is not 49-slice or 75-slice image.',A1)
+@
+
+
+1.6
+log
+@Ask the user for ZORIGIN.
+@
+text
+@d1 1
+a1 1
+C$Id: t1autorg.f,v 1.5 1994/05/03 18:25:44 ty7777 Exp ty7777 $
+d3 3
+a87 1
+      INTEGER*4  I           ! local
+d111 1
+a111 1
+      RCSHEADER = '$Header: /data/petsun4/src/rapture/RCS/t1autorg.f,v 1.5 1994/05/03 18:25:44 ty7777 Exp ty7777 $'
+@
+
+
+1.5
+log
+@Added processing for getting the zorigin.
+@
+text
+@d1 1
+a1 1
+C$Id: t1autorg.f,v 1.4 1994/04/22 21:06:33 ty7777 Exp ty7777 $
+d3 3
+a92 2
+      LOGICAL*1    ERR1           ! error from get_zorigin
+      external     get_zorigin   !$pragma C (get_zorigin)
+d109 1
+a109 1
+      RCSHEADER = '$Header$'
+a234 13
+C
+C     Update the ZORIGIN if it is necessary
+C
+        ZORIGIN = 31
+        IF (PETTNUM .EQ. 10) THEN
+          OPEN (DISK, FILE = CFNAME, STATUS = 'OLD', ERR = 55)
+          fd = getfd (DISK)		! get the file descriptor
+	  CALL get_zorigin (CFNAME, %VAL(fd), I, ERR1)
+	  IF (ERR1 .NE. .TRUE.) THEN
+            ZORIGIN = I
+	  ENDIF
+          CLOSE (DISK) 
+        ENDIF
+@
+
+
+1.4
+log
+@Use 75 slice images.
+@
+text
+@d1 1
+a1 1
+C$Id: t1autorg.f,v 1.3 1993/12/22 16:57:40 ty7777 Exp ty7777 $
+d3 3
+a69 1
+      REAL*4     MEAN, SD    ! mean, SD of seed image
+a71 2
+      INTEGER*4  IMIN, IMAX  ! min and max pixel values of seed image
+      INTEGER*4  MAXSLICE    ! slice where max value is found in seed image
+d82 1
+a82 1
+      INTEGER*4  I, J, N     ! local
+d84 10
+d108 1
+a108 1
+      RCSHEADER = '$Id: t1autorg.f,v 1.3 1993/12/22 16:57:40 ty7777 Exp ty7777 $'
+d219 28
+@
+
+
+1.3
+log
+@Moved output from LOGOUT2 to LOGOUT.
+@
+text
+@d1 1
+a1 1
+C$Id: t1autorg.f,v 1.2 1993/11/26 22:42:51 ty7777 Exp ty7777 $
+d3 3
+d37 1
+d98 1
+a98 1
+      RCSHEADER = '$Id: t1autorg.f,v 1.2 1993/11/26 22:42:51 ty7777 Exp ty7777 $'
+d119 1
+a119 1
+      CALL GETINT(Q,ZSEED,1,49)
+d190 1
+a190 1
+        ELSE IF (NUMSLCS .NE. 49) THEN
+d199 1
+a199 1
+8002  FORMAT(1X,'*** ',A,' is not 49-slice image.',A1)
+d231 2
+a232 2
+        IF (SLICE.LE.49) THEN
+          CALL T1NEXT(PSLICE,SLICE,DISPLAY)
+d274 1
+a274 1
+          IF (RN(SLC).GT.0 .AND. SLC.LT.49) THEN
+@
+
+
+1.2
+log
+@Before adding the midlines.
+@
+text
+@d1 1
+a1 1
+C$Id: t1autorg.f,v 1.1 1993/11/17 16:36:45 ty7777 Exp ty7777 $
+d3 3
+d94 1
+a94 1
+      RCSHEADER = '$Id: t1autorg.f,v 1.1 1993/11/17 16:36:45 ty7777 Exp ty7777 $'
+d290 2
+a291 2
+      WRITE(LOGOUT2,8200)  SFNAME,XSEED,YSEED,ZSEED,THRESH
+      WRITE(LOGOUT2,8300)  RSLICES, RPIXELS
+d311 2
+a312 2
+      WRITE(LOGOUT2,8400)  MAXT, THRESHMAXT
+      WRITE(LOGOUT2,*)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d91 1
+a91 1
+      RCSHEADER = '$Id$'
+d150 2
+a151 2
+      CALL YESNO(Q,A)
+      IF (.NOT.A) RETURN
+d153 5
+a157 5
+8000  FORMAT(1X,'Thresh  Slices  Pixels      T      Max T   Thresh')
+      WRITE(USEROUT,*) 'Type "S" to stop...'
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,8000)
+      WRITE(LOGOUT,8000)
+d159 1
+a159 1
+      IF (DISPLAY) CALL RAMRST(RMD)
+d162 1
+a162 1
+110   THRESH = THRESH - SIGN*STEPSIZE
+d164 4
+a167 4
+120   CALL GETCNW(0)
+      CALL GETCNW(CH)
+      CALL GETCNW(1)
+      IF (CH.EQ.'S' .or. CH.EQ.'s') RETURN
+d178 3
+a180 3
+      IF (MASKNAME.NE.NULL) THEN
+        CALL GETIMG(SETM,HDR,MASKNAME,SLICE,NUMSLCS,
+     &    NUMPETT,MASK,USEROUT,HDRONLY,ERROR)
+d182 3
+a184 3
+          WRITE(USEROUT,8001) MASKNAME,CHAR(7)
+        ELSE IF (NUMSLCS.NE.49) THEN
+          WRITE(USEROUT,8002) MASKNAME,CHAR(7)
+d186 2
+a187 2
+        IF (SETM(XSEED,YSEED).EQ.0) THEN
+          WRITE(USEROUT,8003) XSEED,YSEED,ZSEED,MASKNAME,CHAR(7)
+d198 5
+a202 3
+      CALL GETIMG(IMAGE,HDR,CFNAME,SLICE,NUMSLCS,NUMPETT,
+     &  DISK,USEROUT,HDRONLY,ERROR)
+      IF (ERROR) RETURN
+d212 1
+a212 1
+      CALL T1THRESH(DISPLAY)
+d217 4
+a220 4
+200   CALL GETCNW(0)
+      CALL GETCNW(CH)
+      CALL GETCNW(1)
+      IF (CH.EQ.'S' .or. CH.EQ.'s') RETURN
+d233 4
+a236 4
+300   CALL GETCNW(0)
+      CALL GETCNW(CH)
+      CALL GETCNW(1)
+      IF (CH.EQ.'S' .or. CH.EQ.'s') RETURN
+d263 3
+a265 3
+          CALL GETCNW(0)
+          CALL GETCNW(CH)
+          CALL GETCNW(1)
+d273 3
+a275 3
+          CALL GETCNW(0)
+          CALL GETCNW(CH)
+          CALL GETCNW(1)
+d306 1
+a306 1
+        CALL T1DISP30
+@

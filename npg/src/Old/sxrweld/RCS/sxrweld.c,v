@@ -1,0 +1,378 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	94.09.20.16.30.17;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.10.06.19.16.53;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.09.16.17.14.42;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@sxrweld.c first release version.
+@
+
+
+1.3
+log
+@Use imglist_mode.
+@
+text
+@/*$Id: sxrweld.c,v 1.2 1993/10/06 19:16:53 ty7777 Exp ty7777 $*/
+/*$Log: sxrweld.c,v $
+ * Revision 1.2  1993/10/06  19:16:53  ty7777
+ * Same as the last message.
+ * Checked in to update the version number.
+ *
+ * Revision 1.1  1993/09/16  17:14:42  ty7777
+ * Initial revision
+ **/
+
+/*_________________________________________________________________
+  Description:	This program reads two sxr files and the welded image
+		file to generate a welded sxr file.
+
+  History:	Created by Tom Yang on 09/09/93. 
+_________________________________________________________________*/
+
+#include <petutil/imglist.h>
+
+static char rcsid [] = "$Id: sxrweld.c,v 1.2 1993/10/06 19:16:53 ty7777 Exp ty7777 $";
+
+#define TOP_SXRID	"top.sxr"
+#define WELD_SXRID	"weld.sxr"
+
+PRIVATE int CheckVersion ();
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	BOOLEAN			demigrate;
+	BOOLEAN			encoded;
+	IMAGE_LIST_DATA		*image_list;
+	PARAMETER_DATA		parameter_data;
+	PET_SLICE_DATA  	*slice;
+	SXR_OUTPUT		sxr_output;
+	char			complete_image_files [6][MAXPATH];
+	char			complete_sxrfile [MAXPATH];
+	char			*image_list_file;
+	char			*parameter_list_file;
+	char			petimagetype;
+	char			program_version [MAXLINE];
+	char			short_image_files [6][MAXLINE];
+	char			short_sxrfile [MAXLINE];
+	char			sxr_root [MAXNAME];
+	char			top_sxrfile [MAXNAME];
+	char			trim;
+	char			weldimg_filename [MAXPATH];
+	char			weldsxr_filename [MAXPATH];
+	int			filter_mode;
+	int			i;
+	int			image_mode;
+	int			imgfd;
+	int			j;
+	int			num_image_files;
+	int			num_image_list;
+	int			pettnum;	
+	llist			petlist;
+	short int		num_slices;
+
+	/*
+	 * Get command line arguments.
+	 */
+	parameter_list_file	= argv [1];
+	image_list_file		= argv [2];
+
+	/*
+	 * Initialize global list.
+	 */
+	petlist	= llinit ();
+
+	/* 
+	 * Read the parameters in the image parameters file to the structure
+	 * INFO_TYPE finfo.
+	 */
+	if (readparm (parameter_list_file, &parameter_data) == FAIL)
+	{
+		fprintf (stderr, "Error: from readparm ().\n");
+		free (image_list);
+		exit (FAIL);
+	}
+
+	/* 
+	 * Allocate memory for an array of image list structures. 
+	 */
+	image_list	= (IMAGE_LIST_DATA *) pkg_malloc (sizeof (IMAGE_LIST_DATA) 
+			* MAX_IMAGE_LIST_SIZE, "imageweld", "image_list");
+
+	/* 
+	 * Read list from image_list_file to IMAGE_LIST_DATA structure list
+	 * image_list for manipulation.
+	 */
+	if (readimglist (image_list_file, image_list, &num_image_list) == FAIL)
+	{
+		fprintf (stderr, "Error: from readimglist ().\n");
+		free (image_list);
+		exit (FAIL);
+	}
+
+	/* 
+	 * Get the current program version.
+	 */
+	if (GetVersion (rcsid, program_version) == FAIL)
+		strcpy (program_version, PROGRAM_SXRWELD);
+
+	/* 
+	 * Compute the mean for each image pair.
+	 */
+	demigrate	= TRUE;
+	filter_mode	= IMGFILTER_MODE;
+	if (parameter_data.imglist_mode == STDIMAGE_MODE)
+		image_mode	= WELDED_IMAGE_MODE;
+	else if (parameter_data.imglist_mode == PREWELDED_IMAGE_MODE)
+		image_mode	= STDIMAGE_MODE;
+	else
+	{
+		fprintf (stderr, "Error: Unknown imglist_mode: %d in the parameter file %s.\n",
+			image_mode, parameter_list_file);
+		free (image_list);
+		exit (FAIL);
+	}
+
+	for (i = 0; i < num_image_list; i++)
+	{
+		/*
+		 * Build the short whole scan file.
+		 */
+		build_shortnames (parameter_data, image_list [i], image_mode, filter_mode, 
+				&num_image_files, short_image_files, short_sxrfile);
+
+		/*
+		 * Get the complete welded image file.
+		 */
+		if (checkimg (parameter_data, image_list [i], image_mode, demigrate, 
+		num_image_files, short_image_files, complete_image_files) == FAIL)
+		{
+			fprintf (stderr, 
+				"Error in checking files from image list %s %s %f %s %f %s\n\n",
+				image_list [i].subject_id, 
+				image_list [i].scanset1_id, image_list [i].mean1, 
+				image_list [i].scanset2_id, image_list [i].mean2, 
+				image_list [i].sxrid);
+			continue;
+		}
+
+		strcpy (weldimg_filename, complete_image_files [0]);
+
+		/*
+		 * Get image number and number of slices.
+		 */
+		imgfd	= open (weldimg_filename, O_RDONLY, 0);
+		if (imgfd == -1)
+		{
+			fprintf (stderr, "Can't open %s\n", weldimg_filename); 
+			exit (FAIL);
+		}
+
+		pettnum	= getimage_type (imgfd, weldimg_filename, &encoded, &num_slices);
+
+		if (pettnum == ERROR_SCANNER)
+		{
+			fprintf (stderr, "Unrecongnized scanner type\n"); 
+			exit (FAIL);
+		}
+
+		close (imgfd);
+
+		/* 
+	 	 * Construct the welded sxr file and the short top sxrfile.
+	 	 */
+		strcpy (sxr_root, parameter_data.species);
+		strcat (sxr_root, image_list [i].subject_id);
+
+		strcpy (weldsxr_filename, short_sxrfile);
+		if (strstr (weldsxr_filename, WELD_SXRID) == NULL)
+		{
+			strcpy (weldsxr_filename, sxr_root);
+			strcat (weldsxr_filename, WELD_SXRID);
+		}
+		strcpy (short_sxrfile, sxr_root);
+		strcat (short_sxrfile, TOP_SXRID);
+
+		/*
+		 * If the welded sxr file already exists and the type of the sxr file
+		 * and the number of slices of the PET images matches, we do not have
+		 * to do anything.
+		 */
+		if (checksxr (parameter_data, image_list [i], demigrate, 
+		weldsxr_filename, complete_sxrfile) == SUCCEED)
+		{
+			if (strstr (complete_sxrfile, WELD_SXRID) != NULL &&
+			getsxr (complete_sxrfile, &sxr_output) == SUCCEED &&
+			CheckVersion (complete_sxrfile, program_version) == SUCCEED &&
+			sxr_output.number_slices == num_slices)
+			{
+				free (sxr_output.rlpetdim);		
+				free (sxr_output.rlcenter);		
+				free (sxr_output.vertical_petdim);	
+				free (sxr_output.rlslicedim);		
+				continue;
+			}
+		}
+
+		/*
+		 * Check if the top sxr file exist and copy the first few lines
+		 * of the top sxr file.
+		 */
+		if (checksxr (parameter_data, image_list [i], demigrate, 
+		short_sxrfile, complete_sxrfile) == FAIL)
+		{
+			fprintf (stderr, "Error: the top sxr file %s can not be found.\n", short_sxrfile);
+			exit (ERROR);
+		}
+
+		if (getsxr (complete_sxrfile, &sxr_output) == SUCCEED)
+		{
+			free (sxr_output.rlpetdim);		
+			free (sxr_output.rlcenter);		
+			free (sxr_output.vertical_petdim);	
+			free (sxr_output.rlslicedim);		
+		}
+		else
+		{
+			fprintf (stderr, "Error: in reading top sxr file %s.\n", complete_sxrfile);
+			exit (ERROR);
+		}
+
+		/*
+	 	 * Memory allocation.
+	 	 */
+		sxr_output.rlpetdim		= (float *) malloc (num_slices * sizeof (float));
+		sxr_output.rlcenter		= (float *) malloc (num_slices * sizeof (float));
+		sxr_output.vertical_petdim	= (float *) malloc (num_slices * sizeof (float));
+
+		sxr_output.number_slices	= num_slices;
+
+		if (GetPetParameters (weldimg_filename, trim, pettnum, encoded, 
+		&sxr_output, petlist) == FAIL)
+		{
+			fprintf (stderr, "Error: in GetPetParameters.\n");
+			exit (ERROR);
+		}
+
+		if (savesxr (weldsxr_filename, weldimg_filename, 
+		sxr_root, program_version, FALSE, sxr_output) == FAIL)
+
+		free (sxr_output.rlpetdim);		
+		free (sxr_output.rlcenter);		
+		free (sxr_output.vertical_petdim);	
+
+		/* 
+		 * Clear memory corresponding to list.
+		 */
+		llhead (petlist);			/* step through the list */
+		while (llsize (petlist) > 0)
+		{
+			/* 
+			 * Get a slice. 
+			 */
+			slice	= (PET_SLICE_DATA *) llretrieve (petlist);
+
+			free (slice->input);
+			free (slice);
+			lldelete (petlist);
+		}
+	}
+
+	free (image_list);
+}
+
+/*______________________________________________________________
+ Function:	checkversion
+
+ Description:	Check to see if the sxr file matches the current
+		program version number.
+
+ Return Value:	SUCCEED: version matches; FAIL: not matche.
+______________________________________________________________*/
+PRIVATE int CheckVersion (sxr_name, program_version)
+	char	*sxr_name;
+	char	*program_version;
+{
+	FILE	*sxrfp;
+	char	line [MAXLINE];
+
+	sxrfp	= fopen (sxr_name, "r");
+	if (sxrfp == NULL)
+	{
+		fprintf (stderr, "Error in opening sxr file %s\n", sxr_name);
+		return FAIL;
+	}
+
+	while (fgets (line, MAXLINE, sxrfp) != NULL)
+	{
+		if (strstr (line, program_version) != NULL)
+		{
+			fclose (sxrfp);
+			return SUCCEED;
+		}
+	}
+
+	fclose (sxrfp);
+	return FAIL;
+}
+@
+
+
+1.2
+log
+@Same as the last message.
+Checked in to update the version number.
+@
+text
+@d1 1
+a1 1
+/*$Id: sxrweld.c,v 1.1 1993/09/16 17:14:42 ty7777 Exp ty7777 $*/
+d3 4
+d20 1
+a20 1
+static char rcsid [] = "$Id: sxrweld.c,v 1.1 1993/09/16 17:14:42 ty7777 Exp ty7777 $";
+d111 1
+a111 1
+	if (parameter_data.weld_lstmode == STDIMAGE_MODE)
+d113 1
+a113 1
+	else if (parameter_data.weld_lstmode == PREWELDED_IMAGE_MODE)
+d117 1
+a117 1
+		fprintf (stderr, "Error: Unknown weld_lstmode: %d in the parameter file %s.\n",
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d16 1
+a16 1
+static char rcsid [] = "$Id$";
+@

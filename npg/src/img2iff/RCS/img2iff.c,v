@@ -1,0 +1,249 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2004.12.08.21.18.01;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Log$ */
+/*	===============================================================================
+ *	Module:			img2iff.c
+ *	Date:			Dec 2004
+ *	Author:			Tom Videen
+ *	Description:	Transform ECAT images into Interfile format using floats.
+ *		Input images may be any format recognizable by getrealimg.
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2iff/RCS/img2iff.c,v 1.5 2004/02/16 17:16:20 tom Exp $";
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	ImageFile      *file;
+	Index           indx;
+	FILE           *fd_if;			 /* output Interfile Format header */
+	FILE           *fd_img;			 /* output Interfile image  */
+
+	char           *PET_img;		 /* input PET image filename */
+	char           *IF_img;			 /* output Interfile image filename */
+	char           *IF_hdr;			 /* output Interfile Format header filename */
+	char           *ptr;
+	char            version[5];
+	char            program_date[12];
+	char            str[5];
+	long            dim[3];			 /* dimensions of tensors */
+	long            size;
+	float           global_max;		 /* global maximum */
+	float           global_min;		 /* global minimum */
+	int             day, month, year;
+	long            i, j, k, n;
+
+	float        ***image;			 /* input PET image */
+	float          *img;			 /* output Interfile image */
+
+/*
+ *  Initializations
+ */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	(void) strcpy (version, "    ");
+	if (ptr != NULL) {
+		(void) strncpy (version, ptr, 4);
+		ptr = strstr (ptr, " ");
+		ptr++;
+		(void) strcpy (program_date, "           ");
+		(void) strncpy (program_date, ptr, 10);
+	}
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 4) {
+		fprintf (stdout, "Usage: img2iff PET_img IF_img IF_hdr\n");
+		return (ERROR);
+	}
+	PET_img = argv[1];
+	IF_img = argv[2];
+	IF_hdr = argv[3];
+
+	if ((fd_if = fopen (IF_hdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [img2iff]: creating Interfile Format header %s\n", IF_hdr);
+		return (ERROR);
+	}
+	if ((fd_img = fopen (IF_img, "w")) == 0) {
+		fprintf (stderr, "ERROR [img2iff]: creating Interfile image %s\n", IF_img);
+		return (ERROR);
+	}
+/*
+ *	Read the image.
+ */
+
+	file = make_imgfile (PET_img);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [img2iff]: opening %s\n", PET_img);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [img2iff]: reading MainHeader from %s\n", PET_img);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (indx.frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR) {
+					fprintf (stderr, "ERROR [img2iff]: cannot find %s frame 1, 2 or 3\n", file->name);
+					return (ERROR);
+				}
+			}
+		} else {
+			fprintf (stderr, "ERROR [img2iff]: cannot find %s frame %d\n",
+				 file->name, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [img2iff]: reading subheader in %s\n", PET_img);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	size = dim[0] * dim[1] * dim[2];
+
+/*	readtensor handles any image reversals */
+
+	if ((image = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+
+	if (NULL == (img = (float *) calloc (size, sizeof (float)))) {
+		fprintf (stderr, "ERROR [img2iff]: malloc img\n");
+		return (ERROR);
+	}
+
+/*
+ * Read image into img, find min and max for hdr
+ */
+
+	n = 0;
+	global_max = 0;
+	global_min = 0;
+	for (i = 1; i <= dim[2]; i++) {
+		for (j = 1; j <= dim[1]; j++) {
+			for (k = 1; k <= dim[0]; k++) {
+				img[n] = (image[i][j][k]);
+				if (img[n] > global_max)
+					global_max = img[n];
+				if (img[n] < global_min)
+					global_min = img[n];
+				n++;
+			}
+		}
+	}
+	(void) fwrite (img, sizeof (float), size, fd_img);
+	(void) fclose (fd_img);
+	free (image);
+	free (img);
+
+/*
+ * Create Interfile Format header file
+ */
+
+	fprintf (fd_if, "INTERFILE :=\n");
+	fprintf (fd_if, "image modality     := PET\n");
+	fprintf (fd_if, "originating system := ECAT/%d\n", file->mh->scanner_type);
+	fprintf (fd_if, "version of keys    := 3.3\n");
+	fprintf (fd_if, "date of keys       := 1992:01:01\n");
+	fprintf (fd_if, "conversion program := img2iff\n");
+	fprintf (fd_if, "program version    := %s\n", version);
+	fprintf (fd_if, "program date       := %s\n", program_date);
+	fprintf (fd_if, ";\n");
+	fprintf (fd_if, "GENERAL DATA :=\n");
+	fprintf (fd_if, "original institution := Washington University\n");
+	fprintf (fd_if, "data starting block  := 0\n");
+	fprintf (fd_if, "name of data file    := %s\n", IF_img);
+	fprintf (fd_if, "patient ID := %s\n", file->mh->patnum);
+	fprintf (fd_if, "study ID   := PET\n");
+	fprintf (fd_if, ";\n");
+	fprintf (fd_if, "GENERAL IMAGE DATA :=\n");
+	fprintf (fd_if, "type of data := tomographic\n");
+	fprintf (fd_if, "total number of images := %d\n", (int) dim[2]);
+	(void) strcpy (str, "    ");
+	(void) strncpy (str, file->mh->date_time, 2);
+	month = atoi (str);
+	(void) strncpy (str, file->mh->date_time + 3, 2);
+	day = atoi (str);
+	(void) strncpy (str, file->mh->date_time + 6, 2);
+	year = atoi (str);
+	if (year < 90)
+		fprintf (fd_if, "study date := 20%02d:%02d:%02d\n", year, month, day);
+	else
+		fprintf (fd_if, "study date := 19%02d:%02d:%02d\n", year, month, day);
+	fprintf (fd_if, "imagedata byte order   := bigendian\n");
+	fprintf (fd_if, ";\n");
+	fprintf (fd_if, "PET STUDY :=\n");
+	fprintf (fd_if, "process status := reconstructed\n");
+	fprintf (fd_if, "number of dimensions := 3\n");
+	fprintf (fd_if, "number of slices := %d\n", (int) dim[2]);
+	fprintf (fd_if, "matrix size [1] := %d\n", (int) dim[0]);
+	fprintf (fd_if, "matrix size [2] := %d\n", (int) dim[1]);
+	fprintf (fd_if, "matrix size [3] := %d\n", (int) dim[2]);
+	fprintf (fd_if, "number format   := float\n");
+	fprintf (fd_if, "number of bytes per pixel  := 4\n");
+	fprintf (fd_if, "scaling factor (mm/pixel) [1]  := %f\n", 10. * file->sh->sample_size_1);
+	fprintf (fd_if, "scaling factor (mm/pixel) [2]  := %f\n", 10. * file->sh->sample_size_2);
+	fprintf (fd_if, "scaling factor (mm/pixel) [3]  := %f\n", 10. * file->sh->sample_size_3);
+	fprintf (fd_if, "maximum pixel count := %f\n", global_max);
+	fprintf (fd_if, "minimum pixel count := %f\n", global_min);
+	fprintf (fd_if, "matrix initial element [1] := left\n");
+	fprintf (fd_if, "matrix initial element [2] := anterior\n");
+	fprintf (fd_if, "matrix initial element [3] := superior\n");
+	if (file->mh->zorigin > 0) {
+		fprintf (fd_if, "atlas origin [1] := %.2f\n", 0.5 * ((float) (dim[0] + 1)));
+		fprintf (fd_if, "atlas origin [2] := %.2f\n", 0.5 * ((float) (dim[1] + 1)));
+		fprintf (fd_if, "atlas origin [3] := %d\n", file->mh->zorigin);
+	}
+	fprintf (fd_if, "END OF INTERFILE :=\n");
+	(void) fclose (fd_if);
+	fprintf (stdout, "Converted: %s to %s\n", PET_img, IF_img);
+	return (OK);
+}
+@

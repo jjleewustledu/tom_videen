@@ -1,0 +1,576 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2009.05.06.16.33.07;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2009.05.06.15.17.55;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2008.10.30.20.26.50;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2005.07.01.13.14.18;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2005.05.25.17.58.22;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@mean is float
+@
+text
+@/*	$Log: anameanpix.c,v $
+ * Revision 1.4  2009/05/06  15:17:55  tom
+ * permit 1-byte mask images
+ *
+ * Revision 1.3  2008/10/30  20:26:50  tom
+ * update to dbh.h and permit dim=3
+ *
+ * Revision 1.2  2005/07/01  13:14:18  tom
+ * read floats
+ *
+ * Revision 1.1  2005/05/25  17:58:22  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			anameanpix.c
+ *	Date:			May 2005
+ *	Author:			Tom Videen
+ *	Description:	Determine mean pixel value for all pixels with a mask.
+ *	History:
+ *		06-May-2009	- permit 1-byte mask images
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anameanpix/RCS/anameanpix.c,v 1.4 2009/05/06 15:17:55 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <dbh.h>
+
+/*	----------------------------
+ *	Function:			anameanpix
+ *	----------------------------
+ */
+int main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;
+	FILE           *fp;
+	char           *img1, *hdr1;		 /* input */
+	char           *img2, *hdr2;		 /* mask */
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+	float           unitvol;
+	long            count, num, i;
+	double          sum;
+    int             ntypea, ntypeb;
+	char           *cmsk;
+	short          *img;
+	short          *msk;
+	float          *fimg;
+	float          *fmsk;
+
+	if (argc != 5) {
+		printf ("Usage: anameanpix hdr1 img1 hdr2 img2\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+
+/*	Read Image	*/
+
+	if ((fp = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anameanpix]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [anameanpix]: reading %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [anameanpix]: reading %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+    ntypea = hdr.dime.datatype;
+    if (ntypea != DT_SIGNED_SHORT && ntypea != DT_FLOAT) {
+        fprintf (stderr, "ERROR [anameanpix]: reading %s\n", hdr1);
+        fprintf (stderr, "Datatype = %d\n", ntypea);
+        return (ERROR);
+    }
+    if (hdr.dime.bitpix != 16 && hdr.dime.bitpix != 32) {
+        fprintf (stderr, "ERROR [anameanpix]: reading %s\n", hdr1);
+        fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+        return (ERROR);
+    }
+
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	unitvol = hdr.dime.pixdim[1] * hdr.dime.pixdim[2] * hdr.dime.pixdim[3] * 0.001;
+	(void) fclose (fp);
+	num = dim1 * dim2 * dim3;
+
+    if (ntypea == DT_SIGNED_SHORT) {
+        img = (short*) calloc (num, sizeof (short));
+        if (img == NULL) {
+            fprintf (stderr, "ERROR [anameanpix]: calloc img\n");
+            return (ERROR);
+        }
+    } else {
+        fimg = (float*) calloc (num, sizeof (float));
+        if (fimg == NULL) {
+            fprintf (stderr, "ERROR [anameanpix]: calloc fimg\n");
+            return (ERROR);
+        }
+    }
+	if ((fp = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anameanpix]: opening %s\n", img1);
+		return (ERROR);
+	}
+    if (ntypea == DT_SIGNED_SHORT) {
+        if ((fread (img, sizeof(short), num, fp)) != num) {
+            fprintf (stderr, "ERROR [anameanpix]: reading %s\n", img1);
+            return (ERROR);
+        }
+    } else {
+        if ((fread (fimg, sizeof(float), num, fp)) != num) {
+            fprintf (stderr, "ERROR [anameanpix]: reading %s\n", img1);
+            return (ERROR);
+        }
+    }
+	(void) fclose (fp);
+
+/*	Read Mask	*/
+
+	if ((fp = fopen (hdr2, "r")) == 0) {
+		fprintf (stderr, "ERROR [anameanpix]: opening %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [anameanpix]: reading %s\n", hdr2);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [anameanpix]: reading %s\n", hdr2);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+    ntypeb = hdr.dime.datatype;
+    if (ntypeb != DT_UNSIGNED_CHAR && ntypeb != DT_SIGNED_SHORT && ntypeb != DT_FLOAT) {
+        fprintf (stderr, "ERROR [anameanpix]: reading %s\n", hdr2);
+        fprintf (stderr, "Datatype = %d\n", ntypeb);
+        return (ERROR);
+    }
+    if (hdr.dime.bitpix != 8 && hdr.dime.bitpix != 16 && hdr.dime.bitpix != 32) {
+        fprintf (stderr, "ERROR [anameanpix]: reading %s\n", hdr2);
+        fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+        return (ERROR);
+    }
+	if (dim1 != hdr.dime.dim[1]) {
+		fprintf (stderr, "ERROR [anameanpix]: mask dim1 differs: %ld != %d\n", dim1, hdr.dime.dim[1]);
+		return (ERROR);
+	}
+	if (dim2 != hdr.dime.dim[2]) {
+		fprintf (stderr, "ERROR [anameanpix]: mask dim2 differs: %ld != %d\n", dim2, hdr.dime.dim[2]);
+		return (ERROR);
+	}
+	if (dim3 != hdr.dime.dim[3]) {
+		fprintf (stderr, "ERROR [anameanpix]: mask dim3 differs: %ld != %d\n", dim3, hdr.dime.dim[3]);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+    if (ntypeb == DT_UNSIGNED_CHAR) {
+        cmsk = (char*) calloc (num, sizeof (char));
+        if (cmsk == NULL) {
+            fprintf (stderr, "ERROR [anameanpix]: calloc cmsk\n");
+            return (ERROR);
+        }
+    } else if (ntypeb == DT_SIGNED_SHORT) {
+        msk = (short*) calloc (num, sizeof (short));
+        if (msk == NULL) {
+            fprintf (stderr, "ERROR [anameanpix]: calloc msk\n");
+            return (ERROR);
+        }
+    } else {
+        fmsk = (float*) calloc (num, sizeof (float));
+        if (fmsk == NULL) {
+            fprintf (stderr, "ERROR [anameanpix]: calloc fmsk\n");
+            return (ERROR);
+        }
+    }
+    if ((fp = fopen (img2, "r")) == 0) {
+        fprintf (stderr, "ERROR [anameanpix]: opening %s\n", img2);
+        return (ERROR);
+    }
+    if (ntypeb == DT_UNSIGNED_CHAR) {
+        if ((fread (cmsk, sizeof(char), num, fp)) != num) {
+            fprintf (stderr, "ERROR [anameanpix]: reading %s\n", img2);
+            return (ERROR);
+        }
+    } else if (ntypeb == DT_SIGNED_SHORT) {
+        if ((fread (msk, sizeof(short), num, fp)) != num) {
+            fprintf (stderr, "ERROR [anameanpix]: reading %s\n", img2);
+            return (ERROR);
+        }
+    } else {
+        if ((fread (fmsk, sizeof(float), num, fp)) != num) {
+            fprintf (stderr, "ERROR [anameanpix]: reading %s\n", img2);
+            return (ERROR);
+        }
+    }
+	(void) fclose (fp);
+
+/*	Compute mean within mask	*/
+
+	count = 0;
+	sum = 0;
+    if (ntypea == DT_SIGNED_SHORT && ntypeb == DT_UNSIGNED_CHAR) {
+		for (i = 0; i < num; i++) {
+			if (cmsk[i] > 0) {
+				count++;
+				sum = sum + img[i];
+			}
+		}
+    } else if (ntypea == DT_FLOAT && ntypeb == DT_UNSIGNED_CHAR) {
+		for (i = 0; i < num; i++) {
+			if (cmsk[i] > 0) {
+				count++;
+				sum = sum + fimg[i];
+			}
+		}
+    } else if (ntypea == DT_SIGNED_SHORT && ntypeb == DT_SIGNED_SHORT) {
+		for (i = 0; i < num; i++) {
+			if (msk[i] > 0) {
+				count++;
+				sum = sum + img[i];
+			}
+		}
+    } else if (ntypea == DT_FLOAT && ntypeb == DT_SIGNED_SHORT) {
+		for (i = 0; i < num; i++) {
+			if (msk[i] > 0) {
+				count++;
+				sum = sum + fimg[i];
+			}
+		}
+    } else if (ntypea == DT_SIGNED_SHORT && ntypeb == DT_FLOAT) {
+		for (i = 0; i < num; i++) {
+			if (fmsk[i] > 0) {
+				count++;
+				sum = sum + img[i];
+			}
+		}
+    } else if (ntypea == DT_FLOAT && ntypeb == DT_FLOAT) {
+		for (i = 0; i < num; i++) {
+			if (fmsk[i] > 0) {
+				count++;
+				sum = sum + fimg[i];
+			}
+		}
+	}
+	fprintf (stdout, "Volume = %d voxels or %.3f cc\n", (int) count, (float) count * unitvol);
+    if (ntypea == DT_SIGNED_SHORT) {
+		fprintf (stdout, "Mean = %f\n", sum / count);
+		free (img);
+	} else {
+		fprintf (stdout, "Mean = %f\n", sum / count);
+		free (fimg);
+	}
+    if (ntypeb == DT_SIGNED_SHORT)
+		free (msk);
+	else
+		free (fmsk);
+	return (OK);
+}
+@
+
+
+1.4
+log
+@permit 1-byte mask images
+@
+text
+@d2 3
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anameanpix/RCS/anameanpix.c,v 1.3 2008/10/30 20:26:50 tom Exp tom $";
+d215 1
+a215 1
+    if (ntypea == DT_SIGNED_SHORT && ntypeb == DT_SIGNED_SHORT) {
+d217 1
+a217 1
+			if (msk[i] > 0) {
+d222 1
+a222 1
+    } else if (ntypea == DT_FLOAT && ntypeb == DT_SIGNED_SHORT) {
+d224 1
+a224 1
+			if (msk[i] > 0) {
+d229 1
+a229 1
+    } else if (ntypea == DT_SIGNED_SHORT && ntypeb == DT_FLOAT) {
+d231 1
+a231 1
+			if (fmsk[i] > 0) {
+d236 1
+a236 1
+    } else if (ntypea == DT_FLOAT && ntypeb == DT_FLOAT) {
+d238 1
+a238 1
+			if (fmsk[i] > 0) {
+d243 1
+a243 1
+    } else if (ntypea == DT_SIGNED_SHORT && ntypeb == DT_UNSIGNED_CHAR) {
+d245 1
+a245 1
+			if (cmsk[i] > 0) {
+d250 1
+a250 1
+    } else if (ntypea == DT_FLOAT && ntypeb == DT_UNSIGNED_CHAR) {
+d252 1
+a252 1
+			if (cmsk[i] > 0) {
+d260 1
+a260 1
+		fprintf (stdout, "Mean = %d\n", (int) (sum / count));
+@
+
+
+1.3
+log
+@update to dbh.h and permit dim=3
+@
+text
+@d2 3
+d16 2
+d22 1
+a22 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anameanpix/RCS/anameanpix.c,v 1.2 2005/07/01 13:14:18 tom Exp tom $";
+d48 1
+d143 1
+a143 1
+    if (ntypeb != DT_SIGNED_SHORT && ntypeb != DT_FLOAT) {
+d148 1
+a148 1
+    if (hdr.dime.bitpix != 16 && hdr.dime.bitpix != 32) {
+d167 7
+a173 1
+    if (ntypeb == DT_SIGNED_SHORT) {
+d190 6
+a195 1
+    if (ntypeb == DT_SIGNED_SHORT) {
+d238 14
+@
+
+
+1.2
+log
+@read floats
+@
+text
+@d2 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anameanpix/RCS/anameanpix.c,v 1.1 2005/05/25 17:58:22 tom Exp tom $";
+d23 1
+a23 1
+#include <ANALYZE.h>
+d29 1
+a29 1
+main (argc, argv)
+d34 1
+a34 1
+	struct dsr      hdr;			 /* ANALYZE.h */
+d36 2
+a37 2
+	char           *img1, *hdr1;		 /* input file */
+	char           *img2, *hdr2;		 /* mask file */
+d67 1
+a67 1
+	if (hdr.dime.dim[0] != 4) {
+d73 1
+a73 1
+    if (ntypea != 4 && ntypea != 16) {
+d91 1
+a91 1
+    if (ntypea == 4) {
+d108 1
+a108 1
+    if (ntypea == 4) {
+d131 1
+a131 1
+	if (hdr.dime.dim[0] != 4) {
+d137 1
+a137 1
+    if (ntypeb != 4 && ntypeb != 16) {
+d161 1
+a161 1
+    if (ntypeb == 4) {
+d178 1
+a178 1
+    if (ntypeb == 4) {
+d195 1
+a195 1
+    if (ntypea == 4 && ntypeb == 4) {
+d202 1
+a202 1
+    } else if (ntypea == 16 && ntypeb == 4) {
+d209 1
+a209 1
+    } else if (ntypea == 4 && ntypeb == 16) {
+d216 1
+a216 1
+    } else if (ntypea == 16 && ntypeb == 16) {
+d225 1
+a225 1
+    if (ntypea == 4) {
+d232 1
+a232 1
+    if (ntypeb == 4)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anameanpix/RCS/anameanpix.c,v 1.1 2005/05/25 17:57:10 tom Exp $";
+d32 1
+a32 2
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+d39 1
+d42 2
+d56 2
+a57 2
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anameanpix]: opening: %s\n", hdr1);
+d60 2
+a61 2
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", hdr1);
+d65 1
+a65 1
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", hdr1);
+d69 12
+a80 10
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+d85 1
+a85 1
+	(void) fclose (fd_hdr);
+d88 15
+a102 3
+	img = (short *) calloc (num, sizeof (short));
+	if (img == NULL) {
+		fprintf (stderr, "ERROR [anameanpix]: calloc img\n");
+d105 12
+a116 9
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anameanpix]: opening: %s\n", img1);
+		return (ERROR);
+	}
+	if ((fread (img, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", img1);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+d120 2
+a121 2
+	if ((fd_hdr = fopen (hdr2, "r")) == 0) {
+		fprintf (stderr, "ERROR [anameanpix]: opening: %s\n", hdr2);
+d124 2
+a125 2
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", hdr2);
+d129 1
+a129 1
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", hdr2);
+d133 11
+a143 10
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", hdr2);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", hdr2);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+d156 1
+a156 1
+	(void) fclose (fd_hdr);
+d158 29
+a186 14
+	msk = (short *) calloc (num, sizeof (short));
+	if (msk == NULL) {
+		fprintf (stderr, "ERROR [anameanpix]: calloc msk\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (img2, "r")) == 0) {
+		fprintf (stderr, "ERROR [anameanpix]: opening: %s\n", img2);
+		return (ERROR);
+	}
+	if ((fread (msk, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [anameanpix]: reading: %s\n", img2);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+d192 6
+a197 4
+	for (i = 0; i < num; i++)
+		if (msk[i] > 0) {
+			count++;
+			sum = sum + img[i];
+d199 22
+d222 11
+a232 4
+	fprintf (stdout, "Mean = %d\n", (int) (sum / count));
+
+	free (img);
+	free (msk);
+@

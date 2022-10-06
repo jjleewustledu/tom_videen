@@ -1,0 +1,102 @@
+idl
+
+@IMAGE_UTILS.h
+libpath = getenv('NPG_DIR')
+restore, libpath+'/getframe.sav'
+restore, libpath+'/mapfitw.sav'
+restore, libpath+'/putinterfile.sav'
+restore, libpath+'/type.sav'
+restore, libpath+'/loess.sav'
+restore, libpath+'/med.sav'
+restore, libpath+'/rob_mapfit.sav'
+restore, libpath+'/rob_quarticfit.sav'
+restore, libpath+'/robust_planefit.sav'
+restore, libpath+'/robust_regress.sav'
+restore, libpath+'/robust_sigma.sav'
+infile  = "rpln65.img"
+nrmfile = "rpln65.img"
+outfile = "rnrm65.img"
+
+;  Open output image
+
+str1 = outfile
+l1 = rstrpos(str1,'.')
+IF (l1 GT 0) THEN strput,str1,'log',l1+1 $
+ELSE logfile = logfile+'.log'
+logfile = strcompress(str1, /remove_all)
+get_lun,log_lun
+openw,log_lun,logfile
+printf,log_lun,'Output image ',outfile
+
+;  Read input image
+
+img = {VIMAGE}
+img.fname = infile
+img.ff = 1
+img.lf = 1
+img.fp = 1
+img.lp = 300
+msg = ''
+print,'Original image ',infile
+stat =  getframe(img, msg)
+print,stat,msg
+idata = *img.data
+nx = img.dim[0]
+ny = img.dim[1]
+nz = img.dim[2]
+
+;  Read normalizing image
+
+nrm = {VIMAGE}
+nrm.fname = nrmfile
+nrm.ff = 1
+nrm.lf = 1
+nrm.fp = 1
+nrm.lp = 300
+msg = ''
+print,'Normalizing image ',nrmfile
+stat =  getframe(nrm, msg)
+print,stat,msg
+ndata = float (*nrm.data)
+IF (nx NE nrm.dim[0] OR ny NE nrm.dim[1] OR nz NE nrm.dim[2]) then \
+      print,'Dimension of '+nrmfile+' do not match '*infile
+
+result = loess (ndata, 5, 1, noise, floor=1000)
+test=result-ndata
+print,max(test) & print,min(test)
+
+window, xsize = 1200, ysize = 600
+!P.MULTI = [0, 2, 1]
+surface, ndata, zrange = [0, 20000], zstyle = 1
+surface, result, zrange = [0, 20000]
+
+surface,test       
+
+
+	;result = SFIT(ndata,1,kx=var)
+
+	tdata = ndata
+	idx = where (ndata LE 10000, count) 
+	tdata[idx] = 10000
+	tdata = tdata - 10000
+	result = SFIT(tdata,4,kx=var)
+	window, xsize = 1200, ysize = 600
+	!P.MULTI = [0, 2, 1]									; side-by-side plots
+	surface, tdata, zrange = [0, 10000], zstyle = 1
+	surface, result, zrange = [0, 10000]
+
+	newresult = result + 10000
+	!P.MULTI = [0, 2, 1]									; side-by-side plots
+	surface, ndata, zrange = [0, 20000], zstyle = 1
+	surface, newresult, zrange = [0, 20000]
+
+   odata = ndata * (10000/newresult)
+   *img.data = odata
+   extra = strarr(5)
+   extra[0] = 'program name    := xyptnorm'
+   extra[1] = 'program version := 1.1'
+   extra[2] = 'program date    := 2008:02:05'
+   extra[3] = 'input file      := '+infile
+   stat =  putinterfile(img, outfile, msg, EXTRA=extra) 
+
+

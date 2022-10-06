@@ -1,0 +1,359 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.5
+date	95.05.24.21.20.03;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.05.04.21.38.41;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.05.03.21.57.52;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.05.03.21.04.52;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.05.03.19.32.46;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Added processing for zorigin slice.
+@
+
+
+1.5
+log
+@Use the user defined ZORIGIN.
+@
+text
+@C$Id: t1total.f,v 1.4 1994/05/04 21:38:41 ty7777 Exp ty7777 $
+C$Log: t1total.f,v $
+c Revision 1.4  1994/05/04  21:38:41  ty7777
+c Added getimage_type ().
+c
+c Revision 1.3  1994/05/03  21:57:52  ty7777
+c Use the ZORIGIN.
+c
+c Revision 1.2  1994/05/03  21:04:52  ty7777
+c Added processing for get_zorigin.
+c
+c Revision 1.1  1994/05/03  19:32:46  ty7777
+c Initial revision
+c
+c
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   T1TOTAL.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         11-Jul-90
+C  Written For:  RAPTURE
+C
+C  History:
+C     Modified 05-Nov-91:
+C        1) Option to compute weighted ROIs (WEIGHTVOI);
+C        2) Compute center of mass instead of center of volume;
+C     Modified 12-Dec-91:
+C        1) Apply the MASKFILE before computing regional stats.
+C     Modified 13-Dec-91:
+C        1) Minimize warning messages (WARNED).
+C     Modified 17-Nov-93 by Tom Yang to port to UNIX workstations.
+C     Modified 23-Nov-93 by Tom Yang to add checking for CFNAME and
+C        only when it is not NULL, we call GETIMG. 
+C     Modified 03-May-94 by Tom Yang to get and use the zorigin slice.
+C     Modified 23-May-95 by Tom Yang to use the user defined ZORIGIN.
+C
+C  Intent:
+C     Determine weighted mean, range, and center of mass of all pixels
+C     in current region using image slice in current memory.
+C
+C     Stereotactic reference is:
+C         XC = (64.5 - X)*2     positive left
+C         YC = (64.5 - Y)*2     positive anterior
+C         ZC = (31-SLICE)*2     positive up
+C
+C  Uses:
+C     GETIMAGE
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE T1TOTAL (MEAN, SD, IMIN, IMAX, MAXSLICE)
+C
+      INCLUDE 'rapture.inc'
+C
+      REAL*4     MEAN, SD          ! mean, SD
+      INTEGER*4  IMIN, IMAX        ! min and max pixel values
+      INTEGER*4  MAXSLICE          ! slice where max regional value is found
+C
+      REAL*4     N                 ! real RPIXELS
+      REAL*4     NW                ! real NETWT
+      REAL*4     SUMSQR            ! sum of squares of pixel values
+C
+      INTEGER*4  X,Y               ! x,y coordinates
+      INTEGER*4  IVAL              ! value at location
+      INTEGER*4  VAL               ! weighted value at location
+      INTEGER*4  NETWT             ! sum of weighting factors
+      INTEGER*4  XSUM, YSUM, ZSUM  ! sum of weighted x,y,z coordinates
+      INTEGER*4  SUM               ! sum of pixel values
+      INTEGER*4  NUMSLCS           ! number of slices
+      INTEGER*4  NUMPETT           ! PETT number
+      INTEGER*4  I                 ! local
+C
+      INTEGER*2  HDR(128)          ! slice header
+C
+      INTEGER*4    getimage_type 
+      INTEGER*4    fd 
+      INTEGER*4    PETTNUM 
+      INTEGER*4    getfd 
+      INTEGER*2    NUMSLICES	 ! number of slices obtained by calling getiamge_type
+      LOGICAL*1    ENCODED
+      external     getimage_type !$pragma C (getimage_type)
+C
+      CHARACTER*20  NULL           ! null string
+      CHARACTER*256 RCSHEADER
+C
+      LOGICAL*1  HDRONLY           ! read header only
+      LOGICAL*1  ERROR             ! error reading image
+      LOGICAL*1  MASKING           ! applying a mask to VOI
+      LOGICAL*1  WARNED            ! for pixel skipped in this ROI
+C
+      RCSHEADER = '$Header: /data/petsun4/src/rapture/RCS/t1total.f,v 1.4 1994/05/04 21:38:41 ty7777 Exp ty7777 $'
+      IMIN = 32768
+      IMAX = -32768
+      MAXSLICE = 0
+      XSUM = 0
+      YSUM = 0
+      ZSUM = 0
+      NETWT = 0
+      SUM = 0
+      SUMSQR = 0.0
+      RPIXELS = 0
+      NULL = ' '
+      WARNED = .FALSE.
+C
+      IF (MASKNAME .EQ. NULL) THEN
+        MASKING = .FALSE.
+      ELSE
+        MASKING = .TRUE.
+      END IF
+C
+      DO 300 SLICE = ZMIN, ZMAX
+C
+	IF (CFNAME .NE. NULL) THEN
+          CALL GETIMG (IMAGE, HDR, CFNAME, SLICE, NUMSLCS,
+     &      NUMPETT, DISK, USEROUT, HDRONLY, ERROR)
+          IF (ERROR) THEN
+            WRITE (USEROUT, 8000) CFNAME, CHAR (7)
+            PAUSE
+            RETURN
+          END IF
+C
+C  get the zorigin
+C
+          OPEN (DISK, FILE = CFNAME, STATUS = 'OLD', ERR = 55)
+          GO TO 77
+55        WRITE (USEROUT, *) '*** Error: opening image file ', CFNAME (1:20), ' ***'
+          RETURN
+77        fd = getfd (DISK)		! get the file descriptor
+          PETTNUM = getimage_type (%VAL(fd), CFNAME, ENCODED, NUMSLICES)
+          IF (PETTNUM .EQ. -1) THEN
+	    WRITE (STDOUT, *) 'Wrong image type for ', CFNAME
+	    RETURN
+          ENDIF
+          CLOSE (DISK) 
+        ENDIF
+8000    FORMAT (1X, '*** Error reading ', A, A1)
+C
+        IF (MASKING) THEN
+          CALL GETIMG (SETM, HDR, MASKNAME, SLICE, NUMSLCS,
+     &      NUMPETT, MASK, USEROUT, HDRONLY, ERROR)
+          IF (ERROR) THEN
+            WRITE (USEROUT, 8000) MASKNAME (1:20), CHAR(7)
+            RETURN
+          END IF
+        END IF
+C
+8200    FORMAT(1X,'--- One or more region pixels are masked.')
+        DO 200 I = 1, RN (SLICE)
+          X = INT (RC (1, I, SLICE))
+          Y = INT (RC (2, I, SLICE))
+          IF (MASKING .AND. SETM (X, Y) .EQ. 0) THEN
+            IF (.NOT. WARNED) THEN
+              WRITE (USEROUT, 8200)
+              WARNED = .TRUE.
+            END IF
+          ELSE
+            IVAL = IMAGE (X, Y)
+            VAL  = IVAL * RWT (I, SLICE)
+            XSUM = XSUM + X * RWT (I, SLICE)
+            YSUM = YSUM + Y * RWT (I, SLICE)
+            ZSUM = ZSUM + SLICE * RWT (I, SLICE)
+            IF (WEIGHTVOI) THEN
+              SUM    = SUM + VAL
+              SUMSQR = SUMSQR + (VAL ** 2)
+            ELSE
+              SUM  = SUM + IVAL
+              SUMSQR = SUMSQR + (IVAL ** 2)
+            END IF
+            IF (IVAL .LT. IMIN) IMIN = IVAL
+            IF (IVAL .GT. IMAX) THEN
+              IMAX     = IVAL
+              MAXSLICE = SLICE
+            END IF
+            RPIXELS = RPIXELS + 1
+            NETWT = NETWT + RWT (I, SLICE)
+          END IF
+200     CONTINUE
+C
+300   CONTINUE
+C
+      N = FLOAT (RPIXELS)
+      NW = FLOAT (NETWT)
+      IF (N.GT.0.0) THEN
+        XCTR = (64.5 - (FLOAT (XSUM) / NW)) * 2.0
+        YCTR = (64.5 - (FLOAT (YSUM) / NW)) * 2.0
+        ZCTR = (ZORIGIN - (FLOAT (ZSUM) / NW)) * 2.0
+        IF (WEIGHTVOI) THEN
+          MEAN = FLOAT (SUM) / NW
+        ELSE
+          MEAN = FLOAT (SUM) / N
+        END IF
+        IF (N .GT. 1.0) THEN
+          SD = SQRT ((SUMSQR - N * (MEAN ** 2)) / (N - 1.0))
+        ELSE
+          SD = 0.
+        END IF
+      ELSE
+        XCTR = 0.
+        YCTR = 0.
+        ZCTR = 0.
+        MEAN = 0.
+        SD = 0.
+      END IF
+C
+      RETURN
+      END
+@
+
+
+1.4
+log
+@Added getimage_type ().
+@
+text
+@d1 1
+a1 1
+C$Id: t1total.f,v 1.3 1994/05/03 21:57:52 ty7777 Exp ty7777 $
+d3 3
+d37 1
+a82 2
+      LOGICAL*1    ERR1           ! error from get_zorigin
+      external     get_zorigin   !$pragma C (get_zorigin)
+d93 1
+a93 1
+      RCSHEADER = '$Header: /home/petsun4/ty7777/src/rapture/RCS/t1total.f,v 1.3 1994/05/03 21:57:52 ty7777 Exp ty7777 $'
+a136 13
+C
+C     Update the ZORIGIN if it is necessary
+C
+          ZORIGIN = 31
+          IF (PETTNUM .EQ. 10) THEN
+            OPEN (DISK, FILE = CFNAME, STATUS = 'OLD', ERR = 55)
+            fd = getfd (DISK)		! get the file descriptor
+	    CALL get_zorigin (CFNAME, %VAL(fd), I, ERR1)
+	    IF (ERR1 .NE. .TRUE.) THEN
+              ZORIGIN = I
+	    ENDIF
+            CLOSE (DISK) 
+          ENDIF
+@
+
+
+1.3
+log
+@Use the ZORIGIN.
+@
+text
+@d1 1
+a1 1
+C$Id: t1total.f,v 1.2 1994/05/03 21:04:52 ty7777 Exp ty7777 $
+d3 3
+d73 9
+a81 4
+      INTEGER*4  fd 
+      INTEGER*4  getfd 
+      LOGICAL*1  ERR1              ! error from get_zorigin
+      external   get_zorigin !$pragma C (get_zorigin)
+d91 1
+a91 1
+      RCSHEADER = '$Header: /home/petsun4/ty7777/src/rapture/RCS/t1total.f,v 1.2 1994/05/03 21:04:52 ty7777 Exp ty7777 $'
+d122 14
+d139 1
+a139 1
+          IF (NUMPETT .EQ. 10) THEN
+d141 1
+a141 4
+            GO TO 77
+55          WRITE (USEROUT, *) '*** Error: opening image file ', CFNAME (1:20), ' ***'
+            RETURN
+77          fd = getfd (DISK)		! get the file descriptor
+d148 1
+a148 1
+        END IF
+@
+
+
+1.2
+log
+@Added processing for get_zorigin.
+@
+text
+@d1 1
+a1 1
+C$Id: t1total.f,v 1.1 1994/05/03 19:32:46 ty7777 Exp ty7777 $
+d3 3
+d30 1
+a30 1
+C     Modified 03-May-94 by Tom Yang to get the zorigin slice.
+d83 1
+a83 1
+      RCSHEADER = '$Header: /home/petsun4/ty7777/src/rapture/RCS/t1total.f,v 1.1 1994/05/03 19:32:46 ty7777 Exp ty7777 $'
+d180 1
+a180 1
+        ZCTR = (31.0 - (FLOAT (ZSUM) / NW)) * 2.0
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 2
+C$Id$
+C$Log$
+d6 1
+d70 1
+a70 1
+      external   get_zorigin       ! $pragma C (get_zorigin)
+d80 1
+a80 1
+      RCSHEADER = '$Header$'
+@

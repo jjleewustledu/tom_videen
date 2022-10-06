@@ -1,0 +1,97 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	99.09.03.13.10.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/bin/csh
+#	Module:	align_ct2pet
+#	Author:	Tom Videen
+#	Date:	Jul-99
+#	Use:	Align CT images to PET HO image.
+#	Creates:
+#		rp5000brain.v	- coregistered brain image
+#		rp5000tis.v		- coregistered tissue image
+#		rp5000ct.v		- coregistered CT
+#	Uses:
+#		p5000ct.img		- original CT
+#		p5000brain.img	- CT segmented to brain edges
+#		p5000tis.img	- segmented CT with ventricles and hemorrhage removed
+#		p5000ho1_g3.v	- filtered PET
+
+if ($#argv != 3 ) then
+    echo "Usage: align_ct2pet ct_id pet_id ho"
+    echo " e.g., align_ct2pet p5000 rp5000 ho1"
+    exit (1)
+endif
+
+set CID = $1
+set PID = $2
+set CT  = ${CID}ct
+set BRN = ${CID}brain
+set TIS = ${CID}tis
+set HO  = ${PID}${3}_g3
+set AIR = ${CID}_ct2${3}
+set LOGFILE = align_ct2pet.log
+set INIT = air_init
+
+set EFILES = "$CT.img $BRN.img $TIS.img $HO.v $CT.hdr $BRN.hdr $TIS.hdr"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_ct2pet]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit (1)
+
+img2analyze $HO.v a$HO
+setanamin a$HO 0
+setanamin $CT 0
+set PRM = "-m 6 -p1 0 -p2 16384 -t2 1 -x 1 -v" 
+alignlinear a$HO $CT $AIR.air $PRM >! log
+tail -6 log >! $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file ($INIT)"
+	echo $ERROR >> $LOGFILE
+	exit (1)
+endif
+
+imgreslice $CT $AIR
+imgreslice $BRN $AIR
+imgreslice $TIS $AIR
+
+analyze2img r$CT r$CT.v
+analyze2img r$BRN r$BRN.v
+analyze2img r$TIS r$TIS.v
+
+echo "Created coregistered, resliced images:"
+if (-e r$CT.v)  echo r$CT.v
+if (-e r$BRN.v) echo r$BRN.v
+if (-e r$TIS.v) echo r$TIS.v
+
+rm a$HO.img
+rm a$HO.hdr
+rm a$HO.ifh
+rm log
+
+@

@@ -1,0 +1,86 @@
+#include <flirt++.h>
+
+using namespace flirt;
+
+int             main (int argc, char *argv[])
+{
+	printf ("\n--------------- start FLIRT --------------- \n\n");
+	/* Define and initialize global variables */
+	int             m1, m2;
+	double          h1 = 1.0, h2 = 1.0;
+	char           *fileNameT = (char *) malloc (255 * sizeof (char));
+	char           *fileNameR = (char *) malloc (255 * sizeof (char));
+	char           *fileNameOut = (char *) malloc (255 * sizeof (char));
+	char           *smootherName = (char *) malloc (255 * sizeof (char));
+	char           *fileNameU = (char *) malloc (255 * sizeof (char));
+	int             maxIter = 10;
+	double          alpha = 1.0;
+	double          tau = 1.0;
+	double          mu = 0.0;
+	double          lambda = 0.0;
+	FILE           *ptr;
+
+	if (argc > 1)
+		getMainParameters (argv[1],
+				   &m1, &m2,
+				   &h1, &h2,
+				   fileNameT, fileNameR, fileNameOut,
+				   fileNameU,
+				   smootherName,
+				   &maxIter,
+				   &alpha, &tau,
+				   &mu, &lambda);
+	else {
+		printf ("ERROR: no parameter-file-name given, abort\n\n");
+		return 0;
+	}
+
+	Image2D         R (fileNameR, h1, h2);
+	TransformableImage2D T (fileNameT, h1, h2);
+	Displacement2D  u (R.getDimensions (), h1, h2);
+	SumOfSquaredDifferences distancemeasure (R, T);
+	CurvatureSmoother smoother;
+	FPSolverCurvatureFFT2D fpsolver (u, alpha);
+	FPOptimizer     opti (distancemeasure, smoother, fpsolver, alpha);
+	LineSearch      ur (distancemeasure, smoother, opti, T, u);
+	StopRule        sr (distancemeasure, smoother, maxIter);
+	int             iter = 0;
+
+	printf ("%3s | %15s\n", "n", "D[u]");
+	printf ("%3s-+-%15s\n", "---", "---------------");
+
+	/* The objective function: D[R,T(u)] + alpha*S[u] */
+
+	T.transform (u);
+	distancemeasure.eval ();
+	distancemeasure.evalGradient ();
+	smoother.eval (u);
+	smoother.evalGradient (u);
+
+	printf ("%3d | %15.5e\n", iter, distancemeasure.getValue ());
+
+	do {
+		iter++;
+		opti.computeDisplacementUpdate (u);
+		ur.updateDisplacement (u);
+		/** The objective function: D[R,T(u)] + alpha*S[u] */
+		T.transform (u);
+		distancemeasure.eval ();
+		distancemeasure.evalGradient ();
+		smoother.eval (u);
+		smoother.evalGradient (u);
+		/* status: all variables  uptodate */
+		/*  ( T(u), D(u), S(u), gradD(u), gradS(u)) */
+		printf ("%3d | %15.5e\n", iter, distancemeasure.getValue ());
+	}
+	while (!sr.stopIteration (u, iter));
+
+	T.writeTransformedImageToTiff (fileNameOut);
+
+	if ((ptr = fopen (fileNameU, "w")) != NULL)
+		u.printToFile (ptr);
+	printf ("\b\b \n");
+
+	printf ("\n--------------- quit FLIRT ---------------\n\n");
+	return 1;
+}

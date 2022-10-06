@@ -1,0 +1,208 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	93.07.13.19.17.40;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Computing the total counts for a plt file.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*_________________________________________________________________
+  Description:	This program compute the total counts of a scan.
+
+  History:	Created by Tom Yang on 07/12/93. 
+_________________________________________________________________*/
+
+#include <petutil/archive.h>
+#include <unistd.h>
+
+#define MILLISECONDS_PER_SECOND	1000
+#define NUM_ITEMS		10
+#define NUM_ITEMS_STAR		11
+#define SECONDS_PER_HOUR	3600
+#define SECONDS_PER_MINUTE	60
+#define WATER_SCAN_SECONDS	40
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	BOOLEAN	start_flag;
+	BOOLEAN	single_frame_flag;
+	FILE	*pltfp;
+	char	line [MAXLINE];
+	char	*pltfile;
+	char	sample_time [MAXNAME];
+	char	star [MAXNAME];
+	float	dtcor;
+	float	factor;
+	float	total_delayed;
+	float	total_net_trues;
+	float	total_prompts;
+	int	acs;
+	int	acs_start;
+	int	acs_end;
+	int	cor_singles;
+	int	delayed;
+	int	end_hour;
+	int	end_minute;
+	int	end_second;
+	int	multiples;
+	int	net_trues;
+	int	prompts;
+	int	seconds;
+	int	start_hour;
+	int	start_minute;
+	int	start_second;
+	int	time_before_start;
+	int	true_rate;
+	int	uncor_singles;
+
+	/*______________________________________________________
+	 * Get command line argument.
+	 *______________________________________________________*/
+	pltfile	= argv [1];
+
+	pltfp	= fopen (pltfile, "r");
+	if (pltfp == (FILE *) NULL)
+	{
+		fprintf (stderr, "Error: opening plt file %s\n", pltfile);
+		exit (FAIL);
+	}
+
+	start_flag		= FALSE;
+	single_frame_flag	= FALSE;
+
+	/*
+	 * Determine the starting and ending time and see if it has
+	 * two frames.
+	 */
+	while (fgets (line, MAXLINE, pltfp) != NULL)
+	{
+		if (!single_frame_flag && strstr (line, "IPC Total") != NULL)
+			single_frame_flag	= TRUE;
+
+		if (sscanf (line, "%s %d %d %d %d %d %d %d %f %d", sample_time, &prompts, 
+		&delayed, &multiples, &net_trues, &true_rate, &cor_singles, &uncor_singles, 
+		&dtcor, &acs) == NUM_ITEMS ||
+		sscanf (line, "%s %d %d %d %d %d %d %d %s %f %d", sample_time, &prompts, 
+		&delayed, &multiples, &net_trues, &true_rate, &cor_singles, &uncor_singles, 
+		star, &dtcor, &acs) == NUM_ITEMS)
+		{
+			if (prompts > 0 && delayed > 0 && multiples > 0 && net_trues > 0)
+			{
+				sscanf (sample_time, "%d:%d:%d", &end_hour, &end_minute, &end_second);
+				acs_end	= acs;
+
+				if (!start_flag)
+				{
+					start_flag	= TRUE;
+
+					start_hour	= end_hour;
+					start_minute	= end_minute;
+					start_second	= end_second;
+					acs_start	= acs;
+				}
+			}
+		}
+	}
+
+	if (!single_frame_flag)
+	{
+		acs_start	= (acs_end / MILLISECONDS_PER_SECOND - WATER_SCAN_SECONDS) 
+				* MILLISECONDS_PER_SECOND; 
+	}
+
+	/*
+	 * Go back to the beginning of data file.
+	 */
+	if (fseek (pltfp, 0L, SEEK_SET))
+	{
+		fprintf (stderr, "Seek error in pltsum.\n");
+		exit (FAIL);
+	}
+
+	total_prompts	= 0;
+	total_delayed	= 0;
+	total_net_trues	= 0;
+	start_flag	= FALSE;
+
+	/*
+	 * Compute the total counts, delayed, and net_trues.
+	 */
+	while (fgets (line, MAXLINE, pltfp) != NULL)
+	{
+		if (sscanf (line, "%s %d %d %d %d %d %d %d %f %d", sample_time, &prompts, 
+		&delayed, &multiples, &net_trues, &true_rate, &cor_singles, &uncor_singles, 
+		&dtcor, &acs) == NUM_ITEMS ||
+		sscanf (line, "%s %d %d %d %d %d %d %d %s %f %d", sample_time, &prompts, 
+		&delayed, &multiples, &net_trues, &true_rate, &cor_singles, &uncor_singles, 
+		star, &dtcor, &acs) == NUM_ITEMS)
+		{
+			if (prompts > 0 && delayed > 0 && multiples > 0 
+			&& net_trues > 0 && acs >= acs_start)
+			{
+				if (!start_flag && !single_frame_flag)
+				{
+					start_flag	= TRUE;
+
+					/*
+	 				 * For two frames, we do some interpolation.
+ 					 */
+					if (!single_frame_flag)
+					{
+						factor		= ((float) acs - acs_start) 
+								/ ((float) acs - time_before_start);
+						prompts		= ROUND (prompts * factor);  
+						delayed		= ROUND (delayed * factor);  
+						net_trues	= ROUND (net_trues * factor);  
+					}
+				}
+
+				total_prompts	+= prompts;
+				total_delayed	+= delayed;
+				total_net_trues	+= net_trues;
+			}
+			else if (prompts > 0 && delayed > 0 && multiples > 0 
+			&& net_trues > 0 && !single_frame_flag)
+			{
+				time_before_start	= acs;
+			}
+		}
+	}
+
+	fclose (pltfp);
+
+	if (single_frame_flag)
+		seconds	= (end_hour * SECONDS_PER_HOUR 
+			+ end_minute * SECONDS_PER_MINUTE 
+			+ end_second)
+			- (start_hour * SECONDS_PER_HOUR 
+			+ start_minute * SECONDS_PER_MINUTE 
+			+ start_second);
+	else
+		seconds	= (acs_end - acs_start) / MILLISECONDS_PER_SECOND; 
+
+	fprintf (stdout, "Scan Time:	%d\n", seconds);
+	fprintf (stdout, "Prompts:	%.0f\n", total_prompts);
+	fprintf (stdout, "Delayed:	%.0f\n", total_delayed);
+	fprintf (stdout, "Net Trues:	%.0f\n", total_net_trues);
+}
+@

@@ -1,0 +1,519 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	94.02.09.19.58.50;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@unused
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* @@(#)bkproj.c	1.7 9/6/90 */
+
+/* bkproj.c
+
+	Backprojection program running under SUN 4.01, 4.1 kernel.
+	Uses CSPI emulation package to do numerical computation
+
+	01-May-1990	P. Luk	Adapted from previous version of Larry Byars.
+	22-Feb-1991	P. Luk	handles instrinsic rotation of 933/953 models.
+	01-Aug-1991	P. Luk	generic file I/O.
+	20-Aug-1991	P. Luk	add arc correction option.
+	22-Jul-1992	HPG	update arc correction to include 961
+*/
+
+#include <stdio.h>
+#include <math.h>
+#include "matrix.h"
+#include <string.h>
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/timeb.h>
+
+#ifndef	lint
+static char sccsid[]="@@(#)bkproj.c	1.7 9/6/90 Copyright 1990 CTI Pet Systems, Inc.";
+#endif	lint
+
+main( argc, argv)
+  int argc;
+  char *argv[];
+{
+
+	struct MatDir entry;
+	Main_header mhead, nmain, amain ;
+	Scan_subheader shead;
+	Image_subheader ihead;
+	Norm_subheader nhead;
+	Attn_subheader ahead;
+	MatrixFile *sfp=NULL, *nfp=NULL, *afp=NULL, *ifp=NULL ;
+	MatrixFile *matrix_open(), *matrix_create() ;
+	MatrixData *sdata, *ndata, *adata, *idata, *matrix_read() ;
+	
+        short int *scan, *imagei;
+	int nprojs, nviews, i, j, size, nblks;
+	int decayflg=0, scatflg=0, arcorflg=0 ;
+	int matnum, frame, plane, gate, sino, bed;
+	int bkp_type, bkp_start_view, bkp_nviews;
+	int arg, atn_matnum=0, nrm_matnum=0, TotalNviews=0, MultFactor=1;
+	int fcode, fft_size, fft_size2, fft_offset;
+
+	float *image, *proj, zoom, image_min, image_max, zoom_spec;
+	float xoff, yoff, rotoff, irot, x0, y0;
+	float *cbufr, *tbufr, scalef, get_vax_float();
+	float fparms[10], *filter_bufr, *fft_bufr, *fft_bufr2, ra, fdummy;
+	float fdummy0, offset, delta_m;
+	float *norm, *attn, *buf1, *buf2 ;
+	float half_life, decay_factor=1.0, dtcor, frame_start, frame_duration ;
+	float radius, gprofile[512], *fs, w ;
+	double	ln2, exp(), log(), lt ;
+	double cost, sint, r0, rdx, rdy, rx0, ry0, theta;
+	char fname[256], atn_file[256], nrm_file[256];
+	long timeval, time();
+	double t0, t1, t2, t3, t4, t5 ;
+	double m0, m1, m2, m3, m4, m5;
+	extern char *ctime() ;
+	struct timeb *tp;
+	FILE *fptr, *mat_create();
+
+	if (argc < 5)
+	  crash( "usage: %s scanspec size[,zoom,xoff,yoff,rot,decay,scatflg,arc_corr] imagespec filter\n", argv[0]);
+
+        tp = (struct timeb *) malloc (sizeof (struct timeb));
+	ftime(tp);
+	t0 = (double)tp->time;
+	m0 = (double)tp->millitm;
+        t0 = t0 + m0/1000.0;
+
+        buf1 = (float *) malloc (1024*sizeof(float));
+        buf2 = (float *) malloc (1024*sizeof(float));
+
+	matspec( argv[1], fname, &matnum);
+	sfp = matrix_open(fname, "r") ;
+	if (sfp == NULL)
+	  crash("%s: error opening scan file %s\n", argv[0], fname) ;
+	fptr = sfp->fptr ;		/* copy file descriptor */
+	mhead = *(sfp->mhptr) ;		/* copy main header */
+	if (mhead.file_type != 1)
+	  crash( "%s: matrix file '%s' is not a SCAN file\n", argv[0], fname);
+	sdata = matrix_read(sfp, matnum) ;
+	if (sdata == NULL)
+	   crash("%s: error reading %s\n", argv[0], argv[1]) ;
+	shead = *((Scan_subheader *) sdata->shptr) ;
+	nprojs = shead.dimension_1;
+	nviews = shead.dimension_2;
+        printf ("\nnprojs = %3d  nviews = %3d\n", nprojs, nviews);
+	nblks = entry.endblk-entry.strtblk;
+	scan = (short int *) sdata->data_ptr ;
+	size = 128;
+	zoom = 1.0;
+	xoff = 0.0;
+	yoff = 0.0;
+	rotoff = 0.0;
+	sscanf( argv[2], "%d,%f,%f,%f,%f,%d,%d,%d",
+	   &size, &zoom, &xoff, &yoff, &rotoff, &decayflg, &scatflg, &arcorflg);
+	if (zoom <= 0.5) zoom = 1.0;
+	if (size < 32) size = 32;
+	ihead.pixel_size = shead.sample_distance*(float)nprojs/((float)size*zoom);
+	if (ihead.pixel_size <= 0.0) ihead.pixel_size = 1.0;
+
+	/* Read filter type and other parameters and make the recon filter */
+	fcode = 0;
+	for (i=0; i<10; i++)
+	  fparms[i] = 0.0;
+	sscanf( argv[4], "%d,%f,%f,%f,%f,%f,%f,%f", &fcode, &fparms[0],
+		&fparms[1], &fparms[2], &fparms[3],
+		&fparms[4], &fparms[5], &fparms[6]);
+	fft_size = 512;
+	while (fft_size < 2*nprojs)
+	  fft_size *= 2;
+	fft_offset = (fft_size - nprojs) / 2;
+	fft_size2 = fft_size/2;
+	if (fcode)
+	{
+	  filter_bufr = (float*) malloc( fft_size * sizeof(float));
+	  fft_bufr = (float*) malloc( fft_size * sizeof(float));
+	  fft_bufr2 = (float*) malloc( fft_size * sizeof(float));
+	  makefilter( fft_size, filter_bufr, fcode, fparms, buf1, buf2);
+	} /* End if code */
+
+	proj = (float*) malloc( fft_size*sizeof(float));
+	image = (float*) malloc( size*size*sizeof(float));
+	zoom_spec = zoom;
+	zoom = (float) nprojs / (float) size / zoom;
+	cbufr = (float*) malloc( nprojs*nviews*sizeof(float));
+	for (i=0; i<nprojs*nviews; cbufr[i++]=1.0);
+	scalef = shead.scale_factor;
+	if (scalef <= 0.0) scalef = 1.0;
+	fdummy = 1.0;
+	fdummy0 = 0.5;
+	bkp_type = 0;
+	bkp_start_view = 0;
+	bkp_nviews = nviews;
+	arg = 5;
+	offset = 0.0;
+	while (arg < argc)
+	{
+	  if (!strcmp( argv[arg], "-b"))
+	  { arg++;
+	    sscanf( argv[arg++], "%d,%d,%d", &bkp_type, &bkp_start_view,
+		&bkp_nviews);
+	    continue;
+	  }
+	  else if (!strcmp( argv[arg], "-o"))
+	  {
+	    arg++;
+	    sscanf( argv[arg++], "%f", &offset);
+	    continue;
+	  }
+	  else if (!strcmp( argv[arg], "-a"))
+	  {
+	    arg++;
+	    matspec( argv[arg++], atn_file, &atn_matnum);
+	    afp = matrix_open(atn_file, "r") ;
+	    if (afp == NULL)
+		crash("%s: error opening atten file %s\n", argv[0], atn_file) ;
+	    if (afp->mhptr->file_type != 3)
+	      crash( "%s: file '%s' is not an ATTEN file\n", argv[0], atn_file);
+	    adata = matrix_read(afp, atn_matnum) ;
+	    if (adata == NULL)
+		crash("%s: error reading %s\n", argv[0], argv[arg]) ;
+	    ahead = *((Attn_subheader *) adata->shptr) ;
+	    scalef = scalef*ahead.scale_factor;
+	    attn = (float *) adata->data_ptr ;
+	    for (i=0 ; i<nprojs*nviews ; i++) cbufr[i] *= attn[i] ;
+	    continue;
+	  }
+	  else if (!strcmp( argv[arg], "-n"))
+	  {
+	    arg++;
+	    matspec( argv[arg++], nrm_file, &nrm_matnum);
+	    nfp = matrix_open(nrm_file, "r") ;
+	    if (nfp == NULL)
+	      crash("%s: error opening norm file %s\n", argv[0], nrm_file) ;
+	    if (nfp->mhptr->file_type != 4)
+	      crash( "%s: file '%s' is not a NORM file\n", argv[0], nrm_file);
+	    ndata = matrix_read(nfp, nrm_matnum) ;
+	    if (ndata == NULL)
+	      crash("%s: error reading %s\n", argv[0], argv[arg]) ;
+	    nhead = *((Norm_subheader *) ndata->shptr) ;
+	    norm = (float *) ndata->data_ptr ;
+	    for (i=0 ; i<nprojs*nviews ; i++) cbufr[i] *= norm[i] ;
+	    scalef = scalef*nhead.scale_factor;
+	    continue;
+	  }
+	  else crash( "%s: unknown option '%s'\n", argv[0], argv[arg]);
+	} /* End while arg */
+
+	dtcor = shead.loss_correction_fctr ;
+	if (dtcor < 1.0) dtcor = 1.0 ;
+	frame_start = (float) (shead.frame_start_time/1000) ;
+	frame_duration = (float) (shead.frame_duration/1000) ;
+	if (frame_duration <= 0.0) frame_duration = 1.0 ;
+
+	/* Compute decay correction factor */
+	if (decayflg)
+	{
+	  half_life = shead.isotope_halflife ;
+	  if (half_life > 0)
+	  {
+	    ln2 = log(2.0) ;
+	    lt = frame_duration * ln2/half_life ;
+	    decay_factor = exp(frame_start*ln2/half_life)/(1-lt/2.0
+				+lt*lt/6.0
+				-lt*lt*lt/24.0
+				+lt*lt*lt*lt/120.0 
+				-lt*lt*lt*lt*lt/720.0) ;
+	  }
+	}
+	ftime(tp);
+	t1 = (double)tp->time;
+        m1 = (double)tp->millitm;
+        t1 = t1 + m1/1000.0;
+
+	/* Compute various parameters for arc correction */
+        printf ("\nCompression code = %3d", (int)mhead.compression_code);
+        MultFactor = ((int)mhead.compression_code) ? (int)mhead.compression_code * 2 : 1;
+        TotalNviews = shead.dimension_2 * MultFactor;
+        printf ("\nTotalNviews = %3d\n", TotalNviews);
+
+	if (arcorflg)
+	{
+           switch (TotalNviews) {
+              case 256:
+	         radius = 102.0/2 + 1.0 ;	/* 951 model */
+                 irot = 0.0;
+                 break;
+	      case 192:
+		 radius = 76.0/2 + 1.0 ;	/* 953 model */
+                 break;
+              case 392:
+                 radius = 82.4/2 + 1.0;         /* 961 model */
+                 break;
+              default:
+                 arcorflg = 0;
+                 irot = 0.0;
+	         printf ("\nArc correction unavailable ...\n");
+           } /* End switch */
+
+              if (arcorflg) {
+	         for (i=0 ; i<nprojs ; i++)
+	         gprofile[i] = nprojs/2 + radius * sin(M_PI*(i-nprojs/2)/2/ 
+                                           TotalNviews)/shead.sample_distance;
+	         w = shead.sample_distance * TotalNviews * 2 / M_PI /radius ;
+	         printf("arc correction profile made, radius = %f\n", radius) ;	
+              } /* End if arcorflg */
+	}	
+
+	scalef = scalef * dtcor * decay_factor /frame_duration ;	
+
+	irot = 0.0;
+	if ( (shead.dimension_2 % 96) == 0) irot = -15.0;
+	if ( (shead.dimension_2 % 98) == 0) irot = -12.86;
+
+	sincos(M_PI*rotoff/180.0, &sint, &cost);
+	x0 = xoff*cost + yoff*sint;
+	y0 = -xoff*sint + yoff*cost;
+
+	fs = (float *) malloc(nprojs*nviews*sizeof(float)) ;
+	if (fs == NULL)
+		crash("%s: error allocating %d bytes memory\n",
+		argv[0], nprojs*nviews*sizeof(float)) ;
+
+	ftime(tp);
+	t2 = (double)tp->time;
+        m2 = (double)tp->millitm;
+        t2 = t2 + m2/1000.0;
+
+	if (arcorflg)
+	    arc_correct(nprojs, nviews, scan, fs, gprofile, w) ;
+	else
+	    for (j=0 ; j<nprojs*nviews ; j++) fs[j] = (float) scan[j] ;
+
+	for (i=bkp_start_view; i<bkp_nviews; i++)
+	{
+	  theta = M_PI*i/nviews + (rotoff+irot)*M_PI/180.;
+	  sincos( theta, &sint, &cost);
+	  rdx = cost*zoom;
+	  rdy = sint*zoom;
+	  for (j=0; j<fft_size; j++)
+	    proj[j] = 0.0;
+	  for (j=0; j<nprojs; j++)
+	    proj[j+fft_offset] = *fs++ * (*cbufr++) ;
+
+	  if (fcode != 0)
+	  {
+	    xfrf_( fft_bufr, &ra, proj, &fft_size2);
+	    xcvmls_( fft_bufr, &fdummy, fft_bufr, filter_bufr, &fft_size2);
+	    ra=ra*filter_bufr[1];
+	    xfri_( proj, &ra, fft_bufr, fft_bufr2, &fft_size2);
+	  }
+	  else
+	     if (i == 0) printf("no filter specified\n") ;
+
+	  rx0 = (float) (size/2) - x0/ihead.pixel_size + offset;
+	  ry0 = (float) (size/2) + y0/ihead.pixel_size + offset;
+	  r0 = (float) fft_size2 - rx0*rdx - ry0*rdy;
+/*
+	  printf( "%3d %6.2f %6.2f %6.2f %6.2f %6.2f\r", i, 
+	    180.*(float)i/(float)nviews, rdx, rdy, r0, ra);
+	  fflush( stdout);
+*/
+	  switch (bkp_type)
+	  {  case 1:	/* trapazoidal backprojection */
+	  	bkproj_view_trap( proj, r0, rdx, rdy, image, size, theta);
+		break;
+	     case 0:	/* normal */
+	     default:
+		bkproj_view( proj, r0, rdx, rdy, image, size);
+		break;
+	  }
+	}
+
+	ftime(tp);
+	t3 = (double)tp->time;
+        m3 = (double)tp->millitm;
+        t3 = t3 + m3/1000.0;
+
+	image_max = 0.0;
+	image_min = 0.0;
+	for (i=0; i<size*size; i++)
+	{
+	  image_max = (image[i] > image_max) ? image[i] : image_max;
+	  image_min = (image[i] < image_min) ? image[i] : image_min;
+	}
+	imagei = (short int*) malloc( size*size*sizeof(short int));
+	for (i=0; i<size*size; i++)
+	  imagei[i] = 32767.*image[i]/image_max;
+
+	ftime(tp);
+	t4 = (double)tp->time;
+	m4 = (double)tp->millitm;
+        t4 = t4 + m4/1000.0;
+
+	ihead.data_type = 2;
+	ihead.num_dimensions = 2;
+	ihead.dimension_1 = ihead.dimension_2 = size;
+	ihead.x_origin = xoff;
+	ihead.y_origin = yoff;
+	ihead.recon_scale = zoom_spec;
+	ihead.quant_scale = scalef*M_PI*image_max/32767./nviews/2/fft_size;
+	ihead.image_min = 0;
+	ihead.image_max = 32767;
+	ihead.slice_width = 0.675;
+	ihead.intrinsic_tilt = 0.0;
+	if ( (shead.dimension_2 % 96) == 0) ihead.intrinsic_tilt = -15.0;
+	ihead.image_rotation = rotoff;
+	mhead.file_type = 2;
+	if (nfp != NULL) mhead.calibration_units=nfp->mhptr->calibration_units;
+	ihead.slice_width = mhead.plane_separation ;
+	ihead.filter_code = fcode ;
+	ihead.frame_start_time = frame_start ;
+	ihead.frame_duration = shead.frame_duration ;
+	ihead.quant_units = 2 ;
+	ihead.scan_matrix_num = matnum ;
+	ihead.norm_matrix_num = nrm_matnum ;
+	ihead.atten_cor_matrix_num = atn_matnum ;
+	ihead.plane_eff_corr_fctr = 1.0 ;
+	if (nfp != NULL)
+		ihead.plane_eff_corr_fctr = nhead.scale_factor ;
+	ihead.decay_corr_fctr = decay_factor ;
+	ihead.loss_corr_fctr = dtcor ;
+	ihead.ecat_calibration_fctr = 1.0 ;
+	if (nfp != NULL && nhead.ecat_calib_factor > 0.0)
+		ihead.ecat_calibration_fctr = nhead.ecat_calib_factor ;
+	for (i=0 ; i<6 ; i++) ihead.filter_params[i] = fparms[i] ;
+	ihead.well_counter_cal_fctr = 1.0 ;		
+	matspec( argv[3], fname, &matnum);
+	fptr = mat_open( fname, "r+");
+	if (!fptr) fptr = mat_create( fname, &mhead);
+	mat_write_image( fptr, matnum, &ihead, imagei, size*size*2);
+	mat_close(fptr);
+	ftime(tp);
+	t5 = (double)tp->time;
+	m5 = (double)tp->millitm;
+        t5 = t5 + m5/1000.0;
+	printf (" t1-t0   t2-t1   t3-t2   t4-t3   t5-t4   t5-t0 \n");
+	printf ("%6.3f  %6.3f  %6.3f  %6.3f  %6.3f  %6.3f\n", 
+		t1-t0, t2-t1, t3-t2, t4-t3, t5-t4, t5-t0);
+}
+
+bkproj_view( proj, r0, rdx, rdy, image, size)
+  float *proj, *image;
+  double r0, rdx, rdy;
+  int size;
+{
+	int x, y, j;
+	double r, w;
+
+	for (y=0; y<size; y++)
+	{
+	  r = r0;
+	  for (x=0; x<size; x++)
+	  {
+		j = (int) r;
+		w = r-j;
+		(*image++) += (1.0-w)*proj[j] + w*proj[j+1];
+		r += rdx;
+	  }
+	  r0 += rdy;
+	}
+}
+
+bkproj_view_trap( proj, r0, rdx, rdy, image, size, theta)
+  float *proj, *image;
+  double r0, rdx, rdy, theta;
+  int size;
+{
+	double r, w, w1, w2, r1, r2, r3, r4, f1, f2, f3, q, q1;
+	int x,y,b1,b2,b3,b4;
+	static int flag=1;
+
+	w1=M_SQRT2*fabs(cos(theta+M_PI/4));
+	w2=M_SQRT2*fabs(cos(theta-M_PI/4));
+	if (w1>w2) {w=w1;w1=w2;w2=w;}
+	f1 = 0.5*(w2-w1)/(w2+w1);
+	f2 = 2.0*w1/(w2+w1);
+	f3 = f1;
+/*
+	if (flag) flag=0,printf("theta     w1      w2      f1      f2\n");
+	printf("%7.3f  %7.3f   %7.3f   %7.3f   %7.3f\n", theta, w1, w2, f1, f2);
+*/
+	r0 += 0.5;
+	for ( y=0; y< size; y++, r0+=rdy)
+	{ 
+	  r = r0;
+	  for (x=0; x< size; x++, image++, r+=rdx)
+	  {
+		r1 = r-w2/2;
+		b1 = (int) r1;
+		r2 = r-w1/2;
+		b2 = (int) r2;
+		r3 = r+w1/2;
+		b3 = (int) r3;
+		r4 = r+w2/2;
+		b4 = (int) r4;
+		if (b1==b2)
+		  (*image) += f1*proj[b1];
+		else
+		{
+		  q=b2;
+		  q1=(q-r1)*(q-r1)/((r2-r1)*(r2-r1));
+		  (*image) += f1*q1*proj[b1]+f1*(1.0-q1)*proj[b2];
+		}
+		if (b2==b3)
+		  (*image) += f2*proj[b2];
+		else
+		{	
+		  q=b3;
+		  q1=(q-r2)/(r3-r2);
+		  (*image) += f2*q1*proj[b2]+f2*(1.0-q1)*proj[b3];
+		}
+		if (b3==b4)
+		  (*image) += f3*proj[b3];
+		else
+		{
+		  q=b4;
+		  q1=(r4-q)*(r4-q)/((r4-r3)*(r4-r3));
+		  (*image) += f3*q1*proj[b4]+f3*(1.0-q1)*proj[b3];
+		}
+	  } /* next x */
+	} /* next y */
+}
+
+
+arc_correct( nprojs, nviews, scan_in, scan_out, x, w)
+  int nprojs, nviews;
+  short *scan_in;
+  float *scan_out, *x, w;
+{
+	int i,j,o, in;
+	float f1, f2;
+
+	for (i=0; i<nprojs; i++)
+	{
+	  o = (int) x[i];
+	  f1 = x[i] -  o;
+	  f2 = 1.0 - f1;
+	  if ( i==nprojs/2) f2 = w;
+	  for (j=0; j<nviews; j++)
+	  {
+	    in = scan_in[i+j*nprojs];
+	    scan_out[o+j*nprojs] += in*f2;
+	    scan_out[o+j*nprojs+1] += in*f1;
+	  }
+	}
+}
+@

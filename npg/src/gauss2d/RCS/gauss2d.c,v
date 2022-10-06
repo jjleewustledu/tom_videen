@@ -1,0 +1,406 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.16.15.27.59;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.08.20.18.40.56;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2000.09.06.19.06.22;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.12.16.18.16.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.12.15.18.42.21;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.02.20.20.15;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: gauss2d.c,v $
+ * Revision 1.5  2002/08/20  18:40:56  tom
+ * pad array in x,y dimensions
+ *
+ * Revision 1.4  2000/09/06  19:06:22  tom
+ * strcpy filename
+ *
+ * Revision 1.3  1999/12/16  18:16:32  tom
+ * new libs, sync ver
+ *
+ * Revision 1.2  1999/12/15  18:42:21  tom
+ * lint cleaning
+ *
+ * Revision 1.1  1998/12/02  20:20:15  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			gauss2d.c
+ *	Date:			Dec 1995
+ *	Author:			Tom Videen
+ *	Description:	Apply 2D Gaussian filter to an image file.
+ * ===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/gauss2d/RCS/gauss2d.c,v 1.5 2002/08/20 18:40:56 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <string.h>
+#include <image.h>
+#include <imgutil.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <pettable.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	MainHeader     *mh;
+	SubHeader      *sh;
+	FILE           *recfp;			 /* rec file pointer */
+	char           *recfile;		 /* rec filename */
+	void            rlft3 ();		 /* FFT transform */
+	float        ***img;			 /* image array and frequency spectrum */
+	float        ***data;			 /* padded, resampled array for FFT */
+	float         **spec;			 /* contains portion of frequency spectrum not in */
+	char           *fname1;			 /* file to process */
+	char           *fname2;			 /* file to write */
+	int             frm;			 /* frame number to process */
+	char            runstamp[40];	 /* version, date and userid info */
+	float           f0;				 /* half frequency 1/cm	 */
+	float           fc;				 /* -log(2.)/f0	 */
+	float           fac;			 /* filter factor */
+	unsigned long   dim1, dim2, dim3; /* original array dimensions */
+	unsigned long   nx, ny;			 /* array dimensions for FFT */
+	float           dx, dy;			 /* delta frequency for each dimension */
+	float           fx, fy;			 /* frequency in each dimension */
+	float           f;				 /* square of radial frequency */
+	float           fnorm;			 /* required to normalize inverse FFT */
+	long            i, j, k;
+
+/*	Get command line arguments	*/
+
+	fname1 = argv[1];
+	fname2 = argv[2];
+	f0 = atof (argv[3]);
+	recfile = argv[4];
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[5], argv[6], argv[7],
+			argv[9], argv[10], argv[11]);
+
+/*	Open rec file */
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [gauss2d]: Cannot open %s\n", recfile);
+		return (ERROR);
+	}
+
+/*	Get main header and subheader.
+ *	Store RCS version in mh->sw_revision.
+ */
+
+	frm = 1;
+	indx.frm = frm;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	file = make_imgfile (fname1);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [gauss2d]: Could not open %s\n", fname1);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [gauss2d]: Could not get MainHeader from %s\n", fname1);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR) {
+					fprintf (stderr, "ERROR [gauss2d]: cannot find %s frame 1, 2 or 3\n", fname1);
+					return (ERROR);
+				}
+			}
+		} else {
+			fprintf (stderr, "ERROR [gauss2d]: cannot find %s frame %d\n",
+				 fname1, frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [gauss2d]: Could not read file subheader in %s\n", fname1);
+		return (ERROR);
+	}
+	mh = file->mh;
+	sh = file->sh;
+
+	(void) save_rcs (file, rcsid, runstamp);
+
+	dim1 = (unsigned long) sh->dim1;
+	dim2 = (unsigned long) sh->dim2;
+	dim3 = (unsigned long) sh->dim3;
+	if (dim1 <= 128)
+		nx = 128;
+	else
+		nx = 256;
+	if (dim2 <= 128)
+		ny = 128;
+	else
+		ny = 256;
+	dx = 1.0 / ((float) nx * (sh->sample_size_1));
+	dy = 1.0 / ((float) ny * (sh->sample_size_2));
+	spec = matrix (1, 1, 1, 2 * ny);
+
+/*	Read image */
+
+	fprintf (stdout, "Filtering %s, frame %d\n", fname1, indx.frm);
+	if ((img = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	recout (recfp, fname1);
+
+/*	Pad before FFT */
+
+	data = f3tensor (1, 1, 1, dim2, 1, dim1);
+	fnorm = 2.0 / ((float) dim1 * (float) dim2);
+
+/*	Order of elements in freq spectrum defined on pp 526-7 of Numerical Recipes in C */
+
+	fc = -log (2.0) / pow (f0, 2.0);
+	for (i = 1; i <= dim3; i++) {
+		for (j = 1; j <= dim2; j++)
+			for (k = 1; k <= dim1; k++)
+				data[1][j][k] = img[i][j][k];
+		data = padtensor (data, dim1, dim2, 1, nx, ny, 1);
+		rlft3 (data, spec, 1, ny, nx, 1);/* wants dimensions z,y,x */
+		for (j = 1; j <= ny; j++) {
+			if (j <= ny / 2 + 1)
+				fy = (j - 1) * dy;
+			else
+				fy = (ny - j + 1) * dy;
+			for (k = 1; k <= nx / 2; k++) {
+				fx = (k - 1) * dx;
+				f = pow (fx, 2.0) + pow (fy, 2.0);
+				fac = exp (f * fc);
+				data[1][j][2 * k - 1] *= fac;
+				data[1][j][2 * k] *= fac;
+			}
+			fx = (nx / 2) * dx;
+			f = pow (fx, 2.0) + pow (fy, 2.0);
+			fac = exp (f * fc);
+			spec[1][2 * j - 1] *= fac;	/* effectively 0 */
+			spec[1][2 * j] *= fac;
+		}
+		rlft3 (data, spec, 1, ny, nx, -1);
+		data = trimtensor (data, nx, ny, 1, dim1, dim2, 1);
+
+		for (j = 1; j <= dim2; j++)
+			for (k = 1; k <= dim1; k++)
+				img[i][j][k] = fnorm * data[1][j][k];
+	}
+
+/*	Write image.
+ *	The output frame number is set to 1.
+ *	The subheader is altered to add a constant (GAUSSIAN_FILTER_CODE)
+ *	to the reconstruction filter_code, and the order is inserted
+ *	in another filter parameter which was assumed to be unimportant.
+ */
+
+	indx.frm = 1;
+	fprintf (stdout, "Writing filtered image %s, frame %d\n", fname2, indx.frm);
+	close_imgfile (file);
+	(void) strcpy (file->name, fname2);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [gauss2d]: Could not open %s\n", fname2);
+		return (ERROR);
+	}
+	mh->nframe = indx.frm;
+	mh->pr_filter = 7;
+	sh->filter_code += GAUSSIAN_FILTER_CODE;
+	sh->filter_ramp_slope = f0;
+	if (put_mh (file) == ERROR)
+		return (ERROR);
+	if (writetensor (file, &indx, img) == ERROR)
+		return (ERROR);
+	free_matrix (spec, 1, 1, 1, 2 * ny);
+	free_f3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+	free_imgfile (file);
+	(void) fclose (recfp);
+	return (OK);
+}
+@
+
+
+1.5
+log
+@pad array in x,y dimensions
+@
+text
+@d2 3
+d19 1
+a19 1
+ *	Date:			Dec-95
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/gauss2d/RCS/gauss2d.c,v 1.4 2000/09/06 19:06:22 tom Exp tom $";
+d38 1
+d126 1
+a126 1
+	save_rcs (file, rcsid, runstamp);
+@
+
+
+1.4
+log
+@strcpy filename
+@
+text
+@d2 3
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/gauss2d/RCS/gauss2d.c,v 1.3 1999/12/16 18:16:32 tom Exp tom $";
+d46 1
+a46 1
+	float        ***data;
+d55 2
+a56 1
+	unsigned long   nx, ny, nz;		 /* array dimensions */
+d63 1
+a63 3
+/*
+ *	Get command line arguments
+ */
+d69 2
+a70 2
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[5], argv[6], argv[7],
+		 argv[9], argv[10], argv[11]);
+d79 2
+a80 2
+/*
+ *	Get main header and subheader.
+d124 11
+a134 3
+	nx = (unsigned long) sh->dim1;
+	ny = (unsigned long) sh->dim2;
+	nz = (unsigned long) sh->dim3;
+d137 1
+d141 1
+a141 1
+	printf ("Filtering %s, frame %d\n", fname1, indx.frm);
+d148 2
+a149 3
+	data = f3tensor(1,1,1,ny,1,nx);
+	spec = matrix (1, 1, 1, 2 * ny);
+	fnorm = 2.0 / ((float) nx * (float) ny);
+d154 3
+a156 3
+	for (i = 1; i <= nz; i++) {
+		for (j = 1; j <= ny; j++)
+			for (k = 1; k <= nx; k++)
+d158 2
+a159 1
+		rlft3 (data, spec, 1, ny, nx, 1);	 /* wants dimensions z,y,x */
+d179 4
+a182 2
+		for (j = 1; j <= ny; j++)
+			for (k = 1; k <= nx; k++)
+d186 1
+a186 2
+/*
+ *	Write image.
+d194 1
+a194 1
+	printf ("Writing filtered image %s, frame %d\n", fname2, indx.frm);
+d196 2
+a197 2
+	strcpy (file->name, fname2);
+	strcpy (file->mode, "w");
+d211 1
+a211 1
+	free_f3tensor (img, 1, nz, 1, ny, 1, nx);
+d213 1
+a213 1
+	fclose (recfp);
+@
+
+
+1.3
+log
+@new libs, sync ver
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/gauss2d/RCS/gauss2d.c,v 1.2 1999/12/15 18:42:21 tom Exp tom $";
+d184 1
+a184 2
+	free (file->name);
+	file->name = fname2;
+@
+
+
+1.2
+log
+@lint cleaning
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/gauss2d/RCS/gauss2d.c,v 1.1 1998/12/02 20:20:15 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/gauss2d/RCS/gauss2d.c,v 2.14 1997/03/10 15:47:34 tom Exp $";
+d17 1
+d19 1
+a21 1
+#include <nr.h>
+@

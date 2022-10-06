@@ -1,0 +1,167 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.14.19;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      PROFTABL.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         03-May-88
+C  Written For:  PETT VI Reconstruction Program
+C
+C  Intent:
+C     Generate a table of indices to SPROFILE(2569) to use for
+C     creating the 2D image array from filtered profiles in BACKPROJ.FTN
+C     This table is used in the filtered backprojection after
+C     the convolution and interpolation to assign values from the
+C     filtered profiles to the image array elements.
+C
+C     NOTE:  Changes in this program must have corresponding changes
+C            in BACKPROJ.FTN.
+C
+C  Output file is contiguous 5688 records (72 profiles * 79 records).
+C     Each 79 records contains 100*100 Integer*2 indices.
+C
+C  Logical Units:
+C     1 = Table of profile indices (TABLE)
+C     5 = User output (USEROUT)
+C
+C  No Subroutines.
+C
+C  Instructions for Compiling/Linking:
+C     LINK7X SINTABGN (to use WCS)
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM PROFTABL
+C
+      INTEGER*2  INDX(100,100) ! indices to SPROFILE for 1 profile
+C
+      INTEGER*4  IOWRITE   ! SYSIO write sequential binary wait
+      INTEGER*4  TABLE     ! log. unit for output file for table
+      INTEGER*4  USEROUT   ! log. unit for user output
+      INTEGER*4  NBYTES    ! number of bytes per slice
+      INTEGER*4  PB(6)     ! parameter block used in SYSIO
+      INTEGER*4  DIM       ! x- and y- dimensions in reconstructed array
+      INTEGER*4  PROFSIZE  ! profile size (2 + no of points in input profiles)
+      INTEGER*4  NPROFPNTS ! no. of points/profile
+      INTEGER*4  NPROFILES ! no. of profiles (no. of angles)
+      INTEGER*4  NP        ! local index to profile number in DO loop
+      INTEGER*4  NOUT      ! number of points in interpolated, filtered
+C                              profiles (in BACKPROJ.FTN)
+      INTEGER*4  I,J       ! local integers
+C
+      REAL*4     SINTAB(100)    ! sine table
+      REAL*4     COSTAB(100)    ! cosine table
+      REAL*4     XSIN(100)      ! relate elements of SPROFILT to
+      REAL*4     YCOS(100)      !   elements of ARRAY in BACKPROJ.FTN
+      REAL*4     XYPOS(100)     ! array positions for profiles
+      REAL*4     XMAG           ! magnification factor
+      REAL*4     MIDPT          ! midpoint of SPROFILE (in BACKPROJ.FTN)
+      REAL*4     PI             ! pi
+      REAL*4     SCANDIAM       ! diameter of scan area in mm
+      REAL*4     DINC           ! size of array after magnification [2.7]
+      REAL*4     DX             ! local value for computing XYPOS
+      REAL*4     NINTERP        ! no. of interpolated elements in SPROFILE
+      REAL*4     PROFWIDTH      ! profile width
+C                                (distance between center of adjacent profiles)
+C  Constants
+C
+      DATA  TABLE,USEROUT /1,6/
+      DATA  IOWRITE  /56/
+      DATA  PI       /3.14159/
+      DATA  XMAG     /1.0/
+      DATA  SCANDIAM /270.0/
+C
+C  THE FOLLOWING CONSTANTS MUST BE THE SAME AS THOSE USED in BACKPROJ.FTN
+C
+      DATA  DIM       /100/   ! dimension of image array
+      DATA  NPROFILES /72/    ! no. of profiles
+      DATA  NPROFPNTS /108/   ! no. of points/profile
+      DATA  NOUT      /2569/  ! elements in SPROFILE array
+      DATA  NINTERP   /24.0/  ! no. of interpolated elements in SPROFILE
+C
+C  Initialize other parameters
+C
+      PROFSIZE = NPROFPNTS+2                     ! [110]
+      MIDPT = FLOAT(NOUT/2) + 1.0                ! [1285.0]
+      DINC = SCANDIAM/(XMAG*DIM)                 ! [2.7]
+      PROFWIDTH = SCANDIAM/FLOAT(NPROFPNTS)      ! [2.5]
+C
+      WRITE(USEROUT,*) '***  PROFTABL 03-May-88  ',
+     2  '{generate table of profile indices for BACKPROJ}'
+C
+C  Generate SIN & COS table of angles * NINTERP
+C
+      ANGLE = PI/FLOAT(NPROFILES)
+      DO 100 I=1,NPROFILES
+        SINTAB(I) = NINTERP * SIN(ANGLE*(I-1))
+        COSTAB(I) = NINTERP * COS(ANGLE*(I-1))
+100   CONTINUE
+C
+C  Generate map from image array locations to profiles locations;
+C  (Center of array is 0.0,0.0; top, left is -133.65,-133.65;
+C
+      DX = FLOAT(1-(DIM/2))*DINC - DINC/2.0   ! [-133.65]
+      DO 200 I=1,DIM
+        XYPOS(I) = DX/PROFWIDTH
+        DX = DX + DINC
+200   CONTINUE
+C
+C  Create table for each profile
+C
+      OPEN(TABLE,file="proftabl.tbl")
+      NBYTES = 100*100*2
+      DO 600 NP=1,NPROFILES
+C
+C  Compute SIN-COS tables
+C
+        DO 300 I=1,DIM
+          XSIN(I) = SINTAB(NP)*XYPOS(I)
+          YCOS(I) = COSTAB(NP)*XYPOS(I) + MIDPT
+300     CONTINUE
+C
+C  Compute the indices to SPROFILE for each element of the ARRAY(DIM,DIM)
+C
+        DO 500 J=1,DIM
+          DO 400 I=1,DIM
+            INDX(I,J) = NINT(XSIN(I) + YCOS(J))
+            IF (INDX(I,J).LT.0 .OR. INDX(I,J).GT.NOUT) INDX(I,J)=0
+400       CONTINUE
+500     CONTINUE
+C
+C Write to disk file
+C
+        CALL SYSIO(PB,IOWRITE,TABLE,INDX,NBYTES,0)
+C
+600   CONTINUE
+C
+      CLOSE(TABLE)
+      STOP
+      END
+
+
+
+
+
+
+@

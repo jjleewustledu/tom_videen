@@ -1,0 +1,442 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.10
+date	2010.07.14.14.49.01;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2010.04.23.20.24.15;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2008.12.08.16.00.14;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2004.02.17.15.02.24;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2004.01.28.22.02.50;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2004.01.16.17.01.26;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.12.29.19.10.30;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.01.29.23.22.07;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.25.23.22.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      PEAKSEEK.FTN
+C  Author:       Tom O. Videen
+C  Date:         08-Sep-89
+C  Written For:  Quantitation of PETT VI Images
+C
+C  History:
+C     Revised PEAKSEK4.FTN to use sum of 2 2D-gaussians plus a constant.
+C     Revised 28-Dec-92 to read slice 1-31 (TOV)
+C     Compiles and links on SunOS 4.1.3 only
+C
+C  Intent:
+C     Read an image slice.
+C     Find the polar coordinates of each local maxima.
+C     Find the 8 parameters defining the fit to each local max
+C        using the sum of two 2D gaussians plus a constant
+C        using a modified Mead & Nelder simplex algorithm for multivariate
+C        unconstrained optimization.
+C        (The constant is not fit and must be user supplied).
+C
+C  Parameters of Fit:
+C     A(1) - amplitude of 1st gaussian
+C     A(2) - X-location of peak (both gaussians)
+C     A(3) - Y-location of peak (both gaussians)
+C     A(4) - sigma X of 1st gaussian
+C     A(5) - sigma Y of 1st gaussian
+C     A(6) - amplitude of 2nd gaussian
+C     A(7) - sigma X of 2nd gaussian
+C     A(8) - sigma Y of 2nd gaussian
+C     A(9) - background (constant; not altered in fit)
+C
+C  Logical Units:
+C     1 = Image file (DISK)
+C     2 = Data output file (OUTPUT) (used in GAUSS22E)
+C     5 = User input (USERIN)
+C     6 = User output (USEROUT)
+C
+C  Uses Subroutines:
+C     GETIMAGE - get 1 slice of an image
+C     LOCALMAX - find a local maximum
+C     LOCALMID - find central coordinates of local maximum
+C     LOCALZER - zero pixels corresponding to local maximum
+C     GAUSS22E - fit sum of 2 2D-gaussians to local peak
+C     SIMPINIT - initialize the simplex points
+C     SIMPLEX1 - find best fit using Mead & Nelder algorithm
+C
+C  TERMINAL.LIB
+C     GETINT   - get an integer from user
+C     YESNO    - get an Y/N response from user
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM PEAKSEEK
+
+      PARAMETER (NDIM = 400)    ! max. number of points
+
+      INTEGER*2  IMAGE(128,128) ! image array
+
+      INTEGER*4  DISK        ! log. unit for image file
+      INTEGER*4  DATAFILE    ! log. unit for final fit parmeters
+      INTEGER*4  SLICE       ! slice number
+      INTEGER*4  FIRST
+      INTEGER*4  LAST
+      INTEGER*4  MAX         ! maximum pixel value
+      INTEGER*4  CUTOFF      ! cutoff for local maxima
+      INTEGER*4  LRANGE      ! local range increment in searching for local max
+      INTEGER*4  FRANGE      ! local range to use for fitting curve to local
+      INTEGER*4  ZRANGE      ! local range to zero around local maxima
+      INTEGER*4  X,Y         ! coordinates of a pixel
+      INTEGER*4  N           ! no of local maxima
+      INTEGER*4  I,J         ! local integers
+
+      REAL*4    XMID(10),YMID(10) ! coordinates of centers of local maxima
+      REAL*4    BKGND           ! background value for all points (constant)
+
+      CHARACTER*256 FNAME     ! image file name
+      CHARACTER*256 FNAME1    ! output file name
+      CHARACTER*80  Q         ! query to user
+
+      LOGICAL*1  HDRONLY     ! false --> read header and image
+      LOGICAL*1  ERR         ! true iff unable to open disk file,
+C        unable to read desired slice, or if file format is incorrect
+
+C  Common Block Variables
+
+      REAL*4    XP(NDIM,NDIM)   ! 1st indep. variable (rotated axes)
+      REAL*4    YP(NDIM,NDIM)   ! 2nd indep. variable (rotated axes)
+      REAL*4    ZP(NDIM,NDIM)   ! value of input data at point X,Y
+
+      INTEGER*4 NPTS            ! number of points in X, Y
+      INTEGER*4 USERIN          ! log. unit for user input
+      INTEGER*4 USEROUT         ! log. unit for user output
+
+C  Common RAWDATA is used in FCHI22DG and GAUSS22E
+
+      COMMON /RAWDATA/ XP,YP,ZP,NPTS
+      COMMON /USRIO/ USERIN,USEROUT
+
+      DATA DISK, DATAFILE, USERIN, USEROUT /1,3,5,6/
+      DATA HDRONLY /.FALSE./
+      BKGND = 0.
+      LRANGE = 5
+      ZRANGE = 7
+      FRANGE = 10
+      FNAME = ' '
+      CALL GETARG (1, FNAME)
+      CALL GETARG (2, FNAME1)
+      WRITE(USEROUT,*) '*** PEAKSEEK  16-Jan-2004 {fit 2D Gaussian to local peak}'
+
+C  Get the image point for 1 slice
+
+      OPEN (DATAFILE, FILE = FNAME1, STATUS = 'NEW', ERR = 102)
+      GO TO 103
+102   L = INANYR (FNAME1, ' ')
+      WRITE (USEROUT, *) '*** ERROR -- cannot open file ', FNAME1(1:L),' ***'
+103   CONTINUE
+
+C  The local max is characterized using a rectangular array of pixels
+C  with the dimensions (2*FRANGE+1) x (2*FRANGE + 1)
+
+      Q = 'Range of pixels to include in fitting region'
+      CALL GETINT(Q,FRANGE,0,128)
+
+C      FIRST = 19
+C      LAST = 29
+      FIRST = 56
+      LAST = 56
+      do 1000 slice=FIRST, LAST
+      Q = 'Slice to fit'
+C     CALL GETINT(Q,SLICE,1,47)
+
+      X = 64
+      Y = 64
+      Y = 81
+      Q = 'X'
+C     CALL GETINT(Q,X,0,128)
+      Q = 'Y'
+C     CALL GETINT(Q,Y,0,128)
+
+C  Get Background value
+
+      Q = 'Background level'
+C     CALL GETREAL(Q,BKGND,-10000.,100000.)
+
+      CALL GETUIMAGE (IMAGE, FNAME, SLICE, ERR)
+      IF (ERR) STOP
+
+C  Find max value for this slice
+
+      MAX = 0
+      DO 120 J=1,128
+        DO 110 I=1,128
+          IF (MAX.LT.IMAGE(I,J)) MAX=IMAGE(I,J)
+110     CONTINUE
+120   CONTINUE
+      WRITE(USEROUT,*) 'Slice = ',SLICE,' Maximum Pixel = ',MAX
+
+C  Local peaks must have at least a pixel value of CUTOFF
+
+      Q = 'Minimum value for local maxima (cutoff)'
+      CUTOFF = 3*MAX/4
+C     CALL GETINT(Q,CUTOFF,0,MAX)
+
+C  Once a pixel with a value >= CUTOFF is found, a search is made for
+C  the pixel with the largest value within a rectangle whose dimensions
+C  are (2*LRANGE + 1) x (2*LRANGE + 1) centered on the specified pixel.
+
+      Q = 'Range of pixels to increment in search for local maximum'
+C      CALL GETINT(Q,LRANGE,0,128)
+
+C  After a local maximum has been characterized, a rectangle of pixels
+C  is zeroed so as to skip it in searching for the next peak.
+C  This rectangle has the dimensions (2*ZRANGE + 1) x (2*ZRANGE + 1)
+C  and is centered on the specified pixel.
+
+      Q = 'Range of pixels to zero after locating local maximum'
+C      CALL GETINT(Q,ZRANGE,0,128)
+
+      IF (SLICE.EQ.FIRST) THEN
+         WRITE (DATAFILE,8600) FNAME, SLICE, 2*FRANGE+1, 2*FRANGE+1
+      ENDIF
+8600  FORMAT(A20,' Slice ',I2,3X,I2,'x',I2,' pixel fit',/)
+
+C  Loop until no more peaks are found:
+C     1) find a local max
+C     2) find the coordinates of the center of this local max
+C     3) fit 1 2D gaussian to the region of the local max
+C     4) zero the pixel values in this region
+
+      N = 0
+200   CALL LOCALMAX (X, Y, LRANGE, CUTOFF, MAX, IMAGE)
+
+      IF (X.GT.0) THEN
+        N = N+1
+        CALL LOCALMID (X, Y, MAX, XMID(N), YMID(N), IMAGE)
+C       CALL GAUSS22E (X, Y, MAX, XMID(N), YMID(N), IMAGE, FRANGE, 
+C    &    SLICE, N, DATAFILE, BKGND, FNAME)
+		CALL GAUS2DGB (X, Y, MAX, XMID(N), YMID(N), IMAGE, FRANGE, DATAFILE, SLICE, FIRST)
+        CALL LOCALZER (X, Y, ZRANGE, IMAGE)
+C        GO TO 200
+      END IF
+1000  continue
+
+      STOP
+      END
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d125 4
+a128 2
+      FIRST = 19
+      LAST = 29
+d135 1
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d125 2
+a126 2
+      FIRST = 1
+      LAST = 10
+@
+
+
+1.7
+log
+@Feb 2004
+@
+text
+@d125 2
+a126 2
+      FIRST = 12
+      LAST = 36
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@@
+
+
+1.4
+log
+@modify XCTR, YCTR, FIRST, LAST for line source in air zoomed x10
+@
+text
+@d56 1
+a56 1
+      PARAMETER (NDIM = 100)    ! max. number of points
+d120 1
+a120 1
+C  with the dimensions FRANGE x FRANGE
+d123 1
+a123 1
+C     CALL GETINT(Q,FRANGE,0,128)
+d131 2
+a132 2
+      X = 65
+      Y = 62
+d163 1
+a163 1
+C  the pixel with the largest value with a rectangle whose dimensions
+d175 1
+a175 1
+C     CALL GETINT(Q,ZRANGE,0,128)
+@
+
+
+1.3
+log
+@comparisons run Dec 1999
+@
+text
+@d64 1
+d109 1
+a109 1
+      WRITE(USEROUT,*) '*** PEAKSEEK  29-Jan-98 {fit 2D Gaussian to local peak}'
+d125 3
+a127 3
+      SLICE = 16
+      FIRST = 9
+      do 1000 slice=9,24
+d131 2
+a132 2
+      X = 62
+      Y = 70
+@
+
+
+1.2
+log
+@jan 98
+@
+text
+@d124 3
+a126 2
+      SLICE = 24
+C     do 1000 slice=11,37
+a128 1
+      FIRST = SLICE
+d130 2
+a131 2
+      X = 64
+      Y = 64
+d176 3
+a178 1
+      WRITE (DATAFILE,8600) FNAME, SLICE, 2*FRANGE+1, 2*FRANGE+1
+d199 1
+a199 1
+C1000  continue
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d11 1
+d104 1
+a104 1
+      FRANGE = 5
+d108 1
+a108 1
+      WRITE(USEROUT,*) '*** PEAKSEEK  25-Nov-96 {fit sum of two 2D gaussians to local peaks}'
+d122 1
+a122 1
+C      CALL GETINT(Q,FRANGE,0,128)
+d124 5
+a128 3
+C      SLICE = 24
+C      Q = 'Slice to fit'
+C      CALL GETINT(Q,SLICE,1,47)
+d130 6
+a135 8
+C      Q = 'X'
+C      CALL GETINT(Q,X,0,128)
+C      Q = 'Y'
+C      CALL GETINT(Q,Y,0,128)
+      X = 63
+      Y = 70
+      FIRST = 12
+      DO 9000 SLICE=FIRST,36
+d174 1
+a174 1
+C      CALL GETINT(Q,ZRANGE,0,128)
+d176 2
+a177 2
+C     WRITE (DATAFILE,8600) FNAME, SLICE, 2*FRANGE+1, 2*FRANGE+1
+8600  FORMAT(A20,' Slice ',I1,3X,I1,'x',I1,' pixel fit',/)
+d186 1
+a186 2
+C      CALL LOCALMAX (X, Y, LRANGE, CUTOFF, MAX, IMAGE)
+C200   CONTINUE
+d188 1
+a188 1
+C      IF (X.GT.0) THEN
+d194 1
+a194 1
+C        CALL LOCALZER (X, Y, ZRANGE, IMAGE)
+d196 2
+a197 1
+C      END IF
+a198 2
+9000  CONTINUE
+
+@

@@ -1,0 +1,143 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@// @;
+
+
+1.1
+date	2008.05.06.18.29.51;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <Array.h>
+#include <DistanceMeasure.h>
+#include <Smoother.h>
+#include <Image.h>
+#include <Displacement.h>
+#include <Optimizer.h>
+#include <UpdateRule.h>
+#include <stdlib.h>
+
+namespace flirt {
+
+// ---------------------------------------------------------------------
+//
+// UpdateRule
+//
+// ---------------------------------------------------------------------
+
+UpdateRule ::  UpdateRule(DistanceMeasure& _dist, 
+	                  Smoother&        _smoother,
+	                  Optimizer&       _opti) 
+  : dist(_dist), smoother(_smoother), opti(_opti) {
+  //printf("UpdateRule (%p) :: Constructor\n", this);
+};
+   
+void UpdateRule :: updateDisplacement(Displacement& u) {
+  Array& du = opti.getUpdate();
+  if (haveSameSize(du,u)) {
+    for (int i=0; i<u.getNumberOfElements(); ++i)
+      u.getData()[i] = du.getData()[i];
+  } else {
+    printf("%s %d (Build %s %s) -- ",__FILE__,__LINE__,__DATE__,__TIME__);
+    printf(" UpdateRule :: updateDisplacement(u) : "
+	   "Dimensions of u  does not match dimensions of the update\n"
+	   "du=opti.getUpdate()!\n"); 
+    printf("Dimensions u:\n");
+    u.printDimensions();
+    printf("Dimensions du:\n");
+    u.printDimensions();
+    
+    printf("Exiting on error\n.");
+    exit(-1);
+  };
+}; 
+
+// ---------------------------------------------------------------------
+//
+// LineSearch
+//
+// ---------------------------------------------------------------------
+
+LineSearch ::  LineSearch( DistanceMeasure& dist, 
+			   Smoother&        smoother,
+			   Optimizer&       opti,
+			   TransformableImage& TI,
+			   const Displacement2D& u) 
+  : UpdateRule(dist,smoother,opti), T(TI), isFirstUpdate(1), uold( u.getDimensions(), u.getNumberOfDimensions()) {
+  //printf("Constructor LineSearch(DistanceMeasure, Smoother, Optimizer,"
+  //	 " TransformableImage2D, Displacement2D\n\n");
+};
+
+void LineSearch :: updateDisplacement(Displacement& u) {
+
+  Array& du = opti.getUpdate();
+ 
+  if (!haveSameSize(du,u)) {
+    printf("%s %d (bulid %s %s) -- "
+	   "update and u have different dimensions!\n",
+	   __FILE__,__LINE__,__DATE__,__LINE__);
+  };  
+ 
+  if (isFirstUpdate) {
+    isFirstUpdate = 0;
+  };
+
+
+  double fold    = dist.getValue();// + smoother.getValue();  
+  for (int i=0; i<u.getNumberOfElements(); ++i) {
+    uold.getData()[i] = u.getData()[i];
+  }
+
+  double minNormDx = 1e-15;
+
+  double lambda = 1;
+  double fnew;
+  double normdu = normInf(du.getData(),du.getNumberOfElements());
+  int failure = 0;
+
+  do {
+    for (int i=0; i<u.getNumberOfElements(); ++i) {
+      u.getData()[i] = uold.getData()[i] + lambda * du.getData()[i];
+    }
+    
+    T.transform(u);
+    dist.eval();
+    smoother.eval(u);
+    
+    fnew = dist.getValue();// + smoother.getValue();  
+    
+    //printf("fold = %g, fnew = %g (lambda=%g)\n",fold,fnew,lambda);
+    
+    if (fabs(lambda)*normdu < minNormDx) {
+      failure = 1;
+    }      
+    
+    lambda *= 0.5;
+    
+  } while ((fnew > fold) && (!failure));
+
+  if (failure) {
+    for (int i=0; i<u.getNumberOfElements(); ++i) {
+      u.getData()[i] = uold.getData()[i];
+    }
+    printf("%s %d (Build %s %s) -- ",__FILE__,__LINE__,__DATE__,__TIME__);
+    printf("updateDisplacement(u) : "
+	   "Linesearch failed! Omitting update.\n"); 
+  }
+
+}
+
+}
+@

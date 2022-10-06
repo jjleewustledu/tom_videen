@@ -1,0 +1,110 @@
+#!/bin/csh
+#	Module:	align_focus_tr
+#	Author:	Tom Videen
+#	Date:	Sep 2005
+#	Use:	Align Focus transmission images from same animal
+
+if ($#argv != 2) then
+	echo "Usage:  align_focus_tr reference_tr reslice_tr"
+	echo " e.g.,  align_focus_tr m1010tr3 m1015tr2"
+	exit 1
+endif
+
+set STD = $1
+set RES = $2
+set PID1 = `echo $STD | cut -f1 -dt`
+set PID2 = `echo $RES | cut -f1 -dt`
+set MSK1 = ${PID1}msk
+set MSK2 = ${PID2}msk
+set TR1  = ${PID1}tr
+set TR2  = ${PID2}tr
+set AIR  = ${TR2}_to_${TR1}
+set DDIR = `pwd`
+
+if ($DDIR:t != Align) then
+    echo "This procedure must be done in a path named Align containing"
+    echo "both transmission images: $STD.v $RES.v"
+	exit 1
+endif
+
+# Check files
+if (! -e $STD.v) then
+	echo "ERROR [align_focus_tr]: missing $STD.v"
+	exit 1
+endif
+if (! -e $RES.v) then
+	echo "ERROR [align_focus_tr]: missing $RES.v"
+	exit 1
+endif
+
+# Create masks of both images
+maskpct $STD.v $MSK1.v 20
+maskimg $STD.v $MSK1.v $MSK1.v 1
+maskslc $MSK1.v $MSK1.v 1to3
+maskslc $MSK1.v $MSK1.v 93to95
+
+maskpct $RES.v $MSK2.v 20
+maskimg $RES.v $MSK2.v $MSK2.v 1
+maskslc $MSK2.v $MSK2.v 1to3
+maskslc $MSK2.v $MSK2.v 93to95
+
+# Copy, Scale, then Convert to Analyze
+cp $STD.v $TR1.v
+scaleimage $TR1.v 10000
+scaleimage $MSK1.v 10000
+
+cp $RES.v $TR2.v
+scaleimage $TR2.v 10000
+scaleimage $MSK2.v 10000
+
+img2analyze $TR1.v a$TR1
+img2analyze $MSK1.v a$MSK1
+img2analyze $TR2.v a$TR2
+img2analyze $MSK2.v a$MSK2
+
+unalias rm
+rm a$MSK1.ifh a$MSK2.ifh
+
+EDIT_MASKS:
+# Edit masks to remove lower jaw and areas not common to both images
+echo "---------------------------------------------------------"
+echo "Use vidi to edit both a$MSK1.img and a$MSK2.img to remove"
+echo "  1) lower jaw"
+echo "  2) areas not sampled in both images"
+echo " "
+echo "Press RETURN to cleanup and finish (CTRL-C to quit)"
+set data = `line`
+if (! -e a$MSK1.ifh) goto EDIT_MASKS
+if (! -e a$MSK2.ifh) goto EDIT_MASKS
+
+# Convert from Interfile to Analyze and ECAT
+if2analyze a$MSK1
+if2analyze a$MSK2
+analyze2img a$MSK1 $MSK1.v
+analyze2img a$MSK2 $MSK2.v
+
+# Align, reslice and rescale
+setanamin a$MSK1 0
+setanamin a$MSK2 0
+setanamin a$TR1 0
+setanamin a$TR2 0
+set PRM = '-m 6 -p1 1 -p2 1 -t1 1 -t2 1 -x 2 -b1 3 3 3 -b2 3 3 3'
+alignlinear a$TR1 a$TR2 $AIR.air -e1 a$MSK1 -e2 a$MSK2 $PRM
+imgreslice a$TR2 $AIR
+analyze2img ra$TR2 r$RES.v
+scaleimage r$RES.v 0.0001
+
+echo "---------------------------------------------------------"
+echo "Use vidi to compare $STD.v with r$RES.v"
+echo " "
+echo "Press RETURN to cleanup and finish (CTRL-C to quit)"
+set data = `line`
+
+# Clean up the rest
+rm *ifh
+rm *rec
+rm am*
+rm ram*
+rm $TR1.v
+rm $TR2.v
+

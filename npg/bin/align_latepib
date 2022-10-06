@@ -1,0 +1,109 @@
+#!/bin/csh
+#	Module:	align_latepib
+#   Date:	Dec 2007
+#   Author:	Tom Videen
+#	Use:	Align late frames of a dynamic PIB image
+#   Note:
+#       sumimgframes requires the start time;
+#       single_frames calls sumimgframes;
+
+set USAGE = "Usage: align_latepib pid tracer firstfrm lastfrm reffrm -b 8 -t 40"
+
+if ($#argv != 3) then
+	echo "Usage: align_latepib pid firstfrm lastfrm"
+	echo " i.e., align_latepib p7000 46 54"
+	exit 1
+endif
+
+set PID   = $1
+set FRM1  = $2
+set FRM2  = $3
+
+set CMPD  = pib
+set THRESH = 40
+set BLUR   = 8
+set FRAMES = ${FRM1}to$FRM2
+set ROOT   = $PID$CMPD
+
+set BRAIN  = ${ROOT}_mask.v
+set ORG    = ../${ROOT}1.v
+set RORG   = r${ROOT}1.v
+set SUM    = ${ROOT}1_sum.v
+set SUMG   = ${ROOT}1_sum_g3.v
+
+# Check for existence of first, last and reference frames
+# -------------------------------------------------------
+if (! -e $ORG) then
+	echo "ERROR [align_latepib]: missing $ORG"
+	echo "align_latepib should be called from a subdirectory, Align_latepib"
+	exit 1
+endif
+imghdr $ORG $FRM1 > & ! align.tmp
+set CHK1 = `head -1 align.tmp | cut -c1-5`
+imghdr $ORG $FRM2 > & ! align.tmp
+set CHK2 = `head -1 align.tmp | cut -c1-5`
+/usr/bin/rm align.tmp
+if ($CHK1 == ERROR) then
+	echo "ERROR [align_latepib]: No frame $FRM1 in $ORG"
+	exit 1
+else if ($CHK2 == ERROR) then
+	echo "ERROR [align_latepib]: No frame $FRM2 in $ORG"
+	exit 1
+endif
+
+# Create alignment mask of brain
+# -----------------------------
+set time1 = `imghdr $ORG $FRM1 | grep Start | cut -f2 -d= | cut -f1 -ds`
+sumimgframes $ORG $SUM $FRM1 $FRM2 $time1
+	if ($status != 0) exit 1
+gauss $SUM $SUMG 0.3
+	if ($status != 0) exit 1
+maskpct $SUMG tmp.v 30
+	if ($status != 0) exit 1
+maskimg $SUMG tmp.v $BRAIN 1
+	if ($status != 0) exit 1
+# Mask first and last 2 slices
+# -----------------------------
+maskslc $BRAIN $BRAIN 1to2
+set FNUM = `imghdr $BRAIN | grep slices | cut -f1 -d" "`
+set FN1 = `echo $FNUM - 1 | bc`
+maskslc $BRAIN $BRAIN ${FN1}to${FNUM}
+rm ${SUM}*
+rm ${SUMG}*
+rm tmp.v
+echo "-----------------------------------------------------"
+echo "View $BRAIN with vidi and remove the nose and any other"
+echo "structures or slices which might skew the alignment."
+echo
+echo "Save the edited image and then press return to continue."
+set data = `line`
+
+# Handle format conversion if mask was edited
+if (-e $BRAIN:r.ifh) then
+	if2analyze $BRAIN:r
+	if ($status != 0) exit 1
+	analyze2img $BRAIN:r $BRAIN:r.v
+	if ($status != 0) exit 1
+	rm $BRAIN:r.ifh
+	rm $BRAIN:r.hdr
+endif
+
+single_frames $ORG $ROOT i $FRM1 $FRM2
+	if ($status != 0) exit 1
+align_dynamic $ROOT i $BRAIN ${FRM1}to${FRM2} $THRESH $BLUR scale_962
+	if ($status != 0) exit 1
+reslicedyn $ROOT .i $FRAMES $FRM1 $ORG
+	if ($status != 0) exit 1
+merge_dynframes r$ROOT $FRAMES .i tmp.v
+	if ($status != 0) exit 1
+# Set frame number to 1
+set time1 = `imghdr $ORG $FRM1 | grep Start | cut -f2 -d= | cut -f1 -ds`
+sumimgframes tmp.v $RORG.v $FRM1 $FRM1 $time1
+
+remove_dynfiles $ROOT .i $FRAMES
+remove_dynfiles r$ROOT .i $FRAMES
+rm tmp.v*
+
+echo "-----------------------------------------------------"
+echo "cat ${ROOT}_alignmsk_b${BLUR}_t${THRESH}_p1_x3.log"
+

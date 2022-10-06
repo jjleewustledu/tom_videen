@@ -1,0 +1,234 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	99.02.05.21.57.33;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@; $Id$
+;
+;+
+; NAME:
+;   ELIMCUP
+;
+; PURPOSE:
+;   Plot polar plots of each slice of an image.
+;
+; CATEGORY:
+;   PET processing.
+;
+; CALLING SEQUENCE:
+;   elimcup
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, Jan 1999
+;-
+
+PRO ELIMCUP_EVENT, ev
+   COMMON IMAGE_UTILS
+   COMMON IMAGEHISTO
+   
+   catch, error_status
+   IF (error_status NE 0) THEN BEGIN
+      ok = widget_message(!err_string)
+      RETURN
+   END
+   widget_control, ev.top, get_uvalue=uv
+   widget_control, uv.wid.msg, set_value=''
+   redisplay = 0
+
+   CASE ev.id OF
+      
+      uv.wid.file: BEGIN
+         fname = ''
+         IF (strlen(img.fname) GT 0) THEN fname = img.fname
+         IF (strlen(fname) GT 0) THEN BEGIN 
+            l1 = rstrpos(fname,'/')
+            l2 = rstrpos(fname,'.')
+            str1 = string(replicate(32b,(l2-l1-2)))
+            str1 = '*'+str1
+            strput,fname,str1,l1+1
+            fname = strcompress(fname, /remove_all)
+         ENDIF ELSE fname = '*img'
+         fname = dialog_pickfile(FILE=img.fname, FILTER=fname, /READ)
+         IF (strlen(fname) EQ 0) THEN BEGIN
+            widget_control, uv.wid.msg, set_value='No file entered'
+            RETURN
+         ENDIF ELSE BEGIN 
+            newdata = 1
+            img.fname = fname
+            widget_control, uv.wid.fname, set_value=img.fname
+         ENDELSE 
+      ENDCASE
+      
+      uv.wid.slc[0]: BEGIN 
+         newdata = 1
+         slices[0] = ev.value
+         IF (slices[1] LT slices[0]) THEN BEGIN
+            slices[1] = slices[0]
+            widget_control,wid.slc[1],set_value=slices[1]
+            widget_control, wid.slider, set_slider_min=slices[0]
+         ENDIF
+      ENDCASE
+      
+      uv.wid.slc[1]: BEGIN 
+         newdata = 1
+         slices[1] = ev.value
+         IF (slices[0] GT slices[1]) THEN BEGIN
+            slices[0] = slices[1]
+            widget_control,wid.slc[0],set_value=slices[0]    
+            widget_control, wid.slider, set_slider_max=slices[1]
+         ENDIF
+      ENDCASE
+      
+      uv.wid.bin: BEGIN 
+         binsize = ev.value
+         widget_control, uv.wid.bin, set_value=binsize
+      ENDCASE
+      
+      uv.wid.slider: BEGIN
+         widget_control, uv.wid.slider, get_value=slice
+         IF (slice LE lp) THEN img.p = slice $
+         ELSE widget_control, uv.wid.slider, set_value=lp
+         IF (newdata) THEN BEGIN 
+            msg = 'You must PROCESS before plotting with new values'
+            widget_control, uv.wid.msg, set_value=msg
+            RETURN
+         ENDIF
+         redisplay = 1
+      ENDCASE
+      
+
+      uv.wid.proc: BEGIN
+         
+         CASE ev.value OF 
+            
+            'Process': BEGIN 
+               
+               img.ff = 1
+               img.lf = 1
+               img.fp = slices[0]
+               img.lp = slices[1]
+               IF (getframe(img, msg) NE 0) THEN BEGIN
+                  widget_control, uv.wid.msg, set_value=msg
+                  RETURN
+               ENDIF
+               widget_control, uv.wid.msg, set_value='File '+img.fname+' read'
+               newdata = 0
+               redisplay = 1
+            ENDCASE 
+            
+            'Plot': BEGIN 
+               IF (newdata) THEN BEGIN 
+                  msg = 'You must PROCESS before plotting with new values'
+                  widget_control, uv.wid.msg, set_value=msg
+                  RETURN
+               ENDIF
+               redisplay = 1
+            ENDCASE
+            
+            'Exit': widget_control, ev.top, /destroy
+            
+         ENDCASE 
+      ENDCASE 
+   ENDCASE
+   
+   IF (redisplay) THEN BEGIN 
+      lbnd = range[0]
+      ubnd = range[1] - (range[1]-range[0])/1000.
+      image = (*img.data)[*,*,img.p,*]
+      image = reform(image, /overwrite)
+      nbins = n_elements(hist)
+      pos = rstrpos(img.fname,'/')
+      title = strmid(img.fname,pos+1)
+      xtitle = 'PET Counts'
+      ytitle = 'Number of Pixels'             
+      xrange=[range[0],range[1]]
+      x0 = range[0]
+      y0 = 0.
+      yrange=[0, max(hist)]
+      plot, hist, /nodata, title=title, xtitle=xtitle, ytitle=ytitle, $
+         xrange=xrange, yrange=yrange, xstyle=1, ystyle=1, ytickformat='(I6)',$
+         charsize=1.4, charthick=2, color=3
+   ENDIF 
+END
+   
+
+PRO ELIMCUP
+
+   @@IMAGE_UTILS.h
+   @@IMGHISTO.h
+   
+   on_error, 2
+   loadct,5
+   
+   base = widget_base (TITLE='ELIMCUP', /COLUMN)
+   base1 = widget_base(base, row=1)
+   file = cw_bgroup(base1, /ROW, /NO_RELEASE, ['File'])
+   fname = widget_text(base1, xsize=80)
+   
+   base2 = widget_base(base, /ROW)
+   slc = lonarr(2)
+   slc[0] = cw_field(base2, title='Image Slice Min', /return_events, $
+                    /long, xsize=10, ysize=1)
+   slc[1] = cw_field(base2, title='Max', /return_events, $
+                    /long, xsize=10, ysize=1)
+   base3 = widget_base(base, /ROW)
+   limits = lonarr(2)
+   limits[0] = cw_field(base3, title='Plot  Min =', /return_events, $
+                        /float, xsize=10, ysize=1)
+   limits[1] = cw_field(base3, title='Max <', /return_events, $
+                        /float, xsize=10, ysize=1)
+   bin = cw_field(base3, title='  Bin Size', /return_events, $
+                  /float, xsize=10, ysize=1)
+   slice = 1
+   slider = widget_slider(base, value=slice, min=1, max=slices[1])
+  
+   base5 = widget_base(base, /ROW)
+   proc = cw_bgroup(base5, /ROW, /NO_RELEASE, /RETURN_NAME,  $
+                    ['Process', 'Plot', 'Exit'])
+   base6 = widget_base(base, /ROW)
+   msg = widget_text(base)
+   
+   wid = {WIDGETS,		$
+          base     : base,	$ ; top level base
+          file     : file,	$ ; file selection button id
+          fname    : fname,	$ ; filename
+          slc      : slc,	$ ; slice range
+          limits   : limits,	$ ; range 
+          bin      : bin,	$ ; bin size
+          slider   : slider,	$ ; slider
+          proc     : proc,	$ ; process button id
+          msg      : msg	$ ; message box
+         }
+   
+   uv = {wid:wid}
+   
+   widget_control, slc[0], set_value=slices[0]
+   widget_control, slc[1], set_value=slices[1]
+   widget_control, limits[0], set_value=range[0]
+   widget_control, limits[1], set_value=range[1]
+   widget_control, bin, set_value=binsize
+
+   widget_control, base, set_uvalue=uv
+   widget_control, base, /realize, xoffset=0, yoffset=0
+   xmanager, "ELIMCUP", base, EVENT_HANDLER='ELIMCUP_EVENT'
+
+END 
+
+@

@@ -1,0 +1,145 @@
+/*  $Log: get_sa7.c,v $
+ * Revision 1.4  2003/02/14  21:03:44  tom
+ * fix storage_order, span
+ *
+ * Revision 1.3  2000/09/28  18:17:35  tom
+ * order always 1
+ *
+ * Revision 1.2  2000/09/27  19:03:28  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2000/01/20  21:29:59  tom
+ * Initial revision
+ * */
+/* =============================================================================
+ *	Function:		get_sa7
+ *  Date:           Dec-98
+ *  Author:         Tom Videen (from JMO)
+ *	Description:	Get Attenuation Correction Subheader for Version 7 file.
+ * =============================================================================
+ */
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/PreVersion/RCS/get_sa7.c,v 1.4 2003/02/14 21:03:44 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <libimage.h>
+
+int             get_sa7 (file, indx)
+	ImageFile      *file;
+	Index          *indx;
+
+{
+	Attn_subheader7 *atn;
+
+	union temporary {
+		float           f[NUMREC_ASHDR * LENREC_L];
+		short           s[NUMREC_ASHDR * LENREC_S];
+	}               tmp;
+ 
+    union temp_long {
+        float           f;
+        short           s[2];
+    }               tmpl;
+
+	int             lenrd, matnum, begrec, endrec;
+	int             i, pln1 = 1;
+
+	if (file->m7 == NULL) {
+		fprintf (stderr, "ERROR [get_sa7]: no mainheader for %s\n", file->name);
+		return (ERROR);
+	}
+	if (file->m7->atn == NULL) {
+		if ((make_sa7 (file)) == ERROR) {
+			fprintf (stderr, "ERROR [get_sa7]: Could not calloc memory for atn\n");
+			return (ERROR);
+		}
+	}
+	atn = file->m7->atn;
+
+	matnum = numcode7 (indx->frm, pln1, indx->gate, indx->data, indx->bed);
+	if ((begrec = getmatpos (file, matnum, &endrec)) == ERROR) {
+		fprintf (stderr, "ERROR [get_sa7]: Matrix #%x not found\n", matnum);
+		return (ERROR);
+	}
+	lenrd = NUMREC_ASHDR;
+	if (rdrec (file->fp, (char *) tmp.s, begrec, lenrd) != 0)
+		return (ERROR);
+
+	atn->data_type = tmp.s[0];
+	atn->num_dimensions = tmp.s[1];
+	atn->attenuation_type = tmp.s[2];
+	atn->num_r_elements = tmp.s[3];
+	atn->num_angles = tmp.s[4];
+	atn->num_z_elements = tmp.s[5];
+	atn->ring_difference = tmp.s[6];
+
+    tmpl.s[0] = tmp.s[7];
+    tmpl.s[1] = tmp.s[8];
+	atn->x_resolution = tmpl.f;
+
+    tmpl.s[0] = tmp.s[9];
+    tmpl.s[1] = tmp.s[10];
+	atn->y_resolution = tmpl.f;
+
+    tmpl.s[0] = tmp.s[11];
+    tmpl.s[1] = tmp.s[12];
+	atn->z_resolution = tmpl.f;
+
+    tmpl.s[0] = tmp.s[13];
+    tmpl.s[1] = tmp.s[14];
+	atn->w_resolution = tmpl.f;
+
+    tmpl.s[0] = tmp.s[15];
+    tmpl.s[1] = tmp.s[16];
+	atn->scale_factor = tmpl.f;
+
+    tmpl.s[0] = tmp.s[17];
+    tmpl.s[1] = tmp.s[18];
+	atn->x_offset = tmpl.f;
+
+    tmpl.s[0] = tmp.s[19];
+    tmpl.s[1] = tmp.s[20];
+	atn->y_offset = tmpl.f;
+
+    tmpl.s[0] = tmp.s[21];
+    tmpl.s[1] = tmp.s[22];
+	atn->x_radius = tmpl.f;
+
+    tmpl.s[0] = tmp.s[23];
+    tmpl.s[1] = tmp.s[24];
+	atn->y_radius = tmpl.f;
+
+    tmpl.s[0] = tmp.s[25];
+    tmpl.s[1] = tmp.s[26];
+	atn->tilt_angle = tmpl.f;
+
+    tmpl.s[0] = tmp.s[27];
+    tmpl.s[1] = tmp.s[28];
+	atn->attenuation_coeff = tmpl.f;
+
+    tmpl.s[0] = tmp.s[29];
+    tmpl.s[1] = tmp.s[30];
+	atn->attenuation_min = tmpl.f;
+
+    tmpl.s[0] = tmp.s[31];
+    tmpl.s[1] = tmp.s[32];
+	atn->attenuation_max = tmpl.f;
+
+    tmpl.s[0] = tmp.s[33];
+    tmpl.s[1] = tmp.s[34];
+	atn->skull_thickness = tmpl.f;
+
+	atn->num_additional_atten_coeff = tmp.s[35];
+	for (i = 0; i < 8; i++)
+		atn->additional_atten_coeff[i] = tmp.f[18 + i];
+	atn->edge_finding_threshold = tmp.f[26];
+	atn->storage_order = tmp.s[54];
+	atn->span = tmp.s[55];
+	for (i = 0; i < 64; i++)
+		atn->z_elements[i] = tmp.s[56 + i];
+
+	return (OK);
+}

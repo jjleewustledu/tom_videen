@@ -1,0 +1,143 @@
+head	1.1;
+access;
+symbols;
+locks
+	tom:1.1; strict;
+comment	@// @;
+
+
+1.1
+date	2008.05.13.13.52.30;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <flirt++.h>
+#include <time.h>
+
+using namespace flirt;
+
+typedef enum {
+	ELASTIC_FFT
+}               smoother_t;
+
+smoother_t      getSolverType (const char *str)
+{
+	return ELASTIC_FFT;
+}
+
+int             main (int argc, char *argv[])
+{
+	printf ("\n ------------------ start FLIRT ------------------- \n\n");
+	printf ("3D Elastic FFT (c) SAFIR, Luebeck, Germany, 2005-6 \n");
+
+	/* Define and initialize global variables */
+	int             m1, m2, m3;
+	double          h1 = 1.0, h2 = 1.0, h3 = 1.0;
+	char           *fileNameT = (char *) malloc (255 * sizeof (char));
+	char           *fileNameR = (char *) malloc (255 * sizeof (char));
+	char           *fileNameOut = (char *) malloc (255 * sizeof (char));
+	char           *smootherName = (char *) malloc (255 * sizeof (char));
+	int             maxIter = 10;
+	double          alpha = 1.0;
+	double          tau = 1.0;
+	double          mu = 0.0;
+	double          lambda = 0.0;
+	time_t			ts1, ts2;
+	double			dt;
+	char		   *pts;
+
+	if (argc > 1)
+		getMainParameters3D (argv[1],
+				     &m1, &m2, &m3,
+				     &h1, &h2, &h3,
+				     fileNameT, fileNameR, fileNameOut,
+				     smootherName,
+				     &maxIter,
+				     &alpha, &tau,
+				     &mu, &lambda);
+	else {
+		printf ("ERROR [main]: no parameter file name given, abort\n\n");
+		return 0;
+	}
+
+	Image3D         R (m1, m2, m3, h1, h2, h3);
+	TransformableImage3D T (m1, m2, m3, h1, h2, h3);
+
+	R.readFromFile (fileNameR);
+	T.readFromFile (fileNameT);
+
+	/* Image3D R( fileNameR, h1, h2, h3); TransformableImage3D T( fileNameT, h1, h2, h3); */
+
+	Displacement3D  u (R.getDimensions (), h1, h2, h3);
+	SumOfSquaredDifferences distancemeasure (R, T);
+	ElasticSmoother smoother;
+	FPSolverElasticFFT3D fpsolver (u, alpha, mu, lambda);
+	FPOptimizer     opti (distancemeasure, smoother, fpsolver, alpha);
+
+	/* TMOptimizer opti(distancemeasure,smoother,*solver); */
+	/* opti.setParams(alpha,tau); */
+	/* UpdateRule ur(distancemeasure,smoother,opti); */
+
+	LineSearch      ur (distancemeasure, smoother, opti, T, u);
+	StopRule        sr (distancemeasure, smoother, maxIter);
+
+	int             iter = 0;
+
+	printf ("\n%3s | %15s\n", "n", "D[u]");
+	printf ("%3s-+-%15s\n", "---", "---------------");
+
+	/* The objective function: D[R,T(u)] + alpha*S[u] */
+	T.transform (u);
+
+	/* T.writeTransformedImageToConsole(); */
+
+	distancemeasure.eval ();
+	distancemeasure.evalGradient ();
+	smoother.eval (u);
+	smoother.evalGradient (u);
+
+	/* T.writeTransformedImageToConsole(); */
+
+	printf ("%3d | %15.5e\n", iter, distancemeasure.getValue ());
+
+	do {
+		/* add(u.getData(),uConst.getData(),u.getData(),u.getNumberOfElements()); */
+
+		time(&ts1);	/* get current time */
+		iter++;
+		opti.computeDisplacementUpdate (u);
+		ur.updateDisplacement (u);
+
+		/* The objective function: D[R,T(u)] + alpha*S[u] */
+		T.transform (u);
+		distancemeasure.eval ();
+		distancemeasure.evalGradient ();
+		smoother.eval (u);
+		smoother.evalGradient (u);
+
+		time(&ts2);	/* get current time */
+		dt = difftime(ts2, ts1);
+
+		/* definierter Zustand: Alle Groessen uptodate  */
+		/* ( T(u), D(u), S(u), gradD(u), gradS(u))  */
+		printf ("%3d | %15.5e   %.1lf sec\n", iter, distancemeasure.getValue (), dt);
+	}
+	while (!sr.stopIteration (u, iter));
+
+	/* T.writeTransformedImageToConsole(); */
+	T.writeTransformedImageToFile (fileNameOut);
+
+	printf ("\n--------------- end FLIRT ---------------\n\n");
+	return 1;
+}
+@

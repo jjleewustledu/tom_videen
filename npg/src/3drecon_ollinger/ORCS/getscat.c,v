@@ -1,0 +1,449 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial checking in, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*--------------------------------------------------------------------
+
+Program: scat_interp
+
+Purpose: Get interpolated scatter sinogram.
+
+Perpetrator: John Ollinger
+
+Date: October 7, 1993
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <petutil/matrix.h>
+#include "cube.h"
+#include "cti_proto.h"
+#include "scatter_953b.h"
+
+#define TRUE 1
+#define FALSE 0
+
+static char rcsid [] = "$Header$";
+
+/********************************/
+float *scat_interp(scat,rng,plane)
+/********************************/
+
+float	**scat;		/* 3D scatter sinogram. */
+struct 	ringinfo *rng;	/* Info about scatter sampling. */
+int	plane;
+
+{
+
+int	i,j,k,rings[2],ring1,ring2,ringdiff,
+	pln1,pln2,r11,r12,r21,r22,pad,ioff,koff,
+	numpln,numray,numang,
+	ringnum();
+
+float	pseudo_ring,*scatpln,d1,d2,alpha;
+
+numray = NUMRAY_CTI;
+numang = NUMANG;
+scatpln = (float *)malloc(numray*numang*sizeof(float));
+for(i=0;i<numray*numang;i++)
+    scatpln[i] = 0.;
+
+    ringnum(plane,rings);
+    ring1 = rings[0]; ring2 = rings[1];
+    ringdiff = ring2 - ring1;
+    pseudo_ring = (float)(ring1 + ring2)/2.;
+
+    if(ringdiff < 3 && ringdiff > -3) {
+	if(pseudo_ring < rng->minring) {
+	    /* Outside region sampled. */
+	    r11 = rng->minring;
+	    r21 = rng->minring;
+	    r12 = r11;
+	    r22 = r12;
+	    }
+	else if(pseudo_ring > rng->maxring) {
+	    /* Outside region sampled. */
+	    r11 = rng->maxring;
+	    r21 = rng->maxring;
+	    r12 = r11;
+	    r22 = r12;
+	    }
+	else {
+	    if(rng->rings[0]==(int)(pseudo_ring+.4999)) {
+		r11 = rng->rings[0];
+		r12 = r11;
+		r21 = r11;
+		r22 = r12;
+		}
+	    for(i=1;i<rng->nring;i++) {
+		if(rng->rings[i]== (int)(pseudo_ring+.4999)) {
+		    r11 = rng->rings[i];
+		    r12 = r11;
+		    r21 = r11;
+		    r22 = r12;
+		    }
+		else if(rng->rings[i-1]<pseudo_ring&&rng->rings[i]>pseudo_ring) {
+		    r11 = rng->rings[i-1];
+		    r21 = rng->rings[i];
+	    	    r12 = r11;
+	            r22 = r21;
+		    }
+		
+		}
+	    }
+	pln1 = getpln(r11,r12,rng);
+	pln2 = getpln(r21,r22,rng);
+	}
+    else if((ringdiff >= 3 && ringdiff < 7) || 
+       (ringdiff > -7 && ringdiff <=-3)) {
+	if(pseudo_ring < rng->minring) {
+	    /* Outside region sampled. */
+	    r11 = rng->minring;
+	    r21 = rng->minring;
+	    r12 = rng->minring;
+	    r22 = rng->minring;
+	    }
+	else if(pseudo_ring > rng->maxring) {
+	    /* Outside region sampled. */
+	    r11 = rng->maxring;
+	    r21 = rng->maxring;
+	    r12 = rng->maxring;
+	    r22 = rng->maxring;
+	    }
+	else if(pseudo_ring <= .50001*(rng->rings[0]+rng->rings[1])) {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[0];
+	        r12 = rng->rings[0];
+	        r21 = rng->rings[0];
+	        r22 = rng->rings[1];
+		}
+	    else {
+	        r11 = rng->rings[0];
+	        r12 = rng->rings[0];
+	        r21 = rng->rings[1];
+	        r22 = rng->rings[0];
+		}
+	    }
+	else if(pseudo_ring >= 
+		   .49999*(rng->rings[rng->nring-1]+rng->rings[rng->nring-2])) {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[rng->nring-2];
+	        r12 = rng->rings[rng->nring-1];
+	        r21 = rng->rings[rng->nring-2];
+	        r22 = rng->rings[rng->nring-1];
+		}
+	    else {
+	        r11 = rng->rings[rng->nring-1];
+	        r12 = rng->rings[rng->nring-2];
+	        r21 = rng->rings[rng->nring-1];
+	        r22 = rng->rings[rng->nring-2];
+		}
+	    }
+	else {
+	    for(i=1;i<rng->nring;i++) {
+		if(ringdiff > 0) {
+		    if(rng->rings[i-1]<=pseudo_ring && 
+						rng->rings[i]>pseudo_ring) {
+		        r11 = rng->rings[i-1];
+		        r12 = rng->rings[i];
+			if(i < rng->nring-1) {
+		            r21 = rng->rings[i];
+		            r22 = rng->rings[i+1];
+			    }
+			else { /* Use last direct ring. */
+		            r21 = rng->rings[i];
+		            r22 = rng->rings[i];
+			    }
+		        break;
+		        }
+		    }
+		else {
+		    if(rng->rings[i-1]<=pseudo_ring && 
+						rng->rings[i]>pseudo_ring) {
+		        r21 = rng->rings[i];
+		        r22 = rng->rings[i-1];
+			if(i > 1) {
+		            r11 = rng->rings[i-1];
+		            r12 = rng->rings[i-2];
+			    }
+			else { /* Use first direct ring. */
+		            r11 = rng->rings[i-1];
+		            r12 = rng->rings[i-1];
+			    }
+		        break;
+		        }
+		    }
+		}
+	    if(i == rng->nring) { /* Use first direct and first oblique. */
+	        if(ringdiff > 0) {
+	            r11 = rng->rings[0];
+	            r12 = rng->rings[0];
+	            r21 = rng->rings[0];
+	            r22 = rng->rings[1];
+	            }
+	        else {
+	            r11 = rng->rings[0];
+	            r12 = rng->rings[0];
+	            r21 = rng->rings[1];
+	            r22 = rng->rings[0];
+	            }
+		}
+	    }
+        if(r22 > rng->maxring)
+            r22 = rng->maxring;
+        pln1 = getpln(r11,r12,rng);
+        pln2 = getpln(r21,r22,rng);
+	}
+    else if((ringdiff >= 7 && ringdiff < 11) || 
+       (ringdiff > -11 && ringdiff <=-7)) {
+	if(pseudo_ring <= .50001*(rng->rings[0]+rng->rings[2])) {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[0];
+	        r12 = rng->rings[2];
+	        r21 = rng->rings[0];
+	        r22 = rng->rings[2];
+		}
+	    else {
+	        r11 = rng->rings[2];
+	        r12 = rng->rings[0];
+	        r21 = rng->rings[2];
+	        r22 = rng->rings[0];
+		}
+	    }
+	else if(pseudo_ring >=
+		   .49999*(rng->rings[rng->nring-1]+rng->rings[rng->nring-3])) {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[rng->nring-3];
+	        r12 = rng->rings[rng->nring-1];
+	        r21 = rng->rings[rng->nring-3];
+	        r22 = rng->rings[rng->nring-1];
+		}
+	    else {
+	        r11 = rng->rings[rng->nring-1];
+	        r12 = rng->rings[rng->nring-3];
+	        r21 = rng->rings[rng->nring-1];
+	        r22 = rng->rings[rng->nring-3];
+		}
+	    }
+	else {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[0];
+	        r12 = rng->rings[2];
+	        r21 = rng->rings[1];
+	        r22 = rng->rings[3];
+		}
+	    else {
+	        r11 = rng->rings[2];
+	        r12 = rng->rings[0];
+	        r21 = rng->rings[3];
+	        r22 = rng->rings[1];
+		}
+	    }
+        pln1 = getpln(r11,r12,rng);
+        pln2 = getpln(r21,r22,rng);
+	}
+    else { /* Must be very large ring difference. */
+	if(ringdiff > 0) {
+	    r11 = rng->rings[0];
+	    r12 = rng->rings[3];
+	    r21 = rng->rings[0];
+	    r22 = rng->rings[3];
+	    }
+	else {
+	    r11 = rng->rings[3];
+	    r12 = rng->rings[0];
+	    r21 = rng->rings[3];
+	    r22 = rng->rings[0];
+	    }
+        pln1 = getpln(r11,r12,rng);
+        pln2 = getpln(r21,r22,rng);
+	}
+    d1 = (float)sqrt((double)(ring1-r11)*(ring1-r11)+(ring2-r12)*(ring2-r12));
+    d2 = (float)sqrt((double)(ring1-r21)*(ring1-r21)+(ring2-r22)*(ring2-r22));
+    if((d1+d2) > 0) 
+        alpha = d1/(d1+d2);
+    else
+	alpha = 0.;
+    pad = (numray - rng->xdim)/2;
+    for(j=0,ioff=0,koff=0;j<numang;j++,ioff+=numray,koff+=rng->xdim) {
+	/* Normalize data, then subtract estimates. */
+	for(i=0;i<rng->xdim;i++) {
+	    scatpln[i+ioff+pad] = 
+		((1-alpha)*scat[pln1][i+koff] + alpha *scat[pln2][i+koff]);
+	    }
+	}
+
+return(scatpln);
+	
+}
+
+
+/*************************/
+int getpln(ring1,ring2,rng)
+/*************************/
+
+int	ring1,
+	ring2;
+struct ringinfo *rng;
+
+{
+
+int	ipln;
+
+for(ipln=0;ipln<rng->nringpair;ipln++) {
+    if(rng->ringdef[ipln].ring1 == ring1 &&
+       rng->ringdef[ipln].ring2 == ring2)
+	return(ipln);
+    }
+
+return(-1);
+
+}
+
+/*****************************/
+void loadscat(scatfil,scat,rng)
+/*****************************/
+
+char	*scatfil;	/* Scatter estimate. */
+float	***scat;		/* 3D scatter sinogram. */
+struct ringinfo *rng;	/* Info about scatter data. */
+
+{
+
+int	i,j,ipln,ring1,ring2,
+	ringnum();
+
+struct	cube_header *scathdr;
+
+if((scathdr=GetCubeHeader(scatfil,0)) == NULL) {
+    fprintf(stderr,"Could not open input, %s\n",scatfil);
+    exit(ERROR);
+    }
+
+rng->xdim = scathdr->xdim;
+rng->ydim = scathdr->ydim;
+
+if((*scat = (float **)malloc(scathdr->zdim*sizeof(float *))) == NULL) {
+    fprintf(stderr,"Could not malloc array in \"scatcor\"\n");
+    exit(ERROR);
+    }
+
+rng->nringpair = scathdr->zdim;
+rng->minring = 100000;
+rng->maxring = 0;
+rng->nring = 0;
+for(ipln=0;ipln<scathdr->zdim;ipln++) {
+    if(((*scat)[ipln]=GetCubePlane(scatfil,scathdr,ipln)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",scatfil,ipln);
+        exit(ERROR);
+        }
+    sscanf(scathdr->id,"r%x-%x",&ring1,&ring2);
+    
+    /* Store ring info in structure. */
+    rng->ringdef[ipln].ring1 = ring1;
+    rng->ringdef[ipln].ring2 = ring2;
+    rng->ringdef[ipln].ringdiff = ring2 - ring1;
+    if(ring1 < rng->minring)
+	rng->minring = ring1;
+    if(ring1 > rng->maxring)
+	rng->maxring = ring1;
+    for(j=0;j<rng->nring;j++) {
+	if(ring1 == rng->rings[j])
+	    break;
+	}
+    if(j == rng->nring || rng->nring == 0) {
+	rng->rings[rng->nring] = ring1;
+	++rng->nring;
+	}
+    }
+
+}
+
+/*****************************************/
+float scatscl(sc,plane,scatpln,sino,numang)
+/*****************************************/
+
+struct scatter_tab *sc;
+int	plane;
+float	*scatpln,
+	*sino;
+int	numang;		/* Number of angles in sino and scatpln. */
+
+{
+
+int     i,rnums[2],ioff,dsamp_fctr,iang,jang,lb,ub,i1,i2;
+
+float   sum1,sum2,scl;
+
+int	ringnum();
+
+dsamp_fctr = numang/sc->numang;
+ringnum(plane,rnums);
+/* Note: We implicitly assume that the number of detector rings 
+   is equal to the number of recontructed images. */
+sum1 = 0.; sum2 = 0.;
+for(iang=0,ioff=0;iang<numang;iang++,ioff+=NUMRAY_CTI) {
+    jang = iang/dsamp_fctr;
+    /* Find lowest lower bound for transmission sinogram support. */
+    if(sc->tran_sup[rnums[0]][jang][0] < sc->tran_sup[rnums[1]][jang][0])
+        lb = sc->tran_sup[rnums[0]][jang][0];
+    else
+        lb = sc->tran_sup[rnums[1]][jang][0];
+
+    /* Find highest upper bound for transmission sinogram support. */
+    if(sc->tran_sup[rnums[0]][jang][1] > sc->tran_sup[rnums[1]][jang][1])
+        ub = sc->tran_sup[rnums[0]][jang][1];
+    else
+        ub = sc->tran_sup[rnums[1]][jang][1];
+
+    i1 = lb - SCATROI_SEP - SCATROI_WIDTH;
+    if(i1 < OUTPUT_MODULUS/2)
+        i1 = OUTPUT_MODULUS/2;
+    i2 = i1 + SCATROI_WIDTH;
+    if(i2 < OUTPUT_MODULUS/2)
+        i2 = OUTPUT_MODULUS/2;
+    for(i=i1;i<i2;i++) {
+        sum1 += scatpln[i+ioff];
+        sum2 += sino[i+ioff];
+        }
+    i1 = ub + SCATROI_SEP + 1;
+    if(i1 > sc->numray-OUTPUT_MODULUS/2-1)
+        i1 = sc->numray - OUTPUT_MODULUS/2 - 1;
+    i2 = i1 + SCATROI_WIDTH;
+    if(i2 > sc->numray-OUTPUT_MODULUS/2-1)
+        i2 = sc->numray - OUTPUT_MODULUS/2 - 1;
+    for(i=i1;i<i2;i++) {
+        sum1 += scatpln[i+ioff];
+        sum2 += sino[i+ioff];
+        }
+    }
+scl = sum2/sum1;
+
+return(scl);
+
+}
+@

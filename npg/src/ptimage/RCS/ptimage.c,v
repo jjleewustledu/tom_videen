@@ -1,0 +1,993 @@
+head	2.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.3
+date	2004.02.20.16.14.54;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	2004.02.17.15.20.41;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	2002.11.27.17.12.20;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	97.01.10.18.48.45;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.10.26.22.14.51;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.04.01.15.14.10;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.3
+log
+@Feb 2004
+@
+text
+@/* $Log: ptimage.c,v $
+ * Revision 2.2  2004/02/17  15:20:41  tom
+ * Feb 2004
+ *
+ * Revision 2.1  2002/11/27  17:12:20  tom
+ * *** empty log message ***
+ *
+ * Revision 2.0  1997/01/10  18:48:45  tom
+ * *** empty log message ***
+ * */
+/*	===============================================================================
+ *	Module:			ptimage
+ *	Date:			Jan 1997
+ *	Author:			Tom Videen
+ *	Description:	Create a paired t image
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ptimage/RCS/ptimage.c,v 2.2 2004/02/17 15:20:41 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <libimage.h>
+#include <imgutil.h>
+#include <nrutil.h>
+
+#define SCALER 1000.
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	FILE           *recfp;
+	ImageFile      *file1;
+	Index           indx;
+
+	char            program[MAXFNAME];
+	char            version[MAXFNAME];
+	char            runstamp[40];
+
+	char           *mdfile;
+	char           *recfile;
+	char           *sdfile;
+	char           *nfile;
+	char           *outfile;
+	int             pdim[3];
+	int             i, j, k;
+	float           sd;
+	float           num;
+	float        ***mdiff;
+	float        ***sdimg;
+	float        ***nimg;
+	float        ***t;
+
+	if (argc != 14) {
+		(void) printf ("Usage: ptimage mean sd n out recfile date uid\n");
+		return (ERROR);
+	}
+	mdfile = argv[1];
+	sdfile = argv[2];
+	nfile = argv[3];
+	outfile = argv[4];
+	recfile = argv[5];
+	i = 6;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[i], argv[i + 1], argv[i + 2], argv[i + 4], argv[i + 5], argv[i + 7]);
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		(void) fprintf (stderr, "ERROR [ptimage]: cannot open %s\n", recfile);
+		return (ERROR);
+	}
+	(void) sscanf (rcsid, "%s %s", program, version);
+	(void) strcat (program, " ");
+	(void) strcat (program, version);
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+    file1 = make_imgfile (mdfile);
+    if (file1 == NULL) {
+       fprintf (stderr, "ERROR [ptimage]: making file\n");
+       return (ERROR);
+    }
+    if (get_imgh (file1, &indx) == ERROR) {
+       fprintf (stderr, "ERROR [ptimage]: Cannot open %s\n", mdfile);
+       return (ERROR);
+    }
+
+	pdim[0] = file1->sh->dim1;
+	pdim[1] = file1->sh->dim2;
+	pdim[2] = file1->sh->dim3;
+	(void) save_rcs (file1, rcsid, runstamp);
+
+	if ((mdiff = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		(void) fprintf (stderr, "ERROR [ptimage]: Cannot malloc dif-image\n");
+		return (ERROR);
+	}
+	if ((mdiff = rdtensor (file1, &indx, pdim)) == NULL) {
+		(void) fprintf (stderr, "ERROR [ptimage]: Cannot read %s\n", mdfile);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+	recout (recfp, mdfile);
+	(void) printf ("Dif = %s\n", mdfile);
+
+    if ((sdimg = rdtensor1 (sdfile, pdim)) == NULL) {
+        fprintf (stderr, "ERROR [ptimage]: Cannot read %s\n", sdfile);
+        return (ERROR);
+    }
+	recout (recfp, sdfile);
+	(void) printf ("SD  = %s\n", sdfile);
+
+    if ((nimg = rdtensor1 (nfile, pdim)) == NULL) {
+        fprintf (stderr, "ERROR [ptimage]: Cannot read %s\n", nfile);
+        return (ERROR);
+    }
+	recout (recfp, nfile);
+	(void) printf ("N   = %s\n", nfile);
+
+	if ((t = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		(void) fprintf (stderr, "ERROR [ptimage]: Cannot malloc t-image\n");
+		return (ERROR);
+	}
+	for (i = 1; i <= pdim[2]; i++) {
+		for (j = 1; j <= pdim[1]; j++) {
+			for (k = 1; k <= pdim[0]; k++) {
+				num = nimg[i][j][k];
+				sd = sdimg[i][j][k];
+				if (num > 0 && sd > 0)
+					t[i][j][k] = SCALER * mdiff[i][j][k] / (sd / sqrt (num));
+				else
+					t[i][j][k] = 0.;
+			}
+		}
+	}
+
+	file1->name = outfile;
+	(void) strcpy (file1->mode, "w");
+	(void) printf ("Writing %s\n", outfile);
+	if (open_imgfile (file1) == ERROR) {
+		(void) fprintf (stderr, "ERROR [ptimage]: Cannot open %s\n", outfile);
+		return (ERROR);
+	}
+	file1->mh->nframe = indx.frm;
+	file1->mh->orientation = 0;
+	if (put_mh (file1) == ERROR) {
+		(void) fprintf (stderr, "ERROR [ptimage] writing %s\n", outfile);
+		return (ERROR);
+	}
+	if (writetensor (file1, &indx, t) == ERROR) {
+		(void) fprintf (stderr, "ERROR [ptimage] writing %s\n", outfile);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+
+	free_f3tensor (t, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (mdiff, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (sdimg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (nimg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_imgfile (file1);
+	(void) fclose (recfp);
+	return (0);
+}
+@
+
+
+2.2
+log
+@Feb 2004
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ptimage/RCS/ptimage.c,v 2.1 2002/11/27 17:12:20 tom Exp tom $";
+d89 1
+a89 1
+    if (get_imgh (file1, indx) == ERROR) {
+@
+
+
+2.1
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jan-97
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ptimage/RCS/ptimage.c,v 2.0 1997/01/10 18:48:45 tom Exp tom $";
+d34 2
+a35 2
+	ImageFile      *file1;			 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+d39 1
+a39 1
+	char            runstamp[40];		 /* version, date and userid info */
+d46 2
+a47 2
+	int             pdim[3];		 /* image dimensions in pixels */
+	int             i, j, k;		 /* array indices */
+d81 10
+a90 20
+	file1 = make_imgfile (mdfile);
+	if (open_imgfile (file1) == ERROR) {
+		(void) fprintf (stderr, "ERROR [ptimage]: Cannot open %s\n", mdfile);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		(void) fprintf (stderr, "ERROR [ptimage]: Cannot get MainHeader from %s\n", mdfile);
+		return (ERROR);
+	}
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			(void) fprintf (stderr, "ERROR [ptimage]: Cannot read scan %s frame %d\n", mdfile, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		(void) fprintf (stderr, "ERROR [ptimage]: Cannot read file subheader in %s\n", mdfile);
+		return (ERROR);
+	}
+d94 1
+a94 2
+	save_rcs (file1, rcsid, runstamp);
+	close_imgfile (file1);
+d98 1
+a98 1
+		exit (ERROR);
+d100 1
+a100 1
+	if ((mdiff = rdtensor (mdfile, &indx, pdim)) == NULL) {
+d104 1
+d108 4
+a111 8
+	if ((sdimg = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		(void) fprintf (stderr, "ERROR [ptimage]: Cannot malloc sd-image\n");
+		exit (ERROR);
+	}
+	if ((sdimg = rdtensor (sdfile, &indx, pdim)) == NULL) {
+		(void) fprintf (stderr, "ERROR [ptimage] Cannot read %s\n", sdfile);
+		return (ERROR);
+	}
+d115 4
+a118 8
+	if ((nimg = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		(void) fprintf (stderr, "ERROR [ptimage]: Cannot malloc n-image\n");
+		exit (ERROR);
+	}
+	if ((nimg = rdtensor (nfile, &indx, pdim)) == NULL) {
+		(void) fprintf (stderr, "ERROR [ptimage] Cannot read %s\n", nfile);
+		return (ERROR);
+	}
+d124 1
+a124 1
+		exit (ERROR);
+d144 1
+a144 1
+		exit (ERROR);
+d150 1
+a150 1
+		exit (ERROR);
+d154 1
+a154 1
+		exit (ERROR);
+@
+
+
+2.0
+log
+@*** empty log message ***
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ptimage/RCS/ptimage.c,v 2.19 1996/12/26 19:03:58 tom Exp tom $";
+a51 2
+	printf ("Copyright 1991-1997, Washington University\n");
+	printf ("All rights reserved. Unauthorized reproduction prohibited.\n");
+d53 1
+a53 1
+		printf ("Usage: ptimage mean sd n out recfile date uid\n");
+d62 1
+a62 1
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[i], argv[i + 1], argv[i + 2], argv[i + 4], argv[i + 5], argv[i + 7]);
+d66 1
+a66 1
+		fprintf (stderr, "ERROR [ptimage]: cannot open %s\n", recfile);
+d69 3
+a71 3
+	sscanf (rcsid, "%s %s", program, version);
+	strcat (program, " ");
+	strcat (program, version);
+d80 1
+a80 1
+		fprintf (stderr, "ERROR [ptimage]: Cannot open %s\n", mdfile);
+d84 1
+a84 1
+		fprintf (stderr, "ERROR [ptimage]: Cannot get MainHeader from %s\n", mdfile);
+d90 1
+a90 1
+			fprintf (stderr, "ERROR [ptimage]: Cannot read scan %s frame %d\n", mdfile, indx.frm);
+d95 1
+a95 1
+		fprintf (stderr, "ERROR [ptimage]: Cannot read file subheader in %s\n", mdfile);
+d105 1
+a105 1
+		fprintf (stderr, "ERROR [ptimage]: Cannot malloc dif-image\n");
+d109 1
+a109 1
+		fprintf (stderr, "ERROR [ptimage]: Cannot read %s\n", mdfile);
+d113 1
+a113 1
+	printf ("Dif = %s\n", mdfile);
+d116 1
+a116 1
+		fprintf (stderr, "ERROR [ptimage]: Cannot malloc sd-image\n");
+d120 1
+a120 1
+		fprintf (stderr, "ERROR [ptimage] Cannot read %s\n", sdfile);
+d124 1
+a124 1
+	printf ("SD  = %s\n", sdfile);
+d127 1
+a127 1
+		fprintf (stderr, "ERROR [ptimage]: Cannot malloc n-image\n");
+d131 1
+a131 1
+		fprintf (stderr, "ERROR [ptimage] Cannot read %s\n", nfile);
+d135 1
+a135 1
+	printf ("N   = %s\n", nfile);
+d138 1
+a138 1
+		fprintf (stderr, "ERROR [ptimage]: Cannot malloc t-image\n");
+d155 2
+a156 2
+	strcpy (file1->mode, "w");
+	printf ("Writing %s\n", outfile);
+d158 1
+a158 1
+		fprintf (stderr, "ERROR [ptimage]: Cannot open %s\n", outfile);
+d164 1
+a164 1
+		fprintf (stderr, "ERROR [ptimage] writing %s\n", outfile);
+d168 1
+a168 1
+		fprintf (stderr, "ERROR [ptimage] writing %s\n", outfile);
+d178 1
+a178 1
+	fclose (recfp);
+@
+
+
+1.2
+log
+@indent and rebuild with new libraries
+@
+text
+@d1 1
+a1 1
+/* $Log */
+d3 2
+a4 2
+ *	Module:			ptimage.c
+ *	Date:			31-Mar-94
+a6 1
+ *	History:
+d9 1
+a13 1
+#include <fcntl.h>
+d15 5
+a19 2
+#include <petutil/matrix.h>
+#include <petutil/petutil.h>
+a20 1
+#define DIM		128
+a22 5
+typedef float   REAL_SLICE[DIM][DIM];
+
+static char     rcsid[] = "$Id: ptimage.c,v 1.1 1994/04/01 15:14:10 tom Exp tom $";
+char            list[] = "*;*;*;*";		 /* any frame plane gate bed */
+
+a26 3
+	Image_subheader **subheader;
+	Main_header    *main_header;
+	MatrixFile     *fptr;
+d28 2
+d31 8
+a38 6
+	BOOLEAN         encoded_flag;
+	BOOLEAN         use_mask = 0;
+	char           *meandiff;
+	char           *stdev;
+	char           *numsubs;
+	char           *maskfile;
+d40 2
+a41 7
+	char           *recfile;
+	char            date[40];
+	char           *today;
+	char           *userid;
+	int             fd;
+	int             zdim;
+	int             i, j, k, m;		 /* array indices */
+d44 4
+a47 12
+	float           pixel_size;
+	float           plane_separation;
+	int             scanner;		 /* 6 = PETT VI;  10 = 953B */
+	short           nx;
+	short           ny;
+	short           num_slices;
+	struct Matval   matval;
+	REAL_SLICE     *dif_image;		 /* mean difference image */
+	REAL_SLICE     *sd_image;		 /* standard deviation image */
+	REAL_SLICE     *num_image;		 /* number of subjects image */
+	REAL_SLICE     *t_image;		 /* t-image */
+	REAL_SLICE     *mask_image;		 /* mask image */
+d49 5
+a53 14
+	matval.frame = 1;			 /* default values for matval */
+	matval.plane = 1;
+	matval.gate = 1;
+	matval.data = 0;
+	matval.bed = 0;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ *	---------------------------------------------------
+ */
+
+	if (argc != 15) {
+		printf ("Usage: ptimage meandiff stdev numsubs outfile maskfile recfile date\n");
+		exit (FAIL);
+d55 3
+a57 3
+	meandiff = argv[1];
+	stdev = argv[2];
+	numsubs = argv[3];
+d59 3
+a61 5
+	maskfile = argv[5];
+	recfile = argv[6];
+	sprintf (date, "%s %s %s %s %s %s", argv[7], argv[8], argv[9], argv[10], argv[11], argv[12]);
+	today = argv[13];
+	userid = argv[14];
+d65 2
+a66 2
+		fprintf (stderr, "Error: cannot open %s\n", recfile);
+		exit (FAIL);
+d68 8
+a75 4
+/*
+ *	Determine image file size and allocate/initialize arrays
+ *	--------------------------------------------------------
+ */
+d77 4
+a80 4
+	fd = open (meandiff, O_RDONLY, 0);
+	if (fd == -1) {
+		fprintf (stderr, "Error opening %s\n", meandiff);
+		exit (FAIL);
+d82 3
+a84 5
+	scanner = getimage_type (fd, meandiff, &encoded_flag, &num_slices);
+	close (fd);
+	if (scanner != ECAT_SCANNER) {
+		fprintf (stderr, "Error: cannot open %s as an ECAT image file\n", meandiff);
+		exit (FAIL);
+d86 6
+a91 12
+	fptr = OpenEcat (meandiff, &num_slices, &nx, &ny, &pixel_size, &plane_separation, matval);
+	zdim = num_slices;
+
+	main_header = (Main_header *) calloc (1, sizeof (Main_header));
+	subheader = (Image_subheader **) malloc (zdim * sizeof (caddr_t));
+	dif_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	sd_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	num_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	t_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+	if (strcmp (maskfile, "NONE") != 0) {
+		use_mask = 1;
+		mask_image = (REAL_SLICE *) calloc (zdim, sizeof (REAL_SLICE));
+d93 3
+a95 14
+/*
+ *	Read meandiff
+ *	-------------
+ */
+	if (getrealimg (meandiff, scanner, matval, nx, ny, num_slices, dif_image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", meandiff);
+		free (dif_image);
+		free (sd_image);
+		free (num_image);
+		free (t_image);
+		if (use_mask)
+			free (mask_image);
+		exit (FAIL);
+d97 9
+a105 9
+	if (nx != DIM) {
+		fprintf (stderr, "X-dimension of %s is wrong size\n", meandiff);
+		free (dif_image);
+		free (sd_image);
+		free (num_image);
+		free (t_image);
+		if (use_mask)
+			free (mask_image);
+		exit (FAIL);
+d107 3
+a109 9
+	if (ny != DIM) {
+		fprintf (stderr, "Y-dimension of %s is wrong size\n", meandiff);
+		free (dif_image);
+		free (sd_image);
+		free (num_image);
+		free (t_image);
+		if (use_mask)
+			free (mask_image);
+		exit (FAIL);
+d111 2
+a112 3
+	printf ("Mean Difference    = %s\n", meandiff);
+	fprintf (recfp, "Mean Difference    = %s\n", meandiff);
+	recout (recfp, meandiff);
+d114 3
+a116 18
+/*
+ *	Read stdev
+ *	----------
+ */
+	if (getrealimg (stdev, scanner, matval, nx, ny, num_slices, sd_image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", stdev);
+		for (i = 0; i < zdim; i++)
+			free (subheader[i]);
+		free (subheader);
+		free (main_header);
+		free (dif_image);
+		free (sd_image);
+		free (num_image);
+		free (t_image);
+		if (use_mask)
+			free (mask_image);
+		exit (FAIL);
+d118 3
+a120 13
+	if (nx != DIM) {
+		fprintf (stderr, "X-dimension of %s is wrong size\n", stdev);
+		for (i = 0; i < zdim; i++)
+			free (subheader[i]);
+		free (subheader);
+		free (main_header);
+		free (dif_image);
+		free (sd_image);
+		free (num_image);
+		free (t_image);
+		if (use_mask)
+			free (mask_image);
+		exit (FAIL);
+d122 2
+a123 17
+	if (ny != DIM) {
+		fprintf (stderr, "Y-dimension of %s is wrong size\n", stdev);
+		for (i = 0; i < zdim; i++)
+			free (subheader[i]);
+		free (subheader);
+		free (main_header);
+		free (dif_image);
+		free (sd_image);
+		free (num_image);
+		free (t_image);
+		if (use_mask)
+			free (mask_image);
+		exit (FAIL);
+	}
+	printf ("Standard Deviation = %s\n", stdev);
+	fprintf (recfp, "Standard Deviation = %s\n", stdev);
+	recout (recfp, stdev);
+d125 3
+a127 18
+/*
+ *	Read numsubs
+ *	------------
+ */
+	if (getrealimg (numsubs, scanner, matval, nx, ny, num_slices, num_image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", numsubs);
+		for (i = 0; i < zdim; i++)
+			free (subheader[i]);
+		free (subheader);
+		free (main_header);
+		free (dif_image);
+		free (sd_image);
+		free (num_image);
+		free (t_image);
+		if (use_mask)
+			free (mask_image);
+		exit (FAIL);
+d129 3
+a131 13
+	if (nx != DIM) {
+		fprintf (stderr, "X-dimension of %s is wrong size\n", numsubs);
+		for (i = 0; i < zdim; i++)
+			free (subheader[i]);
+		free (subheader);
+		free (main_header);
+		free (dif_image);
+		free (sd_image);
+		free (num_image);
+		free (t_image);
+		if (use_mask)
+			free (mask_image);
+		exit (FAIL);
+d133 2
+a134 17
+	if (ny != DIM) {
+		fprintf (stderr, "Y-dimension of %s is wrong size\n", numsubs);
+		for (i = 0; i < zdim; i++)
+			free (subheader[i]);
+		free (subheader);
+		free (main_header);
+		free (dif_image);
+		free (sd_image);
+		free (num_image);
+		free (t_image);
+		if (use_mask)
+			free (mask_image);
+		exit (FAIL);
+	}
+	printf ("Number of Subjects = %s\n", numsubs);
+	fprintf (recfp, "Number of Subjects = %s\n", numsubs);
+	recout (recfp, numsubs);
+d136 3
+a138 47
+/*
+ *	Read maskfile
+ *	-------------
+ */
+	if (use_mask) {
+		if (getrealimg (maskfile, scanner, matval, nx, ny, num_slices, mask_image,
+				main_header, subheader) == FAIL) {
+			fprintf (stderr, "Error reading %s\n", maskfile);
+			for (i = 0; i < zdim; i++)
+				free (subheader[i]);
+			free (subheader);
+			free (main_header);
+			free (dif_image);
+			free (sd_image);
+			free (num_image);
+			free (t_image);
+			free (mask_image);
+			exit (FAIL);
+		}
+		if (nx != DIM) {
+			fprintf (stderr, "X-dimension of %s is wrong size\n", maskfile);
+			for (i = 0; i < zdim; i++)
+				free (subheader[i]);
+			free (subheader);
+			free (main_header);
+			free (dif_image);
+			free (sd_image);
+			free (num_image);
+			free (t_image);
+			free (mask_image);
+			exit (FAIL);
+		}
+		if (ny != DIM) {
+			fprintf (stderr, "Y-dimension of %s is wrong size\n", maskfile);
+			for (i = 0; i < zdim; i++)
+				free (subheader[i]);
+			free (subheader);
+			free (main_header);
+			free (dif_image);
+			free (sd_image);
+			free (num_image);
+			free (t_image);
+			free (mask_image);
+			exit (FAIL);
+		}
+		recout (recfp, maskfile);
+		printf ("Mask      = %s\n", maskfile);
+d140 9
+a148 18
+/*
+ *	Compute t
+ *	---------
+ */
+
+	if (use_mask) {
+		for (m = 0; m < zdim; ++m) {
+			for (j = 0; j < DIM; ++j) {
+				for (k = 0; k < DIM; ++k) {
+					if (mask_image[m][j][k] > 0) {
+						num = num_image[m][j][k];
+						sd = sd_image[m][j][k];
+						if (num > 0 && sd > 0)
+							t_image[m][j][k] = SCALER * dif_image[m][j][k] / (sd / sqrt (num));
+						else
+							t_image[m][j][k] = 0.;
+					}
+				}
+a150 13
+	} else {
+		for (m = 0; m < zdim; ++m) {
+			for (j = 0; j < DIM; ++j) {
+				for (k = 0; k < DIM; ++k) {
+					num = num_image[m][j][k];
+					sd = sd_image[m][j][k];
+					if (num > 0 && sd > 0)
+						t_image[m][j][k] = SCALER * dif_image[m][j][k] / (sd / sqrt (num));
+					else
+						t_image[m][j][k] = 0.;
+				}
+			}
+		}
+d153 6
+a158 11
+/*
+ *	Write outfile
+ *	-------------
+ */
+
+	strncpy (main_header->physician_name, &rcsid[5], sizeof (main_header->physician_name) - 1);
+	strncpy (main_header->operator_name, date, sizeof (main_header->operator_name) - 1);
+
+	if (writerealimg (outfile, matval, DIM, DIM, zdim, t_image, main_header, subheader)
+	    == FAIL) {
+		fprintf (stderr, "Error writing %s\n", outfile);
+d160 11
+a170 4
+/*
+ *	Free memory
+ *	-----------
+ */
+d172 5
+a176 10
+	for (i = 0; i < zdim; i++)
+		free (subheader[i]);
+	free (subheader);
+	free (main_header);
+	free (dif_image);
+	free (sd_image);
+	free (num_image);
+	free (t_image);
+	if (use_mask)
+		free (mask_image);
+d178 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d3 3
+a5 3
+ *	Module:				ptimage.c
+ *	Date:					31-Mar-94
+ *	Author:				Tom Videen
+d22 1
+a22 1
+typedef float REAL_SLICE [DIM] [DIM];
+d24 2
+a25 2
+static char rcsid []= "$Id$"; 
+char list [] = "*;*;*;*"; 			/* any frame plane gate bed */
+d28 2
+a29 2
+	int	argc;
+	char	*argv[];
+d31 4
+a34 4
+	Image_subheader		**subheader;
+	Main_header				*main_header;
+	MatrixFile				*fptr;
+	FILE							*recfp;
+d36 28
+a63 28
+	BOOLEAN	encoded_flag;
+	BOOLEAN	use_mask = 0;
+	char		*meandiff;
+	char		*stdev;
+	char		*numsubs;
+	char		*maskfile;
+	char		*outfile;
+	char		*recfile;
+	char		date[40];
+	char		*today;
+	char		*userid;
+	int			fd;
+	int			zdim;
+	int			i, j, k, m;				/* array indices */
+	float		sd;
+	float		num;
+	float		pixel_size;
+	float		plane_separation;
+	int			scanner;					/* 6 = PETT VI;  10 = 953B */
+	short		nx;
+	short		ny;
+	short		num_slices;
+	struct	Matval	matval;
+  REAL_SLICE  *dif_image;			/* mean difference image */
+  REAL_SLICE  *sd_image;			/* standard deviation image */
+	REAL_SLICE	*num_image;			/* number of subjects image */
+  REAL_SLICE  *t_image;				/* t-image */
+	REAL_SLICE	*mask_image;		/* mask image */
+d65 5
+a69 5
+	matval.frame	= 1;				/* default values for matval */
+	matval.plane	= 1;
+	matval.gate		= 1;
+	matval.data		= 0;
+	matval.bed		= 0;
+d78 1
+a78 1
+		exit(FAIL);
+d80 6
+a85 6
+	meandiff		= argv [1];
+	stdev				= argv [2];
+	numsubs			= argv [3];
+	outfile			= argv [4];
+	maskfile		= argv [5];
+	recfile			= argv [6];
+d93 1
+a93 1
+		exit(FAIL);
+a94 1
+
+d114 2
+a115 2
+  main_header = (Main_header *) calloc (1, sizeof (Main_header));
+  subheader   = (Image_subheader **) malloc (zdim * sizeof (caddr_t));
+a123 1
+
+d128 1
+a128 1
+	if (getrealimg (meandiff, scanner, matval, nx, ny, num_slices, dif_image, 
+d162 1
+a162 1
+ 
+d167 1
+a167 1
+	if (getrealimg (stdev, scanner, matval, nx, ny, num_slices, sd_image, 
+d171 1
+a171 1
+			free (subheader [i]);
+d185 1
+a185 1
+			free (subheader [i]);
+d199 1
+a199 1
+			free (subheader [i]);
+d213 1
+a213 1
+ 
+d218 1
+a218 1
+	if (getrealimg (numsubs, scanner, matval, nx, ny, num_slices, num_image, 
+d222 1
+a222 1
+			free (subheader [i]);
+d236 1
+a236 1
+			free (subheader [i]);
+d250 1
+a250 1
+			free (subheader [i]);
+d264 1
+a264 1
+ 
+d270 1
+a270 1
+		if (getrealimg (maskfile, scanner, matval, nx, ny, num_slices, mask_image, 
+d274 1
+a274 1
+				free (subheader [i]);
+d287 1
+a287 1
+				free (subheader [i]);
+d300 1
+a300 1
+				free (subheader [i]);
+a312 1
+
+d316 1
+a316 1
+ */	
+d320 2
+a321 2
+ 	 		for (j = 0 ; j < DIM; ++j) {
+ 	   		for (k = 0; k < DIM; ++k) {
+d324 1
+a324 1
+						sd  = sd_image[m][j][k];
+d326 2
+a327 2
+	 	  		  	t_image[m][j][k] = SCALER * dif_image[m][j][k] / (sd / sqrt(num));
+						 else
+d330 3
+a332 3
+ 		 	  }
+ 			}
+ 		}
+d335 2
+a336 2
+ 	 		for (j = 0 ; j < DIM; ++j) {
+ 	   		for (k = 0; k < DIM; ++k) {
+d338 1
+a338 1
+					sd  = sd_image[m][j][k];
+d340 2
+a341 2
+	 	  	  	t_image[m][j][k] = SCALER * dif_image[m][j][k] / (sd / sqrt(num));
+					 else
+d343 3
+a345 3
+ 		 	  }
+ 			}
+ 		}
+d356 2
+a357 2
+	if (writerealimg (outfile, matval, DIM, DIM, zdim, t_image, main_header, subheader) 
+			== FAIL) {
+a359 1
+
+d366 1
+a366 1
+		free (subheader [i]);
+@

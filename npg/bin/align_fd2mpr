@@ -1,0 +1,69 @@
+#!/bin/csh
+#	Module:	align_fd2mpr
+#	Author:	Tom Videen
+#	Date:	Jun 2000
+#	Use:	Coregister & reslice PET FDOPA images to MPRAGE.
+#	Uses:
+#		rp3000fdsum.img	- sum of first 15 frames of aligned FDOPA
+#		p3000mprc.img	- cropped, cubic-voxel MPRAGE
+#	Creates:
+#		rap3000fdsum.img - coregistered summed FDOPA
+#		rp3000fdsum_to_p3000mprc.air
+#		align_fd2mpr.log
+
+# Parameters for alignlinear which may affect accuracy of the coregistration
+
+set BLUR = "5 5 5"
+set THRESHOLD  = 150
+set PARTITIONS = 16384
+
+if ($#argv != 2) then
+    echo "Usage: align_fd2mpr pet mpr"
+    echo " e.g., align_fd2mpr rp3000fdsum p3000mprc"
+    exit 1
+endif
+
+set PET = $1
+set MPR = $2
+set AIR = ${PET}_to_${MPR}
+set LOGFILE = align_fd2mpr.log
+
+set EFILES = "$PET.img $MPR.img $MPR.hdr"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_fd2mpr]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit 1
+
+# Coregister using summed PET image
+
+img2analyze $PET.img a$PET
+setanamin a$PET 0
+setanamin $MPR 0
+echo "Aligning a$PET to $MPR ..."
+set PRM = "-m 6 -p1 $PARTITIONS -p2 0 -t1 $THRESHOLD -b1 $BLUR -b2 $BLUR -x 1 -v" 
+alignlinear $MPR a$PET $AIR.air $PRM >! log
+tail -6 log >! $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file"
+	echo $ERROR >> $LOGFILE
+	exit 1
+endif
+
+imgreslice a$PET $AIR
+rm a$PET.img
+rm a$PET.hdr
+rm a$PET.ifh
+rm log
+scanair $AIR.air | tail -6 | head -3
+
+echo "----------------------------------"
+echo "Check coregistration using vidi:"
+echo "   Image 1 = $MPR.img"
+echo "   Image 2 = ra$PET.img"

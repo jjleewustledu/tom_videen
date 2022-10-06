@@ -1,0 +1,307 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.10.15.06.54.56;	author jane;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* $Id$ */
+/* $Log$ */
+/* ===============================================================================
+ *  Module:         airshift.c
+ *  Date:           12-Oct-96
+ *  Author:         Jane Dunford-Shore
+ *  Usage:          airshift infile outfile -x xshift -y yshift -z zshift -xr xrot -yr yrot -zr zrot
+ *  Description:    Modify AIR matrix by specified x, y, and z translations
+ *                  and rotations. 
+ *                  New AIR file is created unless same name is specified for 
+ *                  infile and outfile, in which case the original AIR file 
+ *                  is overwritten.
+ * ===============================================================================
+ */
+
+#include <stdio.h>
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <nr.h>
+#include <nrutil.h>
+#include <imgutil.h>
+#include <matrixlib.h>
+
+#include "air.h"		/* AIR structure - Note: This file is currently not in
+                                 * a public include dir. such as /usr/local/npg/include.
+                                 * It is taken from t88mean project.
+                                 */
+
+char            Usage[] = "Usage: shiftair infile outfile xshift yshift zshift\n";
+int             read_air();
+
+main (int argc, char *argv[]) {
+
+    double  xshift;		/* translation along x axis */       
+    double  yshift;		/* translation along y axis */
+    double  zshift;		/* translation along z axis */
+
+    double  xrot;		/* rotation around x axis */       
+    double  yrot;		/* rotation around y axis */
+    double  zrot;		/* rotation around z axis */
+
+    double  cent_x;             /* x coord. of center of rotation */
+    double  cent_y;             /* y coord. of center of rotation */
+    double  cent_z;             /* z coord. of center of rotation */
+
+    char   *infile;		/* name of input AIR file */
+    struct air2 air;            /* structure to hold AIR info. - matrix, etc. */
+
+    char   *outfile;	        /* name of output AIR file */
+    FILE   *fp_outfile;		/* output AIR file */
+
+    float **in_mat;             /* input AIR matrix */
+    float **tr1_mat;            /* matrix containing user-specified translations */
+    float **tr2_mat;            /* matrix to translate user-specified center-of-rotation
+                                   to array origin */
+    float **rot_mat;            /* matrix containing rotations only */
+    float **tr3_mat;            /* matrix to translate translate center-of-rotation from
+                                   array origin back to its original position */
+
+    float **out1_mat;           /* output AIR matrix (after tr1) */
+    float **out2_mat;           /* output AIR matrix (after tr2) */
+    float **out3_mat;           /* output AIR matrix (after rot) */
+    float **out4_mat;           /* output AIR matrix (after tr3) */
+
+    int     i, j;
+    int     col, row;
+
+    /* Read arguments */
+
+    if (argc < 4) {
+        fprintf (stderr, Usage);
+        exit (1);
+    }
+    infile  = argv[1];
+    outfile = argv[2];
+    xshift = atof(argv[3]);
+    yshift = -atof(argv[4]);
+    zshift = -atof(argv[5]);
+    xrot = atof(argv[6]);
+    yrot = atof(argv[7]);
+    zrot = atof(argv[8]);
+    cent_x = atof(argv[9]);
+    cent_y = atof(argv[10]);
+    cent_z = atof(argv[11]);
+
+ /* Convert degrees to radians for rotations */
+    xrot = (xrot / 360) * (2 * M_PI);
+    yrot = (yrot / 360) * (2 * M_PI);
+    zrot = (zrot / 360) * (2 * M_PI);
+
+ /* Initialize matrices */
+
+    in_mat   = matrix(1, 4, 1, 4);
+    tr1_mat  = matrix(1, 4, 1, 4);
+    tr2_mat  = matrix(1, 4, 1, 4);
+    rot_mat  = matrix(1, 4, 1, 4);
+    tr3_mat  = matrix(1, 4, 1, 4);
+    out1_mat = matrix(1, 4, 1, 4);
+    out2_mat = matrix(1, 4, 1, 4);
+    out3_mat = matrix(1, 4, 1, 4);
+    out4_mat = matrix(1, 4, 1, 4);
+
+    for (i = 1; i <= 4; i++) {
+    	for (j = 1; j <= 4; j++) {
+  	    in_mat[i][j]  = 0.0;
+	    tr1_mat[i][j] = 0.0;
+            tr2_mat[i][j] = 0.0;
+            rot_mat[i][j] = 0.0;
+            tr3_mat[i][j] = 0.0;
+	    out1_mat[i][j] = 0.0;
+	    out2_mat[i][j] = 0.0;
+	    out3_mat[i][j] = 0.0;
+	    out4_mat[i][j] = 0.0;
+	}
+     /* Set left-to-right diagonal values, rows 1-3, to 1.0 */
+	in_mat[i][i]  = 1.0;
+	tr1_mat[i][i] = 1.0;
+        tr2_mat[i][i] = 1.0;
+	rot_mat[i][i] = 1.0;
+        tr3_mat[i][i] = 1.0;
+	out1_mat[i][i] = 1.0;
+	out2_mat[i][i] = 1.0;
+	out3_mat[i][i] = 1.0;
+	out4_mat[i][i] = 1.0;
+    }
+
+ /* Read original AIR matrix into air structure and in_mat */
+
+    if (read_air (infile, &air, in_mat) != 0) {
+     	(void) fprintf (stderr, "ERROR: cannot read %s\n", infile);
+       	exit (1);
+    }
+
+ /* Set appropriate values for x,y, and z translations */
+    tr1_mat[1][4] = xshift;
+    tr1_mat[2][4] = yshift;
+    tr1_mat[3][4] = zshift;
+
+ /* Multiply orig. matrix by translation matrix to get first result matrix */
+    matrix_mult(tr1_mat, in_mat, out1_mat, 4, 4, 4);
+
+ /* Translate center to array origin */
+
+    tr2_mat[1][4] = -cent_x;
+    tr2_mat[2][4] = -cent_y;
+    tr2_mat[3][4] = -cent_z;
+
+    matrix_mult(tr2_mat, out1_mat, out2_mat, 4, 4, 4);
+
+ /* Set matrix values that depend on x,y, and z rotations */
+    rot_mat[1][1] = cos(zrot) * cos(yrot) + sin(zrot) * sin(xrot) * sin(yrot);
+    rot_mat[1][2] = sin(zrot) * cos(yrot) - cos(zrot) * sin(xrot) * sin(yrot);
+    rot_mat[1][3] = cos(xrot) * sin(yrot);
+    rot_mat[2][1] = -sin(zrot) * cos(xrot);
+    rot_mat[2][2] = cos(zrot) * cos(xrot);
+    rot_mat[2][3] = sin(xrot);
+    rot_mat[3][1] = sin(zrot) * sin(xrot) * cos(yrot) - cos(zrot) * sin(yrot);
+    rot_mat[3][2] = -cos(zrot) * sin(xrot) * cos(yrot) - sin(zrot) * sin(yrot);
+    rot_mat[3][3] = cos(xrot) * cos(yrot);
+ 
+ /* Multiply orig. matrix by change matrix to get result matrix */
+    matrix_mult(rot_mat, out2_mat, out3_mat, 4, 4, 4);
+
+ /* Translate center back to its original position */
+
+    tr3_mat[1][4] = cent_x;
+    tr3_mat[2][4] = cent_y;
+    tr3_mat[3][4] = cent_z;
+
+    matrix_mult(tr3_mat, out3_mat, out4_mat, 4, 4, 4);
+
+ /* Create output file */
+    if ((fp_outfile = fopen(outfile, "w")) == NULL) {
+      fprintf(stderr, "Couldn't create file %s\n", outfile);
+    }
+
+ /* Change values for matrix in AIR structure
+  * In AIR structure, columns and rows are reversed,
+  * and indexing starts from 0 instead of 1.
+  *
+  * Matrix as it is printed to stdout by scanair:
+  *    1   2   3   4
+  *    5   6   7   8
+  *    9  10  11  12
+  *   13  14  15  16
+  *  
+  * Representation in rows and columns of matrices (e.g., out2_mat):
+  *    1   2   3   4        [1][1] [1][2] [1][3] [1][4] 
+  *    5   6   7   8        [2][1] [2][2] [2][3] [2][4] 
+  *    9  10  11  12        [3][1] [3][2] [3][3] [3][4] 
+  *   13  14  15  16        [4][1] [4][2] [4][3] [4][4] 
+  *
+  * Represenation in AIR structure (air.e)
+  *    1   5   9  13        [0][0] [0][1] [0][2] [0][3]
+  *    2   6  10  14        [1][0] [1][1] [1][2] [1][3]
+  *    3   7  11  15        [2][0] [2][1] [2][2] [2][3]
+  *    4   8  12  16        [3][0] [3][1] [3][2] [3][3] 
+  */
+    for (col = 0; col < 4; col++) {
+        for (row = 0; row < 4; row++) {
+            air.e[col][row] = out4_mat[row+1][col+1];
+        }
+    }   
+
+ /* Write structure data to output AIR file */
+    if ((fwrite((void *) &air, sizeof(struct air2), 1, fp_outfile)) != 1) {
+        fprintf(stderr, "Could not write data structure to output file.\n");
+    }
+
+ /* Print report to standard output */
+    printf("\nOriginal matrix (%s):\n", infile);
+    printf("   [%e %e %e %e\n",in_mat[1][1],in_mat[1][2],in_mat[1][3],in_mat[1][4]);
+    printf("   %e %e %e %e\n",in_mat[2][1],in_mat[2][2],in_mat[2][3],in_mat[2][4]);
+    printf("   %e %e %e %e\n",in_mat[3][1],in_mat[3][2],in_mat[3][3],in_mat[3][4]);
+    printf("   %e %e %e %e]\n\n",in_mat[4][1],in_mat[4][2],in_mat[4][3],in_mat[4][4]);
+
+    /*
+    printf("First result matrix - after translations only:\n");
+    printf("   [%e %e %e %e\n",out1_mat[1][1],out1_mat[1][2],out1_mat[1][3],out1_mat[1][4]);
+    printf("   %e %e %e %e\n",out1_mat[2][1],out1_mat[2][2],out1_mat[2][3],out1_mat[2][4]);
+    printf("   %e %e %e %e\n",out1_mat[3][1],out1_mat[3][2],out1_mat[3][3],out1_mat[3][4]);
+    printf("   %e %e %e %e]\n\n",out1_mat[4][1],out1_mat[4][2],out1_mat[4][3],out1_mat[4][4]);
+    */
+
+    printf("New matrix (%s) - after translations and rotations:\n", outfile);
+    printf("   [%e %e %e %e\n",out4_mat[1][1],out4_mat[1][2],out4_mat[1][3],out4_mat[1][4]);
+    printf("   %e %e %e %e\n",out4_mat[2][1],out4_mat[2][2],out4_mat[2][3],out4_mat[2][4]);
+    printf("   %e %e %e %e\n",out4_mat[3][1],out4_mat[3][2],out4_mat[3][3],out4_mat[3][4]);
+    printf("   %e %e %e %e]\n\n",out4_mat[4][1],out4_mat[4][2],out4_mat[4][3],out4_mat[4][4]);
+
+ /* Clean up - close output file and free space allocated for matrices */
+    if (fp_outfile != NULL) {
+        fclose(fp_outfile);
+        fp_outfile = NULL;
+    }
+
+    if (in_mat != NULL) {
+        free_matrix(in_mat, 1, 4, 1, 4);
+        in_mat = NULL;
+    }
+ 
+    if (tr1_mat != NULL) {
+        free_matrix(tr1_mat, 1, 4, 1, 4);
+        tr1_mat = NULL;
+    }
+
+    if (tr2_mat != NULL) {
+        free_matrix(tr2_mat, 1, 4, 1, 4);
+        tr2_mat = NULL;
+    }
+
+    if (tr3_mat != NULL) {
+        free_matrix(tr3_mat, 1, 4, 1, 4);
+        tr3_mat = NULL;
+    }
+
+    if (out1_mat != NULL) {
+        free_matrix(out1_mat, 1, 4, 1, 4);
+        out1_mat = NULL;
+    }
+
+    if (rot_mat != NULL) {
+        free_matrix(rot_mat, 1, 4, 1, 4);
+        rot_mat = NULL;
+    }
+
+    if (out2_mat != NULL) {
+        free_matrix(out2_mat, 1, 4, 1, 4);
+        out2_mat = NULL;
+    }
+
+    if (out3_mat != NULL) {
+        free_matrix(out3_mat, 1, 4, 1, 4);
+        out3_mat = NULL;
+    }
+
+    if (out4_mat != NULL) {
+        free_matrix(out4_mat, 1, 4, 1, 4);
+        out4_mat = NULL;
+    }
+   
+}
+
+@

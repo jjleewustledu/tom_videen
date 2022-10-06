@@ -1,0 +1,84 @@
+#!/bin/csh
+#   Name:   makePvcTac
+#   Author: hugh flores
+#   Date:   Jan 2012
+#   Created for: pvc processing
+#   Intent: Read time-activity curves and gray/white correction factors.
+#           Apply 3-segment correction 
+#   Input TAC has (4+X) columns: start, duration, reference roi, X other  rois, white-matter roi
+
+if ($#argv != 1) then
+        echo "Usage:  makePvcTac p####"
+        echo " e.g.,  makePvcTac p2951"
+        echo " program expects 2 files to exist in current directory: p2951??1.tac p2951??1.cor"
+        exit 1
+endif
+
+set PID = $1
+set whiteRow = 1
+set greyRow = 2
+set tacRoiOffset = 2
+
+set tacFile = `ls ${PID}*.tac`
+set corFile = `ls ${PID}*.cor`
+set pvcFile = $tacFile:r
+set pvcFile = `echo ${pvcFile}pvc.tac`
+
+if (! -e $tacFile) then
+        echo "ERROR [makePvcTac]: $tacFile not found"
+        exit 1
+else if (! -e $corFile) then
+        echo "ERROR [makePvcTac]: $corFile not found"
+        exit 1
+else if (-e $pvcFile) then
+        echo "Replacing $pvcFile"
+endif
+
+rm ${PID}*pvc.tac
+
+# read tac file 
+set tacColHeaders = `head -1 $tacFile`
+set tacRowCol = `head -2 $tacFile | tail -1`
+set tacRow = $tacRowCol[1]
+set tacCol = $tacRowCol[2]
+set tacWhiteCol = $tacCol
+set roiCol = `echo $tacCol - $tacRoiOffset | bc`
+set roiTac = `tail -$tacRow $tacFile`
+
+# read cor file
+set corColHeaders = `head -1 $corFile`
+set corCol = $#corColHeaders
+set wgcPct = `tail -3 $corFile`
+
+# write header lines to PVC file
+echo "PVC TACs for $PID" >! $pvcFile
+#echo $corColHeaders >> $pvcFile
+set pvcCol = `echo "$tacCol - 1" | bc`
+echo $tacRow  $pvcCol >> $pvcFile
+
+#compute PVC
+set petCntNdx = 1
+while ($petCntNdx <= $tacRow)
+   #get first 2 col for row
+   set Ndx = `echo "$petCntNdx * $tacCol - $tacCol + 1" | bc`
+   set outLine = $roiTac[$Ndx]
+   @ Ndx++
+   set outLine = `echo "$outLine     $roiTac[$Ndx]"`
+
+   set roiNdx = 1
+   while ($roiNdx < $roiCol)
+      set roiTacNdx = `echo "$petCntNdx * $tacCol - $tacCol + $roiNdx + $tacRoiOffset" | bc`
+      set refTacNdx = `echo "$petCntNdx * $tacCol - $tacCol + $tacWhiteCol" | bc`
+      set whiteNdx = $roiNdx
+      set greyNdx = `echo "$roiNdx + $corCol" | bc`
+
+      set pvc = `echo $roiTac[$roiTacNdx] $roiTac[$refTacNdx] $wgcPct[$whiteNdx] $wgcPct[$greyNdx] | awk '{printf("%10.3f", ($1-($2*$3))/$4)}'`
+      set outLine = `echo "$outLine     $pvc"`
+
+      @ roiNdx++
+   end
+
+   echo $outLine >> $pvcFile
+   @ petCntNdx++
+end
+

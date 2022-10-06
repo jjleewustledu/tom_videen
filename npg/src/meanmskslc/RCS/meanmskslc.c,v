@@ -1,0 +1,313 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.16.21.39.26;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.11.27.16.17.02;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.09.06.19.39.27;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.10.24.17.29.34;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.10.23.17.40.40;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/* $Log: meanmskslc.c,v $
+ * Revision 1.4  2002/11/27  16:17:02  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  2000/09/06  19:39:27  tom
+ * strcpy filename
+ *
+ * Revision 1.2  1997/10/24  17:29:34  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1997/10/23  17:40:40  tom
+ * Initial revision
+ * */
+/*	=========================================================================
+ *	Module:			meanmskslc.c
+ *	Author:			Tom Videen
+ *	Description:	Create an image where each slice is the mean of all values
+ *					within the mask
+ *	=================================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: meanmskslc.c,v 1.4 2002/11/27 16:17:02 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	char           *imgname;		 /* input image filename */
+	char           *mskname;		 /* mask image filename */
+	char           *outname;		 /* output image filename */
+	float           threshold;		 /* mask all pixels >= this value */
+	float           sum;
+	float           mean;
+	long            spixels = 0;		 /* slice pixels */
+	long            npixels = 0;		 /* total pixels */
+	long            dim1, dim2, dim3;	 /* dimensions of tensors */
+	long            i, j, pln;
+	float        ***image = NULL;		 /* input image tensor */
+	float        ***mask = NULL;		 /* mask image tensor */
+
+/*
+ *	Get command line arguments.
+ */
+	imgname = argv[1];
+	mskname = argv[2];
+	outname = argv[3];
+	threshold = atof (argv[4]) - .0001;
+	printf ("Threshold = %f\n", threshold);
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ *	Read mask
+ */
+	file = make_imgfile (mskname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot open %s\n", mskname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot get MainHeader from %s\n", mskname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot find %s frame 1-%d\n", mskname, -indx.frm);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot find %s frame %d\n", mskname, indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot read file subheader in %s\n", mskname);
+		return (ERROR);
+	}
+	dim1 = (long) file->sh->dim1;
+	dim2 = (long) file->sh->dim2;
+	dim3 = (long) file->sh->dim3;
+	if ((mask = readtensor (file, &indx)) == NULL) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot read %s\n", mskname);
+		return (ERROR);
+	}
+	close_imgfile (file);
+
+/*
+ *	Read image to mask
+ */
+	file = make_imgfile (imgname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot open %s\n", imgname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot get MainHeader from %s\n", imgname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	indx.pln = 1;
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot find %s frame 1-%d\n", imgname, -indx.frm);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot find %s frame %d\n", imgname, indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot read file subheader in %s\n", imgname);
+		return (ERROR);
+	}
+	if (dim1 != (long) file->sh->dim1) {
+		fprintf (stderr, "ERROR [meanmskslc]: Image and mask have different dimensions\n");
+		return (ERROR);
+	}
+	if (dim2 != (long) file->sh->dim2) {
+		fprintf (stderr, "ERROR [meanmskslc]: Image and mask have different dimensions\n");
+		return (ERROR);
+	}
+	if (dim3 != (long) file->sh->dim3) {
+		fprintf (stderr, "ERROR [meanmskslc]: Image and mask have different dimensions\n");
+		return (ERROR);
+	}
+	if ((image = readtensor (file, &indx)) == NULL) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot read %s\n", imgname);
+		return (ERROR);
+	}
+/*	Compute slice means at set output image values */
+
+	for (pln = 1; pln <= dim3; pln++) {
+		sum = 0;
+		spixels = 0;
+		for (j = 1; j <= dim2; j++) {
+			for (i = 1; i <= dim1; i++) {
+				if (mask[pln][j][i] >= threshold) {
+					sum = sum + image[pln][j][i];
+					spixels++;
+					npixels++;
+				}
+			}
+		}
+		if (spixels > 0) 
+			mean = sum / spixels;
+		else
+			mean = 0.;
+		printf ("Slice %2ld Mean = %.2f\n", pln, mean);
+		for (j = 1; j <= dim2; j++) {
+			for (i = 1; i <= dim1; i++) {
+				if (mask[pln][j][i] < threshold)
+					image[pln][j][i] = 0;
+				else
+					image[pln][j][i] = mean;
+			}
+		}
+	}
+
+/*	Write the masked image */
+
+	printf ("Writing mean masked image %s\n", outname);
+	printf ("Pixels in mask = %ld\n", npixels);
+	close_imgfile (file);
+	(void) strcpy (file->name, outname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot open %s\n", outname);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot write %s\n", outname);
+		return (ERROR);
+	}
+	if (writetensor (file, &indx, image) == ERROR) {
+		fprintf (stderr, "ERROR [meanmskslc]: Cannot write %s\n", outname);
+		return (ERROR);
+	}
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d21 1
+d23 1
+a23 1
+static char     rcsid[] = "$Id: meanmskslc.c,v 1.3 2000/09/06 19:39:27 tom Exp tom $";
+d35 1
+d179 2
+a180 2
+	strcpy (file->name, outname);
+	strcpy (file->mode, "w");
+@
+
+
+1.3
+log
+@strcpy filename
+@
+text
+@d2 3
+d19 1
+a19 1
+static char     rcsid[] = "$Id: meanmskslc.c,v 1.2 1997/10/24 17:29:34 tom Exp tom $";
+a24 1
+#include <floatingpoint.h>
+a26 1
+#include <nr.h>
+a28 1
+#include <imgutil.h>
+d158 1
+a158 1
+		printf ("Slice %2d Mean = %.2f\n", pln, mean);
+d172 1
+a172 1
+	printf ("Pixels in mask = %d\n", npixels);
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Id: meanmskslc.c,v 1.1 1997/10/23 17:40:40 tom Exp tom $";
+d174 1
+a174 2
+	free (file->name);
+	file->name = outname;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Id: meanmskslc.c,v 1.1 1997/10/23 17:32:12 tom Exp $";
+d151 4
+a154 1
+		mean = sum / spixels;
+@

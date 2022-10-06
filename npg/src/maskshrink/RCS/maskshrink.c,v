@@ -1,0 +1,274 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.16.21.12.56;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.27.15.56.08;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.09.06.19.38.19;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.13.18.37.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/* $Log: maskshrink.c,v $
+ * Revision 1.3  2002/11/27  15:56:08  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2000/09/06  19:38:19  tom
+ * strcpy filename
+ *
+ * Revision 1.1  1996/11/13  18:37:42  tom
+ * Initial revision
+ * */
+/*	=========================================================================
+ *	Module:			maskshrink.c
+ *	Author:			Tom Videen
+ *	Description:	Strip pixels from outer edges of an image.
+ *	=================================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: maskshrink.c,v 1.3 2002/11/27 15:56:08 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	char           *imgname;		 /* input image filename */
+	char           *outname;		 /* output image filename */
+	int             npix;			 /* number of pixels to remove */
+	int             i, j, k;		 /* indices to array image */
+	int             n;
+	long            dim[3];			 /* dimensions of tensors */
+	float        ***image = NULL;		 /* primary image tensor */
+
+/*
+ *	Get command line arguments.
+ */
+	imgname = argv[1];
+	outname = argv[2];
+	npix = atoi (argv[3]);
+	if (npix <= 0) {
+		fprintf (stderr, "ERROR [maskshrink]: Number of pixels must be > 0\n");
+		return (ERROR);
+	}
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ *	Read image
+ */
+
+	file = make_imgfile (imgname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskshrink]: Cannot open %s\n", imgname);
+		free_imgfile (file);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskshrink]: Cannot get MainHeader from %s\n", imgname);
+		free_imgfile (file);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [maskshrink]: Cannot read file subheader in %s\n", imgname);
+		free_imgfile (file);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	if ((image = readtensor (file, &indx)) == NULL) {
+		fprintf (stderr, "ERROR [maskshrink]: Cannot read %s\n", imgname);
+		free_imgfile (file);
+		return (ERROR);
+	}
+	for (k = 1; k <= dim[2]; k++) {
+
+/*	Reduce upper row */
+
+		for (j = 1; j <= dim[1]; j++) {
+			n = npix;
+			for (i = 1; i <= dim[0]; i++) {
+				if (image[k][j][i] > 0) {
+					image[k][j][i] = 0;
+					n = n - 1;
+					if (n <= 0)
+						break;
+				}
+			}
+		}
+
+/*	Reduce lower row */
+
+		for (j = 1; j <= dim[1]; j++) {
+			n = npix;
+			for (i = dim[0]; i >= 1; i--) {
+				if (image[k][j][i] > 0) {
+					image[k][j][i] = 0;
+					n = n - 1;
+					if (n <= 0)
+						break;
+				}
+			}
+		}
+
+/*	Reduce left column */
+
+		for (i = 1; i <= dim[0]; i++) {
+			n = npix;
+			for (j = 1; j <= dim[1]; j++) {
+				if (image[k][j][i] > 0) {
+					image[k][j][i] = 0;
+					n = n - 1;
+					if (n <= 0)
+						break;
+				}
+			}
+		}
+
+/*	Reduce right column */
+
+		for (i = 1; i <= dim[0]; i++) {
+			n = npix;
+			for (j = dim[1]; j >= 1; j--) {
+				if (image[k][j][i] > 0) {
+					image[k][j][i] = 0;
+					n = n - 1;
+					if (n <= 0)
+						break;
+				}
+			}
+		}
+	}
+
+/*	Write the masked image */
+
+	printf ("Writing masked image %s\n", outname);
+	close_imgfile (file);
+	(void) strcpy (file->name, outname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskshrink]: Cannot open %s\n", outname);
+		free_imgfile (file);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskshrink]: Cannot write %s\n", outname);
+		free_imgfile (file);
+		return (ERROR);
+	}
+	if (writetensor (file, &indx, image) == ERROR) {
+		fprintf (stderr, "ERROR [maskshrink]: Cannot write %s\n", outname);
+		free_imgfile (file);
+		return (ERROR);
+	}
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d17 1
+d19 1
+a19 1
+static char     rcsid[] = "$Id: maskshrink.c,v 1.2 2000/09/06 19:38:19 tom Exp tom $";
+d31 1
+d55 1
+a55 3
+/*
+ *	Initializations
+ */
+d69 1
+d74 1
+d79 1
+d87 1
+d153 2
+a154 2
+	strcpy (file->name, outname);
+	strcpy (file->mode, "w");
+d157 1
+d162 1
+d167 1
+@
+
+
+1.2
+log
+@strcpy filename
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Id: maskshrink.c,v 1.1 1996/11/13 18:37:42 tom Exp tom $";
+a22 1
+#include <nr.h>
+a24 1
+#include <imgutil.h>
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Id: maskshrink.c,v 1.1 1996/11/13 16:23:56 tom Exp $";
+d145 1
+a145 2
+	free (file->name);
+	file->name = outname;
+@

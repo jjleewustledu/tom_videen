@@ -1,0 +1,171 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2000.02.14.14.36.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* 
+ *  Module:         arcpath.c
+ *  Author:         Fred Kuhns with modifications by Tom Videen
+ *  Description:    Utility for locating files in archive
+ *  History:		Code is all extracted from getpaths.c by Fred Kuhns.
+ */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <arc.h>
+#include <string.h>
+#include <unistd.h>
+#include <arcfind.h>
+#include <riis/syb.h>
+
+struct fnode    *arcpath (fname)
+	char           *fname;
+{
+	struct fnode   *root;
+	char            supp[MAXFNAME];
+	char            scanner[MAXTOKEN], acq[MAXTOKEN], recon[MAXTOKEN], fltr[MAXTOKEN];
+
+	*scanner = *acq = *recon = *fltr = '\0';
+
+	switch (ftype (fname)) {
+	case COMMON_PET:
+		sprintf (supp, ",data,");
+		break;
+	case PET_DATA:
+	case PET_IMAGE:
+		sprintf (supp, ",%s,%s,%s,%s,",
+			 (*scanner) ? scanner : "%",
+			 (*acq) ? acq : "%",
+			 (*recon) ? recon : "%",
+			 (*fltr) ? fltr : "%");
+		break;
+	case MRI_DATA:
+	case MRI_IMAGE:
+	default:
+		strcpy (supp, "%");
+		break;
+	}
+
+	root = (struct fnode *) allfiles (fname, supp);
+	return (root);
+}
+
+static int      ftype (fname)
+	char           *fname;
+{
+	extern int      common_pet, pet_data, pet_image, mri_data, mri_image;
+	char           *ptr, ext[MAXFNAME];
+
+	ptr = strrchr (fname, '.');
+	if (ptr == NULL || *(ptr + 1) == '\0')
+		*ext = '\0';
+	else
+		strcpy (ext, (ptr + 1));
+	return (check_ext (ext));
+}
+
+extern DBPROCESS *DBPROC;
+
+struct fnode   *allfiles (fname, supp)
+	char           *fname, *supp;
+{
+	char            cmd[MAXCMD];
+	struct selectret cols[2];
+	struct fnode   *froot;
+	struct RETROWS *root;
+
+	froot = (struct fnode *) NULL;
+
+	DBPROC = syblogin (ARCIFILE, DBSERVER, DBHOST, ARCUSER, ARCPASSWD, ARCAPP, DBNAME);
+	if (DBPROC == NULL) {
+		fprintf (stderr,"Warning [arcpath]: Unable to log in to DB server\n");
+		return (NULL);
+	}
+	/* initialize column descriptors used un sybrows */
+	cols[0].vartype = (int) NTBSTRINGBIND;
+	cols[0].varlen = 25;
+	cols[0].varaddr = (BYTE *) malloc (26);	 /* space for \0 */
+
+	cols[1].vartype = (int) NTBSTRINGBIND;
+	cols[1].varlen = 255;
+	cols[1].varaddr = (BYTE *) malloc (256); /* space for \0 */
+
+	/* initialize select statement */
+
+	sprintf (cmd,
+		 "select base_dir, path from archive_id, archive_location, archive_file where file_name = '%s' and file_status = 'VALID' and location = 'ARCHIVE' and file_supp like '%s' and archive_file.file_id = archive_location.file_id and archive_file.id = archive_id.id", fname, supp);
+
+	/* runit, and collect rows */
+
+	root = (struct RETROWS *) selectrows (cmd, cols, 2, DBPROC);
+
+	/* free allocated memory for column */
+
+	if (cols[0].varaddr)
+		free (cols[0].varaddr);
+	if (cols[1].varaddr)
+		free (cols[1].varaddr);
+
+	if (root != NULL) {
+		froot = mkfnode ((char *) root->cols[0].varaddr,
+						 (char *) root->cols[1].varaddr, fname);
+	}
+	freerows (root);
+	return (froot);
+}
+
+struct fnode   *mkfnode (base, path, fname)
+	char           *path, *base, *fname;
+{
+	struct fnode   *node;
+	char           *ptr;
+	int             plen;
+	plen = strlen (base) + 1 + strlen (path) + 1 + strlen (fname) + 1;
+	if ((node = (struct fnode *) malloc (sizeof (struct fnode))) == NULL)
+		return ((struct fnode *) NULL);
+	if ((ptr = (char *) malloc (plen)) == NULL) {
+		free (node);
+		return ((struct fnode *) NULL);
+	}
+	node->path = ptr;
+	sprintf (node->path, "%s/%s/%s", base, path, fname);
+	node->next = (struct fnode *) NULL;
+	return (node);
+}
+
+void            freefnode (node)
+	struct fnode   *node;
+{
+	if (node->path != (char *) NULL)
+		free (node->path);
+	free (node);
+}
+
+void            freefnodes (root)
+	struct fnode   *root;
+{
+	struct fnode   *current;
+	while (root != (struct fnode *) NULL) {
+		current = root->next;
+		free (root);
+		root = current;
+	}
+}
+@

@@ -1,0 +1,248 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   D2OXYGEN.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         21-May-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This routine processes an image for OEF or CMRO2:
+C         2 ==> Processing for OEF
+C         3 ==> Processing for CMRO2
+C
+C     Requires simultaneous use of 3 images:
+C        IMAGE(n,n,I1) = Oxygen scan   (read before entering routine)
+C        IMAGE(n,n,I2) = Water or Butanol scan
+C        IMAGE(n,n,I3) = CO scan
+C
+C  History:
+C     Modified 06-Oct-87 by TOV (PROCESS may now be 0-5);
+C     Modified 22-Sep-93 by TOV to process NTYPE = 11 and 12 (created by t88mean).
+C
+C  Common Blocks from: SPIDERAM.INC
+C     **IMAGEDAT - image arrays                   (write)
+C     **DISPLAY   - display parameters            (read only)
+C     **FILES     - scan file list                (read only)
+C
+C  Passed Variables:
+C     I1 = array no. for OO image to process (1-3);
+C        (the image has been read before entering this routine)
+C     SLYCE = slice number to process;
+C     ERRTYPE = type of error in processing images:
+C
+C  Local Variables:
+C     K = 1 for 7-slice images or even slices of 14-slice images;
+C         2 for odd slices of 14-slice images;
+C     F1,F2,F3 = scan file numbers (1-20) of OO, HO and CO images;
+C     I2,I3 = image array numbers (4,5) for HO and CO images;
+C     S2,S3 = scaling factors for image arrays I1, I2, I3;
+C     X1,X2,X3 = image array elements from image arrays I1, I2, I3;
+C     C1 = (constant) SLVRATIO*integral of blood O2 counts/100.0;
+C     C2 = (constant) VOLFACTR*C1;
+C     C3 = (constant) PETTCONV(N)/BRAINDEN;
+C     A1,A2,A3,A4,A5 = temporary components in computation;
+C     SLVRATIO = ratio of cerebral small vessel hematocrit to large vessel
+C        hematocrit;
+C     VOLFACTR = (postcapillary vol + 0.5*capillary vol)/total blood volume;
+C     BRAINDEN = density of brain (g/ml);
+C     HDRONLY = true--> read the header only;
+C               false--> read the header and image; **
+C
+C  Uses:
+C
+C  SPIDERAM.LIB
+C     D2GETIMG - get an image from a disk file;
+C     D2PROCES - metabolic processing of an image;
+C
+C  Called by:  D2IMAGE
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE D2OXYGEN(I1,SLYCE,ERRTYPE)
+C
+      INTEGER*4  SLYCE,ERRTYPE,I1,I2,I3,F1,F2,F3,K,HOERR(3),COERR(3)
+      REAL*4     SLVRATIO,VOLFACTR,BRAINDEN,C1,C2,C3,A1,A2,A3,A4,A5,
+     &           S2,S3,X1,X2,X3,SX
+      LOGICAL*1  HDRONLY
+      character*256 rcsheader
+C
+      INCLUDE 'spideram.inc'
+      rcsheader = "$Id$"
+
+      DATA I2,I3     /4,5/
+      DATA SLVRATIO  /0.85/
+      DATA VOLFACTR  /0.835/
+      DATA BRAINDEN  /1.05/
+      DATA HOERR,COERR /11,12,13,14,15,16/
+C
+      ERRTYPE = 0
+      HDRONLY = .FALSE.
+C
+      IF (PROCESS.LT.2 .OR. PROCESS.GT.3) THEN
+        ERRTYPE = I1
+        RETURN
+      END IF
+C
+      F1 = FILE(I1)
+C
+C   NTYPE = 11 and NTYPE = 12 are special cases where t88mean 
+C   has created a single image of OEF or CMRO2 and scaled it by 1/AOXYGEN(1)
+C
+			IF ((PROCESS.EQ.2 .AND. NTYPE(I1).EQ.11) .OR.
+     &    (PROCESS.EQ.3 .AND. NTYPE(I1).EQ.12)) THEN
+        SCALER(I1) = AOXYGEN(I1,1)
+      	RETURN
+			END IF
+C
+C  Otherwise, process normally
+C
+      IF (NTYPE(I1).NE.1) THEN
+        ERRTYPE = I1
+        RETURN
+      ELSE IF (HOFILE(F1).EQ.0) THEN
+        ERRTYPE = HOERR(I1)
+        RETURN
+      ELSE IF (COFILE(F1).EQ.0) THEN
+        ERRTYPE = COERR(I1)
+        RETURN
+      END IF
+C
+C  Process Cerebral Blood Flow image in IMAGE(n,n,I2)
+C
+      F2 = HOFILE(F1)
+      CALL D2GETIMG(I2,SLYCE,F2,ERRTYPE,HDRONLY)
+      IF (ERRTYPE.NE.0) RETURN
+      CALL D2PROCES(I2,ERRTYPE)
+      IF (ERRTYPE.NE.0) RETURN
+C
+C  Process Cerebral Blood Volume image in IMAGE(n,n,I3)
+C
+      F3 = COFILE(F1)
+      CALL D2GETIMG(I3,SLYCE,F3,ERRTYPE,HDRONLY)
+      IF (ERRTYPE.NE.0) RETURN
+      CALL D2PROCES(I3,ERRTYPE)
+      IF (ERRTYPE.NE.0) RETURN
+C
+C  Use metabolic factors for odd (K=2), even (K=1) or 7-slices (K=1).
+C
+      IF (SLICES.EQ.14 .AND. MOD(CURSLICE,2).NE.0) THEN
+        K = 2
+      ELSE
+        K = 1
+      END IF
+C
+C  Oxygen Extraction and Rate of Oxygen Utilization (CMRO2)
+C    (note: F1-F5 all have units of well counts/(g*scan))
+C
+      C1 = SLVRATIO*O2CNTS(I1,K)/100.0
+      C2 = VOLFACTR*C1
+      C3 = PETTCONV(I1,K)/BRAINDEN
+      S2 = SCALER(I2)
+      S3 = SCALER(I3)
+C
+C  Set SCALER for computed array
+C
+      IF (PROCESS.EQ.2) THEN
+        SCALER(I1) = 0.02
+        SX = 1.0/SCALER(I1)
+      ELSE
+        SCALER(I1) = 0.001
+        SX = 1.0/SCALER(I1)
+      END IF
+C
+      DO 400 J=1,AMAX
+        DO 300 I=1,AMAX
+          IF (IMAGE(I,J,I1).EQ.0) GO TO 300
+          X1 = IMAGE(I,J,I1)
+          X2 = IMAGE(I,J,I2)*S2
+          X3 = IMAGE(I,J,I3)*S3
+          A1 = C3*X1
+          A2 = X2*(AWATER(I1,K)*X2 + BWATER(I1,K))
+          A3 = C1*X3
+          A4 = X2*(AOXYGEN(I1,K)*X2 + BOXYGEN(I1,K))
+          A5 = C2*X3
+          IF (A4.EQ.A5) THEN
+            IMAGE(I,J,I1) = 0
+          ELSE IF (PROCESS.EQ.2) THEN
+            IMAGE(I,J,I1)= NINT(SX*(A1-A2-A3)/(A4-A5))
+          ELSE
+            IMAGE(I,J,I1)= NINT(SX*X2*OXYCONT(I1,K)*(A1-A2-A3)/(A4-A5))
+          END IF
+300     CONTINUE
+400   CONTINUE
+C
+      RETURN
+      END
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d21 1
+a63 5
+C
+C
+C
+C
+C
+d66 1
+a66 1
+     2           S2,S3,X1,X2,X3,SX
+d68 1
+d71 2
+d88 12
+d154 3
+a156 3
+      DO 200 J=1,AMAX
+        DO 100 I=1,AMAX
+          IF (IMAGE(I,J,I1).EQ.0) GO TO 100
+d172 2
+a173 2
+100     CONTINUE
+200   CONTINUE
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

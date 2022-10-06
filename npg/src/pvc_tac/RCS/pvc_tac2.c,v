@@ -1,0 +1,178 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2010.07.14.14.47.53;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log: pvc_tac.c,v $
+ * Revision 1.2  2010/02/17  22:01:01  tom
+ * add error message if not exactly 10 columns
+ *
+ * Revision 1.1  2009/05/29  21:09:57  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:	pvc_tac.c
+ *	Date:	May 2009
+ *	Author:	Tom Videen
+ *	Intent:	Read time-activity curves and gray/white correction factors.
+ *			Apply 3-segment correction
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/pvc_tac/RCS/pvc_tac.c,v 1.2 2010/02/17 22:01:01 tom Exp tom $";
+
+#include <stdio.h>
+
+#define MAXLINE 200
+
+int             main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	FILE           *fpi, *fpc, *fpo;
+	char           *tacfile;		 /* TAC filename */
+	char           *corfile;		 /* corrections filename */
+	char           *outfile;		 /* output file */
+	char            line[MAXLINE];
+	float           d1, d2, d3, d4, d5, d6, d7, d8, d9, d10;
+	float           w3, w4, w5, w6, w7, w8, w9, w10;
+	float           g3, g4, g5, g6, g7, g8, g9, g10;
+	int             nrow, ncol, nvoi;
+	int             i;
+
+/* Initializations */
+
+	if (argc != 4) {
+		fprintf (stderr, "Usage: pvc_tac tac cor out\n");
+		return 1;
+	}
+	tacfile = argv[1];
+	corfile = argv[2];
+	outfile = argv[3];
+
+/* Read TAC	first to get number of VOIs	*/
+
+	fpi = fopen (tacfile, "r");
+	if (fpi == NULL) {
+		fprintf (stderr, "ERROR [pvc_tac]: opening %s\n", tacfile);
+		return 1;
+	}
+	if (fgets (line, MAXLINE, fpi) == NULL) {
+		fprintf (stderr, "ERROR [pvc_tac]: reading %s\n", tacfile);
+		return 1;
+	}
+	if (fgets (line, MAXLINE, fpi) == NULL || sscanf (line, "%d %d", &nrow, &ncol) != 2) {
+		fprintf (stderr, "ERROR [pvc_tac]: reading %s\n", tacfile);
+		return 1;
+	}
+	if (ncol > 10 || ncol < 5) {
+		fprintf (stderr, "ERROR [pvc_tac]: TAC input file should have no more than 10 columns containing values for:\n");
+		fprintf (stderr, "   time, duration, reference region, white-matter region, 1-6 mixed-regions\n");
+		return 1;
+	}
+	nvoi = ncol - 2;
+
+/* Read correction factors		*/
+
+	fpc = fopen (corfile, "r");
+	if (fpc == NULL) {
+		fprintf (stderr, "ERROR [pvc_tac]: opening %s\n", corfile);
+		return 1;
+	}
+	if (fgets (line, MAXLINE, fpc) == NULL) {
+		fprintf (stderr, "ERROR [pvc_tac]: reading %s\n", corfile);
+		return 1;
+	}
+	if (fgets (line, MAXLINE, fpc) == NULL) {
+		fprintf (stderr, "ERROR [pvc_tac]: reading WM line %s\n", corfile);
+		return 1;
+	}
+	if (sscanf (line, "%f %f %f %f %f %f %f %f", &w3, &w4, &w5, &w6, &w7, &w8, &w9, &w10) != nvoi) {
+		fprintf (stderr, "nvoi = %d\n", nvoi);
+		fprintf (stderr, "ERROR [pvc_tac]: reading WM values %s\n", corfile);
+		fprintf (stderr, "%s\n", line);
+		return 1;
+	}
+	if (fgets (line, MAXLINE, fpc) == NULL) {
+		fprintf (stderr, "ERROR [pvc_tac]: reading GM line %s\n", corfile);
+		fprintf (stderr, "%s\n", line);
+		return 1;
+	}
+	if (sscanf (line, "%f %f %f %f %f %f %f %f", &g3, &g4, &g5, &g6, &g7, &g8, &g9, &g10) != nvoi) {
+		fprintf (stderr, "ERROR [pvc_tac]: reading GM values %s\n", corfile);
+		return 1;
+	}
+	(void) fclose (fpc);
+
+
+/* Apply corrections and write output	*/
+
+	fpo = fopen (outfile, "w");
+	if (fpo == NULL) {
+		fprintf (stderr, "ERROR [pvc_tac]: opening %s\n", outfile);
+		return 1;
+	}
+	fprintf (fpo, "corrected time-activity curves for gray/white/csf\n");
+	fprintf (fpo, "%d %d \n", nrow, ncol);
+
+	for (i = 0; i < nrow; i++) {
+		if (fgets (line, MAXLINE, fpi) == NULL) {
+			fprintf (stderr, "ERROR [pvc_tac]: reading row %d of %s\n", i + 1, tacfile);
+			return 1;
+		}
+		if (sscanf (line, "%f %f %f %f %f %f %f %f %f %f", &d1, &d2, &d3, &d4, &d5, &d6, &d7, &d8, &d9, &d10) != ncol) {
+			fprintf (stderr, "ERROR [pvc_tac]: reading %d columns from row %d of %s\n", ncol, i + 1, tacfile);
+			return 1;
+		}
+	/* no correction of columns 3-4 for reference region and white-matter region	*/
+			d5 = (d5 - d4 * w5) / g5;
+			d6 = (d6 - d4 * w6) / g6;
+			d7 = (d7 - d4 * w7) / g7;
+			d8 = (d8 - d4 * w8) / g8;
+			d9 = (d9 - d4 * w9) / g9;
+			d10 = (d10 - d4 * w10) / g10;
+		switch (ncol) {
+		case 4:
+			fprintf (fpo, "%7.1f %6.1f %10.3f %10.3f\n", d1, d2, d3, d4);
+			break;
+		case 5:
+			fprintf (fpo, "%7.1f %6.1f %10.3f %10.3f %10.3f\n", d1, d2, d3, d4, d5);
+			break;
+		case 6:
+			fprintf (fpo, "%7.1f %6.1f %10.3f %10.3f %10.3f %10.3f\n", d1, d2, d3, d4, d5, d6);
+			break;
+		case 7:
+			fprintf (fpo, "%7.1f %6.1f %10.3f %10.3f %10.3f %10.3f %10.3f\n", d1, d2, d3, d4, d5, d6, d7);
+			break;
+		case 8:
+			fprintf (fpo, "%7.1f %6.1f %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f\n", d1, d2, d3, d4, d5, d6, d7, d8);
+			break;
+		case 9:
+			fprintf (fpo, "%7.1f %6.1f %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f\n", d1, d2, d3, d4, d5, d6, d7, d8, d9);
+			break;
+		default:
+			fprintf (fpo, "%7.1f %6.1f %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f\n", d1, d2, d3, d4, d5, d6, d7, d8, d9, d10);
+		}
+	}
+	(void) fclose (fpo);
+	(void) fclose (fpi);
+	return 0;
+}
+@

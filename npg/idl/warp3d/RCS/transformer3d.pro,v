@@ -1,0 +1,354 @@
+head	1.1;
+access;
+symbols;
+locks
+	tom:1.1; strict;
+comment	@# @;
+
+
+1.1
+date	2002.11.20.14.19.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@PRO TRANSFORMER3D
+@@IMAGE_UTILS.h
+@@TRANSFORMER.h
+
+   on_error, 2
+   debug = fix(getenv ('DEBUG'))
+   file1 = getenv ('FILE1')
+   file2 = getenv ('FILE2')
+   warpfile = getenv ('WARPFILE')
+   viewplane = fix(getenv ('PLANE'))
+   log = getenv ('LOGFILE')
+
+   IF (strlen(log) GT 0) THEN BEGIN
+      openw, loglun, log, ERROR=err, /GET_LUN
+      IF (err NE 0) THEN BEGIN
+         print, 'Cannot open logfile: ',log
+         loglun = 0
+      ENDIF
+   ENDIF
+
+   fname = [file1,file2,file2,file2,file2,file2,file2,file2]
+   dsp1 = 'Reference'
+   dsp2 = 'Resampled Study'
+   dsp3 = 'Reference-Study'
+   dsp4 = 'Dif x |Ref Grad|'
+   dname = [dsp1,dsp2,dsp3,dsp4]
+
+   base = widget_base (TITLE='Transformer3D', /COLUMN)
+   base1 = widget_base(base, row=2)
+   rbase1 = widget_base(base1, col=4)
+   rbase2 = widget_base(base1, col=7)
+   msg_time = cw_field(rbase1, title='RunTime', /noedit, value=0, xsize=7, ysize=1)
+   msg_cyc = cw_field(rbase1, title='Cycle', /noedit, value=0, xsize=4, ysize=1)
+   msg_wtime = cw_field(rbase1, title='CycleTime', /noedit, value=0, xsize=7, ysize=1)
+   msg_mse = cw_field(rbase1, title='MeanSqrErr', /noedit, value=0, xsize=10, ysize=1)
+   msg_f0 = cw_field(rbase2, title='f0', /noedit, value=0, xsize=4, ysize=1)
+   msg_f1 = cw_field(rbase2, title='f1', /noedit, value=0, xsize=4, ysize=1)
+   msg_gmin = cw_field(rbase2, title='Limit', /noedit, value=0, xsize=4, ysize=1)
+   msg_gmax = cw_field(rbase2, title='GradMax', /noedit, value=0, xsize=7, ysize=1)
+   msg_size = cw_field(rbase2, title='Size', /noedit, value=0, xsize=3, ysize=1)
+   msg_loop = cw_field(rbase2, title='Loop', /noedit, value=0, xsize=3, ysize=1)
+   msg_cnt = cw_field(rbase2, title='Cnt', /noedit, value=0, xsize=3, ysize=1)
+
+   wid = {WIDGETS,		$
+          base     : base,	$ ; top level base
+          win      : lonarr(4),	$ ; draw window widget id
+          time : msg_time, $
+          mse : msg_mse, $
+          cyc : msg_cyc, $
+          size : msg_size, $
+          loop : msg_loop, $
+          cnt : msg_cnt, $
+          f0  : msg_f0, $
+          f2  : msg_f1, $
+          gmin : msg_gmin, $
+          gmax : msg_gmax, $
+          wtime : msg_wtime $
+         }
+
+   img = {VIMAGE}
+   uv = {wid:wid, img:[img,img,img,img,img,img,img,img]}
+   FOR i= 0, 7 DO BEGIN
+      uv.img[i].f = 1
+      uv.img[i].p = viewplane
+      uv.img[i].fp = 1
+      uv.img[i].lp = 256
+      uv.img[i].ff = 1
+      uv.img[i].lf = 1
+      uv.img[i].fname = fname[i]
+      image = uv.img[i]
+      str = ''
+      IF (getframe(image, str) NE 0) THEN BEGIN
+         print, str,i+1
+         uv.img[i].fname = ''
+         RETURN
+      ENDIF
+      uv.img[i] = image
+   ENDFOR
+   nx = uv.img[0].dim[0]
+   ny = uv.img[0].dim[1]
+   nz = uv.img[0].dim[2]
+   ptr_free, uv.img[5].data
+   ptr_free, uv.img[6].data
+   uv.img[5].data = ptr_new(fltarr(nx,ny,nz))
+   uv.img[6].data = ptr_new(fltarr(nx,ny,nz))
+   uv.img[7].data = ptr_new(fltarr(nx,ny,nz))
+   ref = float(reform((*uv.img[0].data)[*,*,*]))
+   study = float(reform((*uv.img[1].data)[*,*,*]))
+   dif = ref-study
+   grad3d, ref, gx, gy, gz, nx, ny, nz
+   (*uv.img[2].data) = dif
+   (*uv.img[3].data) = sqrt(gx*gx+gy*gy+gz*gz)
+
+   zoom = 2
+   xsize = uv.img[0].dim[0] * zoom
+   ysize = uv.img[0].dim[1] * zoom
+   IF (uv.img[0].pdim[0] GT uv.img[0].pdim[1]) THEN BEGIN
+      xfact = (uv.img[0].pdim[0])/(uv.img[0].pdim[1])
+   ENDIF ELSE BEGIN
+      xfact = 1.
+   ENDELSE
+   dsp[0].set = 1
+   dsp[0].cut =  50
+   IF (!d.n_colors GE 160) THEN nc=80 $
+   ELSE IF (!d.n_colors GE 80) THEN nc=40 $
+   ELSE nc=(!d.n_colors)/2
+   FOR i= 0, 3 DO BEGIN
+      dsp[i].set = 1
+      dsp[i].init = 1
+      dsp[i].type = 1		; 0=auto scaling, 1=manual scaling
+      dsp[i].zoom = zoom
+      dsp[i].xsize = xsize
+      dsp[i].ysize = ysize
+      dsp[i].nc = nc
+      dsp[i].bot = 0		; first element of color table
+      dsp[i].range = 0		; 0=pos, 1=neg, 2=neg/pos
+      dsp[i].min = 0
+      dsp[i].max = 800
+   ENDFOR
+   dsp[2].bot = nc
+   dsp[2].range = 2
+   dsp[2].type = 0
+   dsp[3].type = 0
+   !p.background = 0
+   loadct, 36, ncolors=dsp[0].nc, bottom=dsp[0].bot, file=lut
+   loadct, 37, ncolors=dsp[2].nc, bottom=dsp[2].bot, file=lut
+
+   widget_control, base, set_uvalue=uv
+   widget_control, base, /realize, xoffset=0, yoffset=ysize+30
+
+   yloc = 0
+   FOR i= 0, 3 DO BEGIN
+      dispbase = widget_base(TITLE=dname[i], group_leader=uv.wid.base, uvalue=base)
+      win = widget_draw(dispbase, xsize=dsp[i].xsize, ysize=dsp[i].ysize)
+      xloc = i*(xfact*xsize + 20) < i*320 ; for 1280x1024 display
+      widget_control, dispbase, /realize, xoffset=xloc, yoffset=yloc
+      widget_control, win, get_value=windowIndex
+      wset, windowIndex
+      xmanager, "DISP"+strcompress(string(i+1),/remove_all), dispbase, /just_reg
+      uv.wid.win[i] = win
+      dsp[i].id = windowIndex
+   ENDFOR
+   widget_control, base, set_uvalue=uv
+   display, uv
+   ndx = float(reform((*uv.img[5].data)[*,*,*]))
+   ndy = float(reform((*uv.img[6].data)[*,*,*]))
+   ndz = float(reform((*uv.img[7].data)[*,*,*]))
+
+   ref = float(reform((*uv.img[0].data)[*,*,*]))
+   new = float(reform((*uv.img[1].data)[*,*,*]))
+   study = float(reform((*uv.img[4].data)[*,*,*]))
+   nx = (size(ref))[1]
+   ny = (size(ref))[2]
+   nz = (size(ref))[3]
+
+; ---------------------------------------
+; Shift to Center-of-Mass
+
+   t0 = systime(1)
+   shift3d, ref, study, new, dx, dy, dz
+   study = new
+   dif = ref-new
+   grad3d, ref, gx, gy, gz, nx, ny, nz
+   t1 = systime(1) - t0
+
+   head = '  Time   Cyc  Siz  Loop  Cnt   f0    f1   fac   gmin   MaxGrad   MeanSqrErr'
+   ;;       3600.    1    8    1    1   0.00  0.02  8.0    350    21159.    17164.10
+   values = string(FORMAT='(F7.0,I5,I5,I5,I5,F7.2,F6.2,F5.1,I7,F10.0,F12.2)', $
+                   t1,0,0,0,0,0,0,0,0,0,mean(dif*dif))
+   IF (strlen(log) GT 0 AND loglun NE 0) THEN printf,loglun,format='(A,/,A)', head,values
+
+   widget_control, uv.wid.time, set_value=string(format='(F7.0)',t1)
+   widget_control, uv.wid.mse,  set_value=string(format='(F10.2)',mean(dif*dif))
+   widget_control, uv.wid.cyc,  set_value=string(format='(I4)',0)
+   widget_control, uv.wid.size, set_value=string(format='(I3)',0)
+   widget_control, uv.wid.loop, set_value=string(format='(I3)',0)
+   widget_control, uv.wid.cnt,  set_value=string(format='(I3)',0)
+   widget_control, uv.wid.f0,   set_value=string(format='(F4.2)',0)
+   widget_control, uv.wid.f2,   set_value=string(format='(F4.2)',0)
+   widget_control, uv.wid.gmin, set_value=string(format='(I4)',0)
+   widget_control, uv.wid.gmax, set_value=string(format='(F7.0)',0)
+   widget_control, uv.wid.wtime, set_value=string(format='(F7.0)',0)
+
+   (*uv.img[1].data) = new
+   (*uv.img[2].data) = dif
+   (*uv.img[3].data) = sqrt(gx*gx+gy*gy+gz*gz)
+   (*uv.img[5].data) = (*uv.img[5].data) + replicate(dx,nx*ny*nz)
+   (*uv.img[6].data) = (*uv.img[6].data) + replicate(dy,nx*ny*nz)
+   (*uv.img[7].data) = (*uv.img[7].data) + replicate(dz,nx*ny*nz)
+   mserror = mean(dif*dif)
+   ysize = uv.img[0].dim[1] * dsp[0].zoom
+   display, uv
+
+; WARP Notes:
+;	f0 smooths residual correction with a vicous-like effect (gauss of incremental difference)
+; 	f1 smooths total displacement correction with an elastic-like effect (gauss of total shift)
+; 		best results with f0=0 (no smooth) and f1 small (greater smooth)-> elastic stretch
+; 		f1=0.01 is too slow and f1=0.03 is too fast (distortion)
+; 	gmin set to distinguish primarily brain/csf boundary
+; 	size is downsampling of image before processing
+; 	fac determines speed of shift
+
+   FOR j=1,3 DO BEGIN
+      crit = 0.999              ; stop when mean square error of current step LE crit times MSE of last step
+      f0 = 0.0
+      f1 = 0.02
+      gmin = 350		; primarily brain/csf
+      siz = 2^(4-j)             ; 8, 4, 2
+      fac = 4.0*siz             ; 32, 16, 8
+      grad3d, ref, gx, gy, gz, nx/siz, ny/siz, nz/siz
+      wimg = gx
+      tmpmse = mserror
+      cnt = 1
+      WHILE ((mserror LE crit*tmpmse) OR (cnt LT 3)) DO BEGIN
+         cycle = cycle+1
+         tmpdx = (*uv.img[5].data)
+         tmpdy = (*uv.img[6].data)
+         tmpdz = (*uv.img[7].data)
+         ndx = tmpdx
+         ndy = tmpdy
+         ndz = tmpdz
+         wt0 = systime(1)
+         warp3d, ref, study, new, gx, gy, gz, ndx, ndy, ndz, f0, f1, fac, wimg, gmin
+         wt1 = systime(1) - wt0
+         dif = ref-new
+         tmpmse = mserror
+         mserror = mean(dif*dif)
+         (*uv.img[1].data) = new
+         (*uv.img[2].data) = dif
+         (*uv.img[3].data) = wimg
+         (*uv.img[5].data) = ndx
+         (*uv.img[6].data) = ndy
+         (*uv.img[7].data) = ndz
+         t1 = systime(1) - t0
+
+         values = string(FORMAT='(F7.0,I5,I5,I5,I5,F7.2,F6.2,F5.1,I7,F10.0,F12.2)', $
+                         t1,cycle,siz,j,cnt,f0,f1,fac,gmin,max(wimg),mserror)
+         IF (strlen(log) GT 0 AND loglun NE 0) THEN printf,loglun,values
+
+         widget_control, uv.wid.time, set_value=string(format='(F7.0)',t1)
+         widget_control, uv.wid.mse,  set_value=string(format='(F10.2)',mserror)
+         widget_control, uv.wid.cyc,  set_value=string(format='(I4)',cycle)
+         widget_control, uv.wid.size, set_value=string(format='(I3)',siz)
+         widget_control, uv.wid.loop, set_value=string(format='(I3)',j)
+         widget_control, uv.wid.cnt,  set_value=string(format='(I3)',cnt)
+         widget_control, uv.wid.f0,   set_value=string(format='(F4.2)',f0)
+         widget_control, uv.wid.f2,   set_value=string(format='(F4.2)',f1)
+         widget_control, uv.wid.gmin, set_value=string(format='(I4)',gmin)
+         widget_control, uv.wid.gmax, set_value=string(format='(F7.0)',max(wimg))
+         widget_control, uv.wid.wtime, set_value=string(format='(F7.0)',wt1)
+         display, uv
+         cnt = cnt+1
+      ENDWHILE
+      IF (mserror GT tmpmse) THEN BEGIN
+         print, 'Use penultimate warp'
+         ndx = tmpdx
+         ndy = tmpdy
+         ndz = tmpdz
+      ENDIF
+   ENDFOR
+   wt0 = systime(1)
+   finalwarp3d, study, new, ndx, ndy, ndz, f1
+   wt1 = systime(1) - wt0
+   dif = ref-new
+   (*uv.img[1].data) = new
+   (*uv.img[2].data) = dif
+   display, uv
+   t1 = systime(1) - t0
+   head = '  Time   Cyc    f0    f1    MeanSqrErr'
+   ;;       3600.    1   0.00  0.02    17164.10
+   values = string(FORMAT='(F7.0,I5,F7.2,F6.2,F12.2)', t1,cycle,f0,f1,mean(dif*dif))
+   IF (strlen(log) GT 0 AND loglun NE 0) THEN printf,loglun,format='(A,/,A)', head,values
+
+   widget_control, uv.wid.time, set_value=string(format='(F7.0)',t1)
+   widget_control, uv.wid.mse,  set_value=string(format='(F10.2)',mserror)
+   widget_control, uv.wid.cyc,  set_value=string(format='(I4)',cycle)
+   widget_control, uv.wid.size, set_value=string(format='(I3)',siz)
+   widget_control, uv.wid.loop, set_value=string(format='(I3)',j)
+   widget_control, uv.wid.cnt,  set_value=string(format='(I3)',cnt)
+   widget_control, uv.wid.f0,   set_value=string(format='(F4.2)',f0)
+   widget_control, uv.wid.f2,   set_value=string(format='(F4.2)',f1)
+   widget_control, uv.wid.gmin, set_value=string(format='(I4)',gmin)
+   widget_control, uv.wid.gmax, set_value=string(format='(F7.0)',max(wimg))
+   widget_control, uv.wid.wtime, set_value=string(format='(F7.0)',wt1)
+
+; Save Warped Image
+
+   extra = strarr(3)
+   extra[0] = 'conversion program := transformer'
+   extra[1] = 'program version    := 1.0'
+   extra[2] = 'program date       := 2002:11:19'
+   str1 = ''
+   fname = warpfile
+   uv.img[1].fname = fname
+   print,'Saving ',fname
+   stat = putinterfile(uv.img[1], fname, str1, EXTRA=extra)
+   IF (stat NE 0) THEN message,'ERROR saving '+fname
+
+; Save Warp Factors
+
+   fnamex = warpfile+'_dx'
+   fnamey = warpfile+'_dy'
+   fnamez = warpfile+'_dz'
+   uv.img[5].fname = fnamex
+   uv.img[6].fname = fnamey
+   uv.img[7].fname = fnamez
+   print,'Saving ',fnamex
+   stat = putinterfile(uv.img[5], fnamex, str1, EXTRA=extra)
+   IF (stat NE 0) THEN message,'ERROR saving '+fnamex
+   print,'Saving ',fnamey
+   stat = putinterfile(uv.img[6], fnamey, str1, EXTRA=extra)
+   IF (stat NE 0) THEN message,'ERROR saving '+fnamey
+   print,'Saving ',fnamez
+   stat = putinterfile(uv.img[7], fnamez, str1, EXTRA=extra)
+   IF (stat NE 0) THEN message,'ERROR saving '+fnamez
+
+; Exit
+
+   FOR i=0, 2 DO IF (uv.img[i].data NE ptr_new()) THEN ptr_free, uv.img[i].data
+   IF ((loglun NE 0) AND (size(loglun))[1] NE 0) THEN BEGIN
+      status = FSTAT(loglun)
+      IF (status.open GT 0) THEN close, loglun
+      IF (status.size EQ 0) THEN BEGIN
+         command = 'rm ' + status.name
+         spawn, command
+      ENDIF ELSE print,'Processing log saved in ',status.name
+   ENDIF
+   return
+
+END
+@

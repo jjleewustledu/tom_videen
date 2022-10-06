@@ -1,0 +1,320 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.16.48.03;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.11.27.14.28.33;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.26.20.07.26;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.09.24.19.20.07;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.09.02.20.54.55;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: align1d_apfix.c,v $
+ * Revision 1.4  2002/11/27  14:28:33  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  2002/11/26  20:07:26  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1999/09/24  19:20:07  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/09/02  20:54:55  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			align1d_apfix.c
+ *	Date:			Sep 1999
+ *	Author:			Tom Videen
+ *	Description:	Adjust the alignment of an Analyze image line-by-line
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/align1d_apfix/RCS/align1d_apfix.c,v 1.4 2002/11/27 14:28:33 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+#include <ANALYZE.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	FILE           *fd_cor;			 /* file for y-shifts */
+	char           *inimg, *inhdr;		 /* input file */
+	char           *outimg, *outhdr;	 /* output img file */
+	char           *corfil;			 /* output corrections */
+	char            line[MAXLINE];
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+	long            i, j, k, m;
+	long            n, num;
+	int            *shift;
+	short          *img;
+	short        ***image;
+
+	if (argc != 6) {
+		fprintf (stdout, "Usage: align1d_apfix inhdr inimg outhdr outimg corfil\n");
+		return (ERROR);
+	}
+	inhdr = argv[1];
+	inimg = argv[2];
+	outhdr = argv[3];
+	outimg = argv[4];
+	corfil = argv[5];
+
+/*	Read Image */
+
+	if ((fd_hdr = fopen (inhdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Cannot open: %s\n", inhdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Reading: %s\n", inhdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	num = dim1 * dim2 * dim3;
+	if ((image = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Cannot malloc image\n");
+		return (NULL);
+	}
+	img = (short *) calloc (num, sizeof (short));
+	if (img == NULL) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (inimg, "r")) == 0) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Cannot open: %s\n", inimg);
+		return (ERROR);
+	}
+	if ((fread (img, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Reading: %s\n", inimg);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	fprintf (stdout, "Read %s\n", inimg);
+
+/*	Read correction file */
+
+	if ((fd_cor = fopen (corfil, "r")) == 0) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Unable to open %s\n", corfil);
+		return (ERROR);
+	}
+	(void) fgets (line, MAXLINE, fd_cor);
+	(void) fgets (line, MAXLINE, fd_cor);
+	n = 0;
+	(void) sscanf (line, "%ld\n", &n);
+	if (n != dim3) {
+		fprintf (stderr, "ERROR [align1d_apfix]: %ld lines in %s differs from z-dim = %ld in %s\n",
+			 n, corfil, dim3, inimg);
+		return (ERROR);
+	}
+	shift = (int *) calloc (dim3, sizeof (int));
+	for (j = 1; j <= dim3; j++) {
+		(void) fgets (line, MAXLINE, fd_cor);
+		(void) sscanf (line, "%ld %d\n", &n, &shift[j]);
+	}
+	(void) fclose (fd_cor);
+	fprintf (stdout, "Read %s\n", corfil);
+
+/*	Shift img while moving to image */
+
+	n = 0;
+	for (k = dim3; k >= 1; k--) {
+		/* printf ("%3d %3d\n", k, shift[k]); */
+		for (j = dim2; j >= 1; j--) {
+			m = j + shift[k];
+			for (i = dim1; i >= 1; i--) {
+				if (m >= 1 && m <= dim2)
+					image[k][m][i] = img[n];
+				n++;
+			}
+		}
+	}
+
+/*	Back to tensor */
+
+	n = 0;
+	for (k = dim3; k >= 1; k--) {
+		for (j = dim2; j >= 1; j--) {
+			for (i = dim1; i >= 1; i--) {
+				img[n] = image[k][j][i];
+				n++;
+			}
+		}
+	}
+
+	if ((fd_hdr = fopen (outhdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Unable to open %s\n", outhdr);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Error writing to: %s\n", outhdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	if ((fd_img = fopen (outimg, "w")) == 0) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Unable to open %s\n", outimg);
+		return (ERROR);
+	}
+	if ((fwrite (img, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Error writing to: %s\n", outimg);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	free (img);
+	free (shift);
+	free_s3tensor (image, 1, dim3, 1, dim2, 1, dim1);
+	return (OK);
+}
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			Sep-99
+d21 1
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/align1d_apfix/RCS/align1d_apfix.c,v 1.3 2002/11/26 20:07:26 tom Exp tom $";
+d72 1
+a72 1
+	fclose (fd_hdr);
+d95 1
+a95 1
+	fclose (fd_img);
+d104 2
+a105 2
+	fgets (line, MAXLINE, fd_cor);
+	fgets (line, MAXLINE, fd_cor);
+d107 1
+a107 1
+	sscanf (line, "%ld\n", &n);
+d115 2
+a116 2
+		fgets (line, MAXLINE, fd_cor);
+		sscanf (line, "%ld %d\n", &n, &shift[j]);
+d118 1
+a118 1
+	fclose (fd_cor);
+d156 1
+a156 1
+	fclose (fd_hdr);
+d165 1
+a165 1
+	fclose (fd_img);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/align1d_apfix/RCS/align1d_apfix.c,v 1.2 1999/09/24 19:20:07 tom Exp tom $";
+d103 1
+a103 1
+	sscanf (line, "%d\n", &n);
+d105 1
+a105 1
+		fprintf (stderr, "ERROR [align1d_apfix]: %d lines in %s differs from z-dim = %d in %s\n",
+d112 1
+a112 1
+		sscanf (line, "%d %d\n", &n, &shift[j]);
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/align1d_apfix/RCS/align1d_apfix.c,v 1.1 1999/09/02 20:54:55 tom Exp $";
+a21 1
+#include <nr.h>
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header$";
+a17 1
+#include <libnrimg.h>
+d19 1
+d21 1
+d37 2
+a38 2
+	long            i, j, k, m, n;
+	long            num;
+d64 1
+d69 4
+d97 1
+a113 4
+	if ((image = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [align1d_apfix]: Cannot malloc image\n");
+		return (NULL);
+	}
+@

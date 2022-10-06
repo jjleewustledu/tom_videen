@@ -1,0 +1,155 @@
+/*$Id: getimage_type.c,v 1.3 1995/10/31 14:54:28 tom Exp $*/
+/*$Log: getimage_type.c,v $
+ * Revision 1.3  1995/10/31  14:54:28  tom
+ * remove petutil parent directory from include statements
+ *
+ * Revision 1.2  1995/10/13  16:11:06  ty7777
+ * Use matrix7.h
+ *
+ * Revision 1.1  1995/10/10  15:34:46  ty7777
+ * Initial revision
+ **/
+
+#ifndef lint
+static char sccsid[]="@(#)getimage_type.c 10/09/92 Copyright Neural Pet Group, Washington University 1992";
+#endif
+static char rcsid []= "$Header: /home/npggw/tom/src/libpetf77/RCS/getimage_type.c,v 1.3 1995/10/31 14:54:28 tom Exp $";
+
+/*___________________________________________________________________________________
+ *
+ *	File Name:	getimage_type.c
+ *	Function Name:	getimage_type
+ *	Arguments:	fd:		File descriptor, assigned before calling.	
+ *			image_name:	Image name.
+ *			encoded_flag:	True: encoded image; False: decoded image;
+ *					returned. 
+ *			num_slices:	Number of slices, returned.
+ *	Return Value:	int:		Image type.			
+ *					PETT VI: 6;	Super PETT I: 7;
+ *					ECAT: 10;	Super PETT II: 8;
+ *					Error: -1.
+ *	Description:	Read an image file and determine its image type.
+ *	Called by:	GETIMG () in getimg.f of libpetutil.a.
+ *	Calling:	OpenEcat () in OpenEcat.c of libpetutil.a	
+ *	Author:		Tom Yang
+ *	History:	Created by Tom Yang on 04/15/1992.
+ *
+___________________________________________________________________________________*/
+
+#include <petutil.h>
+#include <matrix7.h>
+
+int getimage_type (fd, image_name, encoded_flag, num_slices)
+int		fd;
+char		*image_name;
+BOOLEAN		*encoded_flag;
+short		*num_slices;
+{
+	MatrixFile	*matfptr;		/* ECAT MatrixFile pointer */
+	char		*char_header;		/* character header */
+	char		fileform [ENCODED_FILE_FORM_LEN + 1];			
+	char		super_pet1_fileform [ENCODED_FILE_FORM_LEN + 1];			
+	float		pixel_size;
+	float		plane_separation;
+	int		scan_type;
+	short		*int_header;		/* integer header */
+	short		xdim;			/* dimension-x */
+	short		ydim;			/* dimension-y */
+	static char	*function	= "getimage_type";
+	struct Matval	matval;
+
+	/*
+	 * Assign default values for matval.
+	 */
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+	/* 
+	 * Allocate memory for image header. 
+	 */
+	char_header = (char *) pkg_malloc (HEADER_SIZE, function, "char_header");
+
+	/* 
+	 * Read first record and check if file is encoded. 
+	 */
+	lseek (fd, 0L, 0);
+	if (read (fd, char_header, HEADER_SIZE) < HEADER_SIZE) 
+	{
+		pkg_message (PKG_ERROR, function, "fread", 
+			"char_header", "Reading error");
+		return	ERROR_SCANNER;
+	}
+
+	int_header	= (short *) char_header; 
+	strncpy (fileform, char_header, ENCODED_FILE_FORM_LEN);
+	strncpy (super_pet1_fileform, char_header + 
+		SUPER_PETT_I_NAME_POS, ENCODED_FILE_FORM_LEN);
+
+	/*
+	 * Check if image file is encoded.
+	 */
+	if (strncmp (fileform, "ENCODED   ", ENCODED_FILE_FORM_LEN) == 0)
+	{
+		*encoded_flag	= TRUE;
+		*num_slices	= int_header [ENCODED_NUMSLICES_POS];
+		scan_type	= int_header [ENCODED_PETTNUM_POS]; 
+	}
+	else
+	{
+		*encoded_flag	= FALSE;
+
+		if (strncmp (fileform, "SUPER PETT", 10) == 0)
+		{
+			*num_slices	= int_header [SPETT_II_NUM_SLICES_POS];
+			scan_type	= SUPER_PETT_II_SCANNER;
+		}
+		else if (strncmp (fileform, "PC2048-15B", 10)	== 0 || 
+			strncmp (fileform, "ECAT-953", 8)	== 0 ||
+			strncmp (fileform, "PETT VI ", 8)	== 0)
+		{
+			*num_slices	= int_header [SPETT_II_NUM_SLICES_POS];
+			scan_type	= SUPER_PETT_II_OTHERS;
+		}
+		else if (strncmp (super_pet1_fileform, "SUPER PETT", 10) == 0)
+		{
+			*num_slices	= int_header [SPETT_I_NUM_SLICES_POS];
+			scan_type	=  SUPER_PETT_I_SCANNER;
+		}
+		else if (int_header [PETT6_POS] == PETT6_NUMBER) 
+		{
+			if (int_header [PETT6_NUM_SLICES_POS] != 0)
+			{
+				*num_slices	= int_header [PETT6_NUM_SLICES_POS];
+			}
+			else
+			{
+				*num_slices	= PETT6_7SLICES;
+			}
+
+			scan_type	=  PETT6_SCANNER;	
+		}
+		/* 
+	 	 * Check if image is in ECAT format.
+	 	 */
+		else if ((matfptr = OpenEcat (fd, image_name, num_slices, &xdim, &ydim, 
+					&pixel_size, &plane_separation, matval)) != NULL)
+		{
+			scan_type	=  ECAT_SCANNER;
+			*encoded_flag	= FALSE;
+			matrix_close (matfptr);
+		}
+		else
+		{
+			fprintf (stderr, "PET Data Input Error.\n");
+
+			scan_type	=  ERROR_SCANNER;
+		}
+	}
+
+	free (char_header);
+
+	return	scan_type;
+}

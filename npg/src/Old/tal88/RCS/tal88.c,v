@@ -1,0 +1,754 @@
+head	1.4;
+access;
+symbols;
+locks
+	tom:1.4; strict;
+comment	@ * @;
+
+
+1.4
+date	93.08.12.22.58.02;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.08.06.15.16.49;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.08.05.22.22.58;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.06.24.18.57.01;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial test version of tal88 reproduces the output of the current hd6mean
+everywhere within the 100x100 inner array of pixels.
+Tested by TOV 24-Jun-93 using p2000ho1 (PETT VI image)
+@
+
+
+1.4
+log
+@equivalent to hd6mean
+@
+text
+@/* $Log: tal88.c,v $
+ * Revision 1.3  1993/08/06  15:16:49  tom
+ * reads prm and list files
+ *
+ * Revision 1.1  1993/06/24  18:57:01  tom
+ * Initial revision
+ *
+ */
+/*	===============================================================================
+ *	Module:				tal88.c
+ *	Date:					24-Jun-93
+ *	Author:				Tom Videen
+ *	Description:	Transform PETT VI or ECAT images into Talairach 1988 space.
+ *								Create summed images (difference, mean, or single)
+ *	History:
+ *		Version 1.1 (24-Jun-93) was a replication of the current hd6mean (SARP) algorithm.
+ *		Version 1.4 (11-Aug-93) read prm and lst files; paired image processing.
+ *			Read mask file for each activation image. 
+ *			Create sd and n images.
+ *			Output images are equivalent to hd6mean (setting x_trans in each slice).
+ *	===============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <petutil/petutil.h>
+#include <petutil/matrix.h>
+#include <petutil/imglist.h>
+#include "atlas.h"
+#include "list.h"
+
+static char rcsid []= "$Id: tal88.c,v 1.3 1993/08/06 15:16:49 tom Exp tom $"; 
+
+char list [] = "*;*;*;*"; 	/* any frame plane gate bed */
+
+REAL_SLICE	imagesum [ZATL];		/* sum of atlas images */
+REAL_SLICE	atlas_image [ZATL];	/* atlas-transformed image */
+SHORT_SLICE	nin [ZATL];					/* number of images contributing to each element of imagesum */
+
+/*	----------------------------
+ *	Function:			tal88
+ *	----------------------------
+ */	
+main (argc, argv)
+	int	argc;
+	char	*argv[];
+{
+	extern	atlas_trans();			/* transform to HD6 image format */
+	extern	getatlas_hd6();			/* get brain atlas definition */
+	extern	process_pet();			/* process 1 slice as counts, CBF, or CBV */
+	extern	int get_tal88_prms();
+
+	Image_subheader		**subheader;
+	Main_header				*main_header;
+	MatrixFile				*fptr;
+	FILE							*listfp;
+	SXR_OUTPUT				sxr;					/* xray & PET measurements */
+	BRAIN_ATLAS				atlas;				/* brain atlas definition */
+	PARAMETER_DATA		parameter_data;
+	IMAGE_LIST_DATA		*image_list;
+	INPUT_FILE_LIST		*scan;
+
+	BOOLEAN	encoded_flag;
+	BOOLEAN	use_mask = 0;
+	BOOLEAN	compute_sd = 0;
+	BOOLEAN	paired_images = 0;
+	char		*lstfile;
+	char		*prmfile;
+	char		*outfile;
+	char		maskfile[MAXPATH];
+	char		sdfile[MAXPATH];
+	char		nfile[MAXPATH];
+	char		*ext;
+	int			lstsize;
+	int			image_mode;
+	int			fd;
+	int			i, j, k;
+	int			temp;
+	float		scaler;						/* scale individual PET images */
+	float		pixel_size;
+	float		plane_separation;
+	int			scanner;					/* 6 = PETT VI;  10 = 953B */
+	short		nx;
+	short		ny;
+	short		num_slices;
+	struct	Matval	matval;
+	REAL_SLICE	*image1;			/* first PET image */
+	REAL_SLICE	*image2;			/* second PET image */
+	REAL_SLICE	*sdimage;			/* SD image */
+	REAL_SLICE	*mask;				/* mask for PET images */
+
+/*
+ *	parameters read from prm file
+ */
+
+	float		smg_norm;
+	char		smg_mode [10];
+	char		smg_divisor [10];
+	char		smg_included [10];
+	char		processing [10];
+	char		smg_mask [10];
+	char		smg_sdimage[10];
+	char		smg_nimage[10];
+
+	matval.frame	= 1;				/* default values for matval */
+	matval.plane	= 1;
+	matval.gate		= 1;
+	matval.data		= 0;
+	matval.bed		= 0;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ *	---------------------------------------------------
+ */
+
+	if (argc != 4) {
+		printf ("Usage: tal88 prmlist imglist outfile\n");
+		exit(FAIL);
+	}
+	prmfile	= argv [1];
+	lstfile	= argv [2];
+	outfile = argv [3];
+
+	strcpy (sdfile, outfile);
+	ext = strrchr (sdfile, '.');
+	strcpy (ext, ".sd");
+
+	strcpy (nfile, outfile);
+	ext = strrchr (nfile, '.');
+	strcpy (ext, ".n");
+
+/* 
+ *	Read imagelist into image_list.
+ *	------------------------------
+ */
+
+	image_list	= (IMAGE_LIST_DATA *) malloc (sizeof (IMAGE_LIST_DATA) * MAX_IMAGE_LIST_SIZE);
+
+	if (readimglist (lstfile, image_list, &lstsize) == FAIL) {
+		printf ("Error: reading %s\n",lstfile);
+		exit (FAIL);
+	}
+
+/*
+ *	Read parameters into parameter_data and get full path names in scan
+ *	-------------------------------------------------------------------
+ */
+
+	scan = (INPUT_FILE_LIST *) malloc (lstsize * sizeof (INPUT_FILE_LIST));
+	
+	if (get_tal88_prms (prmfile, &smg_norm, smg_divisor, smg_included, processing, 
+		smg_mode, smg_mask, smg_sdimage, smg_nimage) == FAIL) {
+		printf ("Error: reading parameter file %s\n",prmfile);
+		exit (FAIL);
+	}
+
+	if (strcmp (smg_mode, "diff") == 0)
+		image_mode = DIFIMAGE_MODE;
+	else
+		image_mode = STDIMAGE_MODE;
+
+	get_input_lists (prmfile, lstfile, lstsize, image_mode, &parameter_data, image_list, scan);
+
+
+/* check the output (debug) */
+
+	for (i = 0; i < lstsize; i++) {
+		printf ("Activation = %s\n", scan [i].activation);
+		if (strcmp (smg_mode, "paired") == 0) printf ("Control    = %s\n", scan [i].control);
+		printf ("SXR        = %s\n", scan [i].sxr);
+	}
+
+/*
+ *	Get atlas values
+ *	----------------
+ */
+
+	getatlas_hd6 (&atlas);
+	main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+	subheader		= (Image_subheader **) malloc (ZATL * sizeof (caddr_t));
+
+/*
+ *	LOOP for each image or image-pair in the list:
+ *	---------------------------------------------
+ */
+
+	for (i=0; i < lstsize; ++i) {
+		getsxr (scan[i].sxr, &sxr);
+
+/*
+ *	First image, first time -- get scanner and dimensions
+ *	-----------------------------------------------------
+ */
+		if (i == 0) {
+			fd = open (scan[i].activation, O_RDONLY, 0);
+			if (fd == -1) {
+				printf ("Error opening %s\n", scan[i].activation);
+				exit (FAIL);
+			}
+			scanner = getimage_type (fd, scan[i].activation, &encoded_flag, &num_slices);
+			close (fd);
+			if (scanner == ERROR_SCANNER) {
+				printf ("Error: file is not a recognized PET image\n");
+				exit (FAIL);
+			}
+			if (scanner == ECAT_SCANNER) {
+				fptr = OpenEcat (scan[i].activation, &num_slices, &nx, &ny, &pixel_size,
+					&plane_separation, matval);
+				if (fptr  == (MatrixFile *) NULL) {
+					printf ("Error: cannot open %s as an ECAT image file\n", scan[i].activation);
+					exit (FAIL);
+				}
+				matrix_close (fptr);
+			} else {
+				nx = DIM;
+				ny = DIM;
+			}
+			image1 = (REAL_SLICE *) calloc (num_slices, sizeof (REAL_SLICE));
+			if (strcmp (smg_mode, "paired") == 0) {
+				paired_images = 1;
+				image2 = (REAL_SLICE *) calloc (num_slices, sizeof (REAL_SLICE));
+			}
+			if (strcmp (smg_mask, "yes") == 0) {
+				use_mask = 1;
+				mask = (REAL_SLICE *) calloc (num_slices, sizeof (REAL_SLICE));
+			}
+			if (strcmp (smg_sdimage, "yes") == 0) {
+				compute_sd = 1;
+				sdimage = (REAL_SLICE *) calloc (ZATL, sizeof (REAL_SLICE));
+			}
+		}
+
+/*
+ *	First (activation) image
+ *	------------------------
+ */
+		if (getrealimg (scan[i].activation, scanner, matval, nx, ny, num_slices, image1, 
+				main_header, subheader) == FAIL) {
+			fprintf (stderr, "Error reading %s\n", scan[i].activation);
+			exit (FAIL);
+		}
+		scaler = smg_norm / image_list[i].activation_mean;
+		printf ("Scale %s by %f\n", scan[i].activation, scaler);
+		if (process_pet (image1, nx, ny, num_slices, scaler, processing, scan[i].activation) > 0) {
+			fprintf (stderr, "Error processing %s\n", scan[i].activation);
+			exit (FAIL);
+		}
+
+/*
+ *	Second (control) image:  subtract from image1
+ *	----------------------
+ */
+
+		if (paired_images) {
+			if (getrealimg (scan[i].control, scanner, matval, nx, ny, num_slices, image2, 
+					main_header, subheader) == FAIL) {
+				fprintf (stderr, "Error reading %s\n", scan[i].control);
+				exit (FAIL);
+			}
+			scaler = smg_norm / image_list[i].control_mean;
+			printf ("Scale %s by %f\n", scan[i].control, scaler);
+			if (process_pet (image2, nx, ny, num_slices, scaler, processing, scan[i].control) > 0) {
+				fprintf (stderr, "Error processing %s\n", scan[i].control);
+				exit (FAIL);
+			}
+			image_diff (image1, image2, num_slices);
+		}
+
+/*
+ *	Read smg_mask
+ *	-------------
+ */
+
+		if (use_mask) {
+			strcpy (maskfile, scan[i].activation);
+			ext = strrchr (maskfile,'.');
+			strcpy (ext, ".msk");
+			if (getrealimg (maskfile, scanner, matval, nx, ny, num_slices, mask, 
+					main_header, subheader) == FAIL) {
+				fprintf (stderr, "Error reading %s\n", maskfile);
+				exit (FAIL);
+			}
+		}
+
+		atlas_trans (image1, atlas_image, nin, sxr, atlas, use_mask, mask);
+		image_sum (imagesum, atlas_image, ZATL, use_mask, mask, compute_sd, sdimage);
+	}
+
+/*
+ *	Scale image and mask pixels before saving
+ *	-----------------------------------------
+ */
+
+	image_scale (imagesum, nin, ZATL, lstsize, smg_divisor, smg_included, paired_images,
+		compute_sd, sdimage);
+
+/*
+ *	Write Summed Image to outfile
+ *	-----------------------------
+ *	frame_duration must be set in all subheaders
+ */
+
+	for (i = num_slices; i < ZATL; i++) {
+		subheader[i] = matrixx_init_image_subheader (subheader[0]);
+	}
+
+	if (writerealimg (outfile, matval, DIM, DIM, ZATL, imagesum, main_header, subheader) 
+			== FAIL) {
+		fprintf (stderr, "Error writing %s\n", outfile);
+	}
+
+/*
+ *	Write SD Image to sdfile
+ *	------------------------
+ */
+
+	if (compute_sd) {
+		if (writerealimg (sdfile, matval, DIM, DIM, ZATL, sdimage, main_header, subheader)
+			== FAIL) {
+			fprintf (stderr, "Error writing %s\n", sdfile);
+		}
+	}
+
+/*
+ *	Convert nin to float and Write N Image to nfile
+ *	-----------------------------------------------
+ */
+
+	if (strcmp (smg_nimage,"yes") == 0) {
+		for (i = 0; i < ZATL; i++) {
+			for (j = 0; j < DIM; j++) {
+				for (k = 0; k < DIM; k++) {
+					imagesum [i][j][k] = nin [i][j][k];
+				}
+			}
+		}
+		if (writerealimg (nfile, matval, DIM, DIM, ZATL, imagesum, main_header, subheader)
+				== FAIL) {
+			fprintf (stderr, "Error writing %s\n", nfile);
+		}
+	}
+
+/*
+ *	Free memory
+ */
+
+	for (i = 0; i < ZATL; i++)
+		free (subheader [i]);
+	free (subheader);
+	free (main_header);
+	free (image1);
+	if (strcmp (smg_mode, "paired") == 0)
+		free (image2);
+	if (compute_sd)
+		free (sdimage);
+	if (use_mask)
+		free (mask);
+	matrix_close (fptr);
+	free (image_list);
+	free (scan);
+}
+@
+
+
+1.3
+log
+@reads prm and list files
+@
+text
+@d2 3
+d17 4
+a20 1
+ *		Version 1.3 (06-Aug-93) read prm and lst files.
+d34 1
+a34 2
+#define FILELEN			20				/* max length of input filename string */
+#define DEFAULT_SEP	0.3375		/* default slice separation of ECAT images */
+a35 2
+static char rcsid []= "$Id: tal88.c,v 1.1 1993/06/24 18:57:01 tom Exp $"; 
+
+d38 3
+a40 3
+REAL_SLICE		imagesum[ZATL];			/* sum of atlas images */
+REAL_SLICE		atlas_image[ZATL];	/* atlas-transformed image */
+SHORT_SLICE		nin[ZATL];					/* number of images contributing to each element of imagesum */
+d55 9
+a63 10
+	Image_subheader	**subheader;
+	Main_header			*main_header;
+	MatrixFile			*fptr;
+	FILE						*listfp;
+	SXR_OUTPUT			sxr;					/* xray & PET measurements */
+	BRAIN_ATLAS			atlas;				/* brain atlas definition */
+	PARAMETER_DATA	parameter_data;
+	IMAGE_LIST_DATA	*image_list;
+	INPUT_FILE_LIST	*scan;
+	struct INFO_TYPE	finfo;
+d66 3
+d72 4
+a75 4
+	char		pixel_divisor [10];
+	char		pixels_included [10];
+	char		processing [10];
+	char		filetype [10];
+d77 1
+d79 1
+a79 1
+	int			i;
+d81 1
+a81 6
+	float		scaler;								/* scale individual PET images */
+	float		normvalue;						/* normalization factor */
+
+	REAL_SLICE	*image1;					/* first and primary PET image */
+	REAL_SLICE	*image2;					/* second PET image */
+
+a83 2
+	int			matdiff;					/* difference in number of matrices requested and found */
+	int			dimension;
+d89 4
+d94 13
+d114 2
+a115 2
+ *	Get command line arguments.
+ * ----------------------------
+d126 8
+d135 2
+a136 1
+ * Read imagelist into image_list.
+d147 2
+a148 1
+ * Read parameters into parameter_data and get full path names in scan
+d152 3
+a154 5
+
+	get_input_lists (prmfile, lstfile, &lstsize, &parameter_data, image_list, &finfo, scan);
+
+	if (get_tal88_prms (prmfile, &normvalue, pixel_divisor, pixels_included, processing, 
+		filetype) == FAIL) {
+d159 4
+a162 1
+/* check the output */
+d164 5
+d171 1
+a171 1
+		printf ("Control    = %s\n", scan [i].control);
+d179 1
+a180 1
+
+d185 2
+a186 2
+ *	LOOP for each image or image-pair
+ *	---------------------------------
+a189 1
+
+d216 1
+a216 2
+			}
+			else {
+a218 2
+				pixel_size = 0.286;
+				plane_separation = 1.44;
+d221 2
+a222 1
+			if (filetype == "paired")
+d224 9
+d236 2
+a237 2
+ *	First image
+ *	-----------
+d244 1
+a244 1
+		scaler = normvalue / image_list[i].activation_mean;
+d252 2
+a253 2
+ *	Second image
+ *	------------
+d256 1
+a256 1
+		if (filetype == "paired") {
+d262 1
+a262 1
+			scaler = normvalue / image_list[i].control_mean;
+d268 2
+d271 14
+a284 1
+			image_diff (image1, image2, nx, ny, num_slices);
+d287 2
+a288 3
+		atlas_trans (image1, atlas_image, nin, sxr, atlas);
+
+		image_sum (imagesum, atlas_image, ZATL);
+d292 2
+a293 1
+ *	Scale image and mask pixels
+d296 2
+a297 1
+	image_scale (imagesum, nin, ZATL, lstsize, pixel_divisor, pixels_included);
+d300 2
+a301 2
+ *	Write Summed Image to outfile.
+ *	-------------------------------
+d308 3
+a310 1
+	if (writerealimg (outfile, matval, DIM, DIM, ZATL, imagesum, main_header, subheader) == FAIL) {
+d314 36
+a349 1
+	for (i = 0; i < ZATL; i++) {
+a350 1
+	}
+d354 1
+a354 1
+	if (filetype == "paired")
+d356 4
+@
+
+
+1.2
+log
+@revised matrix_mult and eliminated matrix_point_mult
+@
+text
+@d13 2
+d20 1
+d24 1
+d26 1
+d50 1
+d58 4
+d64 2
+d67 5
+a71 13
+	char		*filelist;
+	char		*divisor;
+	char		*include;
+	char		*initials;
+	char		*processing;
+	char		fileid[MAXLINE];
+	char		filetype[10];
+	char		ctrlfile[FILELEN];
+	char		actvfile[FILELEN];
+	char		sxrfile[FILELEN];
+	char		line [MAXLINE];
+	char		sbuffer [MAXLINE];
+	int			numfiles;
+d76 2
+a77 3
+	float		pet_mean1;						/* mean counts for first PET image */
+	float		pet_mean2;						/* mean counts for second PET image */
+	float		norm_factor;					/* normalization factor */
+d102 2
+a103 3
+	if (argc < 7 || argc > 8) {
+		printf ("%s%s\n", "Usage: tal88 outfile filelist divisor include norm_factor",
+			"initials [processing]");
+d106 3
+a108 7
+	outfile		= argv[1];
+	filelist	= argv[2];
+	divisor		= argv[3];
+	include		= argv[4];
+	norm_factor	= atof (argv[5]);
+	initials	= argv[6];
+	processing	= argv[7];
+d110 2
+a111 3
+/*
+ *	Read input filelist and check
+ * --------------------------
+d114 5
+a118 3
+	if ( (listfp = fopen (filelist, "r")) == NULL) {
+		printf ("%s %s\n","Cannot open ", filelist);
+		exit(FAIL);
+d121 12
+a132 3
+	if (fgets (line, MAXLINE, listfp) == NULL) {
+		printf ("%s\n", "Cannot read line 1 of %s", filelist);
+		exit(FAIL);
+a133 2
+	sscanf (line, "%s", fileid);
+	printf ("%s\n", fileid);
+d135 6
+a140 3
+	if (fgets (line, MAXLINE, listfp) == NULL) {
+		printf ("%s\n", "Cannot read line 2 of %s", filelist);
+		exit(FAIL);
+a141 2
+	sscanf (line, "%d%s", &numfiles, filetype);
+	printf ("%d %s\n", numfiles, filetype);
+d157 1
+a157 1
+	for (i=1; i <= numfiles; ++i) {
+d159 1
+a159 4
+/*
+ *	Get next input
+ *	--------------
+ */
+a160 9
+		if (fgets (line, MAXLINE, listfp) == NULL) {
+			printf ("%s\n", "Cannot read line 3 of %s", filelist);
+			exit(FAIL);
+		}
+		sscanf (line, "%s%f%s", ctrlfile, &pet_mean1, sxrfile);
+		printf ("%s %f %s\n", ctrlfile, pet_mean1, sxrfile);
+
+		getsxr (sxrfile, &sxr);
+
+d165 2
+a166 2
+		if (i == 1) {
+			fd = open (ctrlfile, O_RDONLY, 0);
+d168 1
+a168 1
+				printf ("Error opening %s\n", ctrlfile);
+d171 1
+a171 1
+			scanner = getimage_type (fd, ctrlfile, &encoded_flag, &num_slices);
+d178 1
+a178 1
+				fptr = OpenEcat (ctrlfile, &num_slices, &nx, &ny, &pixel_size,
+d181 1
+a181 1
+					printf ("Error: cannot open %s as an ECAT image file\n", ctrlfile);
+d193 1
+a193 1
+			if (filetype == "PAIRED")
+d201 1
+a201 1
+		if (getrealimg (ctrlfile, scanner, matval, nx, ny, num_slices, image1, 
+d203 1
+a203 1
+			fprintf (stderr, "Error reading %s\n", ctrlfile);
+d206 4
+a209 4
+		scaler = norm_factor / pet_mean1;
+		printf ("Scale %s by %f\n", ctrlfile, scaler);
+		if (process_pet (image1, nx, ny, num_slices, scaler, processing, ctrlfile) > 0) {
+			fprintf (stderr, "Error processing %s\n", ctrlfile);
+d218 2
+a219 2
+		if (filetype == "PAIRED") {
+			if (getrealimg (actvfile, scanner, matval, nx, ny, num_slices, image2,
+d221 1
+a221 1
+				fprintf (stderr, "Error reading %s\n", actvfile);
+d224 4
+a227 4
+			scaler = norm_factor / pet_mean2;
+			printf ("Scale %s by %f\n", actvfile, scaler);
+			if (process_pet (image2, nx, ny, num_slices, scaler, processing, actvfile) > 0) {
+				fprintf (stderr, "Error processing %s\n", actvfile);
+d238 1
+a238 4
+/*	free (image1);
+	if (filetype == "PAIRED")
+		free (image2);
+*/
+d240 6
+d251 1
+a251 1
+	for (i = 7; i < ZATL; i++) {
+d258 1
+a258 1
+	for (i = 0; i < num_slices; i++) {
+d264 2
+d267 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$
+d26 1
+a26 1
+static char rcsid []= "$Id$"; 
+d71 6
+a76 7
+	float		scaler;									/* scale individual PET images */
+	float		pet_mean1;							/* mean counts for first PET image */
+	float		pet_mean2;							/* mean counts for second PET image */
+	float		norm_factor;						/* normalization factor */
+	float		*image3d;								/* used to pass 3d arrays to and from library functions */
+	REAL_SLICE	*image1;						/* first and primary PET image */
+	REAL_SLICE	*image2;						/* second PET image */
+d88 1
+a88 1
+	matval.frame	= 1;			/* default values for matval */
+d198 1
+a198 1
+			if (filetype == "PAIRED") {
+a199 1
+			}
+d206 1
+a206 2
+		image3d = (float *) image1;
+		if (getrealimg (ctrlfile, scanner, matval, nx, ny, num_slices, image3d, 
+d224 1
+a224 2
+			image3d = (float *) image2;
+			if (getrealimg (actvfile, scanner, matval, nx, ny, num_slices, image3d, 
+d256 1
+a256 2
+	image3d = (float *) imagesum;
+	if (writerealimg (outfile, matval, DIM, DIM, ZATL, image3d, main_header, subheader) == FAIL) {
+@

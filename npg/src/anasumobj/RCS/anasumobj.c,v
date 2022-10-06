@@ -1,0 +1,295 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.18.17.21;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.12.14.19.40.57;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.09.20.15.07.42;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.09.17.19.05.08;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.09.16.18.14.55;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: anasumobj.c,v $
+ * Revision 1.4  1999/12/14  19:40:57  tom
+ * lint cleaning
+ *
+ * Revision 1.3  1999/09/20  15:07:42  tom
+ * permit sum of 1 to isolate an object
+ *
+ * Revision 1.2  1999/09/17  19:05:08  tom
+ * change mask to range
+ *
+ * Revision 1.1  1999/09/16  18:14:55  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			anasumobj.c
+ *	Date:			Sep 1999
+ *	Author:			Tom Videen
+ *	Description:	Add 1 or more Analyze object images
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anasumobj/RCS/anasumobj.c,v 1.4 1999/12/14 19:40:57 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			anasumobj
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdrstr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *img, *hdr;		 /* file namess */
+	long            dim[3];			 /* dimensions of image */
+	long            len=0;
+	long            len1;
+	long            num, n, i;
+	int             first = 1;
+	short           val1, val2;
+	short          *sum, *new;		 /* image */
+
+	if (argc < 7) {
+		printf ("Usage: anasumobj outhdr outimg val1 val2 inhdr1 inimg1 inhdr2 inimg2\n");
+		return (ERROR);
+	}
+	num = (argc - 4) / 2;
+	val1 = atoi (argv[3]);
+	val2 = atoi (argv[4]);
+
+	for (n = 0; n < num; n++) {
+		hdr = argv[2 * n + 5];
+		img = argv[2 * n + 6];
+
+		if ((fd_hdr = fopen (hdr, "r")) == 0) {
+			fprintf (stderr, "ERROR [anasumobj]: Cannot open: %s\n", hdr);
+			return (ERROR);
+		}
+		if ((fread (&hdrstr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+			fprintf (stderr, "ERROR [anasumobj]: Reading: %s\n", hdr);
+			return (ERROR);
+		}
+		if (hdrstr.dime.dim[0] != 4) {
+			fprintf (stderr, "ERROR [anasumobj]: Reading: %s\n", hdr);
+			fprintf (stderr, "Dimensions = %d\n", hdrstr.dime.dim[0]);
+			return (ERROR);
+		}
+		if (hdrstr.dime.datatype != 4) {
+			fprintf (stderr, "ERROR [anasumobj]: Reading: %s\n", hdr);
+			fprintf (stderr, "Datatype = %d\n", hdrstr.dime.datatype);
+			return (ERROR);
+		}
+		if (hdrstr.dime.bitpix != 16) {
+			fprintf (stderr, "ERROR [anasumobj]: Reading: %s\n", hdr);
+			fprintf (stderr, "Bits/pixel = %d\n", hdrstr.dime.bitpix);
+			return (ERROR);
+		}
+		dim[0] = hdrstr.dime.dim[1];
+		dim[1] = hdrstr.dime.dim[2];
+		dim[2] = hdrstr.dime.dim[3];
+		len1 = dim[0] * dim[1] * dim[2];
+		if (first) {
+			first = 0;
+			len = len1;
+			sum = (short *) calloc (len, sizeof (short));
+			if (sum == NULL) {
+				fprintf (stderr, "ERROR [anasumobj]: Cannot calloc sum\n");
+				return (ERROR);
+			}
+			new = (short *) calloc (len, sizeof (short));
+			if (new == NULL) {
+				fprintf (stderr, "ERROR [anasumobj]: Cannot calloc new\n");
+				return (ERROR);
+			}
+		} else if (len != len1) {
+			fprintf (stderr, "ERROR [anasumobj]: Reading: %s\n", hdr);
+			fprintf (stderr, "Image size %d differs from previous %d\n", (int) len1, (int) len);
+			return (ERROR);
+		}
+		(void) fclose (fd_hdr);
+
+		if ((fd_img = fopen (img, "r")) == 0) {
+			fprintf (stderr, "ERROR [anasumobj]: Cannot open: %s\n", img);
+			return (ERROR);
+		}
+		if ((fread (new, sizeof (short), len, fd_img)) != len) {
+			fprintf (stderr, "ERROR [anasumobj]: Reading: %d\n", (int) new);
+			return (ERROR);
+		}
+		(void) fclose (fd_img);
+		fprintf (stdout, "Read %s\n", img);
+
+		for (i = 0; i < len; i++)
+			if (new[i] >= val1 && new[i] <= val2)
+				sum[i] += new[i];
+
+	}
+
+	hdr = argv[1];
+	if ((fd_hdr = fopen (hdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [anasumobj]: Unable to open %s\n", hdr);
+		return (ERROR);
+	}
+	if ((fwrite (&hdrstr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anasumobj]: Error writing to: %s\n", hdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	free (new);
+
+	img = argv[2];
+	if ((fd_img = fopen (img, "w")) == 0) {
+		fprintf (stderr, "ERROR [anasumobj]: Unable to open %s\n", img);
+		return (ERROR);
+	}
+	if ((fwrite (sum, sizeof (short), len, fd_img)) != len) {
+		fprintf (stderr, "ERROR [anasumobj]: Error writing to: %s\n", img);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	return (OK);
+}
+@
+
+
+1.4
+log
+@lint cleaning
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			Sep-99
+d21 1
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anasumobj/RCS/anasumobj.c,v 1.3 1999/09/20 15:07:42 tom Exp tom $";
+d109 1
+a109 1
+		fclose (fd_hdr);
+d119 1
+a119 1
+		fclose (fd_img);
+d137 1
+a137 1
+	fclose (fd_hdr);
+d149 1
+a149 1
+	fclose (fd_img);
+@
+
+
+1.3
+log
+@permit sum of 1 to isolate an object
+@
+text
+@d2 3
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anasumobj/RCS/anasumobj.c,v 1.2 1999/09/17 19:05:08 tom Exp tom $";
+d41 2
+a42 1
+	long            len, len1;
+d102 1
+a102 1
+			fprintf (stderr, "Image size %d differs from previous %d\n", len1, len);
+d112 1
+a112 1
+			fprintf (stderr, "ERROR [anasumobj]: Reading: %s\n", new);
+a145 2
+	free (sum);
+
+@
+
+
+1.2
+log
+@change mask to range
+@
+text
+@d2 3
+d12 1
+a12 1
+ *	Description:	Add 2 or more Analyze object images
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anasumobj/RCS/anasumobj.c,v 1.1 1999/09/16 18:14:55 tom Exp tom $";
+d44 1
+a44 1
+	if (argc < 9) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anasumobj/RCS/anasumobj.c,v 1.1 1999/02/11 17:36:28 tom Exp $";
+d38 1
+a38 1
+	short           val;
+d41 2
+a42 2
+	if (argc < 8) {
+		printf ("Usage: anasumobj outhdr outimg val inhdr1 inimg1 inhdr2 inimg2\n");
+d46 2
+a47 1
+	val = atoi (argv[3]);
+d50 2
+a51 2
+		hdr = argv[2 * n + 4];
+		img = argv[2 * n + 5];
+d112 1
+a112 1
+			if (new[i] == val)
+@

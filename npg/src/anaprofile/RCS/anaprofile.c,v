@@ -1,0 +1,212 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2008.08.07.20.36.51;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/*	===============================================================================
+ *	Module:		anaprofile.c
+ *	Date:		Aug 2005
+ *	Author:		Tom Videen
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anaprofile/RCS/anaprofile.c,v 1.4 2005/05/04 13:29:05 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <nrutil.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			anaprofile
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;
+	FILE           *fd_hdr;
+	FILE           *fd_img;
+	char           *imgfile, *hdrfile;
+	long            nx, ny, nz;	
+	int             bytes;
+	int             i, j, k;
+	int             x, y, z, wid, d;
+	long            sum;
+
+	float        ***img;
+	float          *frow;
+	short          *srow;
+	char           *crow;
+
+
+	if (argc != 7) {
+		fprintf (stdout, "Usage: anaprofile img hdr x y z width\n");
+		return (ERROR);
+	}
+	hdrfile = argv[1];
+	imgfile = argv[2];
+	x = atoi (argv[3]);
+	y = atoi (argv[4]);
+	z = atoi (argv[5]);
+	wid = atoi (argv[6]);
+
+	d = (wid - 1) / 2;
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (hdrfile, "r")) == NULL) {
+		fprintf (stderr, "ERROR [anaprofile]: opening: %s\n", hdrfile);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anaprofile]: reading: %s\n", hdrfile);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [anaprofile]: reading: %s\n", hdrfile);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix == 8)
+		bytes = 1;
+	else if (hdr.dime.bitpix == 16)
+		bytes = 2;
+	else if (hdr.dime.bitpix == 32)
+		bytes = 4;
+	else {
+		fprintf (stderr, "ERROR [anaprofile]: reading: %s\n", hdrfile);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	nx = hdr.dime.dim[1];
+	ny = hdr.dime.dim[2];
+	nz = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+/*
+ *	Read the img and flip X, Y & Z from Analyze convention
+ */
+
+	if ((fd_img = fopen (imgfile, "r")) == NULL) {
+		fprintf (stderr, "ERROR [anaprofile]: opening: %s\n", imgfile);
+		return (ERROR);
+	}
+	if ((img = f3tensor (1, nz, 1, ny, 1, nx)) == NULL) {
+		fprintf (stderr, "ERROR [anaprofile]: malloc img\n");
+		return (ERROR);
+	}
+	if (bytes == 1) {
+		if (NULL == (crow = (char *) calloc (nx, sizeof (char)))) {
+			fprintf (stderr, "ERROR [anaprofile]: malloc row\n");
+			return (ERROR);
+		}
+		for (i = nz; i > 0; i--) {
+			for (j = ny; j > 0; j--) {
+				if ((fread (crow, sizeof (char), nx, fd_img)) != nx) {
+					fprintf (stderr, "ERROR [anaprofile]: reading: %s\n", imgfile);
+					return (ERROR);
+				}
+				for (k = 1; k <= nx; k++)
+					img[i][j][nx - (k - 1)] = (float) crow[k - 1];
+			}
+		}
+
+	} else if (bytes == 2) {
+		if (NULL == (srow = (short *) calloc (nx, sizeof (short)))) {
+			fprintf (stderr, "ERROR [anaprofile]: malloc row\n");
+			return (ERROR);
+		}
+		for (i = nz; i > 0; i--) {
+			for (j = ny; j > 0; j--) {
+				if ((fread (srow, sizeof (short), nx, fd_img)) != nx) {
+					fprintf (stderr, "ERROR [anaprofile]: reading: %s\n", imgfile);
+					return (ERROR);
+				}
+				for (k = 1; k <= nx; k++) {
+					if (srow[k - 1] == -32768)
+						img[i][j][nx - (k - 1)] = 0.;
+					else
+						img[i][j][nx - (k - 1)] = (float) srow[k - 1];
+				}
+			}
+		}
+
+	} else {
+		if (NULL == (frow = (float *) calloc (nx, sizeof (float)))) {
+			fprintf (stderr, "ERROR [anaprofile]: malloc row\n");
+			return (ERROR);
+		}
+		for (i = nz; i > 0; i--) {
+			for (j = ny; j > 0; j--) {
+				if ((fread (frow, sizeof (float), nx, fd_img)) != nx) {
+					fprintf (stderr, "ERROR [anaprofile]: reading: %s\n", imgfile);
+					return (ERROR);
+				}
+				for (k = 1; k <= nx; k++)
+					img[i][j][nx - (k - 1)] = frow[k - 1];
+			}
+		}
+	}
+	fprintf (stdout, "x=%d y=%d z=%d w=%d %s\n",x,y,z,wid,imgfile);
+	(void) fclose (fd_img);
+
+	if (x == 0) {
+		for (i = 1; i <= nx; i++) {
+			sum = 0;
+			for (j = y - d; j <= y + d; j++)
+				sum = sum + img[z][j][i];
+			fprintf (stdout, "%ld %ld\n", i, sum);
+		}
+	} else if (y == 0) {
+		for (j = 1; j <= ny; j++) {
+			sum = 0;
+			for (i = x - d; i <= x + d; i++)
+				sum = sum + img[z][j][i];
+			fprintf (stdout, "%ld %ld\n", j, sum);
+		}
+	} else if (z == 0) {
+		for (k = 1; k <= nz; k++) {
+			sum = 0;
+			for (j = y - d; j <= y + d; j++)
+				for (i = x - d; i <= x + d; i++)
+					sum = sum + img[k][j][i];
+			fprintf (stdout, "%ld %ld\n", k, sum);
+		}
+	}
+	if (bytes == 1)
+		free (crow);
+	else if (bytes == 2)
+		free (srow);
+	else
+		free (frow);
+	free_f3tensor (img, 1, nz, 1, ny, 1, nx);
+	return (OK);
+}
+@

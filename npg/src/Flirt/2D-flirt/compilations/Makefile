@@ -1,0 +1,46 @@
+VER = 1.1
+ROOTPATH = /home/npggw/tom/src/Flirt/2D-flirt
+FFTWPATH = /usr/local/npg/fftw-3.1.2
+
+LIBS  = -L/usr/lib -L${ROOTPATH}/lib -L${FFTWPATH}/lib
+INCS  = -I/usr/include -I${ROOTPATH}/include -I${FFTWPATH}/include
+CPP   = CC -O3 ${INCS} ${LIBS}
+
+CSRCS = \
+	curvature.cc \
+	curvatureTM.cc \
+	diffusiveFFT.cc \
+	elastic.cc 
+
+OBJS = ${CSRCS:.cc=.o}
+
+main: curvature.o curvatureTM.o diffusiveFFT.o elastic.o
+	${CPP} curvature.o -o curvature -lflirt++ -lflirt -lfftw3 -ltiff
+	${CPP} curvatureTM.o -o curvatureTM -lflirt++ -lflirt -lfftw3 -ltiff
+	${CPP} diffusiveFFT.o -o diffusiveFFT -lflirt++ -lflirt -lfftw3 -ltiff
+	${CPP} elastic.o -o elastic -lflirt++ -lflirt -lfftw3 -ltiff
+
+${OBJS}: ${CSRCS}
+	${CPP} -c ${CSRCS}
+
+release:
+	cp curvature /usr/local/npg/bin
+	cp curvatureTM /usr/local/npg/bin
+	cp diffusiveFFT /usr/local/npg/bin
+	cp elastic /usr/local/npg/bin
+
+checkout:
+	co ${CSRCS}
+
+checkin:
+	ci ${CSRCS} 
+
+sync:
+	ci -f -r${VER} ${CSRCS}
+
+lock:
+	co -l ${CSRCS}
+
+clean: 
+	rm ${OBJS}
+

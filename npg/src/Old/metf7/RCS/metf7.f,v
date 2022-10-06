@@ -1,0 +1,850 @@
+head	1.1;
+access;
+symbols;
+locks
+	tom:1.1; strict;
+comment	@c @;
+
+
+1.1
+date	99.01.15.14.06.37;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      METF7.FTN         rev 7
+C
+C  Author:       Joel S. Perlmutter
+C  Date:         12/17/90
+C  Written For:  18F-spiperone parameter estimation
+C
+C  History:
+C
+C     Revision (rev 7) 12/17/90 by JSP:
+C        This revision alters the -tim.dat file & the
+C        -.dat to include the start and length (in secs)
+C        for each tissue activity scan.  This is incorportated
+C        into PARAMET7 which will integrate across the length
+C        of a PET scan, rather than using an instantaneous
+C        point.   Additional features with Mxxxq.DAT files and
+C        default input/output have been added.  Now uses TERMINAL.LIB
+C     Revision (rev 6) 2/22/88 by JSP:
+C        Revision of METF4.FTN to include weighting factors for
+C        regional data (METF5.FTN was intended for RPW generated data).
+C
+C  Intent:
+C     This program will make a file for spip parameter estimation
+C     using the Marquardt parameter estimation program (PARAMET7).
+C
+C  Files called:
+C     1)  MxxxSP.DTA  (18-F activity in arterial blood)
+C     2)  Mxxx.MET or Mxxx.MTB (metab fraction curve)
+C     3)  MxxxXX.RGT (ie, processed tissue activity +/or unprocessed
+C           regional PET counts)
+C     4)  Mxxxtim.DAT (start & length of each regional activ point)
+C     5)  MxxxQ.DAT (automated metf7 file) --for future
+C
+C  Files made:
+C     1)  MxxxART.DAT (18-F time activity curve & metab curve)
+C     2)  Mxxxtim.DAT (start & length for each PET activity point)
+C     3)  MxxxXXX.DAT (file containing regional PET data, starting
+C           guesses for parameter estimation, rCBF, rCBV, f1, type of
+C           parameter estimation to be run, +/- regional total PET
+C           counts per scan--for weighting factors).
+C     4)  MxxxQ.DAT  (file for automated -.DAT production)
+C
+C  Logical Units:
+C      0 = user input; (assigned in .CSS)
+C      1 = user output; (assigned in .CSS)
+C      5 = AUXLU  (opened in code)
+C     11 = disc file; (opened in code: -.RGT & -TIM.DAT files)
+C     12 = disc file: (opened in code: -SP.DTA, -ART.DAT,
+C                      -.MET, reg.DAT files)
+C     13 = disc file; (opened in code; Mxxxq.dat file access)
+C     15 = disc file including metabolite data (Mxxx.MET) (opened in code)
+C
+C  Uses Subroutines:
+C     DATNAME (NFLAG,NAME)
+C     TERMINAL.LIB:
+C       TERMSET(AUXLU)
+C       GETREAL(Q,R,MIN,MAX)
+C       GETINT(Q,I,MIN,MAX)
+C     OPENFILE(NAME,NEWOLD)  for future
+C
+C  Instructions for Compiling/Linking:  METF7.CMP & METF7.LNK
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+       PROGRAM METF7
+C
+       INTEGER*2    NFLAG
+       INTEGER      USERIN,USEROUT,AUXLU
+       REAL         SGUESS(3),TM(100),FRAC(100),PETTOTAL(100)
+       REAL         SECART(100),SPIPBLD(100),SPIPTIS(100)
+       REAL         TISSTART(100),TISLENGT(100),TISMIDPT(100)
+       CHARACTER*4  TYPE
+       CHARACTER*20 NAME,NAME1,BLANK,SAVE,NAME2,NAME3
+       CHARACTER*70 HEAD
+       CHARACTER*80 QUEST(10)
+       COMMON /USERIO/USERIN,USEROUT
+       DATA NAME  /'                    '/
+       DATA BLANK /'                    '/
+       DATA AUXLU,USERIN,USEROUT/1,5,6/
+C
+C
+C                 call terminal.lib programs
+C
+C      CALL TERMSET(AUXLU)
+C
+C
+C
+C             default values of variables
+C                SCANLEN = length of each scan
+C                START = start (in secs) time of each scan
+C
+           SCANLEN = 60.
+           START = 0.
+C
+C
+C            set of questions used for GETREAL & GETINT calls
+C
+          QUEST(1) = '   Enter the length of this scan (sec) '
+          QUEST(2) = '    Enter the start of this scan (sec) '
+C
+C                refresh screen
+C
+C      CALL TCONTROL(1,0,0)
+C      CALL TCONTROL(2,0,0)
+C
+       WRITE(6,*)
+       WRITE(6,*)'              METF7'
+       WRITE(6,*)'         rev 7: 12/18/90 JSP '
+       WRITE(6,*)
+       WRITE(6,*)' To run this program you need to have'
+       WRITE(6,*)' already made:   '
+       WRITE(6,*)'              1. MxxxSP.DTA FILE'
+       WRITE(6,*)'                 (ie, spip blood curve)'
+       WRITE(6,*)'              2. MxxxXXX.RGT FILE'
+       WRITE(6,*)'                  (ie, tissue activity curve)'
+       WRITE(6,*)'                  (processed +/- unprocessed)'
+       WRITE(6,*)'              3. Mxxx.MTB'
+       WRITE(6,*)'                  (ie, metab fracts curve)'
+45     WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'      To make:              enter'
+       WRITE(6,*)
+       WRITE(6,*)'   SPIP ART. file             1'
+       WRITE(6,*)'   PARAMETER EST. file        2'
+       WRITE(6,*)'    --TIM.DAT file            3'
+       WRITE(6,*)'        or'
+       WRITE(6,*)'   to exit the program        4'
+       READ(5,*,ERR=45)ICHOICE
+         IF(ICHOICE .EQ. 1 )GOTO 50
+         IF(ICHOICE .EQ. 2)GOTO 180
+         IF(ICHOICE .EQ. 3)GOTO  495
+         IF(ICHOICE .NE. 4)GOTO 45
+       GOTO 600
+*
+*               select name for output  xxxxART.DAT file
+*                  this contains arterial blood data:
+*                  total activity + metabolite fractions
+*
+50     WRITE(6,*)
+       WRITE(6,*)'      to make:                  enter'
+       WRITE(6,*)
+       WRITE(6,*)'    SPIP ART. FILE            run number'
+       WRITE(6,*)'                        (eg, M65 for M65SP.DTA)'
+         READ(5,100,ERR=50)NAME
+100      FORMAT(A20)
+           IF(BLANK .EQ. NAME) GOTO 50
+           SAVE=NAME
+           NAME1=NAME
+           NFLAG=2
+*
+*             DATNAME just adds (SP).DTA to end of file name
+*
+           CALL DATNAME(NFLAG,NAME1)
+           NFLAG=6
+           CALL DATNAME(NFLAG,NAME)
+           OPEN(12,FILE=NAME,STATUS='OLD',ERR=110)
+           GOTO 120
+110           WRITE(6,*)
+              WRITE(6,*)'...ERROR...UNABLE TO FIND FILE  ',NAME
+              WRITE(6,*)'           PLEASE TRY AGAIN'
+           GOTO 50
+*
+*          begin reading from file
+*
+120    READ(12,127)TYPE,HEAD
+127    FORMAT(A4,A70)
+130    FORMAT(A70)
+          WRITE(6,*)
+          WRITE(6,*)
+          WRITE(6,552)HEAD
+          WRITE(6,*)'   TO USE A DIFFERENT FILE ENTER  1'
+            READ(5,*,ERR=50)IAN
+            IF(IAN .NE. 1)GOTO 133
+            CLOSE(12)
+          GOTO 50
+*
+*           TYPE = '@@01@@' is for .DTA files made with new
+*           BLOOD program, and not old METENTRY
+*                  LINESKIP skips the appropriate # of lines in file
+*                  to get to the arterial-blood data
+*
+133     IF (TYPE .EQ. '@@01@@') THEN
+           LINESKIP = 7
+          ELSE
+           LINESKIP = 5
+        ENDIF
+*
+       DO 135 IN=1,LINESKIP
+135    READ(12,*)
+       READ(12,*)N
+       DO 140 I=1,N
+*
+*        SECART = time (sec) of sample; SPIPBLD = total counts in sample
+*
+140    READ(12,*)SECART(I),SPIPBLD(I)
+       CLOSE(12)
+C
+C
+       NFLAG=7
+       CALL DATNAME(NFLAG,SAVE)
+
+       OPEN(12,FILE=SAVE,STATUS='NEW',ERR=150)
+       GOTO 160
+150    WRITE(6,*)
+       WRITE(6,*)'...ERROR...UNABLE TO USE FILE ',SAVE
+       WRITE(6,*)'        PLEASE TRY AGAIN'
+       GOTO 50
+
+160      WRITE(12,*)'000 ',NAME1,'arterial-blood data & metabolite data'
+       WRITE(12,*)N
+165    WRITE(6,*)
+       WRITE(6,*)
+*
+*                   if scaling factor is desired (FACTOR)
+*
+       WRITE(6,*)' TO MULTIPLY ALL BLOOD ACTIVITY POINTS BY A FACTOR'
+       WRITE(6,*)'              ENTER    1'
+        READ(5,*,ERR=165)IFACT
+       IF(IFACT .NE. 1) GOTO 168
+       WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'  ENTER THE FACTOR'
+       READ(5,*,ERR=165)FACTOR
+168    IF(IFACT .NE. 1)FACTOR=1.0
+
+       DO 170 I=1,N
+          SPIPBLD(I)=SPIPBLD(I)*FACTOR
+170    WRITE(12,*)SECART(I),SPIPBLD(I)
+
+*                enter the metabolite data
+*
+151    WRITE(6,*)
+       WRITE(6,*)'     enter the name of the metabolite file'
+       WRITE(6,*)'   or hit -- RETURN -- to enter data by hand'
+       READ(5,100,ERR=151)NAME
+
+       IF(NAME .EQ. BLANK) THEN
+174     WRITE(6,*)
+        WRITE(6,*)
+        WRITE(6,*)'         enter the # of data points'
+          READ(5,*,ERR=174)NT
+           IF(NT .LE. 0)GOTO 174
+
+          DO 78 I = 1,NT
+76          WRITE(6,*)
+            WRITE(6,*)
+            WRITE(6,*)' enter the time (sec) & fraction of 18-F SPIP'
+            WRITE(6,*)'           for point number: ',I
+*
+*                   TM = time for metab fraction
+*                   FRAC = fraction of total activity that = 18F-spip
+*
+              READ(5,*,ERR=76)TM(I),FRAC(I)
+                 IF(TM(I).LE. 0. .OR. FRAC(I).GT.1.)THEN
+                     WRITE(6,*)'......error....please try again'
+                     GOTO 76
+                 ENDIF
+79          WRITE(6,*)
+            WRITE(6,*)
+        WRITE(6,*)'YOU ENTERED: TIME = ',TM(I),' & FRACT = ',FRAC(I)
+            WRITE(6,*)
+            WRITE(6,*)'   TO CHANGE THIS ENTER -- 1'
+             READ(5,83,ERR=79)A
+              IF(A .EQ. '1')GOTO 76
+78       CONTINUE
+
+      ELSE
+
+554    OPEN(15,FILE=NAME,STATUS='OLD',ERR=152)
+
+*                 read data from the file of metabolite fractions
+
+         READ(15,130)HEAD
+          WRITE(6,552)HEAD
+553       WRITE(6,*)
+          WRITE(6,*)'  to use this file hit --RETURN--'
+          WRITE(6,*)'  to use another file, enter its name'
+           READ(5,100,ERR=553)NAME
+            IF(NAME .NE. BLANK) GOTO 554
+
+         READ(15,*)
+         READ(15,*)
+          NT = 0
+558       READ(15,*,END=556)
+           NT = NT + 1
+
+*
+*               A,B,C,D,E,F = dummy place keepers (to skip over unnecessary
+*                             numbers)
+*
+           READ(15,*)TM(NT),A,B,C,D,E,F,FRAC(NT)
+         GOTO 558
+      ENDIF
+      GOTO 556
+
+152       WRITE(6,*)
+          WRITE(6,*)'     FILE: ',NAME,' is not available'
+          WRITE(6,*)'       try again'
+          WRITE(6,*)
+          GOTO 151
+
+*
+*            output data to a file
+*                    NT = # of time points
+*
+556      WRITE(12,*)NT
+         WRITE(12,557)(TM(I),FRAC(I),I=1,NT)
+557       FORMAT(' ',2(2X,F9.3))
+83      FORMAT(A1)
+
+       CLOSE(12)
+       WRITE(6,*)
+       WRITE(6,*)'DATA FILE ',SAVE,' WRITTEN TO DISC'
+         GOTO 45
+C
+C
+***************************************************
+*
+*   THIS SECTION OF THE PROGRAM WILL WRITE THE FILE
+*   FOR PARAMETER ESTIMATION.
+*
+***************************************************
+C
+C
+C                  refresh screen
+C
+C80    CALL TCONTROL(1,0,0)
+C      CALL TCONTROL(2,0,0)
+C
+180    WRITE(6,*)
+       WRITE(6,*)'  FOR PARAMETER ESTIMATION WITH:    ENTER'
+       WRITE(6,*)
+       WRITE(6,*)'     NO SPECIFIC BINDING (SPIP)       1'
+*                          (e.g., cerebellum)
+       WRITE(6,*)'       SPECIFIC BINDING (SPIP)        2'
+*                          (e.g., striatum)
+       WRITE(6,*)'      To Return to main menu          3'
+*
+*          IFIRST  =  1, since it's first .RGT file (with CBF & CBV data)
+*
+        IFIRST=1
+
+          READ(5,*,ERR=180)NTYPE
+          IF(NTYPE .EQ. 3)GOTO 45
+          IF(NTYPE .NE. 1 .AND. NTYPE .NE. 2 ) GOTO 180
+
+185    WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'ENTER THE NAME FOR THE PARAMETER ESTIMATION FILE'
+       WRITE(6,*)'         (do not use an extension)'
+        READ(5,100,ERR=185)NAME
+          IF(BLANK .EQ. NAME)GOTO 185
+          NAME1=NAME
+          IN=12
+188       NFLAG=4
+          CALL DATNAME(NFLAG,NAME1)
+
+           OPEN(IN,FILE=NAME1,STATUS='NEW',ERR=190)
+             IF(IN .EQ. 11)GOTO 500
+           GOTO 250
+
+190    OPEN(IN,FILE=NAME1,STATUS='OLD',ERR=200)
+       GOTO 210
+
+200    WRITE(6,*)
+       WRITE(6,*)'...ERROR...UNABLE TO USE FILE NAME1 ',NAME1
+       WRITE(6,*)'         PLEASE TRY AGAIN'
+       CLOSE(IN)
+
+       IF(IN .EQ. 11)GOTO 498
+       GOTO 185
+210    WRITE(6,*)
+       WRITE(6,*)'...WARNING FILE NAME1 ',NAME1,' ALREADY EXISTS'
+       WRITE(6,*)
+       WRITE(6,*)'                                      ENTER'
+       WRITE(6,*)'   TO DELETE AND REWRITE THIS FILE      1'
+       WRITE(6,*)'       TO PRESERVE THIS FILE            2'
+         READ(5,*,ERR=210)NEXT
+          IF(NEXT .NE. 1 .AND. NEXT .NE. 2) GOTO 210
+           IF(NEXT .EQ. 1)GOTO 220
+            WRITE(6,*)
+            WRITE(6,*)'    THIS FILE WILL BE PRESERVED'
+            WRITE(6,*)'       TRY A NEW FILE NAME'
+           CLOSE(IN)
+         IF(IN .EQ. 11)GOTO 498
+        GOTO 185
+220    CLOSE(IN,STATUS='DELETE',ERR=230)
+       WRITE(6,*)'FILE ',NAME1,' DELETED'
+       OPEN(IN,FILE=NAME1,STATUS='NEW',ERR=200)
+         IF(IN .EQ. 11)GOTO 500
+       GOTO 250
+230    WRITE(6,*)'...ERROR...UNABLE TO DELETE FILE ',NAME1
+       WRITE(6,*)'         PLEASE TRY ANOTHER NAME'
+       CLOSE(IN)
+       IF(IN .EQ. 11)GOTO 498
+       GOTO 185
+C
+C
+250    WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'   ENTER A HEADER FOR: ',NAME1
+        READ(5,130,ERR=250)HEAD
+
+*      the additional DO loop permits processed regional data files
+*      and then unprocessed regional total PET count files to be read
+*           NEW = 1 (for processed data)
+*           NEW = 2 (for total PET counts, ie, weighting factors)
+
+       DO  477 NEW = 1,2
+
+400      WRITE(6,*)
+         WRITE(6,*)
+         WRITE(6,*)'   Enter the name of the .RGT file that contains'
+
+       IF (NEW .EQ. 1) THEN
+         WRITE(6,*)'        the processed tissue activity curve'
+        ELSE
+*
+*           IFIRST = 3  for first .RGT file of total PET counts
+*
+         IFIRST = 3
+         WRITE(6,*)'        the total PET counts for the ROIs '
+         WRITE(6,*)'  if weighting factors not wanted, enter NONE'
+       ENDIF
+
+       WRITE(6,*)'(note: CBF & CBV should be the first 2 data points)'
+       WRITE(6,*)'         --include the extension .RGT--'
+       IF (NEW .EQ. 1) THEN
+        WRITE(6,*)'also note: each .RGT file should not contain more'
+        WRITE(6,*)'  than 10 data points. If more are needed use'
+        WRITE(6,*)'          additional .RGT files.'
+       ENDIF
+
+         READ(5,430,ERR=400)NAME2
+430    FORMAT(A20)
+         IF(NAME2 .EQ. 'NONE' .OR. NAME2 .EQ. 'none') GOTO 252
+         IF(NAME2 .EQ. BLANK)GOTO 400
+435    OPEN(11,FILE=NAME2,STATUS='OLD',ERR=440)
+       WRITE(6,*)
+       WRITE(6,*)'FILE NAME  ',NAME2,'  FOUND'
+       GOTO 450
+
+440      WRITE(6,*)
+         WRITE(6,*)
+         WRITE(6,*)'...ERROR... UNABLE TO FIND ',NAME2
+         WRITE(6,*)'      TRY ANOTHER FILE'
+         CLOSE(11)
+*          if it's the first loop for each set of files then would
+*             loop back to 400 rather than 475
+         IF(IFIRST .EQ. 2 .OR. IFIRST .EQ. 4) GOTO 475
+         GOTO 400
+*
+450    READ(11,*)
+*
+*         NUM = # of rows in .RGT file (# time points + 2 top rows)
+*         IS = # of columns in .RGT file (# of ROIs)
+*
+       READ(11,*,ERR=460)NUM,IS
+
+       IF (IFIRST .EQ. 3) GOTO 455
+
+        IF (IFIRST .EQ. 1) THEN
+*
+*              This section allows multiple regs on a .RGT file
+*
+451         WRITE(6,*)
+            WRITE(6,*)
+            WRITE(6,*)'  ',NAME2,' HAS ',IS,' REGIONS'
+            WRITE(6,*)
+            WRITE(6,*)'  ENTER THE REGION # YOU WANT, FROM 1 TO ',IS
+               READ(5,*,ERR=451)ISREG
+*
+*                ISREG = # of ROI of interest
+*
+                IF(ISREG .GE. 1 .AND. ISREG .LE. IS) GOTO 455
+                  WRITE(6,*)
+                  WRITE(6,*)'.....ERROR....please try another reg #'
+                  GOTO 451
+*
+455       NUMBER=NUM-2
+*
+*                   NUMBER = # of tissue activity points for each ROI
+*                   The implied DO loops pick the right reg # in .RGT file
+*
+*            skip CBF and CBV lines of data if NEW = 2
+*
+         IF(NEW .EQ. 2) THEN
+           READ(11,*)
+           READ(11,*)
+          ELSE
+           READ(11,*,ERR=460)(CBF,ID=1,ISREG)
+           READ(11,*,ERR=460)(CBV,ID=1,ISREG)
+C
+C              change CBV & CBF to appropriate units
+C
+            CBF=CBF*0.000175
+            CBV=CBV*0.0105
+         ENDIF
+
+          DO 452 IX=1,NUMBER
+*
+*             SPIPTIS = processed ROI data from .RGT file
+*             PETTOTAL = unprocessed total PET counts per ROI per scan
+*                        (ie, used for weighting factors from .RGT file)
+*
+           IF(NEW.EQ.1) READ(11,*,ERR=460)(SPIPTIS(IX),ID=1,ISREG)
+452        IF(NEW.EQ.2) READ(11,*,ERR=460)(PETTOTAL(IX),ID=1,ISREG)
+
+        ELSE
+*
+*        NUMB = # of tissue activity point at beginning of current .RGT file
+*        NUMBER = keeps running current total # of tissue activ points
+*
+          NUMB=NUMBER+1
+          NUMBER=NUMBER+NUM
+            DO 454 IX=NUMB,NUMBER
+             IF(NEW.EQ.1) READ(11,*,ERR=460)(SPIPTIS(IX),ID=1,ISREG)
+454          IF(NEW.EQ.2) READ(11,*,ERR=460)(PETTOTAL(IX),ID=1,ISREG)
+        ENDIF
+
+       CLOSE(11)
+475    WRITE(6,*)
+       WRITE(6,*)'                                       ENTER'
+       WRITE(6,*)'TO USE AN ADDITIONAL .RGT FILE,   THE FILE NAME'
+       WRITE(6,*)'IF NO FURTHER .RGT FILES NEEDED,    --RETURN--'
+       READ(5,430,ERR=475)NAME2
+
+         IF(NAME2 .EQ. BLANK) THEN
+           IF (NEW .EQ. 2) GOTO 252
+            GOTO 477
+          ELSE
+            IF(NEW .EQ. 1) IFIRST = 2
+            IF(NEW .EQ. 2) IFIRST = 4
+            GOTO 435
+         ENDIF
+C
+460      WRITE(6,*)
+         WRITE(6,*)
+         WRITE(6,*)'   THIS FILE ',NAME2,'  IS NOT COMPATIBLE'
+         WRITE(6,*)'         TRY ANOTHER FILE NAME'
+          CLOSE(11)
+         GOTO 400
+
+477    CONTINUE
+*
+*            End of reading .RGT files
+*            Begin writing to the file
+*               If no weighting factors then file type will = 2
+*                       (ie, only processed regional data)
+*               If weighting factors are included, file type = 3
+*                (ie, both processed & unprocessed regional data)
+*
+252     IF (NAME2 .NE. 'NONE' .AND. NAME2 .NE. 'none') WRITE(12,*)'3'
+        IF (NAME2 .EQ. 'NONE' .OR. NAME2 .EQ. 'none') WRITE(12,*)'2'
+        WRITE(12,552)HEAD
+
+       WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'       PARAMETER               STARTING GUESSES'
+       WRITE(6,*)
+
+       IF(NTYPE .EQ. 1)THEN
+          WRITE(12,*)'0'
+           SGUESS(1)=0.02
+           SGUESS(2)=0.05
+          WRITE(6,*)'         f2                       ',SGUESS(1)
+          WRITE(6,*)'         PS                       ',SGUESS(2)
+
+          ELSE
+
+             WRITE(12,*)'1'
+              SGUESS(1)=0.004
+              SGUESS(2)=0.0002
+              SGUESS(3)=0.05
+          WRITE(6,*)'          k1(prime)               ',SGUESS(1)
+          WRITE(6,*)'          k-1                     ',SGUESS(2)
+          WRITE(6,*)'          PS                      ',SGUESS(3)
+       ENDIF
+
+260    WRITE(6,*)
+       WRITE(6,*)'   TO CHANGE THESE STARTING GUESSES ENTER  1'
+       READ(5,*,ERR=260)NGUESS
+       IF(NGUESS .NE. 1)GOTO 317
+270    WRITE(6,*)
+       WRITE(6,*)'  ENTER THE NEW STARTING GUESSES'
+       READ(5,*,ERR=270)(SGUESS(I),I=1,NTYPE+1)
+C
+317    WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'    ENTER THE FRACTION OF FREE SPIPERONE IN BLOOD'
+         READ(5,*,ERR=317)f1
+C
+C
+       WRITE(12,*)CBF,'  F'
+       WRITE(12,*)CBV,'  CBV (V1)'
+       WRITE(12,*)'0.74   V2'
+       WRITE(12,*)f1,'   f1'
+
+C               BRANCHING DEPENDING ON FILE TYPE
+
+       IF(NTYPE .EQ. 1)THEN
+
+*                 NONSPECIFIC BINDING
+
+         WRITE(12,*)SGUESS(1),'   f2'
+         WRITE(12,*)SGUESS(2),'   PS'
+         WRITE(12,*)'0.0    k1(prime)'
+         WRITE(12,*)'0.0    k-1'
+
+        ELSE
+C
+*                  SPECIFIC BINDING
+*
+300      WRITE(6,*)
+         WRITE(6,*)
+         WRITE(6,*)'    ENTER THE f2 FROM THE CEREBELLUM '
+         READ(5,*,ERR=302)f2
+         IF(f2 .LE. 0.) THEN
+302       WRITE(6,*)
+          WRITE(6,*)'...error...try again'
+          GOTO 300
+         ENDIF
+
+           WRITE(12,*)f2,'   f2'
+           WRITE(12,*)SGUESS(3),'   PS'
+           WRITE(12,*)SGUESS(1),'   k1(prime)'
+           WRITE(12,*)SGUESS(2),'   k-1'
+        ENDIF
+C
+C             enter the time of radiotracer administration
+C                   & the midpoint of the last scan
+C
+480    WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'      ENTER THE TIME OF INJECTION   HH MM SS'
+       READ(5,*,ERR=480)H,S,T
+       WRITE(6,*)
+       WRITE(6,*)'    ENTER THE MIDPOINT OF THE LAST SCAN:  HH MM SS'
+       READ(5,*,ERR=480)HL,SL,TL
+       TOTTIME=((HL-H)*3600.)+((SL-S)*60.)+(TL-T)
+       IF(TOTTIME .LE. 0.) GOTO 480
+          WRITE(6,*)
+          WRITE(6,*)
+          WRITE(6,*)'  TOTAL TIME (IN SECS) FOR SCAN: ',TOTTIME
+          WRITE(6,*)'     to enter different data, enter - 1'
+            READ(5,*,ERR=480)IN
+              IF(IN .EQ. 1) GOTO 480
+C
+C          read/write a --TIM.DAT file that contains (in secs)
+C                 scan start TISSTART
+C                 scan length TISLENGT
+C                 scan midpoint TISMIDPT
+C
+495    WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'                                    ENTER'
+       WRITE(6,*)'   to make a file for time points     1'
+       WRITE(6,*)'   to read a file for time points     2'
+       READ(5,*,ERR=495)ITIME
+       IF(ITIME .NE. 1 .AND. ITIME .NE. 2)GOTO 495
+498    WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'     ENTER THE NAME OF THE TIME FILE'
+       WRITE(6,*)'       (do not use the extension)'
+       READ(5,100,ERR=498)NAME3
+       IF(BLANK .EQ. NAME3)GOTO 498
+       IF(ITIME .EQ. 2) GOTO 540
+       IN=11
+       NAME1=NAME3
+       GOTO 188
+500    WRITE(6,*)
+       NAME3=NAME1
+       WRITE(6,*)
+       WRITE(6,*)'  ENTER A HEADER FOR ',NAME3
+       READ(5,130,ERR=500)HEAD
+C
+C                 enter the total number of tissue activity
+C                    points (i.e., # of PET scans)
+C
+       WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'  Enter the number of individual scans'
+       READ(5,*,ERR=500)INSCAN
+       WRITE(11,552)HEAD
+       WRITE(11,*)INSCAN
+
+C                   enter the start & length of each scan
+C                     --the program will calculate the midpoint.
+C
+       DO 510 NU=1,INSCAN
+505     WRITE(6,*)
+        WRITE(6,*)
+            IF(NU.EQ.1) THEN
+                  TISSTART(NU) = START
+                 ELSE
+                  TISSTART(NU) = TISSTART(NU-1)+TISLENGT(NU-1)+1.
+             ENDIF
+           CALL GETREAL(QUEST(2),TISSTART(NU),0.,18000.)
+C
+C
+          IF(TISSTART(NU) .LE. 0.) GOTO 505
+C
+            IF(NU.EQ.1)   THEN
+               TISLENGT(NU) = SCANLEN
+              ELSE
+               TISLENGT(NU) = TISLENGT(NU-1)
+            ENDIF
+           CALL GETREAL(QUEST(1),TISLENGT(NU),0.,3600.)
+            TISMIDPT(NU) = TISSTART(NU) + ((TISLENGT(NU))/2.)
+C
+          WRITE(6,*)'you just entered for scan # ',NU,':'
+           WRITE(6,*)
+          WRITE(6,*)'     scan start: ',TISSTART(NU)
+          WRITE(6,*)'    scan length: ',TISLENGT(NU)
+          WRITE(6,*)
+          WRITE(6,*)'  to change this entry, enter  1'
+          READ(5,*,ERR=505)IAGAIN
+           IF(IAGAIN .EQ. 1)GOTO 505
+C
+            WRITE(11,*)TISMIDPT(NU),TISSTART(NU),TISLENGT(NU)
+510    CONTINUE
+       CLOSE(11)
+       WRITE(6,*)
+       WRITE(6,*)'    ',NAME3,'      WRITTEN TO DISC'
+C
+C           if only -TIM.DAT file is written then return
+C           to main menu (i.e., no reg.DAT file made now)
+C
+       IF(ICHOICE .EQ. 3) GOTO 45
+C
+       GOTO 542
+C
+C
+540    NFLAG=4
+       CALL DATNAME(NFLAG,NAME3)
+542    OPEN(11,FILE=NAME3,STATUS='OLD',ERR=545)
+       GOTO 550
+545    WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'...ERROR...UNABLE TO FIND FILE ',NAME3
+       WRITE(6,*)'      TRY ANOTHER FILE NAME'
+       GOTO 498
+550    READ(11,130)HEAD
+       READ(11,*)NUM
+       WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,552)HEAD
+552    FORMAT(" ",A70)
+555    WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'       TO READ:                   ENTER'
+       WRITE(6,*)'    EVERY SCAN TIME                 1'
+       WRITE(6,*)'     ALL ODD SCANS                  2'
+       WRITE(6,*)'     ALL EVEN SCANS                 3'
+       WRITE(6,*)
+       WRITE(6,*)'   to use another file              0'
+       READ(5,*,ERR=555)INUM
+        IF(INUM .EQ. 0) THEN
+             CLOSE(11)
+             GOTO 495
+        ENDIF
+       IF(INUM .EQ. 3)J=2
+       IF(INUM .EQ. 1 .OR. INUM .EQ. 2)J=1
+       IF(INUM .EQ. 2 .OR. INUM .EQ. 3)J1=2
+       IF(INUM .EQ. 1)J1=1
+       L=0
+       DO 560 IX=J,NUM,J1
+          L=L+1
+          IF(INUM .EQ. 3) READ(11,*)
+          READ(11,*)TISMIDPT(L),TISSTART(L),TISLENGT(L)
+          IF(INUM .EQ. 2 .AND. IX .LT. NUM) READ(11,*)
+560    CONTINUE
+       CLOSE(11)
+C
+C            enter the SPIPTIS, TISMIDPT & (if appropriate) PETTOTAL
+C
+C           SAFETY CHECK:  THE NUMBER OF TISMIDPT SHOULD = SPIPTIS
+C
+       IF(L .EQ. NUMBER)GOTO 570
+       WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'.....WARNING....THE NUMBER OF TISSUE ACTIVITY POINTS'
+       WRITE(6,*)'        DOES NOT EQUAL THE NUMBER OF TIMED POINTS!!!'
+       WRITE(6,*)'      (this means you made a mess!!!!!!!!!!!!!)'
+       WRITE(6,*)'             HIT --RETURN--TO CONTINUE'
+       WRITE(6,*)'           you may begin again--good luck!'
+       READ(5,*)
+       CLOSE(12)
+       GOTO 180
+570    WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'  TO MULTIPLY ALL TISSUE ACTIVITY POINTS BY A'
+       WRITE(6,*)'     FACTOR,   ENTER 1'
+       READ(5,*,ERR=570)IFACT
+          IF(IFACT .NE. 1)GOTO 575
+          WRITE(6,*)
+          WRITE(6,*)
+          WRITE(6,*)'   ENTER THE FACTOR'
+          READ(5,*,ERR=570)FACTOR
+575    IF(IFACT .NE. 1)FACTOR=1.0
+C
+C
+             WRITE(12,*)L
+C
+       DO 580 IX=1,L
+         SPIPTIS(IX)=SPIPTIS(IX)*FACTOR
+        IF(NAME2.EQ.'NONE' .OR. NAME2 .EQ. 'none')
+     1         WRITE(12,*)TISMIDPT(IX),SPIPTIS(IX),TISSTART(IX),
+     2                    TISLENGT(IX)
+        IF(NAME2.NE.'NONE' .AND. NAME2 .NE. 'none')
+     1          WRITE(12,*)TISMIDPT(IX),SPIPTIS(IX),PETTOTAL(IX),
+     2                     TISSTART(IX),TISLENGT(IX)
+580    CONTINUE
+C
+       CLOSE(12)
+       WRITE(6,*)
+       WRITE(6,*)
+       WRITE(6,*)'     ',NAME,'  WRITTEN TO THE DISC'
+       GOTO 45
+C
+600    CONTINUE
+C
+       STOP
+       END
+@

@@ -1,0 +1,595 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.20.16.21.19;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.11.27.18.19.04;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.12.17.17.14.14;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.10.12.13.48.29;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.10.12.13.28.30;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.01.23.21.50.16;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: voiproc.c,v $
+ * Revision 1.5  2002/11/27  18:19:04  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  1999/12/17  17:14:14  tom
+ * lint cleaning
+ *
+ * Revision 1.3  1999/10/12  13:48:29  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1999/10/12  13:28:30  tom
+ * new libimgutil with updated arc path
+ *
+ * Revision 1.1  1997/01/23  21:50:16  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			voiproc.c
+ *	Date:			Jan 1997
+ *	Author:			Tom Videen
+ *	Description:	Compute mean values for a list of VOIs.
+ *	History:
+ *		Revised version of voistat
+ * ===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voiproc/RCS/voiproc.c,v 1.5 2002/11/27 18:19:04 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <imgutil.h>
+#include <voiproc.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+
+#define MAXLIST 2000
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	int				get_input_lists ();
+	ImageFile      *file1;			 /* input image file structure */
+	ImageFile      *timefile;		 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+	IMAGE_LIST_DATA *imglist;		 /* list of files to process */
+	PARAMETER_DATA  prm;			 /* processing parameters */
+	RGTDATA        *rgtlist;		 /* list of region processing output */
+	VOIDATA        *voilist;		 /* list of VOI definitions */
+	HEADER_DATA     hdr;			 /* hdr structure */
+	char            maxfile[MAXPATH];
+	char            date[MAXLINE];
+	char            program[MAXFNAME];
+	char            version[MAXFNAME];
+	char            rgtfile[MAXFNAME];	 /* output RGT file (means) */
+	char           *fname0;			 /* primary filename */
+	char           *regfile;		 /* region file */
+	char           *lstfile;		 /* input imglist file */
+	char           *prmfile;		 /* input parameter file */
+	FILE           *recfp;			 /* rec file (/dev/null) */
+	char           *uid;
+	char           *timefname;		 /* filename containing frame times */
+	char         ***imgname;		 /* image file names */
+	float        ***img;			 /* primary image */
+	float           scaler;			 /* normalization scaling factor */
+	float           adim[3];		 /* voxel dimensions in mm */
+	float           framelen;		 /* frame duration (sec) */
+	float           framestart;		 /* frame start time (sec) */
+	float           frametime;		 /* frame start time (sec) */
+	float           zerotime;		 /* start time relative to time of frame 1 */
+	float           pettconv;		 /* PET conversion factor */
+	int             pdim[3];		 /* image dimensions in pixels (128x128) */
+	int             nvoi_max;		 /* maximum number of VOIs */
+	int             n, i, j, k;
+
+	int             lstsize=0;		 /* number of entries in image list */
+	int             nvoi=0;			 /* number of VOIs */
+	int             npixels;		 /* number of pixels in VOI */
+	int             pixused=0;		 /* actual number of pixels used in computation */
+	int             firstfrm=1;		 /* first valid frame */
+	int             firsttime=1;	 /* first valid time frame */
+	int             filtmode = IMGFILTER_MODE;
+
+/*
+ * Get command line arguments.
+ */
+	if (argc != 12) {
+		fprintf (stderr, "Usage: voiproc prm lst voi dynfile date uid\n");
+		return (ERROR);
+	}
+	prmfile = argv[1];
+	lstfile = argv[2];
+	regfile = argv[3];
+	timefname = argv[4];
+	n = 5;
+	(void) sprintf (date, "%s %s %s %s %s %s",
+		 argv[n], argv[n + 1], argv[n + 2], argv[n + 3], argv[n + 4], argv[n + 5]);
+	uid = argv[n + 6];
+	recfp = fopen ("/dev/null", "w");
+	if (recfp == NULL) {
+		fprintf (stderr, "ERROR opening /dev/null\n");
+		return (ERROR);
+	}
+	(void) sscanf (rcsid, "%s %s", program, version);
+	strcat (program, " ");
+	strcat (program, version);
+	indx.frm = firsttime;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	nvoi_max = 0;
+	npixels = 0;
+	prm.processing = 0;
+	prm.voi_norm = 0;
+	rgtlist = (RGTDATA *) malloc (MAXLIST * sizeof (RGTDATA));
+
+	fprintf (stdout, "\nCopyright 1997-2004, Washington University.\n");
+	fprintf (stdout, "All rights reserved. Unauthorized reproduction prohibited.\n\n");
+
+/*
+ *  Read imagelist into structure imglist
+ */
+
+	imglist = (IMAGE_LIST_DATA *) malloc (MAXLIST * sizeof (IMAGE_LIST_DATA));
+	if (readimglist (lstfile, imglist, &lstsize) == ERROR) {
+		fprintf (stderr, "ERROR [voiproc]: Cannot read %s\n", lstfile);
+		return (ERROR);
+	}
+	if (lstsize > MAXLIST) {
+		fprintf (stderr, "ERROR [voiproc]: imglist size %d > %d\n", lstsize, MAXLIST);
+		return (ERROR);
+	}
+/*
+ *  Read parameters into structure prm and get image filenames
+ */
+
+	imgname = (char ***) malloc (lstsize * sizeof (char **));
+	for (i = 0; i < lstsize; i++) {
+		imgname[i] = (char **) malloc (6 * sizeof (char *));
+		for (j = 0; j < 6; j++)
+			imgname[i][j] = (char *) malloc (MAXPATH);
+	}
+
+	if ((get_input_lists (prmfile, lstsize, filtmode, imgname, &prm, imglist)) == ERROR) {
+		fprintf (stderr, "ERROR [voiproc]: Reading input list files\n");
+		return (ERROR);
+	}
+	if (prm.processing != PROC_NONE && prm.processing != PROC_DECAYCOR
+	    && prm.processing != PROC_UNCORRECTED) {
+		fprintf (stderr, "ERROR [voiproc]: Use voistat for non-dynamic processing\n");
+		return (ERROR);
+	}
+
+/*	Open the time file	*/
+ 
+	timefile = make_imgfile (timefname);
+    if (timefile == NULL) {
+        fprintf (stderr, "ERROR [isum]: making timefile\n");
+        return (ERROR);
+    }
+	indx.frm = 1;
+    if (get_imgh (timefile, &indx) == ERROR) {
+        fprintf (stderr, "ERROR [isum]: Cannot open %s\n", timefname);
+        return (ERROR);
+    }
+	printf ("Image %s:  %d frames\n", timefname, timefile->mh->nframe);
+	printf ("First frame = %d started at %f sec\n", firsttime, 0.001 * timefile->sh->start_time);
+	printf ("Enter Zero Time (sec):  ");
+	if (scanf ("%f", &zerotime) != 1) {
+		fprintf (stderr, "ERROR [voiproc]\n");
+		return (ERROR);
+	}
+	if (readhdr (timefname, &hdr, recfp) == ERROR) {
+		fprintf (stderr, "ERROR [voiproc] processing %s\n", timefname);
+		return (ERROR);
+	}
+
+/*	Process the image list	*/
+
+	for (i = 0; i < lstsize; i++) {
+
+/* Read the region file	*/
+
+		voilist = (VOIDATA *) malloc (sizeof (VOIDATA) * MAXLIST);
+		if (readvoi (regfile, &nvoi, voilist) == ERROR) {
+			fprintf (stderr, "ERROR [voiproc]: Reading VOI\n");
+			return (ERROR);
+		}
+		if (nvoi > nvoi_max) {
+			nvoi_max = nvoi;
+			strcpy (maxfile, regfile);
+		}
+
+/* Get the number of frames	*/
+
+		rgtlist[i].fname = imgname[i][0];
+		fname0 = rgtlist[i].fname;
+		file1 = make_imgfile (fname0);
+    	if (file1 == NULL) {
+        	fprintf (stderr, "ERROR [voiproc]: making file1\n");
+        	return (ERROR);
+    	}
+    	if (get_imgh (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [voiproc]: Cannot open %s\n", fname0);
+			return (ERROR);
+		}
+		rgtlist[i].nframe = file1->mh->nframe;
+		adim[0] = 10.0 * file1->sh->sample_size_1;
+		adim[1] = 10.0 * file1->sh->sample_size_2;
+		adim[2] = 10.0 * file1->sh->sample_size_3;
+		pdim[0] = 128;
+		pdim[1] = 128;
+		pdim[2] = file1->sh->dim3;
+		close_imgfile (file1);
+
+/* Read image and compute means	*/
+
+		rgtlist[i].nvoi = nvoi;
+		rgtlist[i].time = (float *) malloc ((rgtlist[i].nframe + 1) * sizeof (float));
+		rgtlist[i].midtime = (float *) malloc ((rgtlist[i].nframe + 1) * sizeof (float));
+		rgtlist[i].duration = (float *) malloc ((rgtlist[i].nframe + 1) * sizeof (float));
+		rgtlist[i].mean = (float **) malloc ((rgtlist[i].nframe + 1) * sizeof (float *));
+
+		for (j = firstfrm; j <= rgtlist[i].nframe; j++) {
+			rgtlist[i].mean[j] = (float *) malloc (rgtlist[i].nvoi * sizeof (float));
+			indx.frm = j;
+			fname0 = imgname[i][0];
+			file1->name = fname0;
+			indx.frm = 1;
+    		if (get_imgh (file1, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [voiproc]: Cannot open %s\n", fname0);
+				return (ERROR);
+			}
+			if ((img = rdtensor (file1, &indx, pdim)) == NULL) {
+				fprintf (stderr, "ERROR [voiproc] Cannot read %s\n", fname0);
+				return (ERROR);
+			}
+			close_imgfile (file1);
+			if (prm.voi_norm > 0.0 && imglist[i].mean1 > 0.0)
+				scaler = prm.voi_norm / imglist[i].mean1;
+			else
+				scaler = 1.0;
+
+			/* Compute decay-corrected conversion factor using timefile */
+
+			indx.frm = firsttime++;
+			if (get_sh (timefile, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [voiproc]: Cannot read file subheader in %s\n", timefname);
+				return (ERROR);
+			}
+			rgtlist[i].time[j] = (0.001 * timefile->sh->start_time) - zerotime;
+			rgtlist[i].duration[j] = 0.001 * timefile->sh->duration;
+			framelen = timefile->sh->duration * 0.001;
+			framestart = 0.001 * timefile->sh->start_time - zerotime;
+			frametime = framestart - (log (0.5 * (1.0 + exp (-hdr.tau * framelen)))) / (hdr.tau);
+			rgtlist[i].time[j] = framestart;
+			rgtlist[i].midtime[j] = frametime;
+			rgtlist[i].duration[j] = framelen;
+			pettconv = hdr.efactor * hdr.pieslope * 60 / framelen;
+			hdr.pettcnv1 = pettconv;
+			hdr.decay_factor1 = pettconv * exp (frametime * hdr.tau);
+			hdr.framelen = framelen;
+			printf ("frame =%3d  start =%8.1f  midtime =%9.2f  duration =%6.1f  %s\n",
+				firsttime - 1, framestart, frametime, framelen, fname0);
+			if (processPET (img, pdim, scaler, prm.processing, fname0, recfp, &hdr) > 0) {
+				fprintf (stderr, "ERROR [voiproc] processing %s\n", fname0);
+				return (ERROR);
+			}
+			for (k = 0; k < nvoi; k++)
+				rgtmean (img, pdim, adim, k, voilist, prm, &rgtlist[i].mean[j][k], &pixused);
+			if (pixused > npixels)
+				npixels = pixused;
+			free_f3tensor (img, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+		}
+		free_imgfile (file1);
+		free (voilist);
+	}
+	close_imgfile (timefile);
+	free_imgfile (timefile);
+
+	voilist = (VOIDATA *) malloc (sizeof (VOIDATA) * nvoi_max);
+	if (readvoi (maxfile, &nvoi, voilist) == ERROR) {
+		fprintf (stderr, "ERROR [voiproc]: from readvoi\n");
+		return (ERROR);
+	}
+
+/* Write the rgt data to rgtfile	*/
+
+	for (i = 0; i < nvoi; i++) {
+		strcpy (rgtfile, prm.species);
+		strcat (rgtfile, imglist[0].subject_id);
+		strcat (rgtfile, "_");
+		strcat (rgtfile, voilist[i].voiname);
+		strcat (rgtfile, ".rgt");
+		if (writergt (rgtfile, prm, program, i, voilist, firstfrm, lstsize, rgtlist, date, uid,
+			      regfile, prmfile, npixels, adim) == ERROR) {
+			fprintf (stderr, "ERROR [voiproc] in writing rgt data to file %s\n", rgtfile);
+		}
+	}
+	(void) fclose (recfp);
+
+	free (voilist);
+	free (imglist);
+	for (i = 0; i < lstsize; i++) {
+		free (rgtlist[i].time);
+		free (rgtlist[i].duration);
+		free (rgtlist[i].midtime);
+		free (rgtlist[i].mean);
+	}
+	free (rgtlist);
+	for (i = 0; i < lstsize; i++)
+		free (imgname[i]);
+	free (imgname);
+	return (OK);
+}
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d19 1
+a19 1
+ *	Date:			Jan-97
+d26 1
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voiproc/RCS/voiproc.c,v 1.4 1999/12/17 17:14:14 tom Exp tom $";
+d46 1
+a46 1
+	ImageFile      *file;			 /* input image file structure */
+d77 2
+a85 1
+	int             n, i, j, k;
+d103 4
+d121 1
+a121 1
+	fprintf (stdout, "\nCopyright 1997, Washington University.\n");
+d157 3
+a159 3
+/*
+ *	Open the time file
+ */
+d161 9
+a169 25
+	if (open_imgfile (timefile) == ERROR) {
+		fprintf (stderr, "ERROR [voiproc]: Cannot open %s\n", timefname);
+		return (ERROR);
+	}
+	if (get_mh (timefile) == ERROR) {
+		fprintf (stderr, "ERROR [voiproc]: Cannot get MainHeader from %s\n", timefname);
+		return (ERROR);
+	}
+	if (existimgfrm (timefile, &indx) == ERROR) {
+		if (firsttime == 1) {
+			firsttime = 2;
+			indx.frm = firsttime;
+			if (existimgfrm (timefile, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [voiproc]: Cannot read %s frame %d\n", timefname, indx.frm);
+				return (ERROR);
+			}
+		} else {
+			fprintf (stderr, "ERROR [voiproc]: Cannot read %s frame %d\n", timefname, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (timefile, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [voiproc]: Cannot read file subheader in %s\n", timefname);
+		return (ERROR);
+	}
+a180 3
+/*
+ *	Process the image list
+ */
+d182 2
+d186 2
+a187 3
+/*
+ * Read the region file.
+ */
+d197 3
+a199 3
+/*
+ * Get the number of frames.
+ */
+d202 6
+a207 2
+		file = make_imgfile (fname0);
+		if (open_imgfile (file) == ERROR) {
+d211 4
+a214 21
+		if (get_mh (file) == ERROR) {
+			fprintf (stderr, "ERROR [voiproc]: Cannot get MainHeader from %s\n", fname0);
+			return (ERROR);
+		}
+		indx.frm = firstfrm;
+		if (existimgfrm (file, &indx) == ERROR) {
+			firstfrm = 2;
+			indx.frm = firstfrm;
+			if (existimgfrm (file, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [voiproc]: Cannot read %s frame %d\n", fname0, indx.frm);
+				return (ERROR);
+			}
+		}
+		if (get_sh (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [voiproc]: Cannot read file subheader in %s\n", fname0);
+			return (ERROR);
+		}
+		rgtlist[i].nframe = file->mh->nframe;
+		adim[0] = 10.0 * file->sh->sample_size_1;
+		adim[1] = 10.0 * file->sh->sample_size_2;
+		adim[2] = 10.0 * file->sh->sample_size_3;
+d217 2
+a218 1
+		pdim[2] = file->sh->dim3;
+d220 2
+a221 3
+/*
+ * Read image and compute means
+ */
+d232 7
+a238 1
+			if ((img = rdtensor (fname0, &indx, pdim)) == NULL) {
+d242 1
+d279 1
+a279 1
+		free_imgfile (file);
+d282 1
+a282 1
+
+d290 3
+a292 3
+/*
+ * Write the rgt data to rgtfile.
+ */
+d304 2
+d311 1
+a311 2
+		for (j = firstfrm; j <= rgtlist[i].nframe; j++)
+			free (rgtlist[i].mean[j]);
+a313 1
+
+d315 1
+a315 3
+	for (i = 0; i < lstsize; i++) {
+		for (j = 0; j < 6; j++)
+			free (imgname[i][j]);
+a316 2
+	}
+
+a317 1
+	(void) fclose (recfp);
+@
+
+
+1.4
+log
+@lint cleaning
+@
+text
+@d2 3
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voiproc/RCS/voiproc.c,v 1.3 1999/10/12 13:48:29 tom Exp tom $";
+d95 1
+a95 1
+	sprintf (date, "%s %s %s %s %s %s",
+d99 1
+a99 1
+	sscanf (rcsid, "%s %s", program, version);
+d338 1
+a338 1
+	fclose (recfp);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voiproc/RCS/voiproc.c,v 1.2 1999/10/12 13:28:30 tom Exp tom $";
+d31 1
+d39 1
+d71 2
+a72 2
+	int             lstsize;		 /* number of entries in image list */
+	int             nvoi;			 /* number of VOIs */
+d74 3
+a76 3
+	int             pixused;		 /* actual number of pixels used in computation */
+	int             firstfrm = 1;		 /* first valid frame */
+	int             firsttime = 1;		 /* first valid time frame */
+d106 2
+@
+
+
+1.2
+log
+@new libimgutil with updated arc path
+@
+text
+@d2 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voiproc/RCS/voiproc.c,v 1.1 1997/01/23 21:50:16 tom Exp tom $";
+d47 1
+a47 1
+	char            rgtfile[MAXFNAME];/* output RGT file (means) */
+d176 1
+a176 1
+		fprintf (stderr, "ERROR [voiproc] processing %s\n", fname0);
+d274 1
+a274 1
+				firsttime-1, framestart, frametime, framelen, fname0);
+d301 1
+a301 1
+    	strcat (rgtfile, imglist[0].subject_id);
+d306 1
+a306 1
+		      	regfile, prmfile, npixels, adim) == ERROR) {
+d328 1
+a328 1
+	close (recfp);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voiproc/RCS/voiproc.c,v 1.18 1996/11/22 16:04:41 tom Exp $";
+@

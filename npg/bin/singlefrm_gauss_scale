@@ -1,0 +1,71 @@
+#!/bin/csh
+#	Name:	singlefrm_gauss_scale
+#	Author:	Tom Videen
+#	Date:	Sep 1999
+
+if (! $?NPG) setenv NPG /usr/local/npg
+ 
+if ($#argv != 6) then
+	echo "Usage: singlefrm_gauss_scale image frames planes cutoff output_tracer extension"
+	echo " e.g., singlefrm_gauss_scale /data/m500nmb1.img 3to44 8to20 0.3 m img"
+	exit 1
+endif
+
+unalias rm
+set IN	  = $1
+set NAME  = $IN:t
+set FNAME = $NAME:r
+set SPEC  = `echo $FNAME | nawk '{FS="[0123456789]+";print $1}'`
+set PID   = `echo $FNAME | nawk '{FS="[a-z]*";print $2}'`
+set ROOT  = $SPEC$PID
+set FIRST = `echo $2 | nawk '{FS="to";print $1}'`
+set LAST  = `echo $2 | nawk '{FS="to";print $2}'`
+set FP    = `echo $3 | nawk '{FS="to";print $1}'`
+set LP    = `echo $3 | nawk '{FS="to";print $2}'`
+set CUTOFF = $4
+set GF    = `echo "$CUTOFF * 10; quit" | bc -l | cut -f1 -d.`
+set ONAM  = $ROOT$5
+set ANAM  = a$ONAM
+set EX    = $6
+set EXT   = .$EX
+set OEXT  = _g$GF$EXT
+set AEXT  = _g$GF
+
+if (! -e ${IN}) then
+	echo "ERROR [singlefrm_gauss_scale]: $IN does not exist."
+	exit 1
+endif
+
+set i = $FIRST
+while ($i <= $LAST)
+	set IM  = $ONAM
+	set IMM = $ONAM$i$EXT
+	set IMG  = $ONAM$i$OEXT
+	set AIMG = $ANAM$i$AEXT
+	if ((! -e $AIMG.img) || (! -e $AIMG.hdr)) then
+		if (! -e $IMG) then
+			if (! -e $IMM) then
+				echo -- separate_dynframes $IN $IM $EX $i,$i $FP,$LP
+				${NPG}/bin/separate_dynframes $IN $IM $EX $i,$i $FP,$LP
+			endif
+			echo -- gauss $IMM $IMG $CUTOFF
+			${NPG}/bin/gauss $IMM $IMG $CUTOFF
+		endif
+		set IMAX = `imghdr $IMG | grep Max | cut -f2 -d= | cut -f1 -dM`
+		set CHKMAX = `echo $IMAX | cut -f1 -d.`
+		if ($CHKMAX < 31000) then
+			set SCLX = `echo "32000 / $IMAX" | bc -l`
+			echo -- scaleimage $IMG $SCLX
+			scaleimage $IMG $SCLX
+		endif
+		echo -- img2analyze $IMG $AIMG
+		${NPG}/bin/img2analyze $IMG $AIMG
+		${NPG}/bin/setanamin $AIMG 0
+		rm $AIMG.ifh
+		if (-e $AIMG.lkup) rm $AIMG.lkup
+	else
+		echo "-- Single-Frame Analyze file exists: " $AIMG.img
+	endif
+	@ i++
+end
+

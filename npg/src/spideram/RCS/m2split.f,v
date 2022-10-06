@@ -1,0 +1,1200 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.02.08.20.30.38;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	92.10.13.19.49.41;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@C     $Id: m2split.f,v 1.6 2002/12/02 21:26:52 tom Exp tom $
+C     $Log: m2split.f,v $
+c Revision 1.6  2002/12/02  21:26:52  tom
+c format changes plus fixes for g77
+c
+c     Revision 1.5  1994/02/08  20:30:38  ty7777
+c     Increase the midline length.
+c     
+c     Revision 1.4  1993/10/04  21:55:32  tom
+c     added rcsheader
+c     
+c     Revision 1.3  1992/10/13  19:49:41  ty7777
+c     Replace CTOI in GETREAL by NEWCTOI.
+c     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   M2SPLIT.FTN
+C     Author:       Tom O. Videen
+C     Date:         02-Jun-87
+C     Intent:
+C     .  This subroutine gets the user's options to create split images.
+C     .  It then calls other subroutines which create and display the images.
+C     
+C     History:
+C     .  Modified 13-Sep-88 by TOV:
+C     .     1) change FILETP from I*4 to CH*23 in **DISPLAY common block.
+C     .  Modified by Tom Yang 05-Sep-91 to post to the X Windows and UNIX
+C     .     environment.
+C     .  Modified by Tom Yang 08-Feb-94 to increase the midline length to 820.
+C     
+C     Common blocks from SPIDERAM.INC
+C     .  **IMAGEDAT - image arrays                   (write)
+C     .  **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .  **DISPLAY  - display parameters             (write)
+C     .  **FILES    - scan file list                 (read only)
+C     .  **SCALES   - scaling parameters             (write)
+C     .  **REGION   - region analysis parameters     (write)
+C     
+C     Local Variables:
+C     .  TITLE - title of this menu;
+C     .  Q,A - question and answer;
+C     .  STR - string to write to terminal;
+C     .  MID - integer value of XMIDLINE;
+C     .  MID1 = MID+1 (used in IMAGE subtractions);
+C     .  ONPIX = true if midline is on a pixel (i.e.,XMIDLINE is integer);
+C     .  LF1,LF2 - primary and subtraction files for left side of image;
+C     .  RF1,RF2 - primary and subtraction files for right side of image;
+C     .  SIDELF2 - side of LF2 to subtract from right side of LF1;
+C     .  SIDERF2 - side of RF2 to subtract from right side of RF1;
+C     .      (1 = left; 2 = right)
+C     .  LSCALE - SCALEPOS for left side of image (-1,0, or 1);
+C     .  RSCALE - SCALEPOS for right side of image (-1,0, or 1);
+C     .  LEFTABS - ABSSCALE for left side of image;
+C     .  RIGHTABS - ABSSCALE for right side of image;
+C     .  LRANGE - ABSRANGE for left side of image;
+C     .  RRANGE - ABSRANGE for right side of image;
+C     .  LMAX - ABSMAX or RELMAX for left side of image;
+C     .  RMAX - ABSMAX or RELMAX for right side of image;
+C     .  LDMAX - DMAX for left side of image;
+C     .  LDMIN - DMIN for left side of image;
+C     .  LSCALER - SCALER(1) for left side of image;
+C     
+C     Uses Subroutines:
+C     .  D2BARTWO - display and label a split color bar;
+C     .  D2ERROR  - gets appropriate error message for an ERRTYPE;
+C     .  D2GETIMG - get an image from a disk file;
+C     .  D2INIT   - initializes display parameters;
+C     .  D2LABEL4 - label full screen display (MAG=7);
+C     .  D2MAXVAL - get the maximum value for the slice;
+C     .  D2PRCIMG - get a processed image;
+C     .  D2RAW    - display an uninterpolated image;
+C     .  D2SCALER - scale the image for the appropriate color scale;
+C     .  D2SMOOTH - display an interpolated image;
+C     .  XRAMTEK - returns Ramtek x-location of an image x-index;
+C     
+C     RAMUTY.LIB
+C     .  RAMLIN - draws a line on the Ramtek in specified planes;
+C     .  RAMRST - reset the Ramtek;
+C     
+C     Called by:  SPIDERAM
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: m2split.f,v 1.6 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE M2SPLIT
+
+      INTEGER*4    ERRTYPE,HOME,CLEAR,COL,ROW,XRAMTEK,X,LEFT,RIGHT,
+     &     LF1,LF2,RF1,RF2,SIDELF2,SIDERF2,LSCALE,RSCALE,MID,MID1
+      INTEGER*2    LDMAX,LDMIN
+      REAL         LMAX,RMAX,LSCALER
+      CHARACTER*1  BELL
+      CHARACTER*14 TITLE,DASH
+      CHARACTER*20 BLANK
+      CHARACTER*80 Q,STR
+      LOGICAL*1    ANS,HDRONLY,SUBSELF,LEFTABS,RIGHTABS,
+     &     LRANGE,RRANGE,ONPIX,SPLIT
+
+      INCLUDE 'spideram.inc'
+
+      DATA HOME,CLEAR /1,2/
+      DATA LEFT,RIGHT /1,2/
+      DATA TITLE /'Split Images:'/
+      DATA DASH  /'------------'/
+      DATA BLANK /'                    '/
+
+      SPLIT = .TRUE.
+      BELL = CHAR(7)
+      SUBSELF = .FALSE.
+      LF1 = FILE(1)
+      LF2 = 0
+      RF1 = FILE(1)
+      RF2 = 0
+      SIDELF2 = LEFT
+      SIDERF2 = RIGHT
+      LSCALE = SCALEPOS
+      RSCALE = SCALEPOS
+      LEFTABS  = ABSSCALE
+      RIGHTABS = ABSSCALE
+      LRANGE = ABSRANGE
+      RRANGE = ABSRANGE
+      LMAX = RELMAX
+      RMAX = RELMAX
+      LDMAX = 0
+      LDMIN = 0
+      LSCALER = 1.0
+
+      CALL TCONTROL(HOME,0,0)
+      CALL TCONTROL(CLEAR,0,0)
+      WRITE (USEROUT,*) TITLE
+      WRITE (USEROUT,*) DASH
+      WRITE (USEROUT,*)
+      WRITE (USEROUT,*) 'This submenu allows split/difference ',
+     &     'images to be created.'
+      WRITE (USEROUT,*)
+      WRITE (USEROUT,*) 'An appropriate midline may be selected ',
+     &     'with the REGIONS menu'
+      WRITE (USEROUT,*) 'before proceeding with this option.'
+      WRITE (USEROUT,*)
+
+      Q = 'Continue'
+      ANS = .TRUE.
+      CALL YESNO(Q,ANS)
+      IF (.NOT.ANS) RETURN
+
+C     Type of Processing
+
+      WRITE (USEROUT,*)
+      WRITE (USEROUT,*) '0 = PETT Numbers'
+      WRITE (USEROUT,*) '1 = CBF, CBV, or Tissue Activity'
+      WRITE (USEROUT,*) '2 = OEF'
+      WRITE (USEROUT,*) '3 = CMRO2'
+      WRITE (USEROUT,*)
+      Q = 'Type of processing'
+      CALL GETINT(Q,PROCESS,0,3)
+
+      Q = 'Midline position'
+      CALL GETREAL (Q, XMIDLINE, 10.0, 110.0)
+      IF (ABS (XMIDLINE - FLOAT (INT (XMIDLINE))) .LT. 0.25) THEN
+         MID = NINT(XMIDLINE)
+         XMIDLINE = FLOAT(MID)
+         ONPIX = .TRUE.
+      ELSE
+         MID = INT(XMIDLINE)
+         XMIDLINE = FLOAT(MID) + 0.5
+         ONPIX = .FALSE.
+      END IF
+      MID1 = MID + 1
+
+      Q = 'Subtract opposite hemispheres of same image'
+      CALL YESNO(Q,SUBSELF)
+      IF (SUBSELF) THEN
+         LEFTABS  = .FALSE.
+         RIGHTABS = .FALSE.
+         GO TO 100
+      END IF
+
+C     ------------------------------------------------------------------
+
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'Left Side of Image'
+      WRITE(USEROUT,*) '------------------'
+
+ 100  Q = 'Primary Scan File Number (0 to cancel)'
+      CALL GETINT(Q,LF1,0,20)
+      IF (LF1.EQ.0) RETURN
+      IF (FILENAME(LF1).EQ.BLANK) THEN
+         WRITE(USEROUT,*) '** ERROR  no scan file #',LF1,' exists',BELL
+         GO TO 100
+      END IF
+      IF (SUBSELF) GO TO 300
+
+ 200  Q = 'Subtraction Scan File Number (0 if none)'
+      CALL GETINT(Q,LF2,0,20)
+      IF (LF2.NE.0) THEN
+         IF (FILENAME(LF2).EQ.BLANK) THEN
+            WRITE(USEROUT,*)'** ERROR  no scan file #',LF2,' exists',BELL
+            GO TO 200
+         ELSE
+            LEFTABS = .FALSE.
+            Q = 'Side of image to subtract (1=Left! 2=Right)'
+            CALL GETINT(Q,SIDELF2,1,2)
+         END IF
+      ELSE
+         LEFTABS = .TRUE.
+         SIDELF2 = 0
+         GO TO 400
+      END IF
+
+ 300  WRITE(USEROUT,*)
+      WRITE(USEROUT,*) ' 0 = Centered scale'
+      WRITE(USEROUT,*) ' 1 = Zero to Maximum Value'
+      WRITE(USEROUT,*) '-1 = Minimum Value to Zero'
+      Q = 'Type of Scale'
+      CALL GETINT(Q,LSCALE,-1,1)
+
+ 400  Q = 'Scale to a specific maximum (instead of slice maximum)'
+      CALL YESNO(Q,LRANGE)
+      IF (LRANGE) THEN
+         Q = 'Scale Maximum'
+         CALL GETREAL(Q,LMAX,0.,10000.)
+      END IF
+
+      IF (SUBSELF) THEN
+         RSCALE = LSCALE
+         RRANGE = LRANGE
+         RMAX = LMAX
+         GO TO 1000
+      END IF
+
+C     ------------------------------------------------------------------
+
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'Right Side of Image'
+      WRITE(USEROUT,*) '-------------------'
+
+ 600  Q = 'Primary Scan File Number (0 to cancel)'
+      CALL GETINT(Q,RF1,0,20)
+      IF (RF1.EQ.0) RETURN
+      IF (FILENAME(RF1).EQ.BLANK) THEN
+         WRITE(USEROUT,*) '** ERROR  no scan file #',RF1,' exists',BELL
+         GO TO 600
+      END IF
+
+ 700  Q = 'Subtraction Scan File Number (0 if none)'
+      CALL GETINT(Q,RF2,0,20)
+      IF (RF2.NE.0) THEN
+         IF (FILENAME(RF2).EQ.BLANK) THEN
+            WRITE(USEROUT,*)'** ERROR  no scan file #',RF2,' exists',BELL
+            GO TO 700
+         ELSE
+            RIGHTABS = .FALSE.
+            Q = 'Side of image to subtract (1=Left! 2=Right)'
+            CALL GETINT(Q,SIDERF2,1,2)
+         END IF
+      ELSE
+         RIGHTABS = .TRUE.
+         SIDERF2 = 0
+         GO TO 800
+      END IF
+
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) ' 0 = Centered scale'
+      WRITE(USEROUT,*) ' 1 = Zero to Maximum Value'
+      WRITE(USEROUT,*) '-1 = Minimum Value to Zero'
+      Q = 'Type of Scale'
+      CALL GETINT(Q,RSCALE,-1,1)
+
+ 800  Q = 'Scale to a specific maximum (instead of slice maximum)'
+      CALL YESNO(Q,RRANGE)
+      IF (RRANGE) THEN
+         Q = 'Scale Maximum'
+         CALL GETREAL(Q,RMAX,0.,10000.)
+      END IF
+
+C     ------------------------------------------------------------------
+
+ 1000 Q = 'Interpolate the displayed points'
+      CALL YESNO(Q,SMOOTH)
+
+      Q = 'Label the display'
+      CALL YESNO(Q,ANNOTATE)
+
+      IF (FILETP(1:20).EQ.BLANK) THEN
+         TEMPLATE = 0
+      ELSE
+         Q = 'Use the stored template'
+         ANS = .TRUE.
+         CALL YESNO(Q,ANS)
+         IF (ANS) THEN
+            TEMPLATE = 3
+         ELSE
+            TEMPLATE = 0
+         END IF
+      END IF
+
+      Q = 'Slice number to display (0 to cancel)'
+      CALL GETINT(Q,DSECTION,0,NMSLICES)
+      IF (DSECTION.EQ.0) RETURN
+
+C     Default Parameters
+
+      ORIENT = 'T'
+      MAG = 7
+      COL = 0
+      ROW = 0
+      ERRTYPE = 0
+      SLICES = NMSLICES
+      ERRTYPE = 0
+      CALL RAMRST(RMD)
+      CALL D2INIT(1,PETTNUM)
+      DO 1200 J=1,128
+         DO 1100 I=1,128
+            IMAGE(I,J,1) = 0
+ 1100    CONTINUE
+ 1200 CONTINUE
+
+C     ------------------------------------------------------------------
+C     Left Primary Image file (sole image if SUBSELF)
+C     (read header for LF1 as FILE(1))
+
+      HDRONLY = .TRUE.
+      CALL D2GETIMG(1,DSECTION,LF1,ERRTYPE,HDRONLY)
+      IF (ERRTYPE.NE.0) GO TO 9000
+      CALL D2PRCIMG(2,LF1,DSECTION,COL,ROW,ERRTYPE)
+      IF (ERRTYPE.NE.0) GO TO 9000
+      SCALER(1) = SCALER(2)
+
+      IF (SUBSELF) THEN
+         IF (MID.LE.64) THEN
+            C2 = MID
+         ELSE
+            C2 = 128-MID
+         END IF
+         IF (ONPIX) THEN
+            DO 1300 J=1,128
+               DO 1250 I=1,C2
+                  IMAGE(MID-I,J,1) = IMAGE(MID-I,J,2) - IMAGE(MID+I,J,2)
+                  IMAGE(MID+I,J,1) = IMAGE(MID+I,J,2) - IMAGE(MID-I,J,2)
+ 1250          CONTINUE
+ 1300       CONTINUE
+         ELSE
+            DO 1400 J=1,128
+               DO 1350 I=1,C2
+                  IMAGE(MID1-I,J,1) = IMAGE(MID1-I,J,2) - IMAGE(MID+I,J,2)
+                  IMAGE(MID+I,J,1) = IMAGE(MID+I,J,2) - IMAGE(MID1-I,J,2)
+ 1350          CONTINUE
+ 1400       CONTINUE
+         END IF
+         ABSRANGE = LRANGE
+         ABSSCALE = LEFTABS
+         SCALEPOS = LSCALE
+         IF (ABSSCALE) THEN
+            ABSMAX = LMAX
+         ELSE
+            RELMAX = LMAX
+         END IF
+         CALL D2MAXVAL(COL,ROW,0)
+         CALL D2SCALER(COL,ROW,0)
+         GO TO 3000
+      END IF
+
+C     Left Subtraction file
+
+      IF (LF2.NE.0) THEN
+         CALL D2PRCIMG(3,LF2,DSECTION,COL,ROW,ERRTYPE)
+         IF (ERRTYPE.NE.0) GO TO 9000
+      END IF
+
+C     Subtract the images
+
+      IF (LF2.EQ.0) THEN
+         DO 1460 J=1,128
+            DO 1440 I=1,MID
+               IMAGE(I,J,1) = IMAGE(I,J,2)
+ 1440       CONTINUE
+ 1460    CONTINUE
+
+      ELSE IF (SIDELF2.EQ.1) THEN
+         DO 1600 J=1,128
+            DO 1500 I=1,MID
+               IMAGE(I,J,1) = IMAGE(I,J,2) - IMAGE(I,J,3)
+ 1500       CONTINUE
+ 1600    CONTINUE
+
+      ELSE
+         IF (MID.LE.64) THEN
+            C2 = MID
+         ELSE
+            C2 = 128 - MID
+         END IF
+         IF (ONPIX) THEN
+            DO 1700 J=1,128
+               DO 1650 I=1,C2
+                  IMAGE(MID-I,J,1) = IMAGE(MID-I,J,2) - IMAGE(MID+I,J,3)
+ 1650          CONTINUE
+ 1700       CONTINUE
+         ELSE
+            DO 1800 J=1,128
+               DO 1750 I=1,C2
+                  IMAGE(MID1-I,J,1) = IMAGE(MID1-I,J,2) - IMAGE(MID+I,J,3)
+ 1750          CONTINUE
+ 1800       CONTINUE
+         END IF
+      END IF
+
+C     Scale and move to IARRAY
+
+      ABSRANGE = LRANGE
+      ABSSCALE = LEFTABS
+      SCALEPOS = LSCALE
+      IF (ABSSCALE) THEN
+         ABSMAX = LMAX
+      ELSE
+         RELMAX = LMAX
+      END IF
+      IF (.NOT.LRANGE) CALL D2MAXVAL(COL,ROW,LEFT)
+      CALL D2SCALER(COL,ROW,LEFT)
+      LDMAX = DMAX
+      LDMIN = DMIN
+      LSCALER = SCALER(1)
+
+C     ------------------------------------------------------------------
+C     Right Primary Image file
+
+      CALL D2PRCIMG(2,RF1,DSECTION,COL,ROW,ERRTYPE)
+      IF (ERRTYPE.NE.0) GO TO 9000
+      SCALER(1) = SCALER(2)
+
+C     Right Subtraction file
+
+      IF (RF2.NE.0) THEN
+         CALL D2PRCIMG(3,RF2,DSECTION,COL,ROW,ERRTYPE)
+         IF (ERRTYPE.NE.0) GO TO 9000
+      END IF
+
+C     Subtract the images
+
+      IF (RF2.EQ.0) THEN
+         DO 2060 J=1,128
+            DO 2040 I=MID+1,128
+               IMAGE(I,J,1) = IMAGE(I,J,2)
+ 2040       CONTINUE
+ 2060    CONTINUE
+
+      ELSE IF (SIDERF2.EQ.2) THEN
+         DO 2200 J=1,128
+            DO 2100 I=MID+1,128
+               IMAGE(I,J,1) = IMAGE(I,J,2) - IMAGE(I,J,3)
+ 2100       CONTINUE
+ 2200    CONTINUE
+
+      ELSE
+         IF (MID.LE.64) THEN
+            C2 = MID
+         ELSE
+            C2 = 128 - MID
+         END IF
+         IF (ONPIX) THEN
+            DO 2300 J=1,128
+               DO 2250 I=1,C2
+                  IMAGE(MID+I,J,1) = IMAGE(MID+I,J,2) - IMAGE(MID-I,J,3)
+ 2250          CONTINUE
+ 2300       CONTINUE
+         ELSE
+            MID1 = MID+1
+            DO 2400 J=1,128
+               DO 2350 I=1,C2
+                  IMAGE(MID+I,J,1) = IMAGE(MID+I,J,2) - IMAGE(MID1-I,J,3)
+ 2350          CONTINUE
+ 2400       CONTINUE
+         END IF
+      END IF
+
+C     Scale and move to IARRAY
+
+      ABSRANGE = RRANGE
+      ABSSCALE = RIGHTABS
+      SCALEPOS = RSCALE
+      IF (ABSSCALE) THEN
+         ABSMAX = RMAX
+      ELSE
+         RELMAX = RMAX
+      END IF
+      IF (.NOT.RRANGE) CALL D2MAXVAL(COL,ROW,RIGHT)
+      CALL D2SCALER(COL,ROW,RIGHT)
+
+C     ------------------------------------------------------------------
+C     Display the image
+
+ 3000 IF (SMOOTH) THEN
+         CALL D2SMOOTH(SPLIT)
+      ELSE
+         CALL D2RAW
+      END IF
+
+C     Draw the midline
+
+      IF (ONPIX) THEN
+         X = XRAMTEK (MID)
+         DO 3200 I = 0, ZFACTOR * MAG - 1
+            CALL RAMLIN (X + I, 80, X + I, 820, REGPLANE, RMD)
+ 3200    CONTINUE
+      ELSE
+         X = XRAMTEK (MID1)
+         CALL RAMLIN (X, 80, X, 820, REGPLANE, RMD)
+      END IF
+
+C     Draw and label the color bar
+
+      CALL D2BARTWO (RIGHT, .NOT. RIGHTABS)
+      IF (.NOT.SUBSELF) THEN
+         ABSRANGE = LRANGE
+         ABSSCALE = LEFTABS
+         SCALEPOS = LSCALE
+         DMAX = LDMAX
+         DMIN = LDMIN
+         SCALER(1) = LSCALER
+         IF (ABSSCALE) THEN
+            ABSMAX = LMAX
+         ELSE
+            RELMAX = LMAX
+         END IF
+         CALL D2BARTWO (LEFT, .NOT. LEFTABS)
+      END IF
+      IF (ANNOTATE) THEN
+         FILE(1) = LF1
+         CALL D2LABEL4
+      END IF
+      RETURN
+
+C     Error in reading or processing image files
+
+ 9000 CALL D2ERROR(ERRTYPE,STR)
+      WRITE(USEROUT,*) STR
+      Q = 'Continue and cancel this option'
+      ANS = .TRUE.
+      CALL YESNO(Q,ANS)
+
+      RETURN
+      END
+@
+
+
+1.6
+log
+@format changes plus fixes for g77
+@
+text
+@d1 1
+a1 1
+C     $Id: m2split.f,v 1.5 1994/02/08 20:30:38 ty7777 Exp tom $
+d3 3
+d83 1
+a83 1
+C     rcsheader = "$Id: m2split.f,v 1.5 1994/02/08 20:30:38 ty7777 Exp tom $"
+@
+
+
+1.5
+log
+@Increase the midline length.
+@
+text
+@d1 11
+a11 9
+C$Id: m2split.f,v 1.4 1993/10/04 21:55:32 tom Exp ty7777 $
+C$Log: m2split.f,v $
+c Revision 1.4  1993/10/04  21:55:32  tom
+c added rcsheader
+c
+c Revision 1.3  1992/10/13  19:49:41  ty7777
+c Replace CTOI in GETREAL by NEWCTOI.
+c
+C
+d13 66
+a78 72
+C
+C  Subroutine:   M2SPLIT.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         02-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This subroutine gets the user's options to create split images.
+C     It then calls other subroutines which create and display the images.
+C
+C  History:
+C     Modified 13-Sep-88 by TOV:
+C        1) change FILETP from I*4 to CH*23 in **DISPLAY common block.
+C     Modified by Tom Yang 05-Sep-91 to post to the X Windows and UNIX
+C        environment.
+C     Modified by Tom Yang 08-Feb-94 to increase the midline length
+C        to 820.
+C
+C  Common blocks from SPIDERAM.INC
+C     **IMAGEDAT - image arrays                   (write)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (write)
+C     **FILES    - scan file list                 (read only)
+C     **SCALES   - scaling parameters             (write)
+C     **REGION   - region analysis parameters     (write)
+C
+C  Local Variables:
+C     TITLE - title of this menu;
+C     Q,A - question and answer;
+C     STR - string to write to terminal;
+C     MID - integer value of XMIDLINE;
+C     MID1 = MID+1 (used in IMAGE subtractions);
+C     ONPIX = true if midline is on a pixel (i.e.,XMIDLINE is integer);
+C     LF1,LF2 - primary and subtraction files for left side of image;
+C     RF1,RF2 - primary and subtraction files for right side of image;
+C     SIDELF2 - side of LF2 to subtract from right side of LF1;
+C     SIDERF2 - side of RF2 to subtract from right side of RF1;
+C         (1 = left; 2 = right)
+C     LSCALE - SCALEPOS for left side of image (-1,0, or 1);
+C     RSCALE - SCALEPOS for right side of image (-1,0, or 1);
+C     LEFTABS - ABSSCALE for left side of image;
+C     RIGHTABS - ABSSCALE for right side of image;
+C     LRANGE - ABSRANGE for left side of image;
+C     RRANGE - ABSRANGE for right side of image;
+C     LMAX - ABSMAX or RELMAX for left side of image;
+C     RMAX - ABSMAX or RELMAX for right side of image;
+C     LDMAX - DMAX for left side of image;
+C     LDMIN - DMIN for left side of image;
+C     LSCALER - SCALER(1) for left side of image;
+C
+C  Uses Subroutines:
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     D2BARTWO - display and label a split color bar;
+C     D2ERROR  - gets appropriate error message for an ERRTYPE;
+C     D2GETIMG - get an image from a disk file;
+C     D2INIT   - initializes display parameters;
+C     D2LABEL4 - label full screen display (MAG=7);
+C     D2MAXVAL - get the maximum value for the slice;
+C     D2PRCIMG - get a processed image;
+C     D2RAW    - display an uninterpolated image;
+C     D2SCALER - scale the image for the appropriate color scale;
+C     D2SMOOTH - display an interpolated image;
+C     XRAMTEK - returns Ramtek x-location of an image x-index;
+C
+C  RAMUTY.LIB
+C     RAMLIN - draws a line on the Ramtek in specified planes;
+C     RAMRST - reset the Ramtek;
+C
+C  Called by:  SPIDERAM
+C
+d80 2
+a81 1
+C
+d83 1
+a83 1
+C
+d85 1
+a85 2
+     &             LF1,LF2,RF1,RF2,SIDELF2,SIDERF2,LSCALE,RSCALE,
+     &             MID,MID1
+d93 2
+a94 3
+     &             LRANGE,RRANGE,ONPIX,SPLIT
+      character*256 rcsheader
+C
+a95 1
+      rcsheader = "$Id: m2split.f,v 1.4 1993/10/04 21:55:32 tom Exp ty7777 $"
+d102 1
+a102 1
+C
+d123 1
+a123 1
+C
+d130 1
+a130 1
+     2  'images to be created.'
+d133 1
+a133 1
+     2  'with the REGIONS menu'
+d136 1
+a136 1
+C
+d141 3
+a143 3
+C
+C  Type of Processing
+C
+d152 1
+a152 1
+C
+d156 3
+a158 3
+        MID = NINT(XMIDLINE)
+        XMIDLINE = FLOAT(MID)
+        ONPIX = .TRUE.
+d160 3
+a162 3
+        MID = INT(XMIDLINE)
+        XMIDLINE = FLOAT(MID) + 0.5
+        ONPIX = .FALSE.
+d165 1
+a165 1
+C
+d169 3
+a171 3
+        LEFTABS  = .FALSE.
+        RIGHTABS = .FALSE.
+        GO TO 100
+d173 3
+a175 3
+C
+C ------------------------------------------------------------------
+C
+d179 2
+a180 2
+C
+100   Q = 'Primary Scan File Number (0 to cancel)'
+d184 2
+a185 2
+        WRITE(USEROUT,*) '** ERROR  no scan file #',LF1,' exists',BELL
+        GO TO 100
+d188 2
+a189 2
+C
+200   Q = 'Subtraction Scan File Number (0 if none)'
+d192 8
+a199 8
+        IF (FILENAME(LF2).EQ.BLANK) THEN
+          WRITE(USEROUT,*)'** ERROR  no scan file #',LF2,' exists',BELL
+          GO TO 200
+        ELSE
+          LEFTABS = .FALSE.
+          Q = 'Side of image to subtract (1=Left! 2=Right)'
+          CALL GETINT(Q,SIDELF2,1,2)
+        END IF
+d201 3
+a203 3
+        LEFTABS = .TRUE.
+        SIDELF2 = 0
+        GO TO 400
+d205 2
+a206 2
+C
+300   WRITE(USEROUT,*)
+d212 2
+a213 2
+C
+400   Q = 'Scale to a specific maximum (instead of slice maximum)'
+d216 2
+a217 2
+        Q = 'Scale Maximum'
+        CALL GETREAL(Q,LMAX,0.,10000.)
+d219 1
+a219 1
+C
+d221 4
+a224 4
+        RSCALE = LSCALE
+        RRANGE = LRANGE
+        RMAX = LMAX
+        GO TO 1000
+d226 3
+a228 3
+C
+C ------------------------------------------------------------------
+C
+d232 2
+a233 2
+C
+600   Q = 'Primary Scan File Number (0 to cancel)'
+d237 2
+a238 2
+        WRITE(USEROUT,*) '** ERROR  no scan file #',RF1,' exists',BELL
+        GO TO 600
+d240 2
+a241 2
+C
+700   Q = 'Subtraction Scan File Number (0 if none)'
+d244 8
+a251 8
+        IF (FILENAME(RF2).EQ.BLANK) THEN
+          WRITE(USEROUT,*)'** ERROR  no scan file #',RF2,' exists',BELL
+          GO TO 700
+        ELSE
+          RIGHTABS = .FALSE.
+          Q = 'Side of image to subtract (1=Left! 2=Right)'
+          CALL GETINT(Q,SIDERF2,1,2)
+        END IF
+d253 3
+a255 3
+        RIGHTABS = .TRUE.
+        SIDERF2 = 0
+        GO TO 800
+d257 1
+a257 1
+C
+d264 2
+a265 2
+C
+800   Q = 'Scale to a specific maximum (instead of slice maximum)'
+d268 2
+a269 2
+        Q = 'Scale Maximum'
+        CALL GETREAL(Q,RMAX,0.,10000.)
+d271 4
+a274 4
+C
+C ------------------------------------------------------------------
+C
+1000  Q = 'Interpolate the displayed points'
+d276 1
+a276 1
+C
+d279 1
+a279 1
+C
+d281 1
+a281 1
+        TEMPLATE = 0
+d283 8
+a290 8
+        Q = 'Use the stored template'
+        ANS = .TRUE.
+        CALL YESNO(Q,ANS)
+        IF (ANS) THEN
+          TEMPLATE = 3
+        ELSE
+          TEMPLATE = 0
+        END IF
+d292 1
+a292 1
+C
+d296 3
+a298 3
+C
+C  Default Parameters
+C
+d309 9
+a317 9
+        DO 1100 I=1,128
+          IMAGE(I,J,1) = 0
+1100    CONTINUE
+1200  CONTINUE
+C
+C ------------------------------------------------------------------
+C  Left Primary Image file (sole image if SUBSELF)
+C  (read header for LF1 as FILE(1))
+C
+d324 1
+a324 1
+C
+d326 31
+a356 31
+        IF (MID.LE.64) THEN
+          C2 = MID
+        ELSE
+          C2 = 128-MID
+        END IF
+        IF (ONPIX) THEN
+          DO 1300 J=1,128
+            DO 1250 I=1,C2
+              IMAGE(MID-I,J,1) = IMAGE(MID-I,J,2) - IMAGE(MID+I,J,2)
+              IMAGE(MID+I,J,1) = IMAGE(MID+I,J,2) - IMAGE(MID-I,J,2)
+1250        CONTINUE
+1300      CONTINUE
+        ELSE
+          DO 1400 J=1,128
+            DO 1350 I=1,C2
+              IMAGE(MID1-I,J,1) = IMAGE(MID1-I,J,2) - IMAGE(MID+I,J,2)
+              IMAGE(MID+I,J,1) = IMAGE(MID+I,J,2) - IMAGE(MID1-I,J,2)
+1350        CONTINUE
+1400      CONTINUE
+        END IF
+        ABSRANGE = LRANGE
+        ABSSCALE = LEFTABS
+        SCALEPOS = LSCALE
+        IF (ABSSCALE) THEN
+          ABSMAX = LMAX
+        ELSE
+          RELMAX = LMAX
+        END IF
+        CALL D2MAXVAL(COL,ROW,0)
+        CALL D2SCALER(COL,ROW,0)
+        GO TO 3000
+d358 3
+a360 3
+C
+C  Left Subtraction file
+C
+d362 2
+a363 2
+        CALL D2PRCIMG(3,LF2,DSECTION,COL,ROW,ERRTYPE)
+        IF (ERRTYPE.NE.0) GO TO 9000
+d365 3
+a367 3
+C
+C  Subtract the images
+C
+d369 6
+a374 6
+        DO 1460 J=1,128
+          DO 1440 I=1,MID
+            IMAGE(I,J,1) = IMAGE(I,J,2)
+1440      CONTINUE
+1460    CONTINUE
+C
+d376 6
+a381 6
+        DO 1600 J=1,128
+          DO 1500 I=1,MID
+            IMAGE(I,J,1) = IMAGE(I,J,2) - IMAGE(I,J,3)
+1500      CONTINUE
+1600    CONTINUE
+C
+d383 18
+a400 18
+        IF (MID.LE.64) THEN
+          C2 = MID
+        ELSE
+          C2 = 128 - MID
+        END IF
+        IF (ONPIX) THEN
+          DO 1700 J=1,128
+            DO 1650 I=1,C2
+              IMAGE(MID-I,J,1) = IMAGE(MID-I,J,2) - IMAGE(MID+I,J,3)
+1650        CONTINUE
+1700      CONTINUE
+        ELSE
+          DO 1800 J=1,128
+            DO 1750 I=1,C2
+              IMAGE(MID1-I,J,1) = IMAGE(MID1-I,J,2) - IMAGE(MID+I,J,3)
+1750        CONTINUE
+1800      CONTINUE
+        END IF
+d402 3
+a404 3
+C
+C  Scale and move to IARRAY
+C
+d409 1
+a409 1
+        ABSMAX = LMAX
+d411 1
+a411 1
+        RELMAX = LMAX
+d418 4
+a421 4
+C
+C ------------------------------------------------------------------
+C  Right Primary Image file
+C
+d425 3
+a427 3
+C
+C  Right Subtraction file
+C
+d429 2
+a430 2
+        CALL D2PRCIMG(3,RF2,DSECTION,COL,ROW,ERRTYPE)
+        IF (ERRTYPE.NE.0) GO TO 9000
+d432 3
+a434 3
+C
+C  Subtract the images
+C
+d436 6
+a441 6
+        DO 2060 J=1,128
+          DO 2040 I=MID+1,128
+            IMAGE(I,J,1) = IMAGE(I,J,2)
+2040      CONTINUE
+2060    CONTINUE
+C
+d443 6
+a448 6
+        DO 2200 J=1,128
+          DO 2100 I=MID+1,128
+            IMAGE(I,J,1) = IMAGE(I,J,2) - IMAGE(I,J,3)
+2100      CONTINUE
+2200    CONTINUE
+C
+d450 19
+a468 19
+        IF (MID.LE.64) THEN
+          C2 = MID
+        ELSE
+          C2 = 128 - MID
+        END IF
+        IF (ONPIX) THEN
+          DO 2300 J=1,128
+            DO 2250 I=1,C2
+              IMAGE(MID+I,J,1) = IMAGE(MID+I,J,2) - IMAGE(MID-I,J,3)
+2250        CONTINUE
+2300      CONTINUE
+        ELSE
+          MID1 = MID+1
+          DO 2400 J=1,128
+            DO 2350 I=1,C2
+              IMAGE(MID+I,J,1) = IMAGE(MID+I,J,2) - IMAGE(MID1-I,J,3)
+2350        CONTINUE
+2400      CONTINUE
+        END IF
+d470 3
+a472 3
+C
+C  Scale and move to IARRAY
+C
+d477 1
+a477 1
+        ABSMAX = RMAX
+d479 1
+a479 1
+        RELMAX = RMAX
+d483 6
+a488 6
+C
+C ------------------------------------------------------------------
+C  Display the image
+C
+3000  IF (SMOOTH) THEN
+        CALL D2SMOOTH(SPLIT)
+d490 1
+a490 1
+        CALL D2RAW
+d492 3
+a494 3
+C
+C  Draw the midline
+C
+d496 4
+a499 4
+        X = XRAMTEK (MID)
+        DO 3200 I = 0, ZFACTOR * MAG - 1
+          CALL RAMLIN (X + I, 80, X + I, 820, REGPLANE, RMD)
+3200    CONTINUE
+d501 2
+a502 2
+        X = XRAMTEK (MID1)
+        CALL RAMLIN (X, 80, X, 820, REGPLANE, RMD)
+d504 3
+a506 3
+C
+C  Draw and label the color bar
+C
+d509 12
+a520 12
+        ABSRANGE = LRANGE
+        ABSSCALE = LEFTABS
+        SCALEPOS = LSCALE
+        DMAX = LDMAX
+        DMIN = LDMIN
+        SCALER(1) = LSCALER
+        IF (ABSSCALE) THEN
+          ABSMAX = LMAX
+        ELSE
+          RELMAX = LMAX
+        END IF
+        CALL D2BARTWO (LEFT, .NOT. LEFTABS)
+d523 2
+a524 2
+        FILE(1) = LF1
+        CALL D2LABEL4
+d527 4
+a530 4
+C
+C  Error in reading or processing image files
+C
+9000  CALL D2ERROR(ERRTYPE,STR)
+d535 1
+a535 1
+C
+@
+
+
+1.4
+log
+@added rcsheader
+@
+text
+@d1 1
+a1 1
+C$Id: m2split.f,v 1.3 1992/10/13 19:49:41 ty7777 Exp tom $
+d3 3
+d25 4
+a28 1
+C     Modified by TOV 26-Sep-91 for XSPIDERAM.
+d101 1
+a101 1
+      rcsheader = "$Id$"
+d502 3
+a504 3
+        X = XRAMTEK(MID)
+        DO 3200 I=0,ZFACTOR*MAG-1
+          CALL RAMLIN(X+I,80,X+I,420,REGPLANE,RMD)
+d507 2
+a508 2
+        X = XRAMTEK(MID1)
+        CALL RAMLIN(X,80,X,420,REGPLANE,RMD)
+d513 1
+a513 1
+      CALL D2BARTWO(RIGHT,.NOT.RIGHTABS)
+d526 1
+a526 1
+        CALL D2BARTWO(LEFT,.NOT.LEFTABS)
+@
+
+
+1.3
+log
+@Replace CTOI in GETREAL by NEWCTOI.
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d82 2
+a83 2
+     2             LF1,LF2,RF1,RF2,SIDELF2,SIDERF2,LSCALE,RSCALE,
+     3             MID,MID1
+d91 2
+a92 1
+     2             LRANGE,RRANGE,ONPIX,SPLIT
+d95 2
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d1 5
+a5 2
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+d148 2
+a149 2
+      CALL GETREAL(Q,XMIDLINE,10.0,110.0)
+      IF (ABS(XMIDLINE-FLOAT(INT(XMIDLINE))).LT.0.25) THEN
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

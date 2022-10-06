@@ -1,0 +1,548 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.5
+date	2001.11.16.21.16.19;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.08.17.16.32.27;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.11.01.20.05.43;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.09.21.15.42.24;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.09.20.16.59.38;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@restore will now restore erase
+@
+text
+@;+
+; NAME:
+;	VIDI_EDIT
+; PURPOSE:
+;	Widget to edit an image (by setting pixels in ROIs to 0)
+; CATEGORY:
+;	Image processing.
+; CALLING SEQUENCE:
+;	Result = VIDI_EDIT(uv,i,zoom)
+; INPUTS:
+;	UV  = array of image structures
+;	I = index to array
+;	Zoom = zoom factor 
+; OUTPUTS:
+;	Modified image.
+; RESTRICTIONS:
+;	This is a MODAL widget.  No other widget applications will be
+;	responsive while this widget is in use.
+; MODIFICATION HISTORY:
+;	Tom Videen, Feb 1999.
+;-
+
+PRO VIDI_EDIT_DRAW, s, i, xdim, ydim, xzoom, yzoom, FILL= fill
+; Draw outline (or fill if FILL is set) of ROI
+;	or the ith segment of a polygon if i < 0.
+; Image coordinates are tranposed to screen coordinates before drawing.
+; Parameters:
+;	s = state structure
+;	i = segment number
+   
+   n = (*s.roi).num
+   IF (n LT 1) THEN RETURN
+   
+   WSET, s.win
+   DEVICE, SET_GRAPHICS_FUNCTION=3 ; source
+   col = 1
+   WHILE col LT !d.table_size DO col = col + col
+   
+   xsave = !x.s & ysave = !y.s  ; Set scaling to pixel coords
+   !x.s = [0, xzoom/float(!d.x_size)]
+   !y.s = [0, yzoom/float(!d.y_size)]
+   
+   IF (n GE 2) THEN BEGIN       ; Draw
+      xy = (*(*s.roi).loc)[*,0:n-1]
+      xy = VOI_TRANSPOSE(xy, ydim, /DISPLAY)
+      IF KEYWORD_SET(FILL) THEN polyfill, xy, color=col $
+      ELSE IF (i GE 0) THEN plots,xy[*, i:i+1], color=col $ ; One segment
+      ELSE plots, xy, color=col ; All of it
+   ENDIF    
+   !x.s = xsave & !y.s = ysave  ; Restore scaling
+END   
+
+  
+PRO VIDI_EDIT_EVENT, ev, s, xdim, ydim, xzoom, yzoom
+; Called from the VIDI_EDIT event loop.
+; Parameters:
+;	ev = event structure
+;	s = state structure
+   
+   s.button = s.button OR ev.press XOR ev.release ; New button state   
+   n = (*s.roi).num
+   x = (ev.x - s.offset[0]) / xzoom ; Screen coordinates (0,0 is lower left)
+   y = (ev.y - s.offset[1]) / yzoom
+   xy = [fix(x),fix(y)]
+   xy = VOI_TRANSPOSE(xy, ydim) ; Image coordinates (0,0 is upper left)
+   WIDGET_CONTROL, s.pos_w, SET_VALUE=string(xy+1, format='("Cursor Position: ",i,", ",i)')
+
+   IF (xy[0] LT 0) OR (xy[1] LT 0) OR $ ; Check if cursor is within image
+      (xy[0] GT xdim) OR (xy[1] GT ydim) THEN RETURN
+   IF ev.press NE 0 THEN s.drag = [x,y] ; Start of drag operation
+   
+   IF (s.button EQ 1) THEN BEGIN ; Create
+      s.clear = 0
+      IF NOT ptr_valid((*s.roi).loc) THEN BEGIN
+         (*s.roi).type = 2
+         (*s.roi).num = 0
+         (*s.roi).loc = ptr_new(lonarr(2,100))
+         n = 0
+      ENDIF
+      IF (n GT 0) THEN $        ; Check for duplicates
+         IF(xy[0] EQ (*(*s.roi).loc)[0,n-1] AND xy[1] EQ (*(*s.roi).loc)[1,n-1]) THEN RETURN
+      IF ((n+1) GE N_ELEMENTS(*(*s.roi).loc)/2) THEN BEGIN ; Extend array
+         new = ptr_new(lonarr(2,2*(n+1)))
+         (*new)[*,0:n-1] = (*(*s.roi).loc)[*,0:n-1]
+         ptr_free, (*s.roi).loc
+         (*s.roi).loc = new
+      ENDIF
+      IF (n EQ 0) THEN BEGIN 
+         (*(*s.roi).loc)[*,n] = xy ; then add the point to the trace
+         n = n + 1
+         (*s.roi).num = n    
+         IF ((*s.roi).type EQ 2 AND n GE 2) THEN VIDI_EDIT_DRAW, s, n-2, xdim, ydim, xzoom, yzoom
+      ENDIF ELSE BEGIN          ; make certain trace is 4-connected
+         lastx = (*(*s.roi).loc)[0,n-1]
+         lasty = (*(*s.roi).loc)[1,n-1]
+         dx = abs(xy[0]-lastx)
+         dy = abs(xy[1]-lasty)
+         IF (dx GT dy) THEN BEGIN
+            dir = 0
+            IF (dy GT 0) THEN slope = dx/dy ELSE slope = 1
+         ENDIF ELSE BEGIN
+            dir = 1
+            IF (dx GT 0) THEN slope = dy/dx ELSE slope = 1
+         ENDELSE
+         WHILE (xy[0] NE lastx OR xy[1] NE lasty) DO BEGIN
+            IF ((n+10) GE N_ELEMENTS(*(*s.roi).loc)/2) THEN BEGIN ; Extend array
+               new = ptr_new(lonarr(2,2*(n+1)))
+               (*new)[*,0:n-1] = (*(*s.roi).loc)[*,0:n-1]
+               ptr_free, (*s.roi).loc
+               (*s.roi).loc = new
+            ENDIF
+            IF (dir EQ 0) THEN BEGIN
+               IF (xy[1] EQ lasty) THEN slope = 1 $
+               ELSE slope = abs(xy[0]-lastx)/abs(xy[1]-lasty)
+               FOR k=1,slope DO BEGIN
+                  IF ((n+1) GE N_ELEMENTS(*(*s.roi).loc)/2) THEN BEGIN ; Extend array
+                     new = ptr_new(lonarr(2,2*(n+1)))
+                     (*new)[*,0:n-1] = (*(*s.roi).loc)[*,0:n-1]
+                     ptr_free, (*s.roi).loc
+                     (*s.roi).loc = new
+                  ENDIF
+                  IF (xy[0] NE lastx) THEN BEGIN
+                     dx = xy[0]-lastx
+                     nextx = lastx + dx/abs(dx)
+                     (*(*s.roi).loc)[0,n] = nextx
+                     (*(*s.roi).loc)[1,n] = lasty
+                     lastx = nextx
+                     n = n + 1
+                     (*s.roi).num = n    
+                     IF ((*s.roi).type EQ 2 AND n GE 2) THEN VIDI_EDIT_DRAW, s, n-2, xdim, ydim, xzoom, yzoom
+                  ENDIF
+               ENDFOR
+               IF (xy[1] NE lasty) THEN BEGIN
+                  dy = xy[1]-lasty
+                  nexty = lasty + dy/abs(dy)
+                  (*(*s.roi).loc)[0,n] = lastx
+                  (*(*s.roi).loc)[1,n] = nexty
+                  lasty = nexty
+                  n = n + 1
+                  (*s.roi).num = n    
+                  IF ((*s.roi).type EQ 2 AND n GE 2) THEN VIDI_EDIT_DRAW, s, n-2, xdim, ydim, xzoom, yzoom
+               ENDIF
+            ENDIF ELSE BEGIN
+               IF (xy[0] EQ lastx) THEN slope = 1 $
+               ELSE slope = abs(xy[1]-lasty)/abs(xy[0]-lastx)
+               FOR k=1,slope DO BEGIN
+                  IF ((n+1) GE N_ELEMENTS(*(*s.roi).loc)/2) THEN BEGIN ; Extend array
+                     new = ptr_new(lonarr(2,2*(n+1)))
+                     (*new)[*,0:n-1] = (*(*s.roi).loc)[*,0:n-1]
+                     ptr_free, (*s.roi).loc
+                     (*s.roi).loc = new
+                  ENDIF
+                  IF (xy[1] NE lasty) THEN BEGIN
+                     dy = xy[1]-lasty
+                     nexty = lasty + dy/abs(dy)
+                     (*(*s.roi).loc)[0,n] = lastx
+                     (*(*s.roi).loc)[1,n] = nexty
+                     lasty = nexty
+                     n = n + 1
+                     (*s.roi).num = n    
+                     IF ((*s.roi).type EQ 2 AND n GE 2) THEN VIDI_EDIT_DRAW, s, n-2, xdim, ydim, xzoom, yzoom
+                  ENDIF
+               ENDFOR
+               IF (xy[0] NE lastx) THEN BEGIN
+                  dx = xy[0]-lastx
+                  nextx = lastx + dx/abs(dx)
+                  (*(*s.roi).loc)[0,n] = nextx
+                  (*(*s.roi).loc)[1,n] = lasty
+                  lastx = nextx
+                  n = n + 1
+                  (*s.roi).num = n    
+                  IF ((*s.roi).type EQ 2 AND n GE 2) THEN VIDI_EDIT_DRAW, s, n-2, xdim, ydim, xzoom, yzoom
+               ENDIF
+            ENDELSE
+         ENDWHILE 
+      ENDELSE 
+   ENDIF 
+   RETURN
+END   
+   
+
+PRO VIDI_EDIT, uv, i, zoom
+   COMMON VIDI
+   COMMON IMAGE_UTILS
+   
+   draw = uv.wid.win[i]
+   img = uv.img[0]
+   obj = uv.img[1]
+   base = WIDGET_BASE(title='Image Edit', group_leader=uv.wid.base, COL=2)
+   
+   base0 =  WIDGET_BASE(base,/COL)
+   base1 =  WIDGET_BASE(base0,/ROW)
+   erase = WIDGET_BUTTON(base1, value='Erase')
+   fill = WIDGET_BUTTON(base1, value='Fill')
+   restore = WIDGET_BUTTON(base1, value='Restore')
+   up = WIDGET_BUTTON(base1, value='<- Up  ')
+   down = WIDGET_BUTTON(base1, value=' Down ->')  
+   exit = WIDGET_BUTTON(base1, value='Exit')
+   onum = CW_BGROUP(base1, ['1 ','2 ','3 ','4 ','5 ','6 ','7 ','8 ','9 ','10 '], $
+                    LABEL_LEFT='Object:', /ROW, /EXCLUSIVE, set_value=uv.wid.onum-1)
+   cbar = WIDGET_DRAW(base1, xsize=20, ysize=20, frame=2)
+
+   base2 = WIDGET_BASE(base0,/ROW)
+   pos_w = WIDGET_TEXT(base2, XSIZE=25, /FRAME, VALUE='Cursor Position:    0,    0')
+   rslab = CW_FIELD(base2, title='Additional Pairs of Planes to Edit', value=uv.wid.rslab, $
+                    xsize=3, /INTEGER, /RETURN_EVENTS)
+   msg = widget_text(base0, YSIZE=3, XSIZE=55)
+   
+   voi = ptr_new({VOI})
+   (*voi).id = 'VOI'
+   roi = VOI_APPEND(voi)        ; position pointer to free element at end of list
+   WIDGET_CONTROL, draw, GET_VALUE=win
+   WSET, win
+   
+   image_size = [!d.x_size, !d.y_size] / [zoom, zoom]
+   offset = [0,0]
+   p  = offset + image_size /2
+   TVCRS, p[0], p[1], /DEVICE
+   WINDOW, /PIXMAP, /FREE, xs = !d.x_size, ys=!d.y_size ; Save window
+   backing = !d.window
+   DEVICE, copy = [0,0, !d.x_size, !d.y_size, 0, 0, win]
+   
+   s = {EDIT_STATE, $           ; Structure containing state
+        base: base, $           ; Main base widget
+        pos_w : pos_w, $        ; Position text widget
+        msg : msg, $            ; Message window
+        win:  win, $            ; draw widget window #
+        button: 0, $            ; button state
+        drag: [0,0], $          ; Beginning of drag motion
+        clear: 1, $             ; 1=last roi has been erased
+        image_size : long(image_size), $ ; Image array size
+        offset: fix(offset), $  ; offset of array within window
+        zoom : zoom, $          ; zoom factor
+        img : img, $            ; pointer to image data
+        voi : voi, $            ; linked list
+        roi : roi, $            ; pointer to current ROI in linked list
+        last : ptr_new() $      ; pointer to last ROI entered in linked list
+       }
+   
+   WIDGET_CONTROL, base, /REALIZE, xoffset=0, yoffset=0
+   WSHOW, win
+   msg = string(format='(A,/,A,/,A)', $
+                "Use left mouse button to trace or select sequential", $
+                "boundary points.  Then use Fill or Erase to complete.", $
+                "Restore restores all selected planes to values on entry.")
+
+   widget_control, s.msg, set_value=msg
+
+   temp = bytarr(20,20)
+   temp[*,*] = dsp[1].bot + uv.wid.onum
+   widget_control, cbar, get_value=windowIndex
+   wset, windowIndex
+   tv,temp
+
+   CASE i OF
+      0: BEGIN
+         x0 = 0
+         y0 = 1
+         fp = img.fp
+         lp = img.lp
+      END
+      1: BEGIN
+         x0 = 0
+         y0 = 2
+         fp = 1
+         lp = img.dim[1]
+      END
+   ENDCASE
+   xdim = img.dim[x0]
+   ydim = img.dim[y0]
+   xzoom = float (zoom)
+   yzoom = float (zoom)
+   IF (img.pdim[y0] GT img.pdim[x0]) THEN BEGIN 
+      yzoom = (img.pdim[y0])/(img.pdim[x0]) * zoom
+   ENDIF ELSE IF (img.pdim[y0] LT img.pdim[x0]) THEN BEGIN 
+      xzoom = (img.pdim[x0])/(img.pdim[y0]) * zoom
+   ENDIF
+   memobj = reform((*obj.data)[*,*,*,0]) ; save object for restore
+
+   WHILE 1 DO BEGIN             ; Internal event loop   
+      n = (*s.roi).num
+      CASE i OF
+         0: pp = img.p
+         1: pp = img.f
+      ENDCASE
+
+      ev = WIDGET_EVENT([base, draw])
+      CASE ev.id of 
+
+         draw: VIDI_EDIT_EVENT, ev, s, xdim, ydim, xzoom, yzoom
+
+         onum:   BEGIN
+            uv.wid.onum = ev.value + 1
+            temp = bytarr(20,20)
+            temp[*,*] = dsp[1].bot + uv.wid.onum
+            widget_control, cbar, get_value=windowIndex
+            wset, windowIndex
+            tv,temp
+         ENDCASE
+
+         erase:  BEGIN   
+            widget_control, /hourglass
+            n = (*s.roi).num
+            IF (n GE 2 AND s.clear EQ 0) THEN BEGIN 
+               xy = (*(*s.roi).loc)[*,0:n-1]
+               pts = polyfillv(xy[0,*],xy[1,*], xdim, ydim)
+               IF ((size(pts))[0] GT 0) THEN BEGIN
+                  pln1 = pp - uv.wid.rslab
+                  pln2 = pp + uv.wid.rslab
+                  last1 = pln1
+                  last2 = pln2
+                  IF (pln1 LT fp) THEN pln1 = fp
+                  IF (pln2 GT lp) THEN pln2 = lp
+                  IF (pln1 EQ pln2) THEN msg = "Fill applied in plane "+strtrim(string(pln1),2) $
+                  ELSE msg = "Fill applied in planes "+strtrim(string(pln1),2)+" to "+strtrim(string(pln2),2)
+                  memobj = reform((*obj.data)[*,*,*,0])	; save object for restore
+                  FOR pln=pln1-1,pln2-1 DO BEGIN
+                     CASE i OF
+                        0: image = reform((*obj.data)[*,*,pln,0])
+                        1: image = reform((*obj.data)[*,pln,*,0])
+                     ENDCASE
+                     image[pts] = 0
+                     CASE i OF
+                        0: (*obj.data)[*,*,pln,0] = image
+                        1: (*obj.data)[*,pln,*,0] = image
+                     ENDCASE
+                  ENDFOR
+               ENDIF ELSE msg = "Nothing erased"
+               VIDI_DISPLAY, uv
+               s.clear = 1
+               (*s.roi).num = 0  
+            ENDIF ELSE msg = "No defined region to erase"
+            widget_control, s.msg, set_value=msg
+         ENDCASE
+         
+         fill:  BEGIN   
+            widget_control, /hourglass
+            n = (*s.roi).num
+            IF (n GE 2 AND s.clear EQ 0) THEN BEGIN 
+               xy = (*(*s.roi).loc)[*,0:n-1]
+               pts = polyfillv(xy[0,*],xy[1,*], xdim, ydim)
+               IF ((size(pts))[0] GT 0) THEN BEGIN
+                  pln1 = pp - uv.wid.rslab
+                  pln2 = pp + uv.wid.rslab
+                  IF (pln1 LT fp) THEN pln1 = fp
+                  IF (pln2 GT lp) THEN pln2 = lp
+                  IF (pln1 EQ pln2) THEN msg = "Fill applied in plane "+strtrim(string(pln1),2) $
+                  ELSE msg = "Fill applied in planes "+strtrim(string(pln1),2)+" to "+strtrim(string(pln2),2)
+                  last1 = pln1
+                  last2 = pln2
+                  memobj = reform((*obj.data)[*,*,*,0])	; save object for restore
+                  FOR pln=pln1-1,pln2-1 DO BEGIN
+                     CASE i OF
+                        0: image = reform((*obj.data)[*,*,pln,0])
+                        1: image = reform((*obj.data)[*,pln,*,0])
+                     ENDCASE
+                     image[pts] = uv.wid.onum
+                     CASE i OF
+                        0: (*obj.data)[*,*,pln,0] = image
+                        1: (*obj.data)[*,pln,*,0] = image
+                     ENDCASE
+                  ENDFOR
+               ENDIF ELSE msg = "No pixels filled"
+               VIDI_DISPLAY, uv
+               s.clear = 1
+               (*s.roi).num = 0  
+            ENDIF ELSE msg = "No defined region to fill"
+            widget_control, s.msg, set_value=msg
+         ENDCASE
+         
+         restore:  BEGIN 
+            n = (*s.roi).num
+            IF (s.clear GT 0 AND n GT 0) THEN VIDI_EDIT_DRAW, s, -1, xdim, ydim, xzoom, yzoom, /fill
+            msg = "Nothing to Restore"
+            IF ((size(pts))[0] GT 0) THEN BEGIN
+               IF (last1 EQ last2) THEN msg = "Restored last edit in plane "+strtrim(string(last1),2) $
+               ELSE msg = "Restored last edit in planes "+strtrim(string(last1),2)+" to "+strtrim(string(last2),2)
+               FOR pln=last1-1,last2-1 DO BEGIN
+                  CASE i OF
+                     0: image = reform((*obj.data)[*,*,pln,0])
+                     1: image = reform((*obj.data)[*,pln,*,0])
+                  ENDCASE
+                  CASE i OF
+                     0: timage = reform(memobj[*,*,pln])
+                     1: timage = reform(memobj[*,pln,*])
+                  ENDCASE
+                  image[pts] = timage[pts]
+                  CASE i OF
+                     0: (*obj.data)[*,*,pln,0] = image
+                     1: (*obj.data)[*,pln,*,0] = image
+                  ENDCASE
+               ENDFOR
+            ENDIF
+            widget_control, s.msg, set_value=msg
+            s.clear = 1
+            (*s.roi).num = 0 
+            VIDI_DISPLAY, uv
+         ENDCASE
+         
+         up: BEGIN
+            IF (pp GT fp) THEN BEGIN
+               pp = pp-1
+               CASE i OF
+                  0: BEGIN
+                     img.p = pp
+                     uv.img.p = img.p
+                     widget_control, uv.wid.slider1, set_value=pp
+                  END
+                  1: BEGIN
+                     img.f = pp
+                     uv.img.f = img.f
+                     widget_control, uv.wid.slider2, set_value=pp
+                  END
+               ENDCASE
+               VIDI_DISPLAY, uv
+            ENDIF 
+         ENDCASE
+
+         down: BEGIN
+            IF (pp LT lp) THEN BEGIN
+               pp = pp+1
+               CASE i OF
+                  0: BEGIN
+                     img.p = pp
+                     uv.img.p = img.p
+                     widget_control, uv.wid.slider1, set_value=pp
+                  END
+                  1: BEGIN
+                     img.f = pp
+                     uv.img.f = img.f
+                     widget_control, uv.wid.slider2, set_value=pp
+                  END
+               ENDCASE
+               VIDI_DISPLAY, uv
+            ENDIF 
+         ENDCASE 
+
+         exit:  BEGIN
+            WIDGET_CONTROL, base, /DESTROY
+            RETURN
+         ENDCASE 
+         
+         rslab: uv.wid.rslab = ev.value
+         
+      ENDCASE   
+   ENDWHILE
+END   
+@
+
+
+1.4
+log
+@connect 2 points with slope approximating straight line
+@
+text
+@d310 2
+@
+
+
+1.3
+log
+@10 objects
+@
+text
+@d116 6
+d147 6
+d249 5
+a253 5
+	temp = bytarr(20,20)
+	temp[*,*] = dsp[1].bot + uv.wid.onum
+	widget_control, cbar, get_value=windowIndex
+	wset, windowIndex
+	tv,temp
+d294 2
+a295 2
+			temp = bytarr(20,20)
+			temp[*,*] = dsp[1].bot + uv.wid.onum
+d298 1
+a298 1
+        	tv,temp
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d187 1
+a187 1
+   onum = CW_BGROUP(base1, ['1 ','2 ','3 ','4 '], $
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d113 2
+a114 1
+               slope = abs(xy[0]-lastx)/abs(xy[1]-lasty)
+d138 2
+a139 1
+               slope = abs(xy[1]-lasty)/abs(xy[0]-lastx)
+@

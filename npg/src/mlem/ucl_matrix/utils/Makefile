@@ -1,0 +1,38 @@
+# @(#)Makefile	1.11 2/4/93
+#
+# Makefile for utility programs
+#
+CC =	cc
+DEBUG = 
+LECAT = ../libecat.a
+INCLUDE_DIR =..
+SRCDIR = .
+CFLAGS =		$(DEBUG) -I$(INCLUDE_DIR) 
+#
+#
+UTILITY_PROGRAMS =	extract_frame matlist show_header import_2dscan applynorm \
+	show_norm get_axial_lor merge_attn eval_attn extract_frame_blk \
+	phantom_attn matcopy cti2analyze analyze2ifh wb_build mat_projection \
+	read_cti matinfo read_ecat write_ecat mat_reslice scan2if byte_volume \
+	imagemath scanmath matrix_interp
+#
+UTILITY_SOURCES =  $(SRCDIR)/extract_frame.c \
+$(SRCDIR)/matlist.c $(SRCDIR)/show_header.c \
+$(SRCDIR)/applynorm.c $(SRCDIR)/show_norm.c \
+$(SRCDIR)/get_axial_lor.c $(SRCDIR)/merge_attn.c $(SRCDIR)/eval_attn.c \
+$(SRCDIR)/extract_frame_blk.c $(SRCDIR)/phantom_attn.c \
+$(SRCDIR)/matcopy.c $(SRCDIR)/cti2analyze.c $(SRCDIR)/analyze2ifh.c \
+$(SRCDIR)/wb_build.c $(SRCDIR)/mat_projection.c $(SRCDIR)/read_cti.c \
+$(SRCDIR)/matinfo.c $(SRCDIR)/read_ecat.c $(SRCDIR)/write_ecat.c \
+$(SRCDIR)/mat_reslice.c $(SRCDIR)/scan2if.c $(SRCDIR)/byte_volume.c \
+$(SRCDIR)/imagemath.c $(SRCDIR)/scanmath.c  $(SRCDIR)/matrix_interp.c
+
+all:			utilities
+
+utilities:		$(UTILITY_PROGRAMS)
+
+clean:
+	rm -f $(UTILITY_PROGRAMS)
+
+$(UTILITY_PROGRAMS): $(UTILITY_SOURCES) $(LECAT)
+	$(CC) $(CFLAGS) -o $@ $(SRCDIR)/$@.c $(LECAT) -lm

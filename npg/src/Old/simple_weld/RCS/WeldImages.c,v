@@ -1,0 +1,946 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	96.04.29.21.13.36;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.07.20.16.56.31;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.07.19.18.56.45;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.07.19.18.43.51;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.07.19.15.46.23;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.07.19.15.10.44;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@/*$Id: WeldImages.c,v 1.6 1995/09/13 21:47:43 ty7777 Exp $*/
+/*$Log: WeldImages.c,v $
+ * Revision 1.6  1995/09/13  21:47:43  ty7777
+ * Introduced normalization factor.
+ *
+ * Revision 1.5  1995/07/20  16:56:31  ty7777
+ * Modified the description.
+ *
+ * Revision 1.4  1995/07/19  18:56:45  ty7777
+ * Added the comments.
+ *
+ * Revision 1.3  1995/07/19  18:43:51  ty7777
+ * Added fancy header.
+ *
+ * Revision 1.2  1995/07/19  15:46:23  ty7777
+ * After indent.
+ *
+ * Revision 1.1  1995/07/19  15:10:44  ty7777
+ * Initial revision
+ **/
+
+/* ===============================================================================
+ *  Module:	WeldImages.c
+ *  Function:	int WeldImages (char *top_scan, char *bottom_scan, char *whole_scan,
+ *		int noisy_slices, float top_scaling_factor, float bottom_scaling_factor,
+ *		FILE *recfp, char *now, char *version)
+ *  Arguments:	top_scan,		the top scan image name.
+ *		bottom_scan,		the bottom scan image name.
+ *		whole_scan,		the image file name for the welded image.
+ *		noisy_slices,		number of noisy slices.
+ *		top_scaling_factor,	scaling factor for the top scan.
+ *		bottom_scaling_factor,	scaling factor for the bottom scan.
+ *		recfp,			rec file pointer, passed in.
+ *		now,			the current time stamp.
+ *		version,		the program version.
+ *  Return:	SUCCEED: successful; FAIL: error.
+ *  Calling:	GetIndexingScanOffset () in GetIndexingScanOffset.c
+ *		GetSamplingMode () in GetSamplingMode.c
+ *
+ *		Library functions in libhp.a include:
+ *		getimagedim ()
+ *		getrealimg ()
+ *		pkg_malloc ()
+ *		writerealimg ()
+ *		Library functions in libcti.a include:
+ *		matrixx_init_image_subheader ();
+ *  Called by:	the main program in imageweld.c.
+ *  Date:	July 20, 1995.	
+ *  Author:	Tom Yang       
+ *  History:	Created by Tom Yang on 07/20/95.
+ *  Description:This function reads two ECAT images which represent the
+ *		top and bottom scans of the brain with some overlapped
+ *		slices. It then construct an ECAT image for the whole
+ *		brain. The overlapped slices is constructed as the average
+ *		of the top and bottom normalized scans.
+ *		
+ *		Note that the normalization factor is obtained from the image 
+ *		list file and the top 26-31 and the bottom 1-5 slices are not
+ *		used in the wleding.
+ * ===============================================================================
+ */
+
+#include "simple_weld.h"
+#include <values.h>
+#include <petutil/matrix.h>
+
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/simple_weld/RCS/WeldImages.c,v 1.6 1995/09/13 21:47:43 ty7777 Exp $";
+
+PUBLIC int      WeldImages (top_scan, bottom_scan, whole_scan, noisy_slices,
+                   top_scaling_factor, bottom_scaling_factor, recfp, now, version)
+	char           *top_scan;
+	char           *bottom_scan;
+	char           *whole_scan;
+	int             noisy_slices;
+	float           top_scaling_factor;
+	float           bottom_scaling_factor;
+	FILE           *recfp;
+	char           *now;
+	char           *version;
+{
+	BOOLEAN         top_bottom_flipped;
+	Image_subheader **bottom_subheader_list;
+	Image_subheader **subheader_list;
+	Image_subheader **top_subheader_list;
+	Main_header    *bottom_main_header;
+	Main_header    *main_header;
+	Main_header    *top_main_header;
+	char            rec_file[MAXLINE];
+	float          *bottom_image3d;
+	float		*bottom_image3d_overlap;
+	float		bottom_overlap_sum;
+	float           bottom_value;
+	float           bottom_weight;
+	float          *image3d;
+	float           mmppix[3];
+	float		normalization_factor;
+	float           offset;
+	float           scaling_factor;
+	float           pixel_size;
+	float           plane_separation;
+	float          *top_image3d;
+	float		*top_image3d_overlap;
+	float		top_overlap_sum;
+	float           top_value;
+	float           top_weight;
+	int             bottom_lslice;
+	int             corrected_noisy_slices;
+	int             dimension;
+	int             i;
+	int             j;
+	int             k;
+	int             kk;
+	int             num_overlapped_slices;
+	int             num_shifted_slices;
+	int             nslice;
+	int             nx;
+	int             ny;
+	int             sampling_mode;
+	int             scanner;
+	int             slice_dim;
+	int             top_lslice;
+	int             top_scan_overlap_start;
+	long            current_rows;
+	long            current_slices;
+	short           bottom_num_slices;
+	short           height;
+	short           num_slices;
+	short           top_num_slices;
+	short           width;
+	struct Matval   matval;
+
+/*
+ * Assign default values for matval.
+ */
+	matval.frame = 1;
+	matval.plane = 1;
+	matval.gate = 1;
+	matval.data = 0;
+	matval.bed = 0;
+
+/*
+ * Get image type and do error checking.
+ */
+	if (getimagedim (top_scan, matval, &scanner, &width, &height, &top_num_slices,
+			 &pixel_size, &pixel_size, &plane_separation) == FAIL) {
+		fprintf (stderr, "Error: getimagedim () failed.\n");
+		return FAIL;
+	}
+	if (scanner != ECAT_SCANNER) {
+		fprintf (stderr, "Error: top scan file %s is not an ECAT image.\n", top_scan);
+		return FAIL;
+	}
+	mmppix[0] = pixel_size * MMS_PER_CM;
+	mmppix[1] = mmppix[0];
+	mmppix[2] = plane_separation * MMS_PER_CM;
+	fprintf (stdout, "The mmppix obtained from image file %s is %f %f %f.\n",
+		 top_scan, mmppix[0], mmppix[1], mmppix[2]);
+	fprintf (recfp, "The mmppix obtained from image file %s is %f %f %f.\n",
+		 top_scan, mmppix[0], mmppix[1], mmppix[2]);
+
+/*
+ * Determine the sampling mode.
+ */
+	if (GetSamplingMode (top_scan, &sampling_mode) == FAIL) {
+		fprintf (stderr, "Error: in GetSamplingMode for file %s\n", top_scan);
+		return FAIL;
+	} else {
+		fprintf (stdout, "\nProcessing in %dD mode\n", sampling_mode);
+		fprintf (recfp, "\nProcessing in %dD mode\n", sampling_mode);
+	}
+
+/*
+ * Get the offset for the indexing scan.
+ */
+	if (GetIndexingScanOffset (top_scan, bottom_scan, &offset,
+				   &top_bottom_flipped, TRUE, recfp) == FAIL) {
+		fprintf (stderr, "Error: in GetIndexingScanOffset ().\n");
+		return FAIL;
+	}
+	if (top_bottom_flipped) {
+		scaling_factor = top_scaling_factor;
+		top_scaling_factor = bottom_scaling_factor;
+		bottom_scaling_factor = scaling_factor;
+	}
+
+/*
+ * Get the number of the overlapped slices.
+ */
+	num_shifted_slices = ROUND (offset / (plane_separation * MMS_PER_CM));
+	num_overlapped_slices = top_num_slices - num_shifted_slices;
+	corrected_noisy_slices = pkg_min (num_overlapped_slices / 2, noisy_slices);
+
+	if (pkg_abs (offset - num_shifted_slices * plane_separation * MMS_PER_CM) > ERROR_BOUND) {
+		fprintf (stdout, "Image shift differs from exact slice alignment by %.3f mm\n",
+			 num_shifted_slices * plane_separation * MMS_PER_CM - offset);
+		fprintf (recfp, "Image shift differs from exact slice alignment by %.3f mm\n",
+			 num_shifted_slices * plane_separation * MMS_PER_CM - offset);
+	}
+	fprintf (stdout, "\nNumber of overlaped slices = %d\n", num_overlapped_slices);
+	fprintf (recfp, "\nNumber of overlaped slices = %d\n", num_overlapped_slices);
+
+	if (num_overlapped_slices > top_num_slices) {
+		fprintf (stderr, "Error: number of overlapped slices %d is greater than %d.\n",
+			 num_overlapped_slices, top_num_slices);
+		return FAIL;
+	}
+	fprintf (stdout, "The top scan image is %s\n", top_scan);
+	fprintf (stdout, "The bottom scan image is %s\n", bottom_scan);
+	fprintf (recfp, "The top scan image is %s\n", top_scan);
+	fprintf (recfp, "The bottom scan image is %s\n", bottom_scan);
+
+/*
+ * Get data from the top scan.
+ */
+	top_subheader_list = (Image_subheader **) pkg_malloc (top_num_slices * sizeof (caddr_t),
+							      "WeldImages", "top_subheader_list");
+
+	slice_dim = width * height;
+	dimension = slice_dim * top_num_slices;
+	top_image3d = (float *) pkg_malloc (dimension * sizeof (float), "WeldedImages", "top_image3d");
+	top_main_header = (Main_header *) calloc (1, sizeof (Main_header));
+
+	if (getrealimg (top_scan, scanner, matval, width, height, top_num_slices, top_image3d,
+			top_main_header, top_subheader_list) == FAIL) {
+		fprintf (stderr, "Error: getrealimg () failed.\n");
+		free (top_subheader_list);
+		free (top_main_header);
+		free (top_image3d);
+		return FAIL;
+	}
+	fprintf (stdout, "top	bottom\n");
+	fprintf (recfp, "top	bottom\n");
+
+	top_scan_overlap_start = top_num_slices - num_overlapped_slices;
+	for (i = 0; i < num_overlapped_slices; i++) {
+		fprintf (stdout, "%d	%d\n", top_scan_overlap_start + i + 1, (i + 1));
+		fprintf (recfp, "%d	%d\n", top_scan_overlap_start + i + 1, (i + 1));
+	}
+
+	top_scan_overlap_start = top_num_slices - num_overlapped_slices + corrected_noisy_slices;
+	if (num_overlapped_slices - 2 * corrected_noisy_slices > 0) {
+		fprintf (stdout, "\nNumber of weighted slices = %d\n",
+			 num_overlapped_slices - 2 * corrected_noisy_slices);
+		fprintf (recfp, "\nNumber of weighted slices = %d\n",
+			 num_overlapped_slices - 2 * corrected_noisy_slices);
+
+		for (i = 0; i < num_overlapped_slices - 2 * corrected_noisy_slices; i++) {
+			fprintf (stdout, "%d	%d\n",
+				 top_scan_overlap_start + i + 1, corrected_noisy_slices + (i + 1));
+			fprintf (recfp, "%d	%d\n",
+				 top_scan_overlap_start + i + 1, corrected_noisy_slices + (i + 1));
+		}
+	}
+
+/*
+ * Get data from the bottom scan.
+ */
+	if (getimagedim (bottom_scan, matval, &scanner, &width, &height, &bottom_num_slices,
+			 &pixel_size, &pixel_size, &plane_separation) == FAIL) {
+		fprintf (stderr, "Error: getimagedim () failed.\n");
+		return FAIL;
+	}
+	if (scanner != ECAT_SCANNER) {
+		fprintf (stderr, "Error: bottom scan file %s is not an ECAT image.\n", bottom_scan);
+		return FAIL;
+	}
+	if (num_overlapped_slices > bottom_num_slices) {
+		fprintf (stderr, "Error: number of overlapped slices %d is greater than %d.\n",
+			 num_overlapped_slices, bottom_num_slices);
+		return FAIL;
+	}
+	bottom_subheader_list = (Image_subheader **) pkg_malloc (bottom_num_slices * sizeof (caddr_t),
+							   "WeldImages", "bottom_subheader_list");
+
+	dimension = slice_dim * bottom_num_slices;
+	bottom_image3d = (float *) pkg_malloc (dimension * sizeof (float),
+					       "WeldedImages", "bottom_image3d");
+	bottom_main_header = (Main_header *) calloc (1, sizeof (Main_header));
+
+	if (getrealimg (bottom_scan, scanner, matval, width, height, bottom_num_slices, bottom_image3d,
+			bottom_main_header, bottom_subheader_list) == FAIL) {
+		fprintf (stderr, "Error: getrealimg () failed.\n");
+		free (bottom_subheader_list);
+		free (bottom_main_header);
+		free (bottom_image3d);
+		return FAIL;
+	}
+
+/*
+ * Generate merged 3D real array.
+ */
+	num_slices = top_num_slices + bottom_num_slices - num_overlapped_slices;
+	subheader_list = (Image_subheader **) pkg_malloc (num_slices * sizeof (caddr_t),
+							  "WeldImages", "subheader_list");
+	main_header = (Main_header *) calloc (1, sizeof (Main_header));
+	bcopy (top_main_header, main_header, sizeof (Main_header));
+	dimension = slice_dim * num_slices;
+	image3d = (float *) pkg_malloc (dimension * sizeof (float), "WeldImages", "image3d");
+
+/*
+ * Generate the top planes.
+ */
+	nx = width;
+	ny = height;
+	nslice = top_num_slices;
+
+	for (k = 1; k <= top_scan_overlap_start; k++) {
+		current_slices = (k - 1) * slice_dim;
+		for (j = 0; j < slice_dim; j++)
+			image3d[current_slices + j] = top_image3d[current_slices + j]
+				* top_scaling_factor;
+
+/*
+ * Copy the sub headers.
+ */
+		*(subheader_list + k - 1)
+			= matrixx_init_image_subheader (*(top_subheader_list + k - 1));
+	}
+
+/*
+ * Compute the normalization factor.
+ */
+	top_overlap_sum		= 0.0;
+	bottom_overlap_sum	= 0.0;
+	top_image3d_overlap	= top_image3d + top_scan_overlap_start * slice_dim;
+	bottom_image3d_overlap	= bottom_image3d + corrected_noisy_slices * slice_dim;
+	j			= (num_overlapped_slices  - 2 * corrected_noisy_slices) * slice_dim;
+	for (i = 0; i < j; i++)
+	{
+		top_overlap_sum		+= top_image3d_overlap [i];
+		bottom_overlap_sum	+= bottom_image3d_overlap [i];
+	}
+
+	if (pkg_abs (bottom_overlap_sum) >= ERROR_BOUND)
+		normalization_factor	= top_overlap_sum / bottom_overlap_sum;
+	else
+	{
+		fprintf (stderr, 
+		"Error: the sum for the bottom scan %s is 0.0\n", bottom_scan); 
+		return FAIL;
+	}
+
+/*
+ * Compute the top and bottom weight.
+ */
+	top_weight = top_scaling_factor / 2;
+	bottom_scaling_factor *= normalization_factor;
+	bottom_weight = bottom_scaling_factor / 2;
+
+/*
+ * Compute the overlapped planes.
+ */
+	for (k = top_scan_overlap_start + 1;
+	  k <= top_scan_overlap_start + num_overlapped_slices - 2 * corrected_noisy_slices; k++) {
+		current_slices = (k - 1) * slice_dim;
+		kk = k - top_scan_overlap_start + corrected_noisy_slices;
+
+		for (j = 0; j < slice_dim; j++)
+			image3d[current_slices + j]
+				= top_image3d[current_slices + j] * top_weight
+				+ bottom_image3d[(kk - 1) * slice_dim + j] * bottom_weight;
+
+		*(subheader_list + k - 1)
+			= matrixx_init_image_subheader (*(top_subheader_list + k - 1));
+	}
+
+	for (i = 0; i < top_num_slices; i++) {
+		free (top_subheader_list[i]);
+	}
+	free (top_subheader_list);
+	free (top_main_header);
+	free (top_image3d);
+
+/*
+ * Generate the bottom planes.
+ */
+	for (k = top_scan_overlap_start + num_overlapped_slices - 2 * corrected_noisy_slices + 1;
+	     k <= num_slices; k++) {
+		current_slices = (k - 1) * slice_dim;
+		kk = k - top_scan_overlap_start + corrected_noisy_slices;
+
+		for (j = 0; j < slice_dim; j++)
+			image3d[current_slices + j] = bottom_image3d[(kk - 1) * slice_dim + j]
+				* bottom_scaling_factor;
+
+		*(subheader_list + k - 1)
+			= matrixx_init_image_subheader (*(bottom_subheader_list + kk - 1));
+	}
+
+	for (i = 0; i < bottom_num_slices; i++) {
+		free (bottom_subheader_list[i]);
+	}
+	free (bottom_subheader_list);
+	free (bottom_main_header);
+	free (bottom_image3d);
+
+/*
+ * Write 3D image to an ECAT matrix file. 
+ */
+	strncpy (main_header->physician_name, version + 5, sizeof (main_header->physician_name) - 1);
+	strncpy (main_header->operator_name, now, sizeof (main_header->operator_name) - 1);
+	strncat (main_header->study_description, " Welded Image", 13);
+
+	if (writerealimg (whole_scan, matval, width, height, num_slices, image3d,
+			  main_header, subheader_list) == FAIL) {
+		fprintf (stderr, "Error: writerealimg () failed.\n");
+	}
+	for (i = 0; i < num_slices; i++) {
+		free (subheader_list[i]);
+	}
+	free (subheader_list);
+	free (main_header);
+	free (image3d);
+
+	return SUCCEED;
+}
+@
+
+
+1.5
+log
+@Modified the description.
+@
+text
+@d1 1
+a1 1
+/*$Id: WeldImages.c,v 1.4 1995/07/19 18:56:45 ty7777 Exp ty7777 $*/
+d3 6
+d67 1
+a67 1
+static char     rcsid[] = "$Header: /data/petsun4/src/new/RCS/WeldImages.c,v 1.4 1995/07/19 18:56:45 ty7777 Exp ty7777 $";
+d90 2
+d96 1
+d102 2
+d321 1
+a321 1
+ * Compute the weight table.
+d323 23
+d347 1
+@
+
+
+1.4
+log
+@Added the comments.
+@
+text
+@d1 1
+a1 1
+/*$Id: WeldImages.c,v 1.3 1995/07/19 18:43:51 ty7777 Exp ty7777 $*/
+d3 3
+d45 1
+a45 1
+ *  Description:This program reads two ECAT images which represent the
+d50 4
+d61 1
+a61 1
+static char     rcsid[] = "$Header: /data/petsun4/src/new/RCS/WeldImages.c,v 1.3 1995/07/19 18:43:51 ty7777 Exp ty7777 $";
+@
+
+
+1.3
+log
+@Added fancy header.
+@
+text
+@d1 1
+a1 1
+/*$Id: WeldImages.c,v 1.2 1995/07/19 15:46:23 ty7777 Exp ty7777 $*/
+d3 3
+d48 1
+d54 1
+a54 1
+static char     rcsid[] = "$Header: /data/petsun4/src/new/RCS/WeldImages.c,v 1.2 1995/07/19 15:46:23 ty7777 Exp ty7777 $";
+@
+
+
+1.2
+log
+@After indent.
+@
+text
+@d1 1
+a1 1
+/*$Id: WeldImages.c,v 1.1 1995/07/19 15:10:44 ty7777 Exp ty7777 $*/
+d3 3
+d10 35
+a44 2
+/*_________________________________________________________________
+  File:		WeldImages.c
+a45 39
+  Function:	int WeldImages (char *top_scan, char *bottom_scan, char *whole_scan,
+		int noisy_slices, float top_scaling_factor, float bottom_scaling_factor,
+		FILE *recfp, char *now, char *version)
+
+  Arguments:	top_scan,		the top scan image name.
+		bottom_scan,		the bottom scan image name.
+		whole_scan,		the image file name for the welded image.
+		noisy_slices,		number of noisy slices.
+		top_scaling_factor,	scaling factor for the top scan.
+		bottom_scaling_factor,	scaling factor for the bottom scan.
+		recfp,			rec file pointer, passed in.
+		now,			the current time stamp.
+		version,		the program version.
+
+  Return:	SUCCEED: successful; FAIL: error.
+
+  Calling:	GetIndexingScanOffset () in GetIndexingScanOffset.c
+		GetSamplingMode () in GetSamplingMode.c
+
+		Library functions in libhp.a include:
+		getimagedim ()
+		getrealimg ()
+		pkg_malloc ()
+		writerealimg ()
+
+		Library functions in libcti.a include:
+		matrixx_init_image_subheader ();
+
+  Called by:	the main program in imageweld.c.
+
+  Description:	This program reads two ECAT images which represent the
+		top and bottom scans of the brain with some overlapped
+		slices. It then construct an ECAT image for the whole
+		brain. The overlapped slices is constructed in such a
+		way that the noise is minimum.
+
+  History:	Created by Tom Yang on 05/05/93.
+_________________________________________________________________*/
+
+d50 1
+a50 1
+static char     rcsid[] = "$Header: /data/petsun4/src/new/RCS/WeldImages.c,v 1.1 1995/07/19 15:10:44 ty7777 Exp ty7777 $";
+d53 1
+a53 1
+		                   top_scaling_factor, bottom_scaling_factor, recfp, now, version)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d10 2
+a11 2
+  Function:	int WeldImages (char *top_scan, char *bottom_scan, char *whole_scan, 
+		int noisy_slices, float top_scaling_factor, float bottom_scaling_factor, 
+d26 3
+a28 3
+  Calling:	GetIndexingScanOffset () in GetIndexingScanOffset.c	
+		GetSamplingMode () in GetSamplingMode.c	
+  
+d46 1
+a46 1
+  History:	Created by Tom Yang on 05/05/93. 
+d53 1
+a53 1
+static char rcsid []= "$Header$";
+d55 11
+a65 11
+PUBLIC int WeldImages (top_scan, bottom_scan, whole_scan, noisy_slices, 
+	top_scaling_factor, bottom_scaling_factor, recfp, now, version)
+	char		*top_scan;
+	char		*bottom_scan;
+	char		*whole_scan;
+	int		noisy_slices;
+	float		top_scaling_factor;
+	float		bottom_scaling_factor;
+	FILE		*recfp;
+	char		*now;
+	char		*version;
+d67 45
+a111 45
+	BOOLEAN		top_bottom_flipped;
+	Image_subheader	**bottom_subheader_list;
+	Image_subheader	**subheader_list;
+	Image_subheader	**top_subheader_list;
+	Main_header	*bottom_main_header;
+	Main_header	*main_header;
+	Main_header	*top_main_header;
+	char		rec_file [MAXLINE];
+	float		*bottom_image3d;
+	float		bottom_value;
+	float		bottom_weight;
+	float		*image3d;
+	float		mmppix [3];
+	float		offset;
+	float		scaling_factor;
+	float		pixel_size;
+	float		plane_separation;
+	float		*top_image3d;
+	float		top_value;
+	float		top_weight;
+	int		bottom_lslice;
+	int		corrected_noisy_slices;
+	int		dimension;
+	int		i;
+	int		j;
+	int		k;
+	int		kk;
+	int		num_overlapped_slices;
+	int		num_shifted_slices;
+	int		nslice;
+	int		nx;
+	int		ny;
+	int		sampling_mode;
+	int		scanner;
+	int		slice_dim;
+	int		top_lslice;
+	int		top_scan_overlap_start;
+	long		current_rows;
+	long		current_slices;
+	short		bottom_num_slices;
+	short		height;
+	short		num_slices;
+	short		top_num_slices;
+	short		width;
+	struct Matval	matval;
+d113 8
+a120 8
+	/*
+	 * Assign default values for matval.
+	 */
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+d122 5
+a126 6
+	/*
+	 * Get image type and do error checking.
+	 */
+	if (getimagedim (top_scan, matval, &scanner, &width, &height, &top_num_slices, 
+		&pixel_size, &pixel_size, &plane_separation) == FAIL) 
+	{
+d130 1
+a130 3
+
+	if (scanner != ECAT_SCANNER)
+	{
+d134 3
+a136 4
+
+	mmppix [0]	= pixel_size * MMS_PER_CM;
+	mmppix [1]	= mmppix [0];
+	mmppix [2]	= plane_separation * MMS_PER_CM;
+d138 1
+a138 1
+		top_scan, mmppix [0], mmppix [1], mmppix [2]); 
+d140 1
+a140 1
+		top_scan, mmppix [0], mmppix [1], mmppix [2]); 
+d142 4
+a145 5
+	/*
+	 * Determine the sampling mode.
+	 */
+	if (GetSamplingMode (top_scan, &sampling_mode) == FAIL)
+	{
+d148 1
+a148 3
+	}
+	else
+	{
+d153 5
+a157 6
+	/*
+	 * Get the offset for the indexing scan.
+	 */
+	if (GetIndexingScanOffset (top_scan, bottom_scan, &offset, 
+	&top_bottom_flipped, TRUE, recfp) == FAIL)
+	{
+d161 4
+a164 6
+
+	if (top_bottom_flipped)
+	{
+		scaling_factor		= top_scaling_factor;
+		top_scaling_factor	= bottom_scaling_factor; 
+		bottom_scaling_factor	= scaling_factor;
+d167 6
+a172 6
+	/*
+	 * Get the number of the overlapped slices.
+	 */
+	num_shifted_slices	= ROUND (offset / (plane_separation * MMS_PER_CM));
+	num_overlapped_slices	= top_num_slices - num_shifted_slices;
+	corrected_noisy_slices	= pkg_min (num_overlapped_slices / 2, noisy_slices);
+d174 1
+a174 2
+	if (pkg_abs (offset - num_shifted_slices * plane_separation * MMS_PER_CM) > ERROR_BOUND)
+	{
+d176 1
+a176 1
+			num_shifted_slices * plane_separation * MMS_PER_CM - offset);
+d178 1
+a178 1
+			num_shifted_slices * plane_separation * MMS_PER_CM - offset);
+d183 3
+a185 4
+	if (num_overlapped_slices > top_num_slices)
+	{
+		fprintf (stderr, "Error: number of overlapped slices %d is greater than %d.\n", 
+			num_overlapped_slices, top_num_slices);
+a187 1
+
+d193 5
+a197 5
+	/*
+	 * Get data from the top scan.
+	 */
+	top_subheader_list	= (Image_subheader **) pkg_malloc (top_num_slices * sizeof (caddr_t), 
+					"WeldImages", "top_subheader_list");
+d199 4
+a202 4
+	slice_dim	= width * height;
+	dimension	= slice_dim * top_num_slices;
+	top_image3d	= (float *) pkg_malloc (dimension * sizeof (float), "WeldedImages", "top_image3d");
+	top_main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+d204 2
+a205 3
+	if (getrealimg (top_scan, scanner, matval, width, height, top_num_slices, top_image3d, 
+		top_main_header, top_subheader_list) == FAIL)
+	{
+d212 2
+d215 2
+a216 6
+	fprintf (stdout, "top	bottom\n");   
+	fprintf (recfp, "top	bottom\n");   
+
+	top_scan_overlap_start	= top_num_slices - num_overlapped_slices;
+	for (i = 0; i < num_overlapped_slices; i++)
+	{
+d221 6
+a226 7
+	top_scan_overlap_start	= top_num_slices - num_overlapped_slices + corrected_noisy_slices;
+	if (num_overlapped_slices - 2 * corrected_noisy_slices > 0)
+	{
+		fprintf (stdout, "\nNumber of weighted slices = %d\n", 
+			num_overlapped_slices - 2 * corrected_noisy_slices);   
+		fprintf (recfp, "\nNumber of weighted slices = %d\n", 
+			num_overlapped_slices - 2 * corrected_noisy_slices);   
+d228 5
+a232 6
+		for (i = 0; i < num_overlapped_slices - 2 * corrected_noisy_slices; i++)
+		{
+			fprintf (stdout, "%d	%d\n", 
+				top_scan_overlap_start + i + 1, corrected_noisy_slices + (i + 1));
+			fprintf (recfp, "%d	%d\n", 
+				top_scan_overlap_start + i + 1, corrected_noisy_slices + (i + 1));
+d236 5
+a240 6
+	/*
+	 * Get data from the bottom scan.
+	 */
+	if (getimagedim (bottom_scan, matval, &scanner, &width, &height, &bottom_num_slices, 
+		&pixel_size, &pixel_size, &plane_separation) == FAIL) 
+	{
+d244 1
+a244 3
+
+	if (scanner != ECAT_SCANNER)
+	{
+d248 3
+a250 5
+
+	if (num_overlapped_slices > bottom_num_slices)
+	{
+		fprintf (stderr, "Error: number of overlapped slices %d is greater than %d.\n", 
+			num_overlapped_slices, bottom_num_slices);
+d253 2
+d256 4
+a259 2
+	bottom_subheader_list	= (Image_subheader **) pkg_malloc (bottom_num_slices * sizeof (caddr_t), 
+					"WeldImages", "bottom_subheader_list");
+d261 2
+a262 8
+	dimension		= slice_dim * bottom_num_slices;
+	bottom_image3d		= (float *) pkg_malloc (dimension * sizeof (float), 
+						"WeldedImages", "bottom_image3d");
+	bottom_main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+
+	if (getrealimg (bottom_scan, scanner, matval, width, height, bottom_num_slices, bottom_image3d, 
+		bottom_main_header, bottom_subheader_list) == FAIL)
+	{
+d270 7
+a276 7
+	/*
+	 * Generate merged 3D real array.
+	 */
+	num_slices	= top_num_slices + bottom_num_slices - num_overlapped_slices;
+	subheader_list	= (Image_subheader **) pkg_malloc (num_slices * sizeof (caddr_t), 
+					"WeldImages", "subheader_list");
+	main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+d278 2
+a279 2
+	dimension	= slice_dim * num_slices;
+	image3d		= (float *) pkg_malloc (dimension * sizeof (float), "WeldImages", "image3d");
+d281 6
+a286 6
+	/* 
+	 * Generate the top planes.
+	 */
+	nx		= width;
+	ny		= height;
+	nslice		= top_num_slices;
+d288 2
+a289 3
+	for (k = 1; k <= top_scan_overlap_start; k++)
+	{
+		current_slices	= (k - 1) * slice_dim;
+d291 2
+a292 2
+			image3d [current_slices + j]	= top_image3d [current_slices + j] 
+							* top_scaling_factor;
+d294 5
+a298 5
+		/*
+	 	 * Copy the sub headers.
+	 	 */
+		*(subheader_list + k - 1)	
+		= matrixx_init_image_subheader (*(top_subheader_list + k - 1));
+d301 5
+a305 5
+	/*
+	 * Compute the weight table.
+	 */
+	top_weight	= top_scaling_factor / 2;
+	bottom_weight	= bottom_scaling_factor / 2;
+d307 7
+a313 8
+	/* 
+	 * Compute the overlapped planes.
+	 */
+	for (k = top_scan_overlap_start + 1; 
+	k <= top_scan_overlap_start + num_overlapped_slices - 2 * corrected_noisy_slices; k++)
+	{
+		current_slices	= (k - 1) * slice_dim;
+		kk		= k - top_scan_overlap_start + corrected_noisy_slices;
+d316 3
+a318 3
+			image3d [current_slices + j]	
+				= top_image3d [current_slices + j] * top_weight
+				+ bottom_image3d [(kk - 1) * slice_dim + j] * bottom_weight;
+d320 2
+a321 2
+		*(subheader_list + k - 1)	
+		= matrixx_init_image_subheader (*(top_subheader_list + k - 1));
+d324 2
+a325 3
+	for (i = 0; i < top_num_slices; i++)
+	{
+		free (top_subheader_list [i]);
+d331 7
+a337 8
+	/* 
+	 * Generate the bottom planes.
+	 */
+	for (k = top_scan_overlap_start + num_overlapped_slices - 2 * corrected_noisy_slices + 1; 
+	k <= num_slices; k++)
+	{
+		current_slices	= (k - 1) * slice_dim;
+		kk		= k - top_scan_overlap_start + corrected_noisy_slices;
+d340 5
+a344 5
+			image3d [current_slices + j]	= bottom_image3d [(kk - 1) * slice_dim + j] 
+							* bottom_scaling_factor;
+		
+		*(subheader_list + k - 1)	
+		= matrixx_init_image_subheader (*(bottom_subheader_list + kk - 1));
+d347 2
+a348 3
+	for (i = 0; i < bottom_num_slices; i++)
+	{
+		free (bottom_subheader_list [i]);
+d354 3
+a356 3
+	/*______________________________________________________
+	 * Write 3D image to an ECAT matrix file.
+	 *______________________________________________________*/
+d361 2
+a362 3
+	if (writerealimg (whole_scan, matval, width, height, num_slices, image3d, 
+			main_header, subheader_list) == FAIL)
+	{
+d365 2
+a366 4
+
+	for (i = 0; i < num_slices; i++)
+	{
+		free (subheader_list [i]);
+@

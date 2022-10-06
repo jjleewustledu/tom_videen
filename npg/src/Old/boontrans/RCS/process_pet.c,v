@@ -1,0 +1,181 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	96.05.06.19.10.57;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Id: process_pet.c,v 1.1 1995/10/12 21:19:02 tom Exp $
+	$Log: process_pet.c,v $
+ * Revision 1.1  1995/10/12  21:19:02  tom
+ * Initial revision
+ * */
+/*	========================================================================
+ *	Module:			process_pet.c
+ *	Date:			12-Oct-95
+ *	Author:			Tom Videen
+ *	Description:	process an image for CBF, CBV, or counts and scale the result
+ *
+ *	Input:
+ *		pet         -   PET input image
+ *		nx, ny, nz  -   dimensions of PET image
+ *		scaler      -   normalization factor
+ *		process     -   type of processing
+ *		filename    -   image file name
+ *		recfp       -   rec file pointer
+ *		hdr         -   hdr structure (use: ntype, bvfactor1, aflow1, bflow1)
+ *	 
+ *	Output:
+ *		pet  -   processed, scaled PET image
+ *		writes hdr file used to rec file
+ *	 
+ *	Returns:
+ *		SUCCEED or FAIL
+ *	 
+ *	Algorithm:
+ *	1)  If (process = "none" OR process = "") then only scale:
+ *		pet = scaler * pet
+ *	2)  Read the hdr file associated with pet
+ *	3)  If (process = "cbv") and (hdr.ntype = 3) then process as blood volume:
+ *		(scaled by 100 to maintain dynamic range with integer pixels)
+ *		pet = 100 * scaler * hdr.bvfactor1 * pet
+ *	4)  If (process = "cbf")  and (hdr.ntype = 2 or 4) then process as blood flow:
+ *		(scaled by 50 to maintain dynamic range with integer pixels)
+ *		pet = 50 * scaler * pet * ((hdr.aflow1 * pet) + hdr.bflow1))
+ *	 
+ *	Reference:
+ *		Videen et al (1987) JCBFM 7:513-516.
+ *	
+ *	History:
+ *		12-Oct-95	Taken from t88mean
+ *	========================================================================
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <petutil/petutil.h>	/* HEADER_DATA, SUCCEED, FAIL	*/
+#include "brain_atlas.h"		/* REAL_SLICE */
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88trans/RCS/process_pet.c,v 1.1 1995/10/12 21:19:02 tom Exp $";
+
+/*	-----------------------
+ *	Function process_pet
+ *	-----------------------
+ */
+int 
+process_pet (pet, nx, ny, nz, scaler, process, filename, recfp, hdr)
+	REAL_SLICE     *pet;	/* PET input image */
+	short           nx;	/* x-dimension of PET-array */
+	short           ny;	/* y-dimension of PET-array */
+	short           nz;	/* z-dimension of PET-array/* no. of slices */
+	float           scaler;	/* normalization factor */
+	char            process[10];	/* type of processing */
+	char           *filename;	/* image file name */
+	FILE           *recfp;	/* rec file pointer */
+	HEADER_DATA    *hdr;	/* hdr structure */
+
+{
+	short           i, j, k;
+	float           x;	/* temp for pet */
+	float           sx;	/* combined scaler */
+	char           *c;
+	char           *hdrname;/* hdr filename */
+	char           *local_hdrname;	/* local hdr filename */
+
+/*
+ *	Counts
+ */
+
+	if (strcmp (process, "none") == 0 || strcmp (process, "") == 0) {
+		for (k = 0; k < nz; ++k) {
+			for (j = 0; j < ny; ++j) {
+				for (i = 0; i < nx; ++i) {
+					pet[k][j][i] = scaler * pet[k][j][i];
+				}
+			}
+		}
+		return SUCCEED;
+	}
+/*
+ *	Read HDR file
+ */
+
+	hdrname = (char *) calloc (MAXLENGTH, sizeof (char));
+	local_hdrname = (char *) calloc (MAXLENGTH, sizeof (char));
+
+	strcpy (hdrname, filename);
+	c = strrchr (hdrname, '.');
+	if (c == NULL)
+		c = strrchr (hdrname, '\0');
+	strcpy (c, ".hdr");
+
+	c = strrchr (hdrname, '/');
+	if (c == NULL)
+		strcpy (local_hdrname, hdrname);
+	else
+		strcpy (local_hdrname, c + 1);
+
+	if (gethdr (local_hdrname, hdr) == 0) {
+		printf ("HDR = %s\n", local_hdrname);
+		fprintf (recfp, "%s\n", local_hdrname);
+	} else if (gethdr (hdrname, hdr) == 0) {
+		printf ("HDR = %s\n", hdrname);
+		fprintf (recfp, "%s\n", hdrname);
+	} else {
+		printf ("Error:  HDR not found\n as %s\n or %s\n", local_hdrname, hdrname);
+		free (hdrname);
+		free (local_hdrname);
+		return FAIL;
+	}
+	free (hdrname);
+	free (local_hdrname);
+
+/*
+ *	Cerebral Blood Volume  (scaled by 100 to maintain dynamic range with integer pixels)
+ */
+
+	if (strcmp (process, "cbv") == 0 && hdr->ntype == 3) {
+		sx = scaler * 100 * hdr->bvfactor1;
+		for (k = 0; k < nz; ++k) {
+			for (j = 0; j < ny; ++j) {
+				for (i = 0; i < nx; ++i) {
+					pet[k][j][i] = sx * pet[k][j][i];
+				}
+			}
+		}
+		return SUCCEED;
+	}
+/*
+ *	Cerebral Blood Flow  (scaled by 50 to maintain dynamic range with integer pixels)
+ */
+
+	if (strcmp (process, "cbf") == 0 && (hdr->ntype == 2 || hdr->ntype == 4)) {
+		sx = scaler * 50;
+		for (k = 0; k < nz; ++k) {
+			for (j = 0; j < ny; ++j) {
+				for (i = 0; i < nx; ++i) {
+					x = pet[k][j][i];
+					pet[k][j][i] = sx * x * ((hdr->aflow1 * x) + hdr->bflow1);
+				}
+			}
+		}
+		return SUCCEED;
+	}
+	return FAIL;		/* Not processed */
+}
+@

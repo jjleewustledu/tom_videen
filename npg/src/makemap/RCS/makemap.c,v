@@ -1,0 +1,702 @@
+head	2.9;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.9
+date	2004.02.16.20.14.42;	author tom;	state Exp;
+branches;
+next	2.8;
+
+2.8
+date	2002.11.27.15.15.59;	author tom;	state Exp;
+branches;
+next	2.7;
+
+2.7
+date	96.11.08.23.11.46;	author tom;	state Exp;
+branches;
+next	2.6;
+
+2.6
+date	96.11.06.22.46.55;	author tom;	state Exp;
+branches;
+next	2.5;
+
+2.5
+date	96.11.06.22.46.21;	author tom;	state Exp;
+branches;
+next	2.4;
+
+2.4
+date	96.11.06.22.44.32;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	96.09.26.15.57.46;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	96.09.23.17.43.01;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.09.10.19.56.13;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.08.23.18.17.11;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.10.18.20.27.17;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.10.18.20.24.00;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.10.12.18.18.52;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.12.17.48.43;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.9
+log
+@Feb 2004
+@
+text
+@/*  $Id: makemap.c,v 2.8 2002/11/27 15:15:59 tom Exp tom $
+    $Log: makemap.c,v $
+ * Revision 2.8  2002/11/27  15:15:59  tom
+ * *** empty log message ***
+ *
+ * Revision 2.7  1996/11/08  23:11:46  tom
+ * v 2.3 was correct! This restores correct scaling
+ *
+ * Revision 2.6  1996/11/06  22:46:55  tom
+ * sync with Version
+ *
+ * Revision 2.5  1996/11/06  22:46:21  tom
+ * sync with Version
+ *
+ * Revision 2.4  1996/11/06  22:44:32  tom
+ * fix scaling when air.std.size is not 1 mm
+ *
+ * Revision 2.3  1996/09/26  15:57:46  tom
+ * printout Origins in 1-based coordinates
+ *
+ * Revision 2.2  1996/09/23  17:43:01  tom
+ * 2.1 was incorrect!
+ *
+ * Revision 2.1  1996/09/10  19:56:13  tom
+ * scale prop if mr pix not 1 mm
+ *
+ * Revision 2.0  1996/08/23  18:17:11  tom
+ * ver 2 AIR
+ *
+ * Revision 1.4  1995/10/18  20:27:17  tom
+ * changed z-scaling to use ACPC plane to top of brain
+ *
+ * Revision 1.3  1995/10/18  20:24:00  tom
+ * changed origin to anterior commissure
+ *
+ * Revision 1.2  1995/10/12  18:18:52  tom
+ * version added to output file
+ *
+ * Revision 1.1  1995/10/12  17:48:43  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *  Module:         makemap.c
+ *  Date:           Oct 1995
+ *  Author:         Tom Videen
+ *	Description:
+ *		Create a map file from:
+ *			1) air file from alignpettomri;
+ *			2) x,y,z coordinates of atlas origin identified in the MR brain image;
+ *			3) x,y,z dimensions of the MR brain image
+ * ===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 2.8 2002/11/27 15:15:59 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <air.h>
+#include "brain_atlas.h"			 /* BRAIN_ATLAS */
+
+int             read_air ();
+void            get_t88atlas ();
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	struct air2     air;
+	BRAIN_ATLAS     atlas;
+	FILE           *fp;
+	char           *mapfile;
+	char           *airfile;
+	char           *str1, *str2;
+	char            str[80];
+	float         **map, **trans, **scale, **flip, **airmat;
+	float         **tmp0, **tmp1, **tmp2, **mrimat;
+	float          *pt0, *pt1, *ptp;
+	float           xorg, yorg, zorg;
+	float           xsize, ysize, zsize;
+	int             i, j;
+
+/* Read arguments */
+
+	if (argc != 9) {
+		(void) fprintf (stderr, "Usage: makemap mapfile airfile X0 Y0 Z0 xsize ysize zsize\n");
+		return (1);
+	}
+	mapfile = argv[1];
+	airfile = argv[2];
+	xorg = atof (argv[3]);
+	yorg = atof (argv[4]);
+	zorg = atof (argv[5]);
+	xsize = atof (argv[6]);
+	ysize = atof (argv[7]);
+	zsize = atof (argv[8]);
+
+/* Initialize matrices */
+
+	tmp0 = matrix (1, 4, 1, 4);
+	tmp1 = matrix (1, 4, 1, 4);
+	tmp2 = matrix (1, 4, 1, 4);
+	mrimat = matrix (1, 4, 1, 4);
+	airmat = matrix (1, 4, 1, 4);
+	map = matrix (1, 4, 1, 4);
+	trans = matrix (1, 4, 1, 4);
+	scale = matrix (1, 4, 1, 4);
+	flip = matrix (1, 4, 1, 4);
+	for (i = 1; i <= 4; i++) {
+		for (j = 1; j <= 4; j++) {
+			trans[i][j] = 0.0;
+			scale[i][j] = 0.0;
+			flip[i][j] = 0.0;
+		}
+		trans[i][i] = 1.0;
+		scale[i][i] = 1.0;
+		flip[i][i] = 1.0;
+	}
+
+/* Read AIR matrix into airmat (transform pixels-to-pixels)*/
+
+	if (read_air (airfile, &air, airmat) != 0) {
+		(void) fprintf (stderr, "ERROR: cannot read %s\n", airfile);
+		return (1);
+	}
+
+/* Read the atlas definition */
+
+	get_t88atlas (&atlas);
+
+	pt0 = vector (1, 4);
+	pt1 = vector (1, 4);
+	ptp = vector (1, 4);
+	pt0[1] = atlas.x0;
+	pt0[2] = atlas.y0;
+	pt0[3] = atlas.z0;
+	pt0[4] = 1.0;
+	printf ("Origin defined in Spideram space of atlas image\n");
+	ptp[1] = pt0[1] + 1;
+	ptp[2] = pt0[2] + 1;
+	ptp[3] = pt0[3] + 1;
+	ptp[4] = 0;
+	matrix_print (ptp, 3, 1);
+
+/* Translate Atlas origin to matrix origin */
+
+	trans[1][4] = -atlas.x0;
+	trans[2][4] = -atlas.y0;
+	trans[3][4] = -atlas.z0;
+
+/* Scale Atlas dimensions to individual's dimensions */
+
+	scale[1][1] = (xsize * air.std.xsize) / atlas.xsize;
+	scale[2][2] = (ysize * air.std.ysize) / atlas.ysize;
+	scale[3][3] = (zsize * air.std.zsize) / atlas.zsize;
+
+/* Scale Atlas pixels to MRI pixels */
+
+	scale[1][1] = scale[1][1] * (atlas.pixel_size / air.std.xsize);
+	scale[2][2] = scale[2][2] * (atlas.pixel_size / air.std.ysize);
+	scale[3][3] = scale[3][3] * (atlas.slice_separation / air.std.zsize);
+	matrix_mult (scale, trans, tmp0, 4, 4, 4);
+
+/* Reflect all 3 axes to conform to AIR and ANALYZE */
+
+	flip[1][1] = -1.0;
+	flip[2][2] = -1.0;
+	flip[3][3] = -1.0;
+	matrix_mult (flip, tmp0, tmp1, 4, 4, 4);
+
+/* Translate matrix origin to MR origin using ANALYZE coordinates */
+
+	trans[1][4] = xorg - 1.;
+	trans[2][4] = yorg - 1.;
+	trans[3][4] = zorg - 1.;
+	matrix_mult (trans, tmp1, mrimat, 4, 4, 4);
+
+	vector_mult (mrimat, pt0, pt1, 4, 4, 1);
+    printf ("Origin defined in ANALYZE space of MR image\n");
+	ptp[1] = pt1[1] + 1;
+	ptp[2] = pt1[2] + 1;
+	ptp[3] = pt1[3] + 1;
+	matrix_print (ptp, 3, 1);
+
+/* Tranform MR to PET */
+
+	matrix_mult (airmat, mrimat, tmp2, 4, 4, 4);
+
+	vector_mult (tmp2, pt0, pt1, 4, 4, 1);
+    printf ("Origin aligned in ANALYZE space of input PET image\n");
+	ptp[1] = pt1[1] + 1;
+	ptp[2] = pt1[2] + 1;
+	ptp[3] = pt1[3] + 1;
+	matrix_print (ptp, 3, 1);
+
+/* Reflect all 3 axes to conform to our PET pixel order */
+
+	flip[1][1] = -1.0;
+	flip[2][2] = -1.0;
+	flip[3][3] = -1.0;
+	flip[1][4] = air.res.xdim - 1.0;
+	flip[2][4] = air.res.ydim - 1.0;
+	flip[3][4] = air.res.zdim - 1.0;
+	matrix_mult (flip, tmp2, map, 4, 4, 4);
+
+	vector_mult (map, pt0, pt1, 4, 4, 1);
+    printf ("Origin aligned in Spideram space of input PET image\n");
+	ptp[1] = pt1[1] + 1;
+	ptp[2] = pt1[2] + 1;
+	ptp[3] = pt1[3] + 1;
+	matrix_print (ptp, 3, 1);
+	printf ("Matrix MAP\n");
+	matrix_print (map, 4, 4);
+
+/* Open the matrix map file */
+
+	fp = fopen (mapfile, "w");
+	if (fp == NULL) {
+		(void) fprintf (stderr, "ERROR: cannot open %s\n", mapfile);
+		return (1);
+	}
+/* Write RCS version, date, and calling parameters */
+
+	str1 = strstr (rcsid, "RCS") + 4;
+	str2 = strstr (str1, "tom");
+	(void) strncpy (str, str1, str2 - str1);
+	fprintf (fp, "%s\n", str);
+	fprintf (fp, "%s %s %5.1f %5.1f %5.1f %5.1f %5.1f %5.1f\n",
+		 mapfile, airfile, xorg, yorg, zorg, xsize, ysize, zsize);
+
+/* Write the matrix map */
+
+	for (i = 1; i <= 4; i++) {
+		fprintf (fp, "%10.4f %10.4f %10.4f %10.4f\n",
+			 map[i][1], map[i][2], map[i][3], map[i][4]);
+	}
+
+/* Clean up */
+
+	free_matrix (trans, 1, 4, 1, 4);
+	free_matrix (scale, 1, 4, 1, 4);
+	free_matrix (airmat, 1, 4, 1, 4);
+	free_matrix (tmp0, 1, 4, 1, 4);
+	free_matrix (tmp1, 1, 4, 1, 4);
+	free_matrix (tmp2, 1, 4, 1, 4);
+	free_matrix (mrimat, 1, 4, 1, 4);
+	free_matrix (map, 1, 4, 1, 4);
+	free_matrix (flip, 1, 4, 1, 4);
+	return (0);
+}
+@
+
+
+2.8
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 2.7 1996/11/08 23:11:46 tom Exp tom $
+d3 3
+d44 1
+a44 1
+ *  Date:           12-Oct-95
+d53 2
+d57 1
+a57 1
+#include <string.h>
+d60 1
+a60 1
+#include "air.h"				 /* struct air */
+a62 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 2.7 1996/11/08 23:11:46 tom Exp tom $";
+a69 1
+	char            Usage[] = "Usage: makemap mapfile airfile X0 Y0 Z0 xsize ysize zsize\n";
+d87 1
+a87 1
+		(void) fprintf (stderr, Usage);
+d227 1
+a227 1
+	strncpy (str, str1, str2 - str1);
+@
+
+
+2.7
+log
+@v 2.3 was correct! This restores correct scaling
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 2.6 1996/11/06 22:46:55 tom Exp tom $
+d3 3
+a52 2
+#include <math.h>
+#include <nr.h>
+d58 1
+a58 2
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 2.6 1996/11/06 22:46:55 tom Exp tom $";
+char            Usage[] = "Usage: makemap mapfile airfile X0 Y0 Z0 xsize ysize zsize\n";
+d66 1
+d85 1
+a85 1
+		exit (1);
+d122 1
+a122 1
+		exit (1);
+d218 1
+a218 1
+		exit (1);
+d247 1
+a247 1
+	exit (0);
+@
+
+
+2.6
+log
+@sync with Version
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 2.5 1996/11/06 22:46:21 tom Exp tom $
+d3 3
+d57 1
+a57 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 2.5 1996/11/06 22:46:21 tom Exp tom $";
+d135 1
+a135 1
+	printf ("Atlas Origin in Spideram space\n");
+d150 3
+a152 3
+	scale[1][1] = xsize / atlas.xsize;
+	scale[2][2] = ysize / atlas.ysize;
+	scale[3][3] = zsize / atlas.zsize;
+d176 1
+a176 1
+	printf ("MRI Origin in ANALYZE space\n");
+d187 1
+a187 1
+	printf ("PET Origin in ANALYZE space\n");
+d204 1
+a204 1
+	printf ("PET Origin in Spideram space\n");
+@
+
+
+2.5
+log
+@sync with Version
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 2.4 1996/11/06 22:44:32 tom Exp tom $
+d3 3
+d54 1
+a54 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 2.4 1996/11/06 22:44:32 tom Exp tom $";
+@
+
+
+2.4
+log
+@fix scaling when air.std.size is not 1 mm
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 2.3 1996/09/26 15:57:46 tom Exp tom $
+d3 3
+d51 1
+a51 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 2.3 1996/09/26 15:57:46 tom Exp tom $";
+@
+
+
+2.3
+log
+@printout Origins in 1-based coordinates
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 2.2 1996/09/23 17:43:01 tom Exp tom $
+d3 3
+d48 1
+a48 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 2.2 1996/09/23 17:43:01 tom Exp tom $";
+d126 1
+a126 1
+	printf ("Atlas Origin\n");
+d141 3
+a143 3
+	scale[1][1] = (xsize * air.std.xsize) / atlas.xsize;
+	scale[2][2] = (ysize * air.std.ysize) / atlas.ysize;
+	scale[3][3] = (zsize * air.std.zsize) / atlas.zsize;
+d167 1
+a167 1
+	printf ("MRI Origin\n");
+@
+
+
+2.2
+log
+@2.1 was incorrect!
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 2.1 1996/09/10 19:56:13 tom Exp tom $
+d3 3
+d45 1
+a45 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 2.1 1996/09/10 19:56:13 tom Exp tom $";
+d63 1
+a63 1
+	float          *pt0, *pt1;
+d118 1
+d124 5
+a128 1
+	matrix_print (pt0, 4, 1);
+d165 4
+a168 1
+	matrix_print (pt1, 4, 1);
+d176 4
+a179 1
+	matrix_print (pt1, 4, 1);
+d192 5
+a196 2
+	printf ("PET Origin\n");
+	matrix_print (pt1, 4, 1);
+@
+
+
+2.1
+log
+@scale prop if mr pix not 1 mm
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 2.0 1996/08/23 18:17:11 tom Exp tom $
+d3 3
+d42 1
+a42 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 2.0 1996/08/23 18:17:11 tom Exp tom $";
+d108 1
+d128 1
+a128 1
+/* Scale Atlas to MRI pixel size */
+d130 9
+a138 3
+	scale[1][1] = (air.std.xsize * xsize) / atlas.xsize;
+	scale[2][2] = (air.std.ysize * ysize) / atlas.ysize;
+	scale[3][3] = (air.std.zsize * zsize) / atlas.zsize;
+@
+
+
+2.0
+log
+@ver 2 AIR
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 1.4 1995/10/18 20:27:17 tom Exp tom $
+d3 3
+d37 1
+a37 1
+#include "brain_atlas.h"		 /* BRAIN_ATLAS */
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 1.4 1995/10/18 20:27:17 tom Exp tom $";
+d42 1
+a42 1
+void			get_t88atlas ();
+d53 2
+a54 2
+	char			*str1, *str2;
+	char			str[80];
+d57 3
+a59 3
+	float			*pt0, *pt1;
+	float			xorg, yorg, zorg;
+	float			xsize, ysize, zsize;
+d70 6
+a75 6
+	xorg = atof(argv[3]);
+	yorg = atof(argv[4]);
+	zorg = atof(argv[5]);
+	xsize = atof(argv[6]);
+	ysize = atof(argv[7]);
+	zsize = atof(argv[8]);
+a104 1
+
+d126 3
+a128 3
+	scale[1][1] = (atlas.pixel_size/air.std.xsize) * (xsize/atlas.xsize);
+	scale[2][2] = (atlas.pixel_size/air.std.ysize) * (ysize/atlas.ysize);
+	scale[3][3] = (atlas.slice_separation/air.std.zsize) * (zsize/atlas.zsize);
+d138 1
+a138 5
+/* Translate matrix origin to MR origin */
+#ifdef UNDEF
+	trans[1][4] = air.std.xdim - xorg + 1.;
+	trans[2][4] = air.std.ydim - yorg + 1.;
+#endif
+d154 1
+a154 1
+	printf ("AIR-PET Origin\n");
+a179 1
+
+d184 1
+a184 1
+	strncpy (str, str1, str2-str1);
+d187 1
+a187 1
+		mapfile, airfile, xorg, yorg, zorg, xsize, ysize, zsize);
+@
+
+
+1.4
+log
+@changed z-scaling to use ACPC plane to top of brain
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 1.3 1995/10/18 20:24:00 tom Exp tom $
+d3 3
+d30 3
+a32 3
+#include <nrecipes/kr/nr.h>
+#include <nrecipes/kr/nrutil.h>
+#include <petutil/matrixlib.h>
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 1.3 1995/10/18 20:24:00 tom Exp tom $";
+d45 1
+a45 1
+	struct air      air;
+a56 1
+	float			xmid, ymid, zmid;
+d147 1
+a147 1
+	matrix_mult (mrimat, pt0, pt1, 4, 4, 1);
+d155 1
+a155 1
+	matrix_mult (tmp2, pt0, pt1, 4, 4, 1);
+d169 1
+a169 1
+	matrix_mult (map, pt0, pt1, 4, 4, 1);
+@
+
+
+1.3
+log
+@changed origin to anterior commissure
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 1.2 1995/10/12 18:18:52 tom Exp tom $
+d3 3
+d33 1
+a33 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 1.2 1995/10/12 18:18:52 tom Exp tom $";
+@
+
+
+1.2
+log
+@version added to output file
+@
+text
+@d1 1
+a1 1
+/*  $Id: makemap.c,v 1.1 1995/10/12 17:48:43 tom Exp tom $
+d3 3
+d30 1
+a30 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makemap/RCS/makemap.c,v 1.1 1995/10/12 17:48:43 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*  $Id$
+    $Log$ */
+d19 1
+d27 1
+a27 1
+static char     rcsid[] = "$Header$";
+d41 2
+d164 2
+d167 1
+a167 1
+/* Write the matrix map file */
+a168 2
+	printf ("MAP\n");
+	matrix_print (map, 4, 4);
+d174 7
+a180 1
+	fprintf (fp, "%s\n", rcsid);
+d183 3
+@

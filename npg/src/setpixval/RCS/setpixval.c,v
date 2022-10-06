@@ -1,0 +1,257 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2009.05.26.15.42.13;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2004.02.19.22.29.51;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.07.27.15.28.16;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@/*	$Log: setpixval.c,v $
+ * Revision 1.3  2004/02/19  22:29:51  tom
+ * Feb 2004
+ *
+ * Revision 1.1  1999/07/27  15:28:16  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			setpixval.c
+ *	Date:			Jul 1999
+ *	Author:			Tom Videen
+ *	Description:    Set to val all pixels in input which are >= min AND <= max in mask.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/setpixval/RCS/setpixval.c,v 1.3 2004/02/19 22:29:51 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <image.h>
+#include <ANALYZE.h>
+
+int main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fp;				 /* file pointer */
+	char           *in, *inhdr;		 /* input file */
+	char           *msk, *mskhdr;	 /* output file */
+	char           *out, *outhdr;	 /* output file */
+	long            dim1, dim2, dim3; /* dimensions of image */
+	long            len, i;
+	short           min, max;		 /* include all <= or >= these pixel values */
+	short           val;			 /* set pixels to this value */
+	short          *img;			 /* input image */
+	short          *mask;			 /* mask image */
+	long            npixels;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 10) {
+		fprintf (stderr, "Usage: setpixval inhdr in mskhdr msk outhdr out min max val\n");
+		return (ERROR);
+	}
+	inhdr = argv[1];
+	in = argv[2];
+	mskhdr = argv[3];
+	msk = argv[4];
+	outhdr = argv[5];
+	out = argv[6];
+	min = atoi (argv[7]);
+	max = atoi (argv[8]);
+	val = atoi (argv[9]);
+
+/*
+ * Read input image
+ */
+	if ((fp = fopen (inhdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [setpixval]: Cannot open: %s\n", inhdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [setpixval]: Reading: %s\n", inhdr);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [setpixval]: Reading: %s\n", inhdr);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	len = dim1 * dim2 * dim3;
+	(void) fclose (fp);
+
+	if ((fp = fopen (in, "r")) == 0) {
+		fprintf (stderr, "ERROR [setpixval]: Cannot open: %s\n", in);
+		return (ERROR);
+	}
+	img = (short *) calloc (len, sizeof (short));
+	if (img == NULL) {
+		fprintf (stderr, "ERROR [setpixval]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if ((fread (img, sizeof (short), len, fp)) != len) {
+		fprintf (stderr, "ERROR [setpixval]: Reading: %s\n", in);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+/*
+ * Read mask image
+ */
+	if ((fp = fopen (mskhdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [setpixval]: Cannot open: %s\n", mskhdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [setpixval]: Reading: %s\n", mskhdr);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [setpixval]: Reading: %s\n", mskhdr);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	if (dim1 != hdr.dime.dim[1] && dim2 != hdr.dime.dim[2] && dim3 != hdr.dime.dim[3]) {
+		fprintf (stderr, "ERROR [setpixval]: Dimensions of %s differ from %s\n", mskhdr, inhdr);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+	if ((fp = fopen (msk, "r")) == 0) {
+		fprintf (stderr, "ERROR [setpixval]: Cannot open: %s\n", msk);
+		return (ERROR);
+	}
+	mask = (short *) calloc (len, sizeof (short));
+	if (mask == NULL) {
+		fprintf (stderr, "ERROR [setpixval]: Cannot calloc mask\n");
+		return (ERROR);
+	}
+	if ((fread (mask, sizeof (short), len, fp)) != len) {
+		fprintf (stderr, "ERROR [setpixval]: Reading: %s\n", msk);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+/*	Mask it */
+
+	fprintf (stderr,"%d %d\n",min,max);
+	npixels = 0;
+	for (i = 0; i < len; i++) {
+		if (mask[i] >= min && mask[i] <= max) {
+			img[i] = val;
+			npixels++;
+		}
+	}
+	fprintf (stdout, "Total Masked Pixels = %ld\n", npixels);
+
+/* Write output */
+
+	if ((fp = fopen (outhdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [setpixval]: Unable to create ANALYZE header %s\n", outhdr);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [setpixval]: Error writing to: %s\n", outhdr);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+	if ((fp = fopen (out, "w")) == 0) {
+		fprintf (stderr, "ERROR [setpixval]: Unable to create ANALYZE image %s\n", out);
+		return (ERROR);
+	}
+	if ((fwrite (img, sizeof (short), len, fp)) != len) {
+		fprintf (stderr, "ERROR [setpixval]: Writing: %s\n", out);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+	free (img);
+	free (mask);
+	fprintf (stdout, "Masked %s with %s\n", in, msk);
+	return (OK);
+}
+@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@d2 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/setpixval/RCS/setpixval.c,v 1.1 1999/07/27 15:28:16 tom Exp tom $";
+d26 1
+a26 1
+main (argc, argv)
+d137 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d7 1
+a7 1
+ *	Date:			Jul-99
+d12 1
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/setpixval/RCS/setpixval.c,v 1.2 1999/02/08 16:57:47 tom Exp $";
+d78 1
+a78 1
+	fclose (fp);
+d93 1
+a93 1
+	fclose (fp);
+d115 1
+a115 1
+	fclose (fp);
+d130 1
+a130 1
+	fclose (fp);
+d153 1
+a153 1
+	fclose (fp);
+d163 1
+a163 1
+	fclose (fp);
+@

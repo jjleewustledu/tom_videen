@@ -1,0 +1,782 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	95.05.17.21.52.29;	author ty7777;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.04.14.15.36.32;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.04.12.14.19.35;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.04.11.19.59.51;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.04.07.20.08.13;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.04.07.14.46.12;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.03.29.21.00.45;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.03.29.20.16.32;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version with debugging messages.
+@
+
+
+1.8
+log
+@Same as the last version.
+@
+text
+@/*$Id: search.c,v 1.7 1995/04/14 15:36:32 ty7777 Exp $*/
+/*$Log: search.c,v $
+ * Revision 1.7  1995/04/14  15:36:32  ty7777
+ * Final release.
+ *
+ * Revision 1.6  1995/04/12  14:19:35  ty7777
+ * Deleted the debugging message.
+ *
+ * Revision 1.5  1995/04/11  19:59:51  ty7777
+ * sphere_center = 0 means centerd on pixel.
+ *
+ * Revision 1.4  1995/04/07  20:08:13  ty7777
+ * Use pick () for elimination of contagious peaks with the same magnitude.
+ *
+ * Revision 1.3  1995/04/07  14:46:12  ty7777
+ * Use real radii.
+ *
+ * Revision 1.2  1995/03/29  21:00:45  ty7777
+ * Working version.
+ *
+ * Revision 1.1  1995/03/29  20:16:32  ty7777
+ * Initial revision
+ **/
+
+/*___________________________________________________________________________
+  File:		search.c
+
+  Function:	void search (float *filtered_image, float cutoff, 
+			 short num_slices, float adjpeak_radius, POINT3D *list,
+			 float *value_list, int *list_size, int *listp,
+			 BOOLEAN fill_list_flag);
+
+  Arguments:	filtered_image,	filtered image array.
+		cutoff,		cutoff.	
+		num_slices,	number of slices in image.
+		adjpeak_radius,	radius used to get rid of adjacent peaks.
+		list,		3d list array.
+		value_list,	list of magnitude.
+		list_size,	list array size.
+		listp,		current list position.
+		fill_list_flag,	TRUE, fill list and value_list with value;
+				FALSE, compute number of peaks only.
+
+  Description:	This function search for the local peaks pixel by pixel.
+
+  Authors:	Tom Yang, Gordon Shulman
+
+  History:	Created by Tom Yang and Gordon Shulman on 04/05/95. 
+___________________________________________________________________________*/
+
+#include "af3d_par.h"
+#include <math.h>
+
+#define OUTSIDE		-100
+
+static char rcsid [] = "$Header: /usr/local/src/af3d_par/RCS/search.c,v 1.7 1995/04/14 15:36:32 ty7777 Exp $";
+
+PUBLIC void search (filtered_image, cutoff, num_slices, adjpeak_radius, list, value_list, 
+	list_size, listp, fill_list_flag)
+	float	filtered_image [][ENCODED_SLICE_HEIGHT][ENCODED_SLICE_WIDTH];
+	float	cutoff;
+	short	num_slices;
+	float	adjpeak_radius;
+	POINT3D	*list;
+	float	*value_list;
+	int	*list_size;
+	int	*listp;
+	BOOLEAN	fill_list_flag;
+{
+	BOOLEAN	peak_flag;
+	POINT3D	*temp_list;
+	float	distance;
+	float	ref_value;
+	float	*temp_value_list;
+	int	i;
+	int	j;
+	int	k;
+	int	x;
+	int	x0;
+	int	y;
+	int	y0;
+	int	z;
+	int	z0;
+
+	/*
+	 * Find local peaks.
+	 */
+	for (z = 0; z < num_slices; z++)
+	{
+		for (y = 0; y < ENCODED_SLICE_HEIGHT; y++)
+		{
+			for (x = 0; x < ENCODED_SLICE_WIDTH; x++)
+			{
+				ref_value	= filtered_image [z][y][x];
+				peak_flag	= TRUE;
+
+				/* 
+				 * Check cutoff and the neighbouring values against the reference point.
+				 */
+				if (ref_value > cutoff)
+				{
+					for (k = -1; k <= 1 && peak_flag; k++)
+					{
+						z0	= z + k;
+						for (j = -1; j <= 1 && peak_flag; j++)
+						{
+							y0 = y + j;
+							for (i = -1; i <= 1 && peak_flag; i++)
+							{
+								x0	= x + i;
+
+								if (z0 >= 0 && z0 < num_slices
+								&& y0 >= 0 && y0 < ENCODED_SLICE_HEIGHT
+								&& x0 >= 0 && x0 < ENCODED_SLICE_WIDTH
+								&& filtered_image [z0][y0][x0] > ref_value)
+								{
+									peak_flag	= FALSE;
+								}
+							}
+						}
+					}
+				}
+				else
+					peak_flag	= FALSE;
+
+				/* 
+				 * Allocate more memory to list if necessory and put peak on list.
+				 */
+				if (peak_flag)
+				{
+					if (*listp >= *list_size)
+					{
+						*list_size	*= 2;
+						list		= (POINT3D *) realloc ((char *) list, 
+								*list_size * sizeof (POINT3D));
+						value_list	= (float *) realloc ((char *) value_list, 
+								*list_size * sizeof (float));
+						if (list == (POINT3D *) NULL || value_list == (float *) NULL)
+						{
+							fprintf (stderr, 
+							"search.c: Out of memory for list or value_list\n");
+							return;
+						}
+					}
+
+					/*
+					 * Put new point on list.
+					 */
+					list [*listp].x     = x;
+					list [*listp].y     = y;
+					list [*listp].z     = z;
+					value_list [*listp] = ref_value;
+					(*listp)++;
+				}
+			}
+		}
+	}
+
+	/*
+	 * Select only one peak value from a block of contagious peaks with the same peak value.
+	 */
+	pick (list, value_list, *listp);
+
+	/*
+	 * Sort peak list by magnitude in descending order.
+	 */
+	isort (list, value_list, *listp);
+
+	/*
+	 * Get rid of adjacent peaks.
+	 */
+	for (i = 0; i < *listp; i++)
+	{
+		if (value_list [i] > 0.0)
+		{
+			x	= list [i].x;
+			y	= list [i].y;
+			z	= list [i].z;
+
+			for (j = i + 1; j < *listp; j++)
+			{
+				x0		= list [j].x;
+				y0		= list [j].y;
+				z0		= list [j].z;
+				distance	= sqrt ((x0 - x) * ((float)x0 - x) 
+						+ (y0 - y) * ((float)y0 - y) 
+						+ (z0 - z) * ((float)z0 - z));
+
+				if (distance <= adjpeak_radius)
+				{
+	 				value_list [j] = 0.0;
+				}
+			}
+		}
+	}
+	*list_size = *listp;
+
+	/* 
+	 * Put actual peaks on a temporary list and copy temporary list to list.
+	 */
+	temp_list       = (POINT3D *) malloc (*list_size * sizeof (POINT3D));
+	temp_value_list = (float *) malloc (*list_size * sizeof (float));
+
+	if (temp_list == (POINT3D *) NULL || temp_value_list == (float *) NULL)
+	{
+		fprintf (stderr, "Out of memory for temp_list or temp_value_list");
+		return;
+	}
+
+	j = 0;
+	for (i = 0; i < *list_size; i++)
+	{
+		if (value_list [i] > 0.0)
+		{
+			temp_list [j].x     = list [i].x; 
+			temp_list [j].y     = list [i].y; 
+			temp_list [j].z     = list [i].z; 
+			temp_value_list [j] = value_list [i];
+			j++;
+		}
+	}
+
+	*listp     = j;
+
+	if (fill_list_flag)
+	{
+		for (i = 0; i < *listp; i++)
+		{
+			list [i].x     = temp_list [i].x; 
+			list [i].y     = temp_list [i].y; 
+			list [i].z     = temp_list [i].z; 
+			value_list [i] = temp_value_list [i];
+		}
+	}
+
+	free (temp_list);
+	free (temp_value_list);
+}
+@
+
+
+1.7
+log
+@Final release.
+@
+text
+@d1 1
+a1 1
+/*$Id: search.c,v 1.6 1995/04/12 14:19:35 ty7777 Exp ty7777 $*/
+d3 3
+d56 1
+a56 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/search.c,v 1.6 1995/04/12 14:19:35 ty7777 Exp ty7777 $";
+@
+
+
+1.6
+log
+@Deleted the debugging message.
+@
+text
+@d1 1
+a1 1
+/*$Id: search.c,v 1.5 1995/04/11 19:59:51 ty7777 Exp ty7777 $*/
+d3 3
+d43 3
+a45 1
+  History:	Created by Tom Yang on 08/19/92. 
+a50 1
+#define ERROR_BOUND	0.000001
+d53 1
+a53 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/search.c,v 1.5 1995/04/11 19:59:51 ty7777 Exp ty7777 $";
+@
+
+
+1.5
+log
+@sphere_center = 0 means centerd on pixel.
+@
+text
+@d1 1
+a1 1
+/*$Id: search.c,v 1.4 1995/04/07 20:08:13 ty7777 Exp ty7777 $*/
+d3 3
+d49 1
+a49 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/search.c,v 1.4 1995/04/07 20:08:13 ty7777 Exp ty7777 $";
+a150 1
+printf ("\n");
+@
+
+
+1.4
+log
+@Use pick () for elimination of contagious peaks with the same magnitude.
+@
+text
+@d1 1
+a1 1
+/*$Id: search.c,v 1.3 1995/04/07 14:46:12 ty7777 Exp ty7777 $*/
+d3 3
+d46 1
+a46 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/search.c,v 1.3 1995/04/07 14:46:12 ty7777 Exp ty7777 $";
+d148 1
+@
+
+
+1.3
+log
+@Use real radii.
+@
+text
+@d1 1
+a1 1
+/*$Id: search.c,v 1.2 1995/03/29 21:00:45 ty7777 Exp ty7777 $*/
+d3 3
+d43 1
+a43 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/search.c,v 1.2 1995/03/29 21:00:45 ty7777 Exp ty7777 $";
+a57 2
+	BOOLEAN	component_completed;
+	POINT3D	*final_list;
+a59 1
+	float	*dist_list;
+a61 2
+	int	*final_index_list;
+	int	final_list_size;
+a64 3
+	int	old_final_list_size;
+	int	*temp_index_list;
+	int	temp_list_size;
+d75 5
+a79 28
+   for (z = 0; z < num_slices; z++)
+   {
+      for (y = 0; y < ENCODED_SLICE_HEIGHT; y++)
+      {
+         for (x = 0; x < ENCODED_SLICE_WIDTH; x++)
+         {
+            ref_value = filtered_image [z][y][x];
+	    peak_flag = TRUE;
+
+            /* 
+             * Check cutoff and the neighbouring values against the reference point.
+             */
+	    if (ref_value > cutoff)
+	    {
+               for (k = -1; k <= 1 && peak_flag; k++)
+               {
+                  z0 = z + k;
+                  for (j = -1; j <= 1 && peak_flag; j++)
+                  {
+                     y0 = y + j;
+                     for (i = -1; i <= 1 && peak_flag; i++)
+                     {
+                        x0 = x + i;
+
+			if (z0 >= 0 && z0 < num_slices
+			&& y0 >= 0 && y0 < ENCODED_SLICE_HEIGHT
+			&& x0 >= 0 && x0 < ENCODED_SLICE_WIDTH
+			&& filtered_image [z0][y0][x0] > ref_value)
+d81 2
+a82 8
+                           peak_flag = FALSE;
+			}
+                     }
+                  }
+               }
+	    }
+	    else
+               peak_flag = FALSE;
+d84 14
+a97 16
+            /* 
+             * Allocate more memory to list if necessory and put peak on list.
+             */
+            if (peak_flag)
+	    {
+               if (*listp >= *list_size)
+               {
+                  *list_size *= 2;
+                  list       = (POINT3D *) realloc ((char *) list, *list_size * sizeof (POINT3D));
+                  value_list = (float *) realloc ((char *) value_list, *list_size * sizeof (float));
+                  if (list == (POINT3D *) NULL || value_list == (float *) NULL)
+                  {
+                     fprintf (stderr, "search.c: Out of memory for list or value_list\n");
+		     return;
+                  }
+               }
+d99 13
+a111 12
+               /*
+                * Put new point on list.
+                */
+               list [*listp].x     = x;
+               list [*listp].y     = y;
+               list [*listp].z     = z;
+               value_list [*listp] = ref_value;
+               (*listp)++;
+	    }
+	 }
+      }
+   }
+d113 19
+a131 14
+   /*
+    * Select only one peak value from a block of contagious peaks with the same peak value.
+    */
+   for (i = 0; i < *listp; i++)
+   {
+      if (value_list [i] > 0.0)
+      {
+         temp_list  = (POINT3D *) malloc (*listp * sizeof (POINT3D));
+         temp_index_list = (int *) malloc (*listp * sizeof (int));
+         if (temp_list == (POINT3D *) NULL || temp_index_list == (int *) NULL)
+	 {
+      	    fprintf (stderr, "Out of memory for temp_list or temp_index_list");
+	    return;
+         }
+d133 12
+a144 17
+	 /*
+	  * Find all the points that have the same peak value.
+	  */
+         temp_list_size = 0;
+         for (j = i; j < *listp; j++)
+         {
+            if (pkg_abs (value_list [j] - value_list [i]) < ERROR_BOUND)
+            {
+               temp_list [temp_list_size].x = list [j].x;
+               temp_list [temp_list_size].y = list [j].y;
+               temp_list [temp_list_size].z = list [j].z;
+               temp_index_list [temp_list_size]  = j;
+               temp_list_size++;
+            }
+	 }
+         temp_list  = (POINT3D *) realloc ((char *) temp_list, temp_list_size * sizeof (POINT3D));
+         temp_index_list = (int *) realloc ((char *) temp_index_list, temp_list_size * sizeof (int));
+d146 4
+a149 101
+	 /*
+	  * Find the connected component.
+	  */
+	 if (temp_list_size > 1)
+	 {
+            final_list = (POINT3D *) malloc (temp_list_size * sizeof (POINT3D));
+            final_index_list = (int *) malloc (temp_list_size * sizeof (int));
+            if (final_list == (POINT3D *) NULL || final_index_list == (int *) NULL)
+            {
+               fprintf (stderr, "Out of memory for final_list or final_index_list.");
+               return;
+            }
+
+            final_list [0].x	= temp_list [0].x;
+            final_list [0].y	= temp_list [0].y;
+            final_list [0].z	= temp_list [0].z;
+	    final_index_list [0] = temp_index_list [0];
+            final_list_size	= 1;
+            component_completed	= FALSE;
+
+            while (!component_completed)
+            {
+	       old_final_list_size	= final_list_size;
+               for (j = 1; j < temp_list_size; j++)
+               {
+                  for (k = 0; k < final_list_size; k++)
+                  {
+                     if (pkg_abs (temp_list [j].x - final_list [k].x) <= 1
+                     && pkg_abs (temp_list [j].y - final_list [k].y) <= 1
+                     && pkg_abs (temp_list [j].z - final_list [k].z) <= 1
+                     && (pkg_abs (temp_list [j].x - final_list [k].x) == 1
+                     || pkg_abs (temp_list [j].y - final_list [k].y) == 1
+                     || pkg_abs (temp_list [j].z - final_list [k].z) == 1))
+                     {
+                        final_list [final_list_size].x = temp_list [j].x;
+                        final_list [final_list_size].y = temp_list [j].y;
+                        final_list [final_list_size].z = temp_list [j].z;
+                        final_index_list [final_list_size] = temp_index_list [j];
+			temp_list [j].x = OUTSIDE;
+			temp_list [j].y = OUTSIDE;
+			temp_list [j].z = OUTSIDE;
+                        final_list_size++;
+			break;
+                     }
+                  }
+               }
+	       if (final_list_size == old_final_list_size)
+                  component_completed = TRUE;		
+            }
+
+	    if (final_list_size > 1)
+	    {
+               dist_list = (float *) malloc (final_list_size * sizeof (float));
+               if (dist_list == (float *) NULL)
+               {
+                  fprintf (stderr, "Out of memory for dist_list.");
+                  return;
+               }
+
+	       /* Compute the distances */
+               for (j = 0; j < final_list_size; j++)
+               {
+		  dist_list [j] = 0.0;
+                  for (k = 0; k < final_list_size; k++)
+                  {
+		     dist_list [j] += sqrt ( (final_list [k].x - final_list [j].x)
+                                          * ((float) final_list [k].x - final_list [j].x)
+                                          + (final_list [k].y - final_list [j].y)
+                                          * ((float) final_list [k].y - final_list [j].y)
+                                          + (final_list [k].z - final_list [j].z)
+                                          * ((float) final_list [k].z - final_list [j].z) );
+		  }
+               }
+
+	       /* Find peak with the smallest distance */
+	       k = 0;
+	       distance = dist_list [0];
+               for (j = 1; j < final_list_size; j++)
+               {
+		  if (dist_list [j] < distance)
+		  {
+		     value_list [final_index_list [k]] = 0.0;
+		     k = j;
+		     distance = dist_list [j];
+		  }
+		  else
+		  {
+		     value_list [final_index_list [j]] = 0.0;
+		  }
+	       }
+
+	       free (dist_list);
+	    }
+            free (final_list);
+            free (final_index_list);
+	 }
+
+         free (temp_list);
+         free (temp_index_list);
+      }
+   }
+@
+
+
+1.2
+log
+@Working version.
+@
+text
+@d1 1
+a1 1
+/*$Id: search.c,v 1.1 1995/03/29 20:16:32 ty7777 Exp ty7777 $*/
+d3 3
+d14 1
+a14 1
+			 short num_slices, int adjpeak_radius, POINT3D *list,
+d40 1
+a40 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/search.c,v 1.1 1995/03/29 20:16:32 ty7777 Exp ty7777 $";
+d44 9
+a52 9
+   float     filtered_image [][ENCODED_SLICE_HEIGHT][ENCODED_SLICE_WIDTH];
+   float     cutoff;
+   short     num_slices;
+   int       adjpeak_radius;
+   POINT3D   *list;
+   float     *value_list;
+   int       *list_size;
+   int       *listp;
+   BOOLEAN   fill_list_flag;
+d54 22
+a75 22
+   BOOLEAN   peak_flag;
+   BOOLEAN   component_completed;
+   POINT3D   *final_list;
+   POINT3D   *temp_list;
+   float     distance;
+   float     *dist_list;
+   float     ref_value;
+   float     *temp_value_list;
+   int       *final_index_list;
+   int       final_list_size;
+   int       i;
+   int       j;
+   int       k;
+   int       old_final_list_size;
+   int       *temp_index_list;
+   int       temp_list_size;
+   int       x;
+   int       x0;
+   int       y;
+   int       y0;
+   int       z;
+   int       z0;
+d77 3
+a79 3
+   /*
+    * Go through the entire 3d filtered array.
+    */
+d163 3
+d181 3
+d283 4
+a286 4
+   /*
+    * Sort peak list by magnitude in descending order.
+    */
+   isort (list, value_list, *listp);
+d288 10
+a297 10
+   /*
+    * Get rid of adjacent peaks.
+    */
+   for (i = 0; i < *listp; i++)
+   {
+      if (value_list [i] > 0.0)
+      {
+         x  = list [i].x;
+         y  = list [i].y;
+         z  = list [i].z;
+d299 8
+a306 8
+         for (j = i + 1; j < *listp; j++)
+         {
+            x0 = list [j].x;
+            y0 = list [j].y;
+            z0 = list [j].z;
+	    distance = sqrt ((x0 - x) * ((float)x0 - x) 
+			+ (y0 - y) * ((float)y0 - y) 
+			+ (z0 - z) * ((float)z0 - z));
+d308 8
+a315 8
+	    if (distance <= (float) adjpeak_radius)
+            {
+               value_list [j] = 0.0;
+            }
+         }
+      }
+   }
+   *list_size = *listp;
+d317 5
+a321 5
+   /* 
+    * Put actual peaks on a temporary list and copy temporary list to list.
+    */
+   temp_list       = (POINT3D *) malloc (*list_size * sizeof (POINT3D));
+   temp_value_list = (float *) malloc (*list_size * sizeof (float));
+d323 5
+a327 5
+   if (temp_list == (POINT3D *) NULL || temp_value_list == (float *) NULL)
+   {
+      fprintf (stderr, "Out of memory for temp_list or temp_value_list");
+      return;
+   }
+d329 12
+a340 12
+   j = 0;
+   for (i = 0; i < *list_size; i++)
+   {
+      if (value_list [i] > 0.0)
+      {
+         temp_list [j].x     = list [i].x; 
+         temp_list [j].y     = list [i].y; 
+         temp_list [j].z     = list [i].z; 
+         temp_value_list [j] = value_list [i];
+         j++;
+      }
+   }
+d342 1
+a342 1
+   *listp     = j;
+d344 10
+a353 10
+   if (fill_list_flag)
+   {
+      for (i = 0; i < *listp; i++)
+      {
+         list [i].x     = temp_list [i].x; 
+         list [i].y     = temp_list [i].y; 
+         list [i].z     = temp_list [i].z; 
+         value_list [i] = temp_value_list [i];
+      }
+   }
+d355 2
+a356 2
+   free (temp_list);
+   free (temp_value_list);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d37 1
+a37 1
+static char rcsid [] = "$Header$";
+a183 3
+for (j = 0; j < temp_list_size; j++)
+	printf ("Gordon: %d %d %d %.4f\n", 
+	temp_list [j].x, temp_list [j].y, temp_list [j].z, value_list [temp_index_list[j]]); 
+a220 3
+for (j = 0; j < final_list_size; j++)
+	printf ("Shulman: %d %d %d %.4f\n", 
+	final_list [j].x, final_list [j].y, final_list [j].z, value_list [final_index_list [j]]); 
+a243 1
+printf ("Distances: %d %.4f\n", j, dist_list [j]); 
+a261 3
+	printf ("Pick: %d %d %d %.4f %.4f\n", 
+	final_list [k].x, final_list [k].y, final_list [k].z, 
+	value_list [final_index_list [k]], distance); 
+a264 1
+printf ("\n\n");
+a300 3
+if (fill_list_flag)
+	printf ("thrown out: %d %d %d %f good: %d %d %d %f\n", 
+	x0, y0, z0, value_list [j], x, y, z, value_list [i]); 
+@

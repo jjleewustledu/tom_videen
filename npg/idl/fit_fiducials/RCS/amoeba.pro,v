@@ -1,0 +1,237 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	96.01.08.15.20.13;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@; $Id: amoeba.pro,v 1.1 1994/12/21 21:17:45 tom Exp $
+;
+;+
+; NAME:
+;   AMOEBA 
+;
+; PURPOSE:
+;	Find minimum of multivariate nonlinear function FIT_FUNC using
+;	Variation of Nead & Melder's simplex algorithm from
+;	Press W.H., et al (1986) Numerical Recipes pp 292-293.
+;
+; CATEGORY:
+;   Image processing.
+;
+; CALLING SEQUENCE:
+;   AMOEBA, p, f, ndim, nparm, ftol, iter, ilo
+;
+; INPUTS:
+;	p(ndim,nparm):	starting simplex
+;	f(ndim):		initial functional values of simplex
+;	ndim:			no. of points in simplex (nparm+1)
+;	nparm:			no. of parameters in function (dimension of simplex)
+;	ftol:			functional tolerance
+;
+; OUTPUTS:
+;	p(ndim,nparm):  final simplex (best in (1,n)
+;	f(ndim):        final functional values of simplex
+;	iter:			number of iterations
+;	ilo:			lowest (best) point of simplex
+;
+; FUNCTION:
+;	The routine writes the values of all parameters for the best fit
+;	for each 25 iterations.  When these values appear not to be changing,
+;	the simplex is exploring around or shrinking about the best point.
+;	The routine exits when the SD of ALL points of the simplex is less
+;	than the specified tolerance (FTOL).
+;
+; REFERENCES:
+;	Press W.H., et al (1986) Numerical Recipes pp 292-293.
+;	S.L.S. Jacoby, J.S. Kowalik & J.T. Pizzo (1972) Iterative Methods
+;		for Nonlinear Optimization Problems, Prentice-Hall, pp 79-83.
+;
+; INTERNAL VARIABLES:
+;	rtol		; test range for tolerance
+;	ctr			; functional value of centroid
+;	ihi			; highest (worst) point of simplex
+;	inhi		; next highest point of simplex
+
+; EXAMPLE
+;   AMOEBA, p, f, ndim, nparm, ftol, iter, ilo
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, 12-Dec-94
+;-
+ 
+pro amoeba, p, f, ndim, nparm, ftol, iter, ilo, x, y, yfit, distance, angle, nfree
+
+	alpha = 1.0			; reflection parameter
+	beta  = 0.5			; contraction parameter
+	gamma = 2.0			; expansion parameter
+	itmax = 1000		; max. no. of iterations allowed
+	pr = dblarr(nparm)	; reflected pt. or contraction point
+	prr = dblarr(nparm)	; expansion pt. or contraction about the low pt.
+	pbar = dblarr(nparm); center of simplex face across from high pt.
+					  	; (centroid of all points except high pt)
+	iter = 0
+
+START:
+	ilo = 0
+	if (iter/50.) - iter/50 eq 0 then begin
+		print, FORMAT='(i4,d15.7,7d11.4)', iter, f(ilo), p(ilo,0:nparm-1)
+	endif
+
+; Determine which point is highest (worst), next highest, and lowest (best)
+; by looping over the points in the simplex.
+
+	if f(0) gt f(1) then begin
+		ihi = 0
+		inhi = 1
+	endif else begin
+		ihi = 1
+		inhi = 0
+	endelse
+	for i=0,ndim-1 do begin
+		if f(i) lt f(ilo) then ilo = i
+		if f(i) gt f(ihi) then begin
+			inhi = ihi
+			ihi = i
+		endif else if f(i) gt f(inhi) then $
+			if i ne ihi then inhi = i
+	endfor
+
+; Use Jacoby et al test for tolerance (the test of Press et al does not
+; work for small tolerances with Wood's test function)
+
+; Compute the centroid of the current simplex, or the
+; vector average of all points except the highest, i.e.,
+; the center of the "face" of the simplex across from the high point.
+
+	for j=0,nparm-1 do begin
+		pbar(j) = 0
+		for i=0,ndim-1 do $
+			if i ne ihi then pbar(j) = pbar(j) + p(i,j)
+		pbar(j) = pbar(j)/nparm
+	endfor
+
+; Compute standard deviation of points from the current centroid
+
+	fit_func, pbar, ctr, ndim, x, y, yfit, distance, angle, nfree
+	rtol = double(0.)
+	for i=0,ndim-1 do rtol = rtol + (f(i)-ctr)^2
+	rtol = sqrt(rtol/ndim)
+
+; Compare SD to tolerance
+; if acceptable, return the centroid as point 1 (minimum)
+; with its functional value in f(1)
+
+	if rtol lt ftol then begin
+		print, FORMAT='(i4,d14.7,7d11.4)', iter, f(ilo), p(ilo,0:nparm-1)
+		return
+	endif
+
+	if (iter eq itmax) then begin
+		print, 'Simplex exceeding maximum iterations.'
+		return
+	endif
+
+; Begin a new iteration.
+; Explore by a factor of alpha through the face, i.e.
+; reflect the simplex from the high point.
+
+	iter = iter + 1
+	for j=0,nparm-1 do pr(j) = (alpha + 1.)*pbar(j) - alpha*p(ihi,j)
+
+; Evaluate the function at the reflected point.
+
+	fit_func, pr, fpr, ndim, x, y, yfit, distance, angle, nfree
+
+; Gives a result better than the best point, so try an additional
+; extrapolation by a factor of gamma,
+
+	if fpr le f(ilo) then begin
+		for j=0,nparm-1 do prr(j) = gamma*pr(j) + (1.-gamma)*pbar(j)
+
+; and check out the function there.
+
+		fit_func, prr, fprr, ndim, x, y, yfit, distance, angle, nfree
+
+; The additional extrapolation succeeded, and replaces the high point.
+
+		if fprr lt f(ilo) then begin
+			for j=0,nparm-1 do p(ihi,j) = prr(j)
+			f(ihi) = fprr
+
+; The additional extrapolation failed, but we can still use the reflected pt.
+
+		endif else begin
+			for j=0,nparm-1 do p(ihi,j) = pr(j)
+			f(ihi) = fpr
+		endelse
+
+; The reflected point is worse than the second-highest.
+
+	endif else if fpr ge f(inhi) then begin
+
+; if it's better than the highest, then replace the highest.
+
+		if fpr lt f(ihi) then begin
+			for j=0,nparm-1 do p(ihi,j) = pr(j)
+			f(ihi) = fpr
+		endif
+
+; but look for an intermediate point,
+; in other words, perform a contraction of the simplex along one dimension.
+
+		for j=0,nparm-1 do prr(j) = beta*p(ihi,j) + (1.-beta)*pbar(j)
+
+; Then evaluate the function.
+
+		fit_func, prr, fprr, ndim, x, y, yfit, distance, angle, nfree
+
+; Contraction gives an improvement, so accept it.
+
+		if fprr lt f(ihi) then begin
+			for j=0,nparm-1 do p(ihi,j) = prr(j)
+			f(ihi) = fprr
+
+; Can't seem to get rid of that high point.
+; Better contract around the lowest (best) point.
+
+		endif else begin
+			for i=0,ndim-1 do begin
+				if i ne ilo then begin
+					for j=0,nparm-1 do begin
+						pr(j) = 0.5*(p(i,j) + p(ilo,j))
+						p(i,j) = pr(j)
+					endfor
+					fit_func, pr, f(i), ndim, x, y, yfit, distance, angle, nfree
+				endif
+			endfor
+		endelse
+
+; We arrive here if the original reflection gives a middling point.
+; Replace the old high point and continue
+
+	endif else begin
+		for j=0,nparm-1 do p(ihi,j) = pr(j)
+		f(ihi) = fpr
+	endelse
+
+; for the test of doneness and the next fraction.
+
+	goto, START
+	end
+@

@@ -1,0 +1,453 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	2004.07.21.13.53.11;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2004.07.21.13.51.20;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2004.02.19.22.36.40;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2002.11.27.17.45.58;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2000.12.05.19.26.31;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2000.10.12.18.02.58;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2000.10.12.15.29.39;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.08.18.15.42.44;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.08.18.15.23.40;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.08.18.15.04.52;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@/* $Id: slcmean.c,v 1.9 2004/07/21 13:51:20 tom Exp tom $ */
+/* $Log: slcmean.c,v $
+ * Revision 1.9  2004/07/21  13:51:20  tom
+ * remove free_imagefile at end
+ *
+ * Revision 1.8  2004/02/19  22:36:40  tom
+ * Feb 2004
+ *
+ * Revision 1.7  2002/11/27  17:45:58  tom
+ * *** empty log message ***
+ *
+ * Revision 1.6  2000/12/05  19:26:31  tom
+ * *** empty log message ***
+ *
+ * Revision 1.5  2000/10/12  18:02:58  tom
+ * sd, se, t
+ *
+ * Revision 1.4  2000/10/12  15:29:39  tom
+ * check for npixels
+ *
+ * Revision 1.3  2000/08/18  15:42:44  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2000/08/18  15:23:40  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2000/08/18  15:04:52  tom
+ * Initial revision
+ * */
+/*	=========================================================================
+ *	Module:			slcmean.c
+ *	Author:			Tom Videen
+ *	Description:	Compute slice mean of an image
+ *	=================================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: slcmean.c,v 1.9 2004/07/21 13:51:20 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <imgutil.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <myvalues.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	char           *fname;
+	char           *mskname;
+	float        ***mask;
+	float        ***img;
+	double          val, sum, sumsqrs, mean, sd, serr, t;
+	double          hipct, lopct;
+	long            nvox;
+	long            dim[3];
+	int             pln1, pln2;
+	int             hi, lo;
+	int             i, j, pln;
+
+	fname = argv[1];
+	mskname = argv[2];
+	pln1 = atoi(argv[3]);
+	pln2 = atoi(argv[4]);
+
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/* Read Mask */
+
+	file = make_imgfile (mskname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [slcmean]: Cannot open %s\n", mskname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [slcmean]: Cannot get MainHeader from %s\n", mskname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [slcmean]: cannot find %s frame 1, 2 or 3\n", mskname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [slcmean]: Cannot read file subheader in %s\n", mskname);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	if ((mask = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	close_imgfile (file);
+	free_imgfile (file);
+
+/* Read OH */
+
+	file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [slcmean]: Cannot open %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [slcmean]: Cannot get MainHeader from %s\n", fname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [slcmean]: cannot find %s frame 1, 2 or 3\n", fname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [slcmean]: Cannot read file subheader in %s\n", fname);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	if ((img = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	close_imgfile (file);
+	free_imgfile (file);
+
+/* Compute mean within mask for OH */
+
+	nvox = 0;
+	sum = 0.0;
+	mean = 0.0;
+	sumsqrs = 0.0;
+	sd = 0.0;
+	serr = 0.0;
+	t = 0.0;
+	for (pln = pln1; pln <= pln2; pln++) {
+		for (j = 1; j <= dim[1]; j++) {
+			for (i = 1; i <= dim[0]; i++) {
+				if (mask[pln][j][i] > 0.) {
+					val = (double) img[pln][j][i];
+					sum += val;
+					sumsqrs += DSQR(val);
+					nvox++;
+				}
+			}
+		}
+	}
+	if (nvox > 0) 
+		mean = sum / nvox;
+	if (nvox > 1) {
+		val = ((sumsqrs - nvox * DSQR(mean)) / (nvox - 1.0));
+        if (val > 0.0) {
+            sd = sqrt (val);
+			serr = sd / sqrt((double) nvox);
+			t = mean / serr;
+		}
+    }
+
+	hi = 0;
+	lo = 0;
+	for (pln = pln1; pln <= pln2; pln++) {
+		for (j = 1; j <= dim[1]; j++) {
+			for (i = 1; i <= dim[0]; i++) {
+				if (mask[pln][j][i] > 0.) {
+					val = (double) img[pln][j][i];
+					if (val > 2*sd)
+						hi++;
+					else if (val < -2*sd)
+						lo++;
+				}
+			}
+		}
+	}
+	hipct = 100.* (float) hi/(float) nvox;
+	lopct = 100.* (float) lo/(float) nvox;
+
+	fprintf (stdout, "    Voxels       Mean         SD          SE         T       Pct >2SD   Pct <2SD\n");
+	fprintf (stdout, "    ------     --------    ---------   --------   --------   --------   --------\n");
+	fprintf (stdout, "%10ld %12.4f %12.4f %10.4f %10.4f %8.2f %10.2f\n", nvox, mean, sd, serr, t, hipct, lopct);
+
+	free_f3tensor (mask, 1, dim[2], 1, dim[1], 1, dim[0]);
+	free_f3tensor (img, 1, dim[2], 1, dim[1], 1, dim[0]);
+	return (OK);
+}
+@
+
+
+1.9
+log
+@remove free_imagefile at end
+@
+text
+@d1 1
+a1 1
+/* $Id: slcmean.c,v 1.8 2004/02/19 22:36:40 tom Exp $ */
+d3 3
+d38 1
+a38 1
+static char     rcsid[] = "$Id: slcmean.c,v 1.8 2004/02/19 22:36:40 tom Exp $";
+d163 1
+a163 1
+			serr = sd / sqrt(nvox);
+d186 1
+a186 1
+	fprintf (stdout, "    Voxels       Mean         SD          SE         T         %>2SD      %<2SD\n");
+@
+
+
+1.8
+log
+@Feb 2004
+@
+text
+@d1 1
+a1 1
+/* $Id: slcmean.c,v 1.7 2002/11/27 17:45:58 tom Exp tom $ */
+d3 3
+d35 1
+a35 1
+static char     rcsid[] = "$Id: slcmean.c,v 1.7 2002/11/27 17:45:58 tom Exp tom $";
+a188 1
+	free_imgfile (file);
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/* $Id: slcmean.c,v 1.6 2000/12/05 19:26:31 tom Exp tom $ */
+d3 3
+d30 1
+d32 1
+a32 1
+static char     rcsid[] = "$Id: slcmean.c,v 1.6 2000/12/05 19:26:31 tom Exp tom $";
+d46 1
+a68 1
+	indx.frm = 1;
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/* $Id: slcmean.c,v 1.5 2000/10/12 18:02:58 tom Exp tom $ */
+d3 3
+d28 1
+a28 1
+static char     rcsid[] = "$Id: slcmean.c,v 1.5 2000/10/12 18:02:58 tom Exp tom $";
+d178 1
+a178 1
+	fprintf (stdout, "%10d %12.4f %12.4f %10.4f %10.4f %8.2f %10.2f\n", nvox, mean, sd, serr, t, hipct, lopct);
+@
+
+
+1.5
+log
+@sd, se, t
+@
+text
+@d1 1
+a1 1
+/* $Id: slcmean.c,v 1.4 2000/10/12 15:29:39 tom Exp tom $ */
+d3 3
+d25 1
+a25 1
+static char     rcsid[] = "$Id: slcmean.c,v 1.4 2000/10/12 15:29:39 tom Exp tom $";
+d49 1
+d53 1
+a153 3
+	fprintf (stdout, "    Voxels       Mean         SD          SE         T\n");
+	fprintf (stdout, "    ------     --------    ---------   --------   --------\n");
+	fprintf (stdout, "%10d %12.4f %12.4f %10.4f %10.4f\n", nvox, mean, sd, serr, t);
+d155 22
+@
+
+
+1.4
+log
+@check for npixels
+@
+text
+@d1 1
+a1 1
+/* $Id: slcmean.c,v 1.3 2000/08/18 15:42:44 tom Exp tom $ */
+d3 3
+d22 1
+a22 1
+static char     rcsid[] = "$Id: slcmean.c,v 1.3 2000/08/18 15:42:44 tom Exp tom $";
+d27 1
+d45 2
+a46 3
+	double          sum;
+	double          mean;
+	long            npixels;
+d120 1
+d123 4
+a126 1
+	npixels = 0;
+d131 4
+a134 2
+					sum += img[pln][j][i];
+					npixels++;
+d139 13
+a151 4
+	if (npixels > 0)
+		mean = sum / npixels;
+	fprintf (stdout, "Mean   = %9.4f\n", mean);
+	fprintf (stdout, "Pixels = %9d\n", npixels);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/* $Id: slcmean.c,v 1.2 2000/08/18 15:23:40 tom Exp tom $ */
+d3 3
+d19 1
+a19 1
+static char     rcsid[] = "$Id: slcmean.c,v 1.2 2000/08/18 15:23:40 tom Exp tom $";
+d39 2
+a40 2
+	float        ***mask = NULL;
+	float        ***img = NULL;
+d118 1
+d130 2
+a131 1
+	mean = sum / npixels;
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/* $Id: slcmean.c,v 1.1 2000/08/18 15:04:52 tom Exp tom $ */
+d3 3
+d16 1
+a16 1
+static char     rcsid[] = "$Id: slcmean.c,v 1.1 2000/08/18 15:04:52 tom Exp tom $";
+d38 2
+a39 2
+	float           sum;
+	float           mean;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/* $Id$ */
+/* $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Id: slcmean.c,v 1.1 2000/08/17 19:05:28 tom Exp $";
+d124 2
+a125 1
+	fprintf (stdout, "Mean = %f    Pixels = %d\n", mean, npixels);
+@

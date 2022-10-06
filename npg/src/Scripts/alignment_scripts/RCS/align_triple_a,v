@@ -1,0 +1,177 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2005.01.25.18.31.06;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/bin/csh
+#   Module: align_triple
+#   Author: Tom Videen
+#   Date:   Jan 2005
+#   Use:    Align PET images (HO, OO, CO) 
+#	rcsid = $Id$
+
+if ($#argv != 4) then
+    echo "Usage:  align_triple ho oc oo mask"
+	echo " e.g.,  align_triple p5000ho1 p5000oc1 p5000oo1 p5000mask.v"
+    exit 1
+endif
+
+set HO  = $1
+set OC  = $2
+set OO  = $3
+set MASK = $4
+
+set OCHO = ${OC}_to_ho
+set OOHO = ${OO}_to_ho
+set LOG = Align_triple.log
+set THR   = 50
+set FIL  = _g3
+set HOf  = $HO$FIL
+set OCf  = $OC$FIL
+set OOf  = $OO$FIL
+set ROOT = $MASK:r
+set AMASK = a$ROOT
+set MASK2 = ${ROOT}b.v
+set AMASK2 = ${AMASK}b
+
+unalias cp
+unalias rm
+
+# Check existence of files:
+
+set EFILES = "$MASK $HO.v $OO.v $OC.v $HOf.v $OOf.v $OCf.v"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_triple]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit (1)
+
+# Check the pixel size in PET headers:
+
+set STATUS = 0
+set ORGSIZE = 0
+foreach i ($EFILES)
+	set PIXSIZE = `imghdr $i | grep 'Pixel size' | cut -f4 -d' '`
+	if ($ORGSIZE == 0) then
+		set ORGSIZE = $PIXSIZE
+		set ORGFILE = $i
+	else if ($PIXSIZE != $ORGSIZE) then
+		echo "ERROR [align_triple]: different pixel sizes:"
+		echo "  $ORGFILE = $ORGSIZE"
+		echo "  $i = $PIXSIZE"
+		set STATUS = 1
+	endif
+endif
+if ($STATUS != 0) exit (1)
+
+# Setup log file:
+
+set BINFILE = `which align_triple`
+set VER = `grep rcsid $BINFILE | cut -f2- -d: | cut -f1 -dE | head -1`
+echo "Align Triple:  " `whoami` `date` >! $LOG
+echo "Version: " $VER  >> $LOG
+echo ""                >> $LOG
+
+# Convert images to Analyze format:
+
+img2analyze $MASK $AMASK
+img2analyze $HOf.v a$HOf
+img2analyze $OOf.v a$OOf
+img2analyze $OCf.v a$OCf
+setanamin $AMASK 0
+setanamin a$HOf 0
+setanamin a$OOf 0
+
+# Align OO to HO, then reslice OO:
+
+echo "Aligning:  $OOf to $HOf"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK -x 1 -v"
+echo ">> alignlinear oo to ho" >> $LOG
+echo $PRM >> $LOG
+
+alignlinear a$HOf a$OOf $OOHO.air $PRM >! log
+tail -6 log | head -3 >> $LOG
+tail -1 log >> $LOG
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOG
+    exit 1
+endif
+imgreslice a$OOf $OOHO
+analyze2img ra$OOf r$OOf.v
+if (! -e null.air) alignlinear a$HOf a$HOf null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 $OOHO.air null.air $MASK >> $LOG
+echo " " >> $LOG
+
+# Combined resliced OOf with existing mask
+ 
+maskimg $MASK r$OOf.v $MASK2 10
+img2analyze $MASK2 $AMASK2
+setanamin $AMASK2 0
+
+# Align CO to resliced OO, then reslice CO:
+ 
+echo "Aligning:  $OCf to r$OOf"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK2 -x 1 -v"
+echo ">> alignlinear oc to oo" >> $LOG
+echo $PRM >> $LOG
+ 
+setanamin ra$OOf 0
+setanamin a$OCf 0
+alignlinear ra$OOf a$OCf $OCHO.air $PRM >! log
+tail -6 log | head -3 >> $LOG
+tail -1 log >> $LOG
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOG
+    exit 1
+endif
+imgreslice a$OCf $OCHO
+analyze2img ra$OCf r$OCf.v
+airdif1 $OCHO.air null.air $MASK >> $LOG
+
+img2analyze $OO.v a$OO
+imgreslice  a$OO  $OOHO
+analyze2img ra$OO r$OO.v
+
+img2analyze $OC.v a$OC
+imgreslice  a$OC  $OCHO
+analyze2img ra$OC r$OC.v
+
+cp $HO.v r$HO.v
+cp $HOf.v r$HOf.v
+
+rm $MASK2
+rm $AMASK2.img
+rm $AMASK2.ifh
+rm $AMASK2.hdr
+
+echo "Complete [align_triple] ========================="
+cat $LOG
+@

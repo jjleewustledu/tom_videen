@@ -1,0 +1,844 @@
+head	2.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.1
+date	2006.07.06.20.40.20;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2004.02.13.16.51.03;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2000.01.25.22.26.44;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.10.12.13.21.46;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.09.30.16.36.00;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.05.01.22.47.16;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.09.10.20.38.11;	author jane;	state Exp;
+branches;
+next	;
+
+
+desc
+@main source file for alignimg
+@
+
+
+2.1
+log
+@change thresholds t1 and t2 to integers for AIR 5.2
+@
+text
+@/* $Id: alignimg.c,v 2.0 2004/02/13 16:51:03 tom Exp $ */
+/* $Log: alignimg.c,v $
+ * Revision 2.0  2004/02/13  16:51:03  tom
+ * Feb 2004
+ *
+ * Revision 1.5  2000/01/25  22:26:44  tom
+ * add mask option
+ *
+ * Revision 1.4  1999/10/12  13:21:46  tom
+ * new libimgutil with updated arc path
+ *
+ * Revision 1.3  1998/09/30  16:36:00  tom
+ * add -u option for unidirection alignment to standard.
+ * add -r option for standard deviation of ratio image cost function.
+ * change default cost function to least squares.
+ *
+ * Revision 1.2  1998/05/01  22:47:16  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1996/09/10  20:38:11  jane
+ * Initial revision
+ * */
+
+/*  =========================================================================
+ *  File:        alignimg.c
+ *  Date:        4-Sept-96
+ *  Author:      Jane Dunford-Shore
+ *  Program:     alignimg (alignimg.c is compiled to alignimg.bin, which is
+ *               called by the shell script alignimg)
+ *  Description: Align all images in an imagelist to a specified standard.
+ *  Functions:   main()
+ *  Input parameters:
+ *		 1) imagelist file
+ *		 2) parameter file
+ *       3) scan number (-s option)
+ *  Local function calls:
+ *       getprms_alignimg()    # alignimg project dir.
+ *       readprm()             # libimgutil
+ *       readimglist()         # libimgutil
+ *       buildnames()          # libimgutil
+ *	History:
+ *		Modified 9/30/98 TOV
+ *			add -u option for unidirection alignment to standard.
+ *			add -r option for standard deviation of ratio image cost function.
+ *			change default cost function to least squares.
+ *  =========================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignimg/RCS/alignimg.c,v 2.0 2004/02/13 16:51:03 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <nrutil.h>
+#include <myvalues.h>
+#include <imgutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+
+{
+	int				getprms_alignimg ();
+	IMAGE_LIST_DATA *list;			 /* data extracted from imglist - for reslice files */
+	IMAGE_LIST_DATA std_data;		 /* data for standard image, AS IF extracted from
+									  * imglist */
+	char           *listname;		 /* filename of imglist */
+	int             listsize;		 /* number of lines in imglist */
+	PARAMETER_DATA  prm;			 /* parameter values from parameter file */
+	char           *prmname;		 /* parameter file name */
+	int             filtmode;		 /* filter mode */
+
+/* Reslice files */
+	char           *imgpath;		 /* full path for image files */
+	char           *imgname[2];		 /* image filenames - filtered format */
+	char           *origname[2];	 /* image filenames - unfiltered format */
+	char           *sxrname;		 /* sxr (skull x-ray) filename */
+	int             nfiles;			 /* number of scans in one line of imglist */
+
+/* Standard file */
+	char           *stdpath;		 /* full path for standard file */
+	char           *std_imgname[1];	 /* standard image filename - filtered format */
+	char           *std_origname[1]; /* standard image filename - unfiltered format */
+	char           *tmp_ptr;		 /* placeholder - corresponds to sxrname */
+	int             tmp_int;		 /* placeholder - corresponds to nfiles */
+
+	char           *dtype;			 /* data type (for archive paths to files) */
+									 /* - e.g., "961_sta_fb_ramp" */
+	char            airfile[MAXPATH]; /* name of AIR file */
+	char            command[MAXPATH]; /* complete command ("alignlinear ....") */
+
+/* Miscellaneous */
+	int             i, j;			 /* counters */
+	char           *std;			 /* scan no. of standard image to align to */
+	char           *uni;			 /* 1 = bidirectional; 0 = unidirectional alignment */
+	char           *fit;			 /* 1 = ratio; 2 = least squares */
+	char           *mask;			 /* mask for alignment */
+	float           t1 = -1.0;		 /* threshold1 - for standard image */
+	float           t2 = -1.0;		 /* threshold2 - for reslice image */
+	int             tt1, tt2;		 /* integer versions for AIR 5.2	*/
+	int             imagesexist;	 /* whether or not necessary images are present */
+	int             airexists;		 /* whether or not AIR file is already present */
+
+/*
+ *  Get command-line arguments
+ *  Note: "-s" has already been removed by preceding shellscript "alignimg"
+ */
+	if (argc < 6 || argc > 7) {
+		fprintf (stderr, "Usage: alignimg prm imagelist -s<num> [-u] [-r] [-m mask]\n");
+		return (ERROR);
+	}
+
+	prmname = argv[1];			 /* parameter filename */
+	listname = argv[2];			 /* imglist filename */
+	std = argv[3];				 /* scan no. of standard to align to */
+	uni = argv[4];				 /* value for -p2 in alignlinear */
+	fit = argv[5];				 /* value for -x in alignlinear */
+	if (argc == 7)
+		mask = argv[6];			 /* mask */
+	else
+		mask = "";
+
+/*
+ * Initialize pointers
+ */
+
+	for (i = 0; i < 2; i++) {
+		imgname[i] = (char *) malloc (MAXPATH);
+		origname[i] = (char *) malloc (MAXPATH);
+	}
+	std_imgname[0] = (char *) malloc (MAXPATH);
+	std_origname[0] = (char *) malloc (MAXPATH);
+	dtype = (char *) malloc (MAXPATH);
+	tmp_ptr = (char *) malloc (MAXPATH);
+	sxrname = (char *) malloc (MAXPATH);
+
+/*
+ *  Read parameter file
+ */
+	if (readprm (prmname, &prm) == ERROR) {
+		fprintf (stderr, "ERROR [alignimg]: reading parameters from %s\n", prmname);
+		return (ERROR);
+	}
+/*
+ *  Read program-specific parameters
+ */
+	if (getprms_alignimg (prmname, &t1, &t2) == ERROR) {
+		fprintf (stderr, "ERROR [alignimg]: reading parameter file %s\n", prmname);
+		return (ERROR);
+	}
+	tt1 = (int) t1;
+	tt2 = (int) t2;
+
+/*
+ *  Read imglist into IMAGE_LIST_DATA structure
+ */
+	list = (IMAGE_LIST_DATA *) malloc (sizeof (IMAGE_LIST_DATA) * MAX_IMAGE_LIST_SIZE);
+	if (readimglist (listname, list, &listsize) == ERROR) {
+		fprintf (stderr, "ERROR [alignimg]: reading imagelist %s\n", listname);
+		return (ERROR);
+	}
+/*
+ *  Align each image in imglist to specified standard image
+ *  Process one line of imglist at a time
+ */
+	for (i = 0; i < listsize; i++) {
+		imagesexist = 1;
+		airexists = 0;
+
+/*
+ * Build names of scans in this line of image list. Build names for both filtered
+ * (post-reconstruction) and unfiltered versions, but use the unfiltered version
+ * only if a filtered version is not found.
+ *
+ * Note: Variable "filtmode" determines which value from the parameter file is used to
+ * build the filter portion of the filename - either the "imgfilter" or "recfilter"
+ * value. The recfilter value is not actually inserted, however - no filter name
+ * appears. For example: p5093ho2_5b5.img would be an imgfilter filename, and the
+ * corresponding recfilter filename would be p5093ho2.img.
+ */
+		filtmode = IMGFILTER_MODE;
+		if (buildnames (prm, list[i], filtmode, &nfiles, imgname, sxrname) == ERROR) {
+			fprintf (stderr, "ERROR [alignimg]: building filenames from %s %s %f %s %f %s\n",
+				 list[i].subject_id, list[i].scanset1_id, list[i].mean1,
+				 list[i].scanset2_id, list[i].mean2, list[i].sxrid);
+		}
+		filtmode = RECFILTER_MODE;
+		if (buildnames (prm, list[i], filtmode, &nfiles, origname, sxrname) == ERROR) {
+			fprintf (stderr, "ERROR [alignimg]: building filenames from %s %s %f %s %f %s\n",
+				 list[i].subject_id, list[i].scanset1_id, list[i].mean1,
+				 list[i].scanset2_id, list[i].mean2, list[i].sxrid);
+		}
+/*
+ * Build name of standard scan. Only scan no. is specified, so need to get other
+ * filename info. from image list line already parsed.
+ */
+		(void) strcpy (std_data.subject_id, list[i].subject_id);
+		(void) strcpy (std_data.scanset1_id, std);
+		filtmode = IMGFILTER_MODE;
+		if (buildnames (prm, std_data, filtmode, &tmp_int, std_imgname, tmp_ptr) == ERROR) {
+			fprintf (stderr, "ERROR [alignimg]: building filenames from %s %s %f %s %f %s\n",
+				 std_data.subject_id, std_data.scanset1_id, std_data.mean1,
+				 std_data.scanset2_id, std_data.mean2, std_data.sxrid);
+		}
+		filtmode = RECFILTER_MODE;
+		if (buildnames (prm, std_data, filtmode, &tmp_int, std_origname, tmp_ptr) == ERROR) {
+			fprintf (stderr, "ERROR [alignimg]: building filenames from %s %s %f %s %f %s\n",
+				 std_data.subject_id, std_data.scanset1_id, std_data.mean1,
+				 std_data.scanset2_id, std_data.mean2, std_data.sxrid);
+		}
+/* Get complete paths to files -- e.g., "963_sta_fb_ramp" */
+
+		(void) sprintf (dtype, "%s_%s_%s_%s", prm.scanner, prm.acquisition, prm.reconstruction, prm.recfilter);
+		fprintf (stdout, "-----------------\n");	/* visual separator */
+
+/* Check for specified standard file */
+
+		stdpath = getpath (std_imgname[0], dtype, prm);
+		if (strcmp (stdpath, "") == 0) {
+			stdpath = getpath (std_origname[0], dtype, prm);
+			if (strcmp (stdpath, "") == 0) {
+				fprintf (stderr, "ERROR [alignimg]: Cannot find %s\n", std_origname[0]);
+				imagesexist = 0;
+			}
+		}
+/* Align each scan for this line of image list */
+
+		for (j = 0; j < nfiles && imagesexist; j++) {
+			airexists = 0;
+
+			/* Check for scan to be aligned to standard          */
+			/* First check for filtered version                  */
+			/* If it doesn't exist, check for unfiltered version */
+
+			imgpath = getpath (imgname[j], dtype, prm);
+			if (strcmp (imgpath, "") == 0) {
+				imgpath = getpath (origname[j], dtype, prm);
+				if (strcmp (imgpath, "") == 0) {
+					fprintf (stderr, "ERROR [alignimg]: Cannot find %s\n", origname[j]);
+					imagesexist = 0;
+				}
+			}
+			/* Build airfile name - e.g., "p5093ho1_5b5.air" */
+
+			if (j == 0) {		 /* first scan no. on this line of imglist */
+				(void) sprintf (airfile, "%s%s%s%s.air", prm.species, list[i].subject_id, prm.tracer, list[i].scanset1_id);
+			} else {		 /* second scan no. on this line of imglist */
+				(void) sprintf (airfile, "%s%s%s%s.air", prm.species, list[i].subject_id, prm.tracer, list[i].scanset2_id);
+			}
+
+			/* Check to see if AIR file already exists for this reslice image */
+
+			airexists = 0;
+			if (fopen (airfile, "r") != NULL) {
+				fprintf (stderr, "ERROR [alignimg]: AIR file %s already exists\n", airfile);
+				airexists = 1;
+			}
+			if (imagesexist && !airexists) {
+				fprintf (stdout, "Threshold1 = %d  Threshold2 = %d\n", tt1, tt2);
+				if (strlen(mask) > 0) 
+					(void) sprintf (command, "alignlinear %s %s %s -m 6 -t1 %d -t2 %d -p1 1 -p2 %s -e1 %s -e2 %s -x %s",
+						stdpath, imgpath, airfile, tt1, tt2, uni, mask, mask, fit);
+				else
+					(void) sprintf (command, "alignlinear %s %s %s -m 6 -t1 %d -t2 %d -p1 1 -p2 %s -x %s",
+						stdpath, imgpath, airfile, tt1, tt2, uni, fit);
+				fprintf (stdout, "%s\n", command);
+				fprintf (stdout, "(aligning %s and %s)\n", stdpath, imgpath);
+				if (system (command) != 0) {
+					fprintf (stderr, "ERROR [alignimg]: Could not align %s\n", imgpath);
+					return (ERROR);
+				}
+			}
+		}
+	}
+
+	free (list);
+	free (dtype);
+	for (i = 0; i < 2; i++) {
+		free (imgname[i]);
+		free (origname[i]);
+	}
+	free (sxrname);
+	free (std_imgname[0]);
+	free (std_origname[0]);
+	free (tmp_ptr);
+	return (OK);
+}
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@d1 1
+a1 1
+/* $Id: alignimg.c,v 1.5 2000/01/25 22:26:44 tom Exp tom $ */
+d3 3
+d50 1
+a50 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignimg/RCS/alignimg.c,v 1.5 2000/01/25 22:26:44 tom Exp tom $";
+d102 1
+d153 2
+d261 1
+a261 1
+				fprintf (stdout, "Threshold1 = %f  Threshold2 = %f\n", t1, t2);
+d263 2
+a264 2
+					(void) sprintf (command, "alignlinear %s %s %s -m 6 -t1 %f -t2 %f -p1 1 -p2 %s -e1 %s -e2 %s -x %s",
+						stdpath, imgpath, airfile, t1, t2, uni, mask, mask, fit);
+d266 2
+a267 2
+					(void) sprintf (command, "alignlinear %s %s %s -m 6 -t1 %f -t2 %f -p1 1 -p2 %s -x %s",
+						stdpath, imgpath, airfile, t1, t2, uni, fit);
+@
+
+
+1.5
+log
+@add mask option
+@
+text
+@d1 1
+a1 1
+/* $Id: alignimg.c,v 1.4 1999/10/12 13:21:46 tom Exp tom $ */
+d3 3
+d45 1
+d47 1
+a47 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignimg/RCS/alignimg.c,v 1.4 1999/10/12 13:21:46 tom Exp tom $";
+d193 2
+a194 2
+		strcpy (std_data.subject_id, list[i].subject_id);
+		strcpy (std_data.scanset1_id, std);
+d209 1
+a209 1
+		sprintf (dtype, "%s_%s_%s_%s", prm.scanner, prm.acquisition, prm.reconstruction, prm.recfilter);
+d242 1
+a242 1
+				sprintf (airfile, "%s%s%s%s.air", prm.species, list[i].subject_id, prm.tracer, list[i].scanset1_id);
+d244 1
+a244 1
+				sprintf (airfile, "%s%s%s%s.air", prm.species, list[i].subject_id, prm.tracer, list[i].scanset2_id);
+d257 1
+a257 1
+					sprintf (command, "alignlinear %s %s %s -m 6 -t1 %f -t2 %f -p1 1 -p2 %s -e1 %s -e2 %s -x %s",
+d260 1
+a260 1
+					sprintf (command, "alignlinear %s %s %s -m 6 -t1 %f -t2 %f -p1 1 -p2 %s -x %s",
+@
+
+
+1.4
+log
+@new libimgutil with updated arc path
+@
+text
+@d1 1
+a1 1
+/* $Id: alignimg.c,v 1.3 1998/09/30 16:36:00 tom Exp tom $ */
+d3 3
+d36 1
+a36 1
+ *		Modified 9/30/98 TOV 
+a41 1
+
+d43 1
+a43 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignimg/RCS/alignimg.c,v 1.3 1998/09/30 16:36:00 tom Exp tom $";
+d47 1
+d56 1
+d58 1
+a58 5
+/* ------------------ *
+ * Begin declarations *
+ * ------------------ */
+
+/* Imglist file */
+d60 2
+a61 1
+	IMAGE_LIST_DATA std_data;		 /* data for standard image, AS IF extracted from imglist */
+a63 2
+
+/* Parameter file */
+a65 2
+
+/* Filenames */
+a81 1
+/* Archive path */
+d84 2
+a86 9
+/* AIR file */
+	char            airfile[MAXPATH];/* name of AIR file */
+	char           *period_pos;		 /* location of period in image filename */
+	int             len;			 /* length of image filename before last period */
+
+/* Text of command */
+	char            cbuffer[MAXFNAME];	 /* temporary buffer for building command */
+	char            command[MAXPATH];	 /* complete command ("alignlinear ....") */
+
+d92 1
+a94 1
+	char            tmp[10];		 /* temporary buffer */
+a96 1
+	FILE           *fp;			 	 /* AIR file, if it exists */
+a97 4
+/* ---------------- *
+ * End declarations *
+ * ---------------- */
+
+d102 5
+d112 4
+d135 1
+a135 1
+		fprintf (stderr, "ERROR [alignimg]: reading parameters from %s\n, prmname");
+d141 4
+a144 1
+	getprms_alignimg (prmname, &t1, &t2);
+d246 1
+a246 1
+			if ((fp = fopen (airfile, "r")) != NULL) {
+d252 6
+a257 1
+				sprintf (command, "alignlinear %s %s %s -m 6 -t1 %f -t2 %f -p1 1 -p2 %s -x %s", stdpath, imgpath, airfile, t1, t2, uni, fit);
+a267 2
+/* Free malloc'd space */
+
+d275 2
+a276 2
+	free (std_imgname);
+	free (std_origname);
+@
+
+
+1.3
+log
+@add -u option for unidirection alignment to standard.
+add -r option for standard deviation of ratio image cost function.
+change default cost function to least squares.
+@
+text
+@d1 1
+a1 1
+/* $Id: alignimg.c,v 1.2 1998/05/01 22:47:16 tom Exp tom $ */
+d3 5
+d41 1
+a41 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignimg/RCS/alignimg.c,v 1.2 1998/05/01 22:47:16 tom Exp tom $";
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/* $Id: alignimg.c,v 1.1 1996/09/10 20:38:11 jane Exp tom $ */
+d3 3
+d21 1
+a21 1
+ *               3) scan number (-s option)
+d23 9
+a31 4
+ *               getprms_alignimg()    # alignimg project dir.
+ *               readprm()             # libimgutil
+ *               readimglist()         # libimgutil
+ *               buildnames()          # libimgutil
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignimg/RCS/alignimg.c,v 1.1 1996/09/10 20:38:11 jane Exp tom $";
+d55 1
+a55 2
+	IMAGE_LIST_DATA std_data;		 /* data for standard image, AS IF extracted from
+						  * imglist */
+d69 1
+a69 1
+	char           *origname[2];		 /* image filenames - unfiltered format */
+d75 2
+a76 2
+	char           *std_imgname[1];		 /* standard image filename - filtered format */
+	char           *std_origname[1];	 /* standard image filename - unfiltered format */
+d82 1
+a82 1
+	/* - e.g., "961_sta_fb_ramp" */
+d85 1
+a85 1
+	char            airfile[MAXPATH];	 /* name of AIR file */
+d96 2
+d101 1
+a101 1
+	int             imagesexist;		 /* whether or not necessary images are present */
+d103 1
+a103 1
+	FILE           *fp;			 /* AIR file, if it exists */
+d116 2
+a157 1
+
+d165 1
+a165 1
+ * 
+a183 1
+
+a201 1
+
+a216 1
+
+d222 3
+a224 3
+	/* Check for scan to be aligned to standard          */
+	/* First check for filtered version                  */
+	/* If it doesn't exist, check for unfiltered version */
+d234 1
+a235 2
+	/* Build airfile name - e.g., "p5093ho1_5b5.air" */
+
+d242 1
+a242 1
+	/* Check to see if AIR file already exists for this reslice image */
+d251 1
+a251 1
+				sprintf (command, "alignlinear %s %s %s -m 6 -t1 %f -t2 %f -p1 1 -p2 1 -x 1 -s 81 1 3 -r 25 -h 5 -c .00001", stdpath, imgpath, airfile, t1, t2);
+d259 2
+a260 2
+		}				 /* end inner for loop */
+	}					 /* end outer for loop */
+a265 1
+
+a270 1
+
+a273 1
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/* $Id$ */
+/* $Log$ */
+d11 1
+a11 1
+ *  Program:     alignimg (alignimg.c is compiled to alignimg.bin, which is 
+d28 1
+a28 1
+static char     rcsid[] = "$Header$";
+d35 1
+a35 1
+#include <imgutil.h> 
+d38 2
+a39 2
+    int   argc;
+    char *argv[];
+d45 6
+a50 5
+ /* Imglist file */
+    IMAGE_LIST_DATA *list;		/* data extracted from imglist - for reslice files */
+    IMAGE_LIST_DATA  std_data;		/* data for standard image, AS IF extracted from imglist */
+    char  *listname;			/* filename of imglist */
+    int    listsize;			/* number of lines in imglist */
+d52 3
+a54 3
+ /* Parameter file */
+    PARAMETER_DATA   prm;		/* parameter values from parameter file */
+    char            *prmname;		/* parameter file name */
+d56 2
+a57 9
+ /* Filenames */
+    int    filtmode;			/* filter mode */
+   
+    /* Reslice files */
+    char  *imgpath;			/* full path for image files */
+    char  *imgname[2];	        	/* image filenames - filtered format */
+    char  *origname[2];         	/* image filenames - unfiltered format */
+    char  *sxrname;              	/* sxr (skull x-ray) filename */
+    int    nfiles;			/* number of scans in one line of imglist */
+d59 6
+a64 6
+    /* Standard file */
+    char  *stdpath;			/* full path for standard file */
+    char  *std_imgname[1];	        /* standard image filename - filtered format */
+    char  *std_origname[1];	        /* standard image filename - unfiltered format */
+    char  *tmp_ptr;     		/* placeholder - corresponds to sxrname */
+    int    tmp_int;                     /* placeholder - corresponds to nfiles */
+d66 6
+a71 8
+    /* Archive path */
+    char  *dtype;                	/* data type (for archive paths to files) */
+					/* - e.g., "961_sta_fb_ramp" */
+  
+    /* AIR file */
+    char   airfile[MAXPATH];		/* name of AIR file */
+    char  *period_pos;			/* location of period in image filename */
+    int    len;				/* length of image filename before last period */
+d73 3
+a75 3
+ /* Text of command */ 
+    char   cbuffer[MAXFNAME];		/* temporary buffer for building command */
+    char   command[MAXPATH];		/* complete command ("alignlinear ....") */
+d77 19
+a95 10
+ /* Miscellaneous */
+    int     i, j;			/* counters */
+    char   *std;			/* scan no. of standard image to align to */
+    float   t1 = -1.0;			/* threshold1 - for standard image */
+    float   t2 = -1.0;			/* threshold2 - for reslice image */
+    char    tmp[10];			/* temporary buffer */
+    int     imagesexist;		/* whether or not necessary images are present */
+    int     airexists;			/* whether or not AIR file is already present */
+    FILE   *fp;				/* AIR file, if it exists */
+						 
+d104 3
+a106 3
+    prmname =  argv[1];   /* parameter filename */
+    listname = argv[2];   /* imglist filename */
+    std =      argv[3];   /* scan no. of standard to align to */
+a110 10
+    
+    for (i = 0; i < 2; i++) {
+        imgname[i] = (char *)malloc(MAXPATH);
+        origname[i] = (char *)malloc(MAXPATH);
+    }
+    std_imgname[0] = (char *)malloc(MAXPATH);
+    std_origname[0] = (char *)malloc(MAXPATH);
+    dtype = (char *)malloc(MAXPATH);
+    tmp_ptr = (char *)malloc(MAXPATH);
+    sxrname = (char *)malloc(MAXPATH);
+d112 10
+d125 4
+a128 5
+    if (readprm(prmname, &prm) == ERROR) {
+        fprintf(stderr, "ERROR [alignimg]: reading parameters from %s\n, prmname");
+	return(ERROR);
+    }
+
+d132 1
+a132 1
+    getprms_alignimg(prmname, &t1, &t2); 
+d137 5
+a141 6
+    list = (IMAGE_LIST_DATA *)malloc(sizeof(IMAGE_LIST_DATA)*MAX_IMAGE_LIST_SIZE);
+    if (readimglist(listname, list, &listsize) == ERROR) {
+	fprintf(stderr, "ERROR [alignimg]: reading imagelist %s\n", listname);
+      	return(ERROR);
+    }
+
+d146 19
+a164 21
+    for (i = 0; i < listsize; i++) { 
+     
+        imagesexist = 1;
+        airexists = 0;
+ 
+     /*  
+      * Build names of scans in this line of image list.
+      * Build names for both filtered (post-reconstruction) and unfiltered
+      * versions, but use the unfiltered version only if a filtered version
+      * is not found.
+      * 
+      * Note: Variable "filtmode" determines which value from the parameter file
+      * is used to build the filter portion of the filename - either the
+      * "imgfilter" or "recfilter" value. The recfilter value is not actually
+      * inserted, however - no filter name appears. For example: p5093ho2_5b5.img
+      * would be an imgfilter filename, and the corresponding recfilter filename 
+      * would be p5093ho2.img.
+      */
+	filtmode = IMGFILTER_MODE;
+	if (buildnames(prm, list[i], filtmode, &nfiles, imgname, sxrname) == ERROR) {
+	    fprintf(stderr, "ERROR [alignimg]: building filenames from %s %s %f %s %f %s\n",
+d167 4
+a170 4
+	}
+     	filtmode = RECFILTER_MODE;
+	if (buildnames (prm, list[i], filtmode, &nfiles, origname, sxrname) == ERROR) {
+	    fprintf (stderr, "ERROR [alignimg]: building filenames from %s %s %f %s %f %s\n",
+d173 1
+a173 1
+	}
+d175 9
+a183 9
+     /* 
+      * Build name of standard scan. Only scan no. is specified, so need to get
+      * other filename info. from image list line already parsed.  
+      */
+        strcpy(std_data.subject_id, list[i].subject_id);
+        strcpy(std_data.scanset1_id, std);
+	filtmode = IMGFILTER_MODE;
+        if (buildnames(prm, std_data, filtmode, &tmp_int, std_imgname, tmp_ptr) == ERROR) {
+	    fprintf(stderr, "ERROR [alignimg]: building filenames from %s %s %f %s %f %s\n",
+d186 4
+a189 4
+	}
+        filtmode = RECFILTER_MODE;
+        if (buildnames(prm, std_data, filtmode, &tmp_int, std_origname, tmp_ptr) == ERROR) {
+	    fprintf(stderr, "ERROR [alignimg]: building filenames from %s %s %f %s %f %s\n",
+d192 1
+a192 1
+	}
+d194 1
+a194 3
+     /* Get complete paths to files -- e.g., "963_sta_fb_ramp" */
+        sprintf(dtype, "%s_%s_%s_%s", prm.scanner, prm.acquisition, prm.reconstruction, prm.recfilter);
+	fprintf(stdout, "-----------------\n");   /* visual separator */
+d196 2
+a197 9
+     /* Check for specified standard file */
+        stdpath = getpath(std_imgname[0], dtype, prm);
+	if (strcmp(stdpath, "") == 0) {
+            stdpath = getpath(std_origname[0], dtype, prm);
+            if (strcmp(stdpath, "") == 0) {
+                fprintf(stderr, "ERROR [alignimg]: Cannot find %s\n", std_origname[0]);
+                imagesexist = 0;
+            }
+        }
+d199 1
+a199 4
+     /* Align each scan for this line of image list */	
+	for (j = 0; j < nfiles && imagesexist; j++) { 
+       
+            airexists = 0;
+d201 8
+a208 26
+	 /* Check for scan to be aligned to standard          */
+	 /* First check for filtered version                  */
+	 /* If it doesn't exist, check for unfiltered version */ 
+	    imgpath = getpath(imgname[j], dtype, prm);
+	    if (strcmp(imgpath, "") == 0) {
+                imgpath = getpath(origname[j], dtype, prm);
+                if (strcmp(imgpath, "") == 0) {
+                    fprintf(stderr, "ERROR [alignimg]: Cannot find %s\n", origname[j]);
+                    imagesexist = 0;
+                }
+            }
+	    
+         /* Build airfile name - e.g., "p5093ho1_5b5.air" */
+            if (j == 0) {  /* first scan no. on this line of imglist */
+                sprintf(airfile, "%s%s%s%s.air", prm.species, list[i].subject_id, prm.tracer, list[i].scanset1_id);
+            }
+            else {         /* second scan no. on this line of imglist */
+                sprintf(airfile, "%s%s%s%s.air", prm.species, list[i].subject_id, prm.tracer, list[i].scanset2_id);
+            }
+ 
+	 /* Check to see if AIR file already exists for this reslice image */
+            airexists = 0;
+            if ((fp = fopen(airfile, "r")) != NULL) {
+                fprintf(stderr, "ERROR [alignimg]: AIR file %s already exists\n", airfile);
+                airexists = 1;
+            }
+d210 1
+a210 12
+            if (imagesexist && !airexists) {  
+                fprintf(stdout, "Threshold1 = %f  Threshold2 = %f\n", t1, t2);  
+                sprintf(command, "alignlinear %s %s %s -m 6 -t1 %f -t2 %f -p1 1 -p2 1 -x 1 -s 81 1 3 -r 25 -h 5 -c .00001", stdpath, imgpath, airfile, t1, t2);
+                fprintf(stdout, "%s\n", command);
+                fprintf(stdout, "(aligning %s and %s)\n", stdpath, imgpath);
+		if (system(command) != 0) {
+		    fprintf(stderr, "ERROR [alignimg]: Could not align %s\n", imgpath);
+		    return(ERROR);
+                } 
+	    }    
+        }   /* end inner for loop */
+    }   /* end outer for loop */
+d212 2
+a213 3
+ /* Free malloc'd space */
+    free(list);
+    free(dtype);
+d215 3
+a217 5
+    for (i = 0; i < 2; i++) {
+        free(imgname[i]);
+        free(origname[i]);
+    }
+    free(sxrname);
+d219 8
+a226 3
+    free(std_imgname);
+    free(std_origname);
+    free(tmp_ptr);
+d228 44
+a271 1
+    return(OK);
+@

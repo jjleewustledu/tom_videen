@@ -1,0 +1,174 @@
+/* $Log$ */
+/*
+ * ===============================================================================
+ *  Module:         makeprmlst
+ *  Date:           Aug-96
+ *  Author:         Tom Videen
+ *  Description:
+ *		Create an abbreviated parameter file and image list which will
+ *		permit t88mean to compute the scalers from the named image file.
+ * ===============================================================================
+ */
+static char     rcsid[] = "$Header$";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <image.h>
+#include <libimage.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	PARAMETER_DATA  prm;			 /* processing parameters */
+	ImageFile      *file;
+    MainHeader     *mh;
+    SubHeader      *sh;
+    Image_subheader7 *sh7;
+    Image_subheader *sh6;
+    PETT6HDR       *p6h;
+
+	Index           indx;
+	FILE           *fp;
+	char            sbuffer[MAXNAME];
+	char            sbuffer1[MAXNAME];
+	int             i;
+
+	char           *imgfile;
+	char           *lstfile;
+	char           *prmfile;
+
+	imgfile = argv[1];
+	prmfile = argv[2];
+	lstfile = argv[3];
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+    file = make_imgfile (fname);
+    if (open_imgfile (file) == ERROR) {
+        fprintf (stderr, "ERROR [makeprmlst]: Could not open %s\n", fname);
+        return (ERROR);
+    }
+    if (get_mh(file) == ERROR) {
+        fprintf (stderr, "ERROR [makeprmlst]: Could not get MainHeader from %s\n", fname);
+        return (ERROR);
+    }
+    if (existimgfrm (file, &indx) == ERROR) {
+        if (frm == 1) {
+            indx.frm = 2;
+            if (existimgfrm (file, &indx) == ERROR) {
+                fprintf (stderr, "ERROR [makeprmlst]: cannot find %s frame 1 or 2\n", file);
+                return (ERROR);
+            }
+        } else {
+            fprintf (stderr, "ERROR [makeprmlst]: cannot find %s frame %d\n",
+                 file, frm);
+            return (ERROR);
+        }
+    }
+    if (get_sh (file, &indx) == ERROR) {
+        fprintf (stderr, "ERROR [makeprmlst]: Could not read file subheader in %s\n", file);
+        return (ERROR);
+    }
+
+    mh = file->mh;
+    sh = file->sh;
+
+	fp = fopen (prmfile, "w");
+	if (fp == (FILE *) NULL) {
+		fprintf (stderr, "Error in opening file %s\n", prmfile);
+		return (ERROR);
+	}
+	fprintf (fp, "# Created by makeprmlst\n\n");
+	fprintf (fp, "category:       individual\n");
+	fprintf (fp, "datatype:       pet_image\n");
+	fprintf (fp, "smg_compute:    no\n");
+
+	fprintf (fp, "species:        %s\n", species);
+	fprintf (fp, "tracer:         %s\n", tracer);
+	fprintf (fp, "extension:      %s\n", s);
+
+    if (mh->scanner_type == 6) {
+    	p6h = file->p6;
+		fprintf (fp, "scanner:        pett6\n");
+    	if (strcmp (mh->acquisition, "low") == 0) {
+			fprintf (fp, "acquisition:    low_resolution\n");
+			fprintf (fp, "recfilter:      filterg\n");
+		} else {
+			fprintf (fp, "acquisition:    high_resolution\n");
+			fprintf (fp, "recfilter:      filterf\n");
+		}
+    	if (p6h->file_type == 1000)
+			fprintf (fp, "reconstruction: filtered_backprojection_old\n");
+    	else if (p6h->file_type == 1010 || p6h->file_type == 1020)
+			fprintf (fp, "reconstruction: filtered_backprojection\n");
+        	mh->sw_version = VERSION_NEW;
+    	else if (p6h->file_type == 2000)
+			fprintf (fp, "reconstruction: maximum_likelihood\n");
+        	mh->sw_version = VERSION_ML;
+    	else if (p6h->file_type == 2010)
+			fprintf (fp, "reconstruction: filtered_backprojection_Dave_Politte\n");
+        	mh->sw_version = VERSION_DGP;
+    	else
+			fprintf (fp, "reconstruction: filtered_backprojection\n");
+		fprintf (fp, "imgfilter:      none\n");
+ 
+    } else if (mh->scanner_type == 953) {
+		fprintf (fp, "scanner:        953\n");
+        if (mh->wobble_speed > 0)
+			fprintf (fp, "acquisition:    sta\n");
+        else
+			fprintf (fp, "acquisition:    wob\n");
+		fprintf (fp, "reconstruction: filtered_backprojection\n");
+		fprintf (fp, "reconstruction: 3d_filtered_backprojection\n");
+		fprintf (fp, "recfilter:      ramp\n");
+    	if (abs (sh6->filter_code - 100) == 1) 
+			fprintf (fp, "imgfilter:      gauss %f\n");
+    	else if (abs (sh6->filter_code - 200) == 1)
+			fprintf (fp, "imgfilter:      butterworth %f %d\n");
+		else
+			fprintf (fp, "imgfilter:      none\n");
+
+    } else if (mh->scanner_type == 961) {
+	    sh7 = file->m7->sh;
+
+		fprintf (fp, "scanner:        961\n");
+        if (mh->wobble_speed > 0)
+			fprintf (fp, "acquisition:    sta\n");
+        else
+			fprintf (fp, "acquisition:    3d\n");
+		fprintf (fp, "reconstruction: filtered_backprojection\n");
+		fprintf (fp, "recfilter:      ramp\n");
+    	if (sh7->filter_code == 101)
+			fprintf (fp, "imgfilter:      gauss %f\n");
+    	if (sh7->filter_code == 201)
+			fprintf (fp, "imgfilter:      butterworth %f %d\n");
+		else
+			fprintf (fp, "imgfilter:      none\n");
+	}
+
+	if (prm.imgfilter_type == FILTER_GAUSS)
+		sprintf (sbuffer, "gauss %.1f", prm.imgfilter_cutoff);
+	else if (prm.imgfilter_type == FILTER_BUTTERWORTH)
+		sprintf (sbuffer, "butterworth %.1f %d", prm.imgfilter_cutoff,
+			 prm.imgfilter_order);
+	else
+		strcpy (sbuffer, "none");
+	fclose (fp);
+
+	fp = fopen (list_filename, "w");
+	if (fp == (FILE *) NULL) {
+		fprintf (stderr, "Error in opening %s&n", list_filename);
+		return (ERROR);
+	}
+	fprintf (fp, "%s %s %s\n", subject_id, scanset1_id, sxrid);
+	fclose (fp);
+
+	exit (0);
+}

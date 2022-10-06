@@ -1,0 +1,484 @@
+head	2.30;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.30
+date	2010.08.05.14.13.29;	author tom;	state Exp;
+branches;
+next	2.29;
+
+2.29
+date	2005.10.06.17.05.07;	author tom;	state Exp;
+branches;
+next	2.28;
+
+2.28
+date	2005.08.08.16.29.32;	author tom;	state Exp;
+branches;
+next	2.25;
+
+2.25
+date	2004.11.03.14.28.30;	author tom;	state Exp;
+branches;
+next	2.24;
+
+2.24
+date	2004.11.02.16.40.33;	author tom;	state Exp;
+branches;
+next	2.21;
+
+2.21
+date	2004.07.08.14.39.29;	author tom;	state Exp;
+branches;
+next	2.20;
+
+2.20
+date	2004.02.17.15.09.00;	author tom;	state Exp;
+branches;
+next	2.6;
+
+2.6
+date	99.12.16.17.05.19;	author tom;	state Exp;
+branches;
+next	2.5;
+
+2.5
+date	96.04.25.16.09.08;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	93.07.15.20.00.39;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.10.28.15.55.00;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Original Unix release
+@
+
+
+2.30
+log
+@update to recognize 962
+@
+text
+@c $Log: writehd1.f,v $
+c Revision 2.29  2005/10/06  17:05:07  tom
+c use PID instead of scandate for determining PIE
+c
+c Revision 2.28  2005/08/08  16:29:32  tom
+c add pie Aug 2005
+c
+c Revision 2.25  2004/11/03  14:28:30  tom
+c add getpie_961
+c
+c Revision 2.24  2004/11/02  16:40:33  tom
+c set 961 pies based on scandate, acquisition, software
+c
+c Revision 2.21  2004/07/08  14:39:29  tom
+c update getpie for 961
+c
+c Revision 2.20  2004/02/17  15:09:00  tom
+c Feb 2004
+c
+c Revision 2.6  1999/12/16  17:05:19  tom
+c fix date
+c
+c Revision 2.5  1996/04/25  16:09:08  tom
+c release Apr-96
+c
+c Revision 2.0  1993/07/15  20:00:39  tom
+c Modified to read ECAT files and adjust PIE
+c
+c Revision 1.1  1992/10/28  15:55:00  tom
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   WRITEHD1.FTN
+C  Author:       Tom O. Videen
+C  Date:         15-Jun-87
+C  Written for:  PETPROC
+C  Intent:
+C     This subroutine writes creates an .HDR file with metabolic
+C     constants.  See HDRFORM for values in this file.
+C
+C  History:
+C     Based on WRITEHDR.FTN for METPROC.
+C     Modified 10-Oct-88 by TOV to move check for existence of HDF file
+C        from this subroutine to PETAFILE.
+C     Modified 27-Mar-89 by TOV to write PIESLOPE and EFACTOR to HDR file.
+C
+C     Modified for Unix 23-Oct-92 TOV
+C		Added ieee2pe conversion of all output REALs
+C		Added RCSHEADER and Log
+C
+C  Variables:
+C     OUT = array used to write HDR files;
+C     HEAD* = values equivalenced with elements in OUT array header;
+C
+C  Note: HEAD21 and 32 get non-decay-corrected PETT conversion factor;
+C        HEAD31 and 42 get decay-corrected PETT conversion factor;
+C
+C  Common Block Variables:
+C
+C  /USRIO/
+C     USEROUT = logical unit for user output;
+C
+C  /SCANS/
+C     NTYPE = type of scan file;
+C     SCANST = start time of scan (sec);
+C     SCANEND = end time of scan (sec);
+C     SCANLEN = scan length (sec);
+C     FRAMELEN = frame length (non-zero for 14-slice scans);
+C     TAU = decay constant used for specified file (1/sec);
+C     PETTCONV = PETT conversion factor;
+C        (well counts * pixel)/(PETT no * ml)
+C     INITIALS = initials of user;
+C     FNAME = scan file name;
+C     SLICES = number of slices in image file;
+C     SCANTIME = length of scan (seconds) read from file header;
+C     RCONTYPE = reconstruction type;
+C     SCANNAME = name of scan image file;
+C     SCANDATE = date of scan (MM/DD/YYYY);
+C     COMPOUND = compound used in scan;
+C     FILTER = reconstruction filter;
+C     SCANNER = scanner name (PETT VI, SUPER PETT IIH, etc);
+C     RESOLUTION: 0 = low; 1 = high resolution scan;
+C
+C  Uses Subroutines:
+C  TERMINAL.LIB
+C     GTSTRING
+C
+C  FORTRAN Runtime Library
+C     IDATE
+C     SYSIO
+C
+C  Called by:  PETPROC
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+      SUBROUTINE WRITEHD1(EFACTOR)
+
+      INTEGER*4    DATE(3),PB(6),IOWRITE,NBYTES,L1,L2,L3,I
+      INTEGER*2    OUT(128),HEAD4,HEAD5,HEAD8,HEAD9,HEAD12
+      INTEGER*4    ieee2pe
+      INTEGER*4    HEAD17,HEAD18,HEAD19,HEAD20,HEAD21,
+     &             HEAD31,HEAD32,HEAD42,HEAD43,HEAD44,EFACTOR
+      CHARACTER*2  MM,DD,YY
+      CHARACTER*4  HEAD11
+      CHARACTER*8  HEAD2,HEAD3,HEAD10,HEAD14,PROCDATE,SHORTDATE
+      CHARACTER*10 HEAD6
+      CHARACTER*12 HEAD7
+      CHARACTER*14 HEAD1
+      CHARACTER*80 Q,STR
+      CHARACTER*256 RCSHEADER
+
+      EQUIVALENCE (OUT(1),  HEAD1),
+     2            (OUT(8),  HEAD2),
+     3            (OUT(12), HEAD3),
+     4            (OUT(16), HEAD4),
+     5            (OUT(17), HEAD5),
+     6            (OUT(18), HEAD6),
+     7            (OUT(23), HEAD7),
+     8            (OUT(29), HEAD8),
+     9            (OUT(30), HEAD9),
+     A            (OUT(31), HEAD10)
+      EQUIVALENCE (OUT(35), HEAD11),
+     2            (OUT(37), HEAD12),
+     3            (OUT(39), HEAD14),
+     4            (OUT(47), HEAD17),
+     5            (OUT(49), HEAD18),
+     6            (OUT(51), HEAD19)
+      EQUIVALENCE (OUT(53), HEAD20),
+     2            (OUT(55), HEAD21),
+     3            (OUT(75), HEAD31),
+     4            (OUT(77), HEAD32),
+     5            (OUT(97), HEAD42),
+     6            (OUT(99), HEAD43),
+     7            (OUT(101),HEAD44)
+
+      external ieee2pe !$pragma C (ieee2pe)
+
+      INCLUDE 'petproc.inc'
+      DATA IOWRITE,NBYTES  /56,256/
+      RCSHEADER = "$Id: writehd1.f,v 2.29 2005/10/06 17:05:07 tom Exp tom $"
+
+C  Open HDR file
+
+100   OPEN(DISK,FILE=HDRNAME,ERR=120)
+      GO TO 200
+120   WRITE(USEROUT,*) '*** Unable to open file:  ',HDRNAME( : LNBLNK(HDRNAME))
+      Q = 'File name to use'
+      STR = HDRNAME( : LNBLNK(HDRNAME))
+      CALL GTSTRING(Q,STR)
+      HDRNAME = STR
+      GO TO 100
+
+8000  FORMAT(I2)
+200   CALL IDATE(DATE)
+      WRITE(DD,8000) DATE(1)
+      WRITE(MM,8000) DATE(2)
+      WRITE(YY,8000) DATE(3) - ((DATE(3)/100)*100)
+      PROCDATE = MM//'/'//DD//'/'//YY
+      SHORTDATE = SCANDATE(1:6)//SCANDATE(9:10)
+
+      DO 300 I=1,128
+        OUT(I) = 0
+300   CONTINUE
+
+C  Insert Coefficients into Header
+
+      HEAD1 = SCANNER
+      HEAD2 = SCANNAME
+      HEAD3 = SHORTDATE
+      HEAD4 = SLICES
+      HEAD5 = SCANTIME
+      HEAD6 = COMPOUND
+      HEAD7 = FILTER
+      HEAD8 = INT(RCONTYPE)
+      HEAD9 = INT(RESOLUTION)
+      HEAD10 = PROCDATE
+      HEAD11 = INITIALS
+      HEAD12 = NTYPE
+      L1 = IANYL(PIENAME,':')+1
+      L3 = IANYR(PIENAME,'/')+1
+      IF (L3.GT.L1) L1=L3
+      L2 = IANYL(PIENAME,'.')-1
+      IF (L2.LE.0) L2=INANYR(PIENAME,' ')
+      HEAD14 = ' '
+      HEAD14 = PIENAME(L1:L2)
+      HEAD17 = ieee2pe(SCANST)
+      HEAD18 = ieee2pe(SCANLEN)
+      HEAD19 = ieee2pe(FRAMELEN)
+      HEAD20 = ieee2pe(TAU)
+      HEAD21 = ieee2pe(PETTCONV(1))
+C     HEAD32 = ieee2pe(PETTCONV(2))
+      HEAD31 = ieee2pe(PETTCONV(1)*EXP(TAU*0.5*(SCANST+SCANEND)))
+C     HEAD42 = ieee2pe(PETTCONV(2)*EXP(TAU*0.5*(SCANST+SCANEND)))
+      HEAD43 = ieee2pe(PIESLOPE)
+      HEAD44 = ieee2pe(EFACTOR)
+      CALL SYSIO(PB,IOWRITE,DISK,OUT,NBYTES,0)
+
+      WRITE(USEROUT,*) 'File Processed: ',FNAME( : LNBLNK(FNAME))
+      WRITE(USEROUT,*) 'HDR File Name:  ',HDRNAME( : LNBLNK(HDRNAME))
+      WRITE(USEROUT,*) '===================================='
+      WRITE(USEROUT,*)
+      CLOSE(DISK)
+
+      RETURN
+      END
+@
+
+
+2.29
+log
+@use PID instead of scandate for determining PIE
+@
+text
+@d2 3
+d140 1
+a140 1
+      RCSHEADER = "$Id: writehd1.f,v 2.28 2005/08/08 16:29:32 tom Exp tom $"
+@
+
+
+2.28
+log
+@add pie Aug 2005
+@
+text
+@d2 3
+d137 1
+a137 1
+      RCSHEADER = "$Id: writehd1.f,v 2.25 2004/11/03 14:28:30 tom Exp tom $"
+@
+
+
+2.25
+log
+@add getpie_961
+@
+text
+@d2 3
+d134 1
+a134 1
+      RCSHEADER = "$Id: writehd1.f,v 2.24 2004/11/02 16:40:33 tom Exp tom $"
+@
+
+
+2.24
+log
+@set 961 pies based on scandate, acquisition, software
+@
+text
+@d2 3
+d131 1
+a131 1
+      RCSHEADER = "$Id: writehd1.f,v 2.21 2004/07/08 14:39:29 tom Exp tom $"
+@
+
+
+2.21
+log
+@update getpie for 961
+@
+text
+@d2 3
+d128 1
+a128 1
+      RCSHEADER = "$Id: writehd1.f,v 2.20 2004/02/17 15:09:00 tom Exp tom $"
+@
+
+
+2.20
+log
+@Feb 2004
+@
+text
+@d2 3
+d125 1
+a125 1
+      RCSHEADER = "$Id: writehd1.f,v 2.6 1999/12/16 17:05:19 tom Exp tom $"
+@
+
+
+2.6
+log
+@fix date
+@
+text
+@d2 3
+d122 1
+a122 1
+      RCSHEADER = "$Id: writehd1.f,v 2.5 1996/04/25 16:09:08 tom Exp tom $"
+@
+
+
+2.5
+log
+@release Apr-96
+@
+text
+@d2 3
+a13 1
+C
+a16 1
+C
+d58 1
+a58 1
+C     SCANDATE = date of scan (MM/DD/YY);
+a64 1
+C
+a72 1
+C
+d84 1
+a84 1
+      CHARACTER*8  HEAD2,HEAD3,HEAD10,HEAD14,PROCDATE
+d119 1
+a120 2
+      RCSHEADER = "$Id: writehd1.f,v 2.0 1993/07/15 20:00:39 tom Exp tom $"
+
+d138 1
+d148 1
+a148 1
+      HEAD3 = SCANDATE
+a154 1
+
+@
+
+
+2.0
+log
+@Modified to read ECAT files and adjust PIE
+@
+text
+@d2 3
+d26 3
+a28 3
+C			Modified for Unix 23-Oct-92 TOV
+C				Added ieee2pe conversion of all output REALs
+C				Added RCSHEADER and Log
+d75 1
+a75 1
+C
+d77 1
+a77 1
+C
+d80 1
+a80 1
+			INTEGER*4		 ieee2pe
+d82 1
+a82 1
+     2             HEAD31,HEAD32,HEAD42,HEAD43,HEAD44,EFACTOR
+d91 1
+a91 1
+C
+d115 3
+a117 3
+C
+			external ieee2pe !$pragma C (ieee2pe)
+C
+d120 3
+a122 3
+C
+			RCSHEADER = "$Id$"
+C
+d124 1
+a124 1
+C
+d133 1
+a133 1
+C
+d135 1
+a135 1
+200		CALL IDATE(DATE)
+d140 1
+a140 1
+C
+d144 1
+a144 1
+C
+d146 1
+a146 1
+C
+d156 1
+a156 1
+C
+d161 2
+a162 2
+			L3 = IANYR(PIENAME,'/')+1
+			IF (L3.GT.L1) L1=L3
+d178 1
+a178 1
+C
+d184 1
+a184 1
+C
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+c $Log$
+d75 1
+a75 1
+      INTEGER*4    DATE(3),PB(6),IOWRITE,NBYTES,L1,L2,I
+d118 1
+a118 1
+			RCSHEADER = "$Header$"
+d158 2
+@

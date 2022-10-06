@@ -1,0 +1,355 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	2004.02.13.21.44.38;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.12.22.22.40.31;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.09.18.13.41.53;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.04.22.42.09;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.10.16.16.31.49;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.09.19.19.59.44;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.05.02.16.36.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@Feb 2004
+@
+text
+@/*	$Log: cv7topett6.c,v $
+ * Revision 1.7  1999/12/22  22:40:31  tom
+ * eliminate testing for scanner
+ *
+ * Revision 1.6  1998/09/18  13:41:53  tom
+ * add scanner 962
+ *
+ * Revision 1.5  1996/11/04  22:42:09  tom
+ * new libimage with corrected PETT VI header
+ *
+ * Revision 1.4  1996/10/16  16:31:49  tom
+ * sync with Version
+ * new libimage
+ *
+ * Revision 1.2  1996/09/19  19:59:44  tom
+ * new libraries
+ *
+ * Revision 1.1  1996/05/02  16:36:42  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			cv7topett6.c
+ *	Date:			May 1996
+ *	Author:			Tom Videen
+ *	Description:
+ *		Read Matrix 7 image files and write them as PETT VI image files.
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/cv7topett6/RCS/cv7topett6.c,v 1.7 1999/12/22 22:40:31 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+#include <libnrimg.h>				 /* freetensor, readtensor, writetensor6 */
+#include <imgutil.h>				 /* recout */
+
+/*	----------------------------
+ *	Function:	cv7topett6
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	FILE           *recfp;			 /* rec file */
+	MainHeader     *mh;
+	SubHeader      *sh;
+	char           *infile;
+	char           *outfile;
+	char           *recfile;
+	char            runstamp[40];	 /* version, date and userid info */
+	float        ***image;			 /* PET image */
+	int             frm;
+	int             nx, ny, nz;		 /* array dimensions */
+	int             pett6dim = 100;	 /* PETT VI array dimension */
+
+/*
+ *	Read command line arguments and initialize filenames.
+ */
+	if (argc != 11) {
+		printf ("Usage: cv7topett6 infile frame outfile recfile date\n");
+		return (ERROR);
+	}
+	infile = argv[1];
+	frm = atoi (argv[2]);
+	outfile = argv[3];
+	recfile = argv[4];
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[5], argv[6], argv[7], argv[8], argv[9], argv[10]);
+
+	indx.frm = frm;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [cv7topett6]: cannot open %s\n", recfile);
+		return (ERROR);
+	}
+	file = make_imgfile (infile);
+	(void) strcpy (file->mode, "r");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [cv7topett6]: Cannot open %s\n", infile);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [cv7topett6]: Cannot get MainHeader from %s\n", infile);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [cv7topett6]: cannot find %s frame %d\n", infile, frm);
+				return (ERROR);
+			}
+		} else {
+			fprintf (stderr, "ERROR [cv7topett6]: cannot find %s frame %d\n", infile, frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [cv7topett6]: Cannot read file subheader in %s\n", infile);
+		return (ERROR);
+	}
+	mh = file->mh;
+	sh = file->sh;
+	nx = sh->dim1;
+	ny = sh->dim2;
+	nz = sh->dim3;
+
+	mh->number_format = sh->number_format;
+	printf ("Reading  = %s\n", infile);
+	if ((image = readtensor (file, &indx)) == NULL) {
+		fprintf (stderr, "ERROR [cv7topett6] reading %s\n", infile);
+		return (ERROR);
+	}
+	recout (recfp, infile);
+	(void) save_rcs (file, rcsid, runstamp);
+	close_imgfile (file);
+
+	printf ("Writing  = %s\n", outfile);
+	file->name = outfile;
+	(void) strcpy (file->mode, "w");
+	mh->file_format = PETT6;
+	indx.frm = 1;
+	mh->nframe = indx.frm;
+
+    if ((file->p6 = (PETT6HDR *) malloc (sizeof (PETT6HDR))) == NULL) {
+        fprintf (stderr, "ERROR [cv7topett6]: cannot malloc PETT6HDR\n");
+        return (ERROR);
+    }
+	if (fill_hp6 (file, &indx) == ERROR)
+		return (ERROR);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [cv7topett6]: Cannot open %s\n", outfile);
+	}
+    image = trimtensor (image, nx, ny, nz, pett6dim, pett6dim, nz);
+	sh->dim1 = pett6dim;
+	sh->dim2 = pett6dim;
+	if (writetensor (file, &indx, image) == ERROR)
+		return (ERROR);
+	free_f3tensor (image, 1, nz, 1, ny, 1, nx);
+	free_imgfile (file);
+	(void) fclose (recfp);
+	return (OK);
+}
+@
+
+
+1.7
+log
+@eliminate testing for scanner
+@
+text
+@d2 3
+d23 1
+a23 1
+ *	Date:			May-96
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/cv7topett6/RCS/cv7topett6.c,v 1.6 1998/09/18 13:41:53 tom Exp tom $";
+d73 1
+a73 1
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[5], argv[6], argv[7], argv[8], argv[9], argv[10]);
+d87 1
+a87 1
+	strcpy (file->mode, "r");
+d125 1
+a125 1
+	save_rcs (file, rcsid, runstamp);
+d130 1
+a130 1
+	strcpy (file->mode, "w");
+d151 1
+a151 1
+	fclose (recfp);
+@
+
+
+1.6
+log
+@add scanner 962
+@
+text
+@d2 3
+d26 1
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/cv7topett6/RCS/cv7topett6.c,v 1.5 1996/11/04 22:42:09 tom Exp tom $";
+a32 1
+#include <nr.h>
+a54 1
+	int             scanner;		 /* 6, 953, 961, 962 */
+a61 2
+	printf ("Copyright 1996, Washington University\n");
+	printf ("All rights reserved. Unauthorized reproduction prohibited.\n");
+d64 1
+a64 1
+		exit (ERROR);
+d81 1
+a81 1
+		exit (ERROR);
+d87 1
+a87 1
+		exit (ERROR);
+d91 1
+a91 1
+		exit (ERROR);
+d98 1
+a98 1
+				exit (ERROR);
+d102 1
+a102 1
+			exit (ERROR);
+d107 1
+a107 1
+		exit (ERROR);
+a114 5
+	scanner = mh->scanner_type;
+	if (scanner != 961 && scanner != 962) {
+		fprintf (stderr, "ERROR [cv7topett6]: file is not a 961 or 962 PET image\n");
+		exit (ERROR);
+	}
+d119 1
+a119 1
+		exit (ERROR);
+d137 1
+a137 1
+		exit (ERROR);
+d145 1
+a145 1
+		exit (ERROR);
+d149 1
+a149 1
+	exit (OK);
+@
+
+
+1.5
+log
+@new libimage with corrected PETT VI header
+@
+text
+@d2 3
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/cv7topett6/RCS/cv7topett6.c,v 1.4 1996/10/16 16:31:49 tom Exp $";
+d53 1
+a53 1
+	int             scanner;		 /* 6, 953, 961 */
+d117 2
+a118 2
+	if (scanner != 961) {
+		fprintf (stderr, "ERROR [cv7topett6]: file is not a 961 PET image\n");
+@
+
+
+1.4
+log
+@sync with Version
+new libimage
+@
+text
+@d2 4
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/cv7topett6/RCS/cv7topett6.c,v 1.2 1996/09/19 19:59:44 tom Exp tom $";
+d139 1
+a139 1
+	if (fill_hp6 (file) == ERROR)
+@
+
+
+1.2
+log
+@new libraries
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/cv7topett6/RCS/cv7topett6.c,v 1.1 1996/05/02 16:36:42 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/cv7topett6/cv7topett6.c,v 1.1 1996/05/02 13:15:15 tom Exp $";
+@

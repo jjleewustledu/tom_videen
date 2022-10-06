@@ -1,0 +1,410 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.6
+date	2006.08.25.14.34.05;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2004.02.17.15.16.17;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.09.23.15.51.59;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@update to use 20 samples
+@
+text
+@c $Log: pieinput.f,v $
+c Revision 1.5  2004/02/17  15:16:17  tom
+c Feb 2004
+c
+c Revision 1.1  1997/09/23  15:51:59  tom
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   PIEINPUT.FTN
+C  Author:       Tom O. Videen
+C  Date:         22-Dec-87
+C  Intent:		Get pie data file values.
+C  History:
+C     Modified 28-Feb-89 by TOV to allow specification of either
+C        blue or white caps on counting syringes.
+C     Message for blue or white caps altered by TOV 30-Mar-89.
+C			Modified for Unix 10-Feb-93 TOV
+C
+C  Common Blocks used:
+C     USRIO
+C     PIEPARAM
+C
+C  Uses BLOOD Subroutines:
+C     CHECKTIM - check that time is in HH:MM:SS format;
+C     SECS - convert time from HH:MM:SS to seconds from midnight;
+C
+C  Uses TERMINAL.LIB
+C     GTSTRING
+C     GETINT
+C     GETREAL
+C     YESNO
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+	SUBROUTINE PIEINPUT
+
+	INTEGER*4    REFSECS,TIMESECS,SECS
+	REAL*4       DTIME,WEIGHT,SC1,SC2
+	REAL*4       SC1NEW,SC2NEW,SC1OLD,SC2OLD
+	CHARACTER*1  BELL,NUM
+	CHARACTER*80 Q,STR,BLANK
+	CHARACTER*256 RCSHEADER
+	LOGICAL*1    A
+
+C  Correction factors for the well counter.
+C  SC1 corrects for the position and SC2 corrects for the volume
+C  of the sample in the well counter.
+
+	INCLUDE 'piedata.inc'
+	DATA SC1NEW,SC2NEW /1.026,-0.0522/   ! BLUE caps
+	DATA SC1OLD,SC2OLD /1.098,-0.1969/   ! WHITE caps
+	RCSHEADER = "$Header: /home/npggw/tom/src/piedata/RCS/pieinput.f,v 1.5 2004/02/17 15:16:17 tom Exp tom $"
+
+	BELL = CHAR(7)
+	BLANK = ' '
+
+	Q = 'Your initials'
+	STR = ' '
+	CALL GTSTRING(Q,STR)
+	INITIALS = STR(1:4)
+
+	Q = 'Subject (6 characters! i.e., cal_2d or cal_3d)'
+	STR = SUBJECT
+	CALL GTSTRING(Q,STR)
+	SUBJECT = STR(1:6)
+
+	Q = 'Nuclide (5 characters)'
+	STR = NUCLIDE
+	CALL GTSTRING(Q,STR)
+	NUCLIDE = STR(1:5)
+	IF (NUCLIDE.EQ.'O15  ' .or. NUCLIDE.EQ.'o15  ') THEN
+		ALPHA = 0.005592
+	ELSE IF (NUCLIDE.EQ.'N13 ' .or. NUCLIDE.EQ.'n13  ') THEN
+		ALPHA = 0.001160
+	ELSE IF (NUCLIDE.EQ.'C11 ' .or. NUCLIDE.EQ.'c11  ') THEN
+		ALPHA = 0.0005669
+	ELSE IF (NUCLIDE.EQ.'GA68' .or. NUCLIDE.EQ.'ga68 ') THEN
+		ALPHA = 0.0001691
+	ELSE IF (NUCLIDE.EQ.'F18 ' .or. NUCLIDE.EQ.'f18  ') THEN
+		ALPHA = 0.00010529
+	END IF
+	Q = 'Number of pie scan images'
+	CALL GETINT(Q,NSCANS,1,20)
+
+	WRITE(USEROUT,*) 'BLUE or BEIGE caps were used AFTER 11/17/85'
+	WRITE(USEROUT,*) 'WHITE caps were used BEFORE 11/17/85 (P873)'
+	WRITE(USEROUT,*)
+	Q = 'Were BLUE or BEIGE caps used on syringes in the well counter'
+	A = .TRUE.
+	CALL YESNO(Q,A)
+	IF (A) THEN
+		SC1 = SC1NEW
+		SC2 = SC2NEW
+	ELSE
+		SC1 = SC1OLD
+		SC2 = SC2OLD
+	END IF
+
+8000  FORMAT(I1)
+	DO 200 I=1,NSCANS
+		WRITE(USEROUT,*)
+		WRITE(USEROUT,*)'Scan File #',I
+		WRITE(USEROUT,*)'-------------'
+		Q = 'Scan File Name'
+		STR = SCANNAME(I)
+		IF (STR.EQ.BLANK) THEN
+			WRITE(NUM,8000) I
+			L = INANYR(SUBJECT,' ')
+			STR = SUBJECT(1:L)//NUM
+		END IF
+		CALL GTSTRING(Q,STR)
+		SCANNAME(I) = STR(1:12)
+
+100		Q = 'Start time (HH:MM:SS or HH.MM.SS)'
+		STR = SCANSTART(I)
+		CALL GTSTRING(Q,STR)
+		CALL CHECKTIM(STR,A)
+		IF (.NOT.A) GO TO 100
+		SCANSTART(I) = STR(1:8)
+
+		Q = 'Scan length (seconds)'
+		CALL GETINT(Q,SCANLEN(I),10,50000)
+		Q = 'Starting Bank Pair value (in 1000s)'
+		CALL GETREAL(Q,BANKPAIR(I),0.1,1000.0)
+200	CONTINUE
+
+	WRITE(USEROUT,*)
+	IF (REFTIME.EQ.'        ') REFTIME=SCANSTART(1)
+300	Q = 'Reference time (HH:MM:SS or HH.MM.SS)'
+	STR = REFTIME
+	CALL GTSTRING(Q,STR)
+	CALL CHECKTIM(STR,A)
+	IF (.NOT.A) GO TO 300
+	REFTIME = STR(1:8)
+	REFSECS = SECS(REFTIME)
+
+	Q = 'Decay constant (1/sec)'
+	CALL GETREAL(Q,ALPHA,0.0000001,1.0)
+	Q = 'Number of syringes counted in well counter'
+	CALL GETINT(Q,NCOUNTS,1,20)
+	Q = 'Did well count periods differ from 10 seconds'
+	CALL YESNO(Q,VARYTIME)
+
+	DO 500 I=1,NCOUNTS
+		WRITE(USEROUT,*)
+		WRITE(USEROUT,*)'Syringe #',I
+		WRITE(USEROUT,*)'-----------'
+		Q = 'Dry syringe weight (grams)'
+		CALL GETREAL(Q,DRYWEIGHT(I),0.,100.)
+		Q = 'Wet syringe weight (grams)'
+		CALL GETREAL(Q,WETWEIGHT(I),DRYWEIGHT(I)+0.001,100.)
+
+400		Q = 'Time counted (HH:MM:SS or HH.MM.SS)'
+		STR = COUNTIME(I)
+		CALL GTSTRING(Q,STR)
+		CALL CHECKTIM(STR,A)
+		IF (.NOT.A) GO TO 400
+		COUNTIME(I) = STR(1:8)
+		TIMESECS = SECS(COUNTIME(I))
+
+		IF (VARYTIME) THEN
+			IF (I.EQ.1) THEN
+			  COUNTPER(I) = 10.
+			ELSE
+			  COUNTPER(I) = COUNTPER(I-1)
+			END IF
+			Q = 'Well count period (seconds)'
+			CALL GETREAL(Q,COUNTPER(I),1.,1000.)
+			Q = 'Number of counts'
+		ELSE
+			COUNTPER(I) = 10
+			Q = 'Number of counts per 10 seconds'
+		END IF
+		CALL GETINT(Q,COUNTS(I),0,999999)
+
+		DTIME = FLOAT(TIMESECS-REFSECS)
+		WEIGHT = WETWEIGHT(I)-DRYWEIGHT(I)
+		CORCNTS(I) = FLOAT(COUNTS(I))*EXP(DTIME*ALPHA)/(COUNTPER(I)*WEIGHT)
+
+C  Correction for position and volume of sample in well counter
+
+		CORCNTS(I) = CORCNTS(I)/(SC1+SC2*WEIGHT)
+
+500   CONTINUE
+
+	RETURN
+	END
+@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@d2 3
+a10 1
+C
+d13 1
+a13 3
+C  Intent:
+C     Get pie data file values.
+C
+d35 11
+a45 11
+C
+      SUBROUTINE PIEINPUT
+C
+      INTEGER*4    REFSECS,TIMESECS,SECS
+      REAL*4       DTIME,WEIGHT,SC1,SC2
+      REAL*4       SC1NEW,SC2NEW,SC1OLD,SC2OLD
+      CHARACTER*1  BELL,NUM
+      CHARACTER*80 Q,STR,BLANK
+			CHARACTER*256 RCSHEADER
+      LOGICAL*1    A
+C
+d49 51
+a99 51
+C
+      INCLUDE 'piedata.inc'
+      DATA SC1NEW,SC2NEW /1.026,-0.0522/   ! BLUE caps
+      DATA SC1OLD,SC2OLD /1.098,-0.1969/   ! WHITE caps
+			RCSHEADER = "$Header: /home/npggw/tom/src/piedata/RCS/pieinput.f,v 1.1 1997/09/23 15:51:59 tom Exp tom $"
+C
+      BELL = CHAR(7)
+      BLANK = ' '
+C
+      Q = 'Your initials'
+      STR = ' '
+      CALL GTSTRING(Q,STR)
+      INITIALS = STR(1:4)
+C
+      Q = 'Subject (6 characters! i.e., P1000 or P500W)'
+      STR = SUBJECT
+      CALL GTSTRING(Q,STR)
+      SUBJECT = STR(1:6)
+C
+      Q = 'Nuclide (5 characters)'
+      STR = NUCLIDE
+      CALL GTSTRING(Q,STR)
+      NUCLIDE = STR(1:5)
+      IF (NUCLIDE.EQ.'O15  ' .or. NUCLIDE.EQ.'o15  ') THEN
+        ALPHA = 0.005592
+      ELSE IF (NUCLIDE.EQ.'N13 ' .or. NUCLIDE.EQ.'n13  ') THEN
+        ALPHA = 0.001160
+      ELSE IF (NUCLIDE.EQ.'C11 ' .or. NUCLIDE.EQ.'c11  ') THEN
+        ALPHA = 0.0005669
+      ELSE IF (NUCLIDE.EQ.'GA68' .or. NUCLIDE.EQ.'ga68 ') THEN
+        ALPHA = 0.0001691
+      ELSE IF (NUCLIDE.EQ.'F18 ' .or. NUCLIDE.EQ.'f18  ') THEN
+        ALPHA = 0.00010529
+      END IF
+      Q = 'Number of pie scan images'
+      CALL GETINT(Q,NSCANS,1,10)
+C
+      WRITE(USEROUT,*) 'BLUE or BEIGE caps were used AFTER 11/17/85'
+      WRITE(USEROUT,*) 'WHITE caps were used BEFORE 11/17/85 (P873)'
+      WRITE(USEROUT,*)
+      Q = 'Were BLUE or BEIGE caps used on syringes in the well counter'
+      A = .TRUE.
+      CALL YESNO(Q,A)
+      IF (A) THEN
+        SC1 = SC1NEW
+        SC2 = SC2NEW
+      ELSE
+        SC1 = SC1OLD
+        SC2 = SC2OLD
+      END IF
+C
+d101 80
+a180 81
+      DO 200 I=1,NSCANS
+        WRITE(USEROUT,*)
+        WRITE(USEROUT,*)'Scan File #',I
+        WRITE(USEROUT,*)'-------------'
+        Q = 'Scan File Name'
+        STR = SCANNAME(I)
+        IF (STR.EQ.BLANK) THEN
+          WRITE(NUM,8000) I
+          L = INANYR(SUBJECT,' ')
+          STR = SUBJECT(1:L)//'cal'//NUM
+        END IF
+        CALL GTSTRING(Q,STR)
+        SCANNAME(I) = STR(1:12)
+C
+100     Q = 'Start time (HH:MM:SS or HH.MM.SS)'
+        STR = SCANSTART(I)
+        CALL GTSTRING(Q,STR)
+        CALL CHECKTIM(STR,A)
+        IF (.NOT.A) GO TO 100
+        SCANSTART(I) = STR(1:8)
+C
+        Q = 'Scan length (seconds)'
+        CALL GETINT(Q,SCANLEN(I),10,50000)
+        Q = 'Starting Bank Pair value (in 1000s)'
+        CALL GETREAL(Q,BANKPAIR(I),0.1,1000.0)
+200   CONTINUE
+C
+      WRITE(USEROUT,*)
+      IF (REFTIME.EQ.'        ') REFTIME=SCANSTART(1)
+300   Q = 'Reference time (HH:MM:SS or HH.MM.SS)'
+      STR = REFTIME
+      CALL GTSTRING(Q,STR)
+      CALL CHECKTIM(STR,A)
+      IF (.NOT.A) GO TO 300
+      REFTIME = STR(1:8)
+      REFSECS = SECS(REFTIME)
+C
+      Q = 'Decay constant (1/sec)'
+      CALL GETREAL(Q,ALPHA,0.0000001,1.0)
+      Q = 'Number of syringes counted in well counter'
+      CALL GETINT(Q,NCOUNTS,1,10)
+      Q = 'Did well count periods differ from 10 seconds'
+      CALL YESNO(Q,VARYTIME)
+C
+      DO 500 I=1,NCOUNTS
+        WRITE(USEROUT,*)
+        WRITE(USEROUT,*)'Syringe #',I
+        WRITE(USEROUT,*)'-----------'
+        Q = 'Dry syringe weight (grams)'
+        CALL GETREAL(Q,DRYWEIGHT(I),0.,100.)
+        Q = 'Wet syringe weight (grams)'
+        CALL GETREAL(Q,WETWEIGHT(I),DRYWEIGHT(I)+0.001,100.)
+C
+400     Q = 'Time counted (HH:MM:SS or HH.MM.SS)'
+        STR = COUNTIME(I)
+        CALL GTSTRING(Q,STR)
+        CALL CHECKTIM(STR,A)
+        IF (.NOT.A) GO TO 400
+        COUNTIME(I) = STR(1:8)
+        TIMESECS = SECS(COUNTIME(I))
+C
+        IF (VARYTIME) THEN
+          IF (I.EQ.1) THEN
+            COUNTPER(I) = 10.
+          ELSE
+            COUNTPER(I) = COUNTPER(I-1)
+          END IF
+          Q = 'Well count period (seconds)'
+          CALL GETREAL(Q,COUNTPER(I),1.,1000.)
+          Q = 'Number of counts'
+        ELSE
+          COUNTPER(I) = 10
+          Q = 'Number of counts per 10 seconds'
+        END IF
+        CALL GETINT(Q,COUNTS(I),0,999999)
+C
+        DTIME = FLOAT(TIMESECS-REFSECS)
+        WEIGHT = WETWEIGHT(I)-DRYWEIGHT(I)
+        CORCNTS(I) = FLOAT(COUNTS(I))*EXP(DTIME*ALPHA)/
+     2    (COUNTPER(I)*WEIGHT)
+C
+d182 3
+a184 3
+C
+        CORCNTS(I) = CORCNTS(I)/(SC1+SC2*WEIGHT)
+C
+d186 3
+a188 3
+C
+      RETURN
+      END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+c $Log$
+d53 1
+a53 1
+			RCSHEADER = "$Header$"
+@

@@ -1,0 +1,250 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.10.12.21.19.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Id$
+	$Log$ */
+/*	========================================================================
+ *	Module:			process_oxygen.c
+ *	Date:			12-Oct-95
+ *	Author:			Tom Videen
+ *	Description:	process an image for CBF, CBV, OEF, CMRO2 or counts and scale the result
+ *	
+ *	Input:
+ *		oxygenimage -   oxygen (oo) PET input image
+ *		flowimage   -   flow (ho) PET input image
+ *		volimage    -   vol (co) PET input image
+ *		nx, ny, nz  -   dimensions of PET image
+ *		scaler      -   normalization factor
+ *		process     -   type of processing
+ *		oxygenname  -   oxygen image file name
+ *		flowname    -   flow image file name
+ *		volname     -   vol image file name
+ *		recfp       -   rec file pointer
+ *		hdr         -   hdr structure
+ *	
+ *	Output:
+ *		pet         -   processed, scaled PET image
+ *		writes hdr files used to rec file
+ *	
+ *	Returns:
+ *		SUCCEED or FAIL
+ *	
+ *	Algorithm:
+ *	1)  If (process != "cmro2" AND process !- "oef") then return FAIL.
+ *	2)  Process the flow image.
+ *	3)  Process the volume image.
+ *	4)  Read the hdr file associated with oxygen image.
+ *	5)  If (hdr.ntype != 1) then return FAIL.
+ *	6)  If (process = "oef") then process as oxygen extraction:
+ *		(scaled by 1000 to maintain dynamic range with integer pixels)
+ *	7)  If (process = "cbf")  and (hdr.ntype = 2 or 4) then process as blood flow:
+ *		(scaled by 1000 to maintain dynamic range with integer pixels)
+ *	 
+ *	Reference and Equations in:
+ *		Videen et al (1987) JCBFM 7:513-516.
+ *	
+ *	History:
+ *		12-Oct-95	Taken from t88mean
+ *	========================================================================
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <petutil/petutil.h>
+#include "brain_atlas.h"		/* MAXLENGTH */
+
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/t88mean/RCS/process_oxygen.c,v 1.5 1994/10/03 16:17:13 tom Exp $";
+
+/*	-----------------------
+ *	Function process_oxygen
+ *	-----------------------
+ */
+int 
+process_oxygen (oxygenimage, flowimage, volimage, nx, ny, nz, scaler, process,
+		oxygenname, flowname, volname, recfp, hdr)
+	REAL_SLICE     *oxygenimage;	/* oxygen (oo) PET input image */
+	REAL_SLICE     *flowimage;	/* flow (ho) PET input image */
+	REAL_SLICE     *volimage;	/* vol (co) PET input image */
+	short           nx;	/* x-dimension of PET-array */
+	short           ny;	/* y-dimension of PET-array */
+	short           nz;	/* z-dimension of PET-array or no. of slices */
+	float           scaler;	/* normalization factor */
+	char            process[10];	/* type of processing */
+	char           *oxygenname;	/* oxygen image file name */
+	char           *flowname;	/* flow image file name */
+	char           *volname;/* vol image file name */
+	FILE           *recfp;	/* rec file pointer */
+	HEADER_DATA    *hdr;	/* hdr structure */
+
+{
+	short           i, j, k;
+	float           sx;	/* combined scaler */
+	float           slvratio = 0.85;	/* ratio of cerebral small vessel  to large vessel
+						 * hematocrit */
+	float           volfactr = 0.835;	/* (postcapillary vol + 0.5*capillary vol)/total
+						 * blood volume */
+	float           brainden = 1.05;	/* ensity of brain (g/ml) */
+	float           x1, x2, x3;	/* image array elements from image arrays */
+	float           c1;	/* slvratio * integral of blood O2 counts/100.0 */
+	float           c2;	/* volfactr * c1 */
+	float           c3;	/* pettconv(n) / brainden */
+	float           a1, a2, a3, a4, a5;	/* temporary components in computation */
+	char           *c;
+	char            localproc[10];	/* type of processing */
+	char           *hdrname;/* hdr filename */
+	char           *local_hdrname;	/* local hdr filename */
+
+/*
+ *	Check process
+ */
+
+	if ((strcmp (process, "cmro2") != 0) && (strcmp (process, "oef") != 0))
+		return FAIL;
+
+/*
+ *	Process flow image
+ */
+
+	strcpy (localproc, "cbf");
+	if (process_pet (flowimage, nx, ny, nz, 1.0, localproc, flowname, recfp, hdr) > 0) {
+		fprintf (stderr, "Error processing %s\n", flowname);
+		return FAIL;
+	}
+/*
+ *	Process volume image
+ */
+
+	strcpy (localproc, "cbv");
+	if (process_pet (volimage, nx, ny, nz, 1.0, localproc, volname, recfp, hdr) > 0) {
+		fprintf (stderr, "Error processing %s\n", volname);
+		return FAIL;
+	}
+/*
+ *  Read HDR file
+ */
+
+	hdrname = (char *) calloc (MAXLENGTH, sizeof (char));
+	local_hdrname = (char *) calloc (MAXLENGTH, sizeof (char));
+
+	strcpy (hdrname, oxygenname);
+	c = strrchr (hdrname, '.');
+	if (c == NULL)
+		c = strrchr (hdrname, '\0');
+	strcpy (c, ".hdr");
+
+	c = strrchr (hdrname, '/');
+	if (c == NULL)
+		strcpy (local_hdrname, hdrname);
+	else
+		strcpy (local_hdrname, c + 1);
+
+	if (gethdr (local_hdrname, hdr) == 0) {
+		printf ("HDR = %s\n", local_hdrname);
+		fprintf (recfp, "%s\n", local_hdrname);
+	} else if (gethdr (hdrname, hdr) == 0) {
+		printf ("HDR = %s\n", hdrname);
+		fprintf (recfp, "%s\n", hdrname);
+	} else {
+		printf ("Error:  HDR not found\n as %s\n or %s\n", local_hdrname, hdrname);
+		free (hdrname);
+		free (local_hdrname);
+		return FAIL;
+	}
+	free (hdrname);
+	free (local_hdrname);
+
+	if (hdr->ntype != 1)
+		return FAIL;
+
+/*
+ *	Constants for oxygen processing  (scaled by 1000 to maintain dynamic range with integer pixels)
+ */
+
+	sx = scaler * 1000;
+	c1 = slvratio * hdr->o2cnts1 / 100.0;
+	c2 = volfactr * c1;
+	c3 = hdr->pettcnv1 / brainden;
+
+/*
+ *	Oxygen Extraction
+ */
+
+	if (strcmp (process, "oef") == 0) {
+		for (k = 0; k < nz; ++k) {
+			for (j = 0; j < ny; ++j) {
+				for (i = 0; i < nx; ++i) {
+					x1 = oxygenimage[k][j][i];
+					if (x1 == 0.)
+						oxygenimage[k][j][i] = 0;
+					else {
+						x2 = flowimage[k][j][i] * .02;
+						x3 = volimage[k][j][i] * .01;
+						a1 = c3 * x1;
+						a2 = x2 * (hdr->awater1 * x2 + hdr->bwater1);
+						a3 = c1 * x3;
+						a4 = x2 * (hdr->aoxygen1 * x2 + hdr->boxygen1);
+						a5 = c2 * x3;
+						if (a4 == a5)
+							oxygenimage[k][j][i] = 0;
+						else
+							oxygenimage[k][j][i] = sx * (a1 - a2 - a3) / (a4 - a5);
+						if (oxygenimage[k][j][i] > 1000.)
+							oxygenimage[k][j][i] = 1000.;
+						else if (oxygenimage[k][j][i] < 0.)
+							oxygenimage[k][j][i] = 0.;
+					}
+				}
+			}
+		}
+		return SUCCEED;
+	}
+/*
+ *	Rate of Oxygen Utilization (CMRO2)
+ */
+
+	if (strcmp (process, "cmro2") == 0) {
+		for (k = 0; k < nz; ++k) {
+			for (j = 0; j < ny; ++j) {
+				for (i = 0; i < nx; ++i) {
+					x1 = oxygenimage[k][j][i];
+					if (x1 == 0.)
+						oxygenimage[k][j][i] = 0;
+					else {
+						x2 = flowimage[k][j][i] * .02;
+						x3 = volimage[k][j][i] * .01;
+						a1 = c3 * x1;
+						a2 = x2 * (hdr->awater1 * x2 + hdr->bwater1);
+						a3 = c1 * x3;
+						a4 = x2 * (hdr->aoxygen1 * x2 + hdr->boxygen1);
+						a5 = c2 * x3;
+						if (a4 == a5)
+							oxygenimage[k][j][i] = 0;
+						else
+							oxygenimage[k][j][i] = sx * x2 * hdr->oxycont1 * (a1 - a2 - a3) / (a4 - a5);
+					}
+				}
+			}
+		}
+		return SUCCEED;
+	}
+}
+@

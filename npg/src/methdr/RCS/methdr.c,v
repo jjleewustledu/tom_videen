@@ -1,0 +1,371 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.17.14.07.27;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.27.16.38.04;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.08.23.19.35.02;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.06.09.14.22.33;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/*	$Log: methdr.c,v $
+ * Revision 1.3  2002/11/27  16:38:04  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1996/08/23  19:35:02  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1995/06/09  14:22:33  tom
+ * Initial revision
+ * */
+/*	-------------------------------------------------------------------------
+ *	Module:		methdr.c
+ *	Intent:		Read a METEVAL-processed PETT VI image and create an hdr file.
+ *	Author:		Tom Videen
+ *	Date:		Jun 1995
+ *	-------------------------------------------------------------------------
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Id: methdr.c,v 1.3 2002/11/27 16:38:04 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <imgutil.h>
+#include "pett6.h"
+
+#define PETT6_FILTER_LEN 12
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	FILE           *fp;
+	OS32_HEAD 	   *os32_header;
+	PETT6_HEAD     *pett6_header;
+	char           *tmp;
+	char            datatype[MAXLINE];
+	char            datatype_start[MAXLINE];
+	char            filter[PETT6_FILTER_LEN + 1];
+	char           *header;
+	char            line[MAXLINE];
+	char           *root;
+	char            str[100];
+	char            date[10];
+	char            fname[100];
+	int             number, itmp;
+	int             ntype;
+
+	if (argc != 2) {
+		fprintf (stderr, "Usage: methdr filename\n");
+		return (1);
+	}
+/*
+ *	Read the PETT VI header
+ */
+
+	root = argv[1];
+	(void) strcpy (fname, root);
+	(void) strcat (fname, ".img");
+	fp = fopen (fname, "r");
+	if (fp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR: Cannot open %s\n", fname);
+		return (1);
+	}
+	os32_header = (OS32_HEAD *) malloc (sizeof (OS32_HEAD));
+	if (os32_header == NULL) return (1);
+	header = (char *) malloc (256);
+	if (header == NULL) return (1);
+	(void) fread (os32_header, sizeof (OS32_HEAD), 1, fp);
+	bcopy (os32_header, header, sizeof (OS32_HEAD));
+	(void) fclose (fp);
+	pett6_header = (PETT6_HEAD *) header;
+
+/*
+ *	Determine the data type of the file
+ */
+
+	if ((fp = fopen ("/usr/local/lib/header.tbl", "r")) == (FILE *) NULL) {
+		fprintf (stderr, "ERROR: Cannot open %s\n", "/usr/local/lib/header.tbl");
+		return (1);
+	}
+	while (fgets (line, MAXLINE, fp) != NULL) {
+		if (strncmp (line, "END", 3) == 0) {
+			(void) strcpy (datatype, "Unknown Data Type");
+			break;
+		} else {
+			(void) sscanf (line, "%d %s", &number, datatype_start);
+			tmp = strstr (line, datatype_start);
+			(void) strcpy (datatype, tmp);
+			if (number == pett6_header->file_type)
+				break;
+		}
+	}
+	(void) fclose (fp);
+
+	if (pett6_header->file_type > 2000) {
+		fprintf (stderr, "ERROR: datatype %d is not a PETT VI file\n",
+			 pett6_header->file_type);
+		return (1);
+	}
+	if (pett6_header->file_type == 1010 || pett6_header->file_type == 1020)
+		(void) strncpy (filter, pett6_header->filter, PETT6_FILTER_LEN);
+	else
+		(void) strcpy (filter, " ");
+
+/*
+ *	Open the hdr file
+ */
+
+	(void) strcpy (fname, root);
+	(void) strcat (fname, ".hdr");
+	fp = fopen (fname, "w");
+	if (fp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR: Cannot open %s\n", fname);
+		return (1);
+	}
+/*
+ *
+ */
+
+	bcopy ("PETT VI       ", os32_header->scanner, 14);
+	bcopy (root, os32_header->scanname, 8);
+	(void) strncpy (str, pett6_header->date, 2);
+	(void) strcat (str, "/");
+	(void) strncat (str, pett6_header->date + 2, 2);
+	(void) strcat (str, "/");
+	(void) strncat (str, pett6_header->date + 4, 2);
+	bcopy (str, os32_header->scandate, 8);
+	os32_header->scantime = pett6_header->scan_time;
+	if (pett6_header->number_of_slices == 0)
+		os32_header->slices = 7;
+	else
+		os32_header->slices = pett6_header->number_of_slices;
+	os32_header->resolution = pett6_header->resolution;
+	bcopy (pett6_header->compound, os32_header->compound, 4);
+	bcopy (pett6_header->filter, os32_header->filter, PETT6_FILTER_LEN);
+	os32_header->rcontype = pett6_header->file_type;
+
+/*
+ *	Get metabolic factors inserted into old headers by METEVAL
+ */
+
+	os32_header->ntype = pett6_header->metab2;
+	bcopy (pett6_header->metab17, os32_header->initials, 4);
+
+	itmp = pett6_header->metab13;
+	itoa (itmp, str);
+	(void) strcpy (date, str);
+	(void) strcat (date, "/");
+	itmp = pett6_header->metab14;
+	itoa (itmp, str);
+	(void) strcat (date, str);
+	(void) strcat (date, "/");
+	itmp = pett6_header->metab15;
+	itoa (itmp, str);
+	(void) strcat (date, str);
+	bcopy (date, os32_header->procdate, 8);
+
+	fprintf (stdout, "METEVAL processing by %s %.8s\n", os32_header->initials,
+		 os32_header->procdate);
+
+	os32_header->pettcnv1 = pett6_header->metab6;
+	os32_header->pieslope = pett6_header->metab6;
+	os32_header->oxycont1 = pett6_header->metab8;
+	os32_header->totalcnts = pett6_header->metab9;
+	os32_header->decay_factor1 = pett6_header->decay_constant;
+	os32_header->decay_factor2 = pett6_header->decay_constant;
+	os32_header->scanlen = pett6_header->metab12;
+
+	ntype = pett6_header->metab2;
+	switch (ntype) {
+	case 1:
+		os32_header->aoxygen1 = pett6_header->metab4;
+		os32_header->boxygen1 = pett6_header->metab5;
+		os32_header->o2cnts1 = pett6_header->metab7;
+		os32_header->awater1 = pett6_header->metab10;
+		os32_header->bwater1 = pett6_header->metab11;
+		break;
+	case 2:
+	case 4:
+		os32_header->aflow1 = pett6_header->metab4;
+		os32_header->bflow1 = pett6_header->metab5;
+		os32_header->scancnts = pett6_header->metab7;
+		break;
+	case 3:
+		os32_header->bvfactor1 = pett6_header->metab4;
+		os32_header->scancnts = pett6_header->metab7;
+		break;
+	default:
+		fprintf (stderr, "ERROR: unrecognized ntype\n");
+		return (1);
+	}
+
+	(void) fwrite (os32_header, sizeof (OS32_HEAD), 1, fp);
+	(void) fclose (fp);
+	return (0);
+}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d15 1
+a15 1
+ *	Date:		09-Jun-95
+d18 3
+a29 2
+static char     rcsid[] = "$Id: methdr.c,v 1.2 1996/08/23 19:35:02 tom Exp tom $";
+
+d67 1
+d69 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 4
+a4 1
+/*	$Log$
+d16 1
+d18 1
+d24 1
+a24 1
+static char     rcsid[] = "$Id: methdr.c,v 1.1 1995/06/09 14:22:33 tom Exp tom $";
+d48 1
+a48 1
+		exit (1);
+d55 2
+a56 2
+	strcpy (fname, root);
+	strcat (fname, ".img");
+d60 1
+a60 1
+		exit (1);
+d64 1
+a64 1
+	fread (os32_header, sizeof (OS32_HEAD), 1, fp);
+d66 1
+a66 1
+	fclose (fp);
+d75 1
+a75 1
+		exit (1);
+d79 1
+a79 1
+			strcpy (datatype, "Unknown Data Type");
+d82 1
+a82 1
+			sscanf (line, "%d %s", &number, datatype_start);
+d84 1
+a84 1
+			strcpy (datatype, tmp);
+d89 1
+a89 1
+	fclose (fp);
+d94 1
+a94 1
+		exit (1);
+d97 1
+a97 1
+		strncpy (filter, pett6_header->filter, PETT6_FILTER_LEN);
+d99 1
+a99 1
+		strcpy (filter, " ");
+d105 2
+a106 2
+	strcpy (fname, root);
+	strcat (fname, ".hdr");
+d110 1
+a110 1
+		exit (1);
+d118 5
+a122 5
+	strncpy (str, pett6_header->date, 2);
+	strcat (str, "/");
+	strncat (str, pett6_header->date + 2, 2);
+	strcat (str, "/");
+	strncat (str, pett6_header->date + 4, 2);
+d131 1
+a131 1
+	bcopy (pett6_header->filter, os32_header->filter);
+d143 2
+a144 2
+	strcpy (date, str);
+	strcat (date, "/");
+d147 2
+a148 2
+	strcat (date, str);
+	strcat (date, "/");
+d151 1
+a151 1
+	strcat (date, str);
+d186 1
+a186 1
+		exit (1);
+d189 3
+a191 2
+	fwrite (os32_header, sizeof (OS32_HEAD), 1, fp);
+	fclose (fp);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 2
+/*	$Id$
+ *	$Log$ */
+d14 1
+a14 1
+#include <petutil/petutil.h>
+d17 1
+a17 1
+static char     rcsid[] = "$Id$";
+d19 2
+d26 1
+a26 1
+	OS32_HEAD      *os32_header;
+d149 2
+a150 2
+	fprintf (stdout,"METEVAL processing by %s %.8s\n", os32_header->initials,
+		os32_header->procdate);
+@

@@ -1,0 +1,195 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.23.15.42.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   P2TRACK.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         19-Mar-87
+C  Written For:  SPIDERAM Super PET Image Display Program
+C
+C  Intent:
+C      This routine allows an irregular region to be drawn on
+C      the Ramtek Display Monitor using the trackball.
+C      All of the points plotted are stored in the list BOUNDARY.
+C      Each point of the region is plotted with the same number
+C      of screen pixels (MAG*ZFACTOR x MAG*ZFACTOR) as
+C      data points.
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (read only)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (read only)
+C     **REGION   - region analysis parameters     (write)
+C
+C   Variables:
+C     N = number of the region being defined;
+C     ERRFLAG = set true when user attempts to include more than
+C        2000 points in the array BOUNDARY for irregular regions;
+C     X1,Y1 = coordinates of the first point of the region;
+C     XLAST,YLAST = coordinates of the last point entered in the
+C        region list;
+C     X,Y = location of current point;
+C     PLANES = planes on the Ramtek in which to draw the boundary;
+C     NEWCURSOR = TRUE when a call to SETCUR (in subroutines P2PTCONV
+C        or REMPNT) has repositioned the cursor.
+C        It is set FALSE when the cursor is next moved with
+C        the trackball without repositioning.
+C        (repositioning occurs when the cursor is moved outside of
+C         of the region of the image and when points are removed
+C         from the region)
+C     NEWPOINT = TRUE when the cursor has been moved to a new point
+C        without repositioning with a call to SETCUR.
+C     TRACKING = TRUE after TRACK has been initiated;
+C        is set FALSE after the TRACK button has been turned off;
+C        (These three flags are necessary because SETCUR always
+C         leaves the TRACK state as 0 regardless of the status of
+C         the TRACK button.)
+C     FLAG(4) = flags set by reading the trackball:
+C        FLAG(2) = TRACK   = true if TRACK is activated;
+C        FLAG(4) = VISIBLE = true if cursor is VISIBLE;
+C
+C  Uses:
+C
+C  SPIDERAM.LIB Subroutines:
+C     P2PTCONV
+C     P2ADDLST
+C     P2ADDPNT
+C     P2REMPNT
+C
+C  SPIDERAM.LIB Functions:
+C     XRAMTEK - converts image x-index to Ramtek x-coordinate;
+C     YRAMTEK - converts image y-index to Ramtek y-coordinate;
+C
+C  RAMUTY.LIB
+C     GETPAD
+C     SETCUR
+C
+C  Called by: R2IRREG
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE P2TRACK(N,PLANES,ERRFLAG)
+C
+      INTEGER*4  N,PLANES,X1,Y1,X,Y,XLAST,YLAST,XRAMTEK,YRAMTEK
+      LOGICAL*1  FLAG(4),NEWCURSOR,TRACKING,NEWPOINT,TRACK,VISIBLE,
+     &           ERRFLAG
+      character*256 rcsheader
+C
+      EQUIVALENCE (TRACK,   FLAG(2))
+      EQUIVALENCE (VISIBLE, FLAG(4))
+C
+      INCLUDE 'spideram.inc'
+      rcsheader = "$Id: p2track.f,v 1.3 1993/10/04 21:55:32 tom Exp $"
+C
+      ERRFLAG  = .FALSE.
+      IF (ORIENT.EQ.'T') THEN
+        SLICE(N)= CURSLICE
+      ELSE
+        SLICE(N) = DSECTION
+      END IF
+      BVAL(N)  = TOP+1
+C
+C  Position the cursor at the center of the screen
+C     (not tracking,not blinking and not visible)
+C
+C     CALL SETCUR(287,256,0,0,RMD)
+      NEWCURSOR = .FALSE.
+      NEWPOINT  = .FALSE.
+      TRACKING  = .FALSE.
+C
+C  Check the trackball until VISIBLE and TRACK are turned on
+C
+100   CALL GETPAD(X1,Y1,FLAG,RMD)
+      IF (.NOT.VISIBLE .OR. .NOT.TRACK) GO TO 100
+C
+C   Plot the first point
+C
+      TRACKING = .TRUE.
+      CALL P2PTCONV(X1,Y1,NEWCURSOR)
+      CALL P2ADDPNT(X1,Y1,PLANES,N,ERRFLAG)
+      IF (ERRFLAG) GO TO 9000
+      XLAST = X1
+      YLAST = Y1
+C
+C   Continue to plot new points as the trackball is moved
+C      until TRACK or VISIBLE is false.
+C
+200   CALL GETPAD(X,Y,FLAG,RMD)
+C
+C   If the last movement of the cursor did not result in
+C      a call to SETCUR, then TRACK is a true reflection
+C      of the status of the TRACK button.
+C
+      IF (NEWPOINT .AND. .NOT.NEWCURSOR .AND. .NOT.TRACK) THEN
+        TRACKING = .FALSE.
+      END IF
+C
+C   If the cursor is visible and tracking and at a new
+C      point in the image, then add the point to the boundary.
+C
+      IF (VISIBLE.AND.TRACKING) THEN
+        CALL P2PTCONV(X,Y,NEWCURSOR)
+        IF (NEWCURSOR) NEWPOINT=.FALSE.
+        IF (X.NE.XLAST .OR. Y.NE.YLAST) THEN
+          IF (.NOT.NEWCURSOR) NEWPOINT =.TRUE.
+          CALL P2ADDLST(X,Y,PLANES,N,ERRFLAG)
+          IF (ERRFLAG) GO TO 9000
+          XLAST = X
+          YLAST = Y
+        END IF
+C
+C   If the visible switch has been turned off,
+C     then remove points from the list.
+C
+      ELSE IF (.NOT.VISIBLE) THEN
+250     CALL P2REMPNT(XLAST,YLAST,PLANES,N)
+        CALL GETPAD(X,Y,FLAG,RMD)
+        IF (.NOT.VISIBLE) GO TO 250
+        X = XRAMTEK(XLAST)
+        Y = YRAMTEK(YLAST)
+C        CALL SETCUR(X,Y,0,1,RMD)
+        NEWCURSOR = .TRUE.
+        NEWPOINT  = .FALSE.
+C
+C   If the track switch has been turned off,
+C     then complete the region.
+C
+      ELSE IF (.NOT.TRACKING) THEN
+        CALL P2ADDLST(X1,Y1,PLANES,N,ERRFLAG)
+        IF (ERRFLAG) GO TO 9000
+        AVAL(N) = TOP - BVAL(N) + 1
+        RETURN
+      END IF
+      GO TO 200
+C
+C  ERRFLAG is true. Illegal region (too many points)
+C
+9000  SLICE(N) = 0
+      TOP = BVAL(N)-1
+      AVAL(N) = 0
+      BVAL(N) = 0
+C
+      RETURN
+      END
+@

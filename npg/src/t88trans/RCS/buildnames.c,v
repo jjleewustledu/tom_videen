@@ -1,0 +1,207 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.10.12.21.19.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Id$
+	$Log$ */
+/* ===============================================================================
+ *	Module:			buildnames.c
+ *	Date:			12-Oct-95
+ *	Author:			Tom Videen
+ *	Description:	Construct short image filename.
+ *					Modified build_shortnames.c (Tom Yang)
+ *	Arguments:
+ *		prm	-	all parameters;
+ *		imglist	-	contains scan id and scan numbers;
+ *		imgmode	-	STDIMAGE_MODE or DIFIMAGE_MODE
+ *		filter	-	RECFILTER_MODE, IMGFILTER_MODE, or MSKFILTER_MODE;
+ *		nfiles	-	returned
+ *		imgfile	-	returned
+ *		matfile	-	returned
+ * ===============================================================================
+ */
+#include <values.h>
+#include <petutil/imglist.h>
+
+static char     rcsid[] = "$Header$";
+
+int             buildnames (prm, imglist, imgmode, filter, nfiles, imgfile, matfile)
+	PARAMETER_DATA  prm;
+	IMAGE_LIST_DATA imglist;
+	int             imgmode;
+	int             filter;
+	int            *nfiles;
+	char            imgfile[][MAXLINE];
+	char            matfile[MAXPATH];
+{
+	char            cbuffer[MAXLINE];
+	char            extension[MAXNAME];
+	char            fsuffix[MAXNAME];
+	char            string[MAXLINE];
+	char            subject[MAXNAME];
+	float           filter_cutoff;
+	int             filter_order;
+	int             filter_type;
+	int             scanset_field[6];
+	int             i;
+
+	strcpy (cbuffer, prm.species);
+	strcat (cbuffer, imglist.subject_id);
+	strcpy (subject, cbuffer);
+	strcat (cbuffer, prm.tracer);
+
+	if (filter == RECFILTER_MODE) {
+		filter_type = prm.recfilter_type;
+		filter_cutoff = prm.recfilter_cutoff;
+		filter_order = prm.recfilter_order;
+	} else if (filter == IMGFILTER_MODE) {
+		filter_type = prm.imgfilter_type;
+		filter_cutoff = prm.imgfilter_cutoff;
+		filter_order = prm.imgfilter_order;
+	} else if (filter == MSKFILTER_MODE) {
+		filter_type = prm.mskfilter_type;
+		filter_cutoff = prm.mskfilter_cutoff;
+		filter_order = prm.mskfilter_order;
+	}
+	if (filter_type != FILTER_NONE) {
+		filter_suffix (filter_type, filter_cutoff, filter_order, fsuffix);
+	}
+	if (imgmode == STDIMAGE_MODE) {
+		strcpy (imgfile[0], cbuffer);
+		strcat (imgfile[0], imglist.scanset1_id);
+		*nfiles = 1;
+		if (strlen (imglist.scanset2_id) > 0) {
+			strcpy (imgfile[1], cbuffer);
+			strcat (imgfile[1], imglist.scanset2_id);
+			*nfiles = 2;
+		}
+	} else if (imgmode == DIFIMAGE_MODE) {
+		if (strlen (imglist.scanset2_id) == 0) {
+			fprintf (stderr, "difimage list must be paired\n");
+			return FAIL;
+		}
+		strcpy (imgfile[0], cbuffer);
+		strcat (imgfile[0], imglist.scanset1_id);
+		strcat (imgfile[0], "-");
+		strcat (imgfile[0], imglist.scanset2_id);
+		*nfiles = 1;
+	} else if (imgmode == PREWELDED_IMAGE_MODE) {
+		if (sscanf (imglist.scanset1_id, "%dw%d", scanset_field, scanset_field + 1) != 2) {
+			fprintf (stderr, "scanset1_id (%s) should have the form n1wn2\n",
+				 imglist.scanset1_id);
+			return FAIL;
+		}
+		for (i = 0; i <= 1; i++) {
+			strcpy (imgfile[i], cbuffer);
+			itoa (scanset_field[i], string);
+			strcat (imgfile[i], string);
+		}
+		*nfiles = 2;
+
+		if (strlen (imglist.scanset2_id) > 0) {
+			if (sscanf (imglist.scanset2_id, "%dw%d", scanset_field,
+				    scanset_field + 1) != 2) {
+				fprintf (stderr, "scanset2_id (%s) should have the form n1wn2\n",
+					 imglist.scanset2_id);
+				return FAIL;
+			}
+			for (i = 2; i <= 3; i++) {
+				strcpy (imgfile[i], cbuffer);
+				itoa (scanset_field[i - 2], string);
+				strcat (imgfile[i], string);
+			}
+			*nfiles = 4;
+		}
+	} else if (imgmode == MULTITRACER_IMAGE_MODE) {
+		if (sscanf (imglist.scanset1_id, "%df%dv%d",
+			    scanset_field, scanset_field + 1, scanset_field + 2) != 3) {
+			fprintf (stderr, "scanset1_id (%s) should have the form n1fn2vn3\n",
+				 imglist.scanset1_id);
+			return FAIL;
+		}
+		strcpy (imgfile[0], cbuffer);
+		strcpy (imgfile[1], subject);
+		strcat (imgfile[1], prm.ftracer);
+		strcpy (imgfile[2], subject);
+		strcat (imgfile[2], prm.vtracer);
+		for (i = 0; i <= 2; i++) {
+			itoa (scanset_field[i], string);
+			strcat (imgfile[i], string);
+		}
+		*nfiles = 3;
+
+		if (strlen (imglist.scanset2_id) > 0) {
+			if (sscanf (imglist.scanset2_id, "%df%dv%d",
+				    scanset_field, scanset_field + 1, scanset_field + 2) != 3) {
+				fprintf (stderr, "scanset1_id (%s) should have the form n1fn2vn3\n",
+					 imglist.scanset2_id);
+				return FAIL;
+			}
+			strcpy (imgfile[3], cbuffer);
+			strcpy (imgfile[4], subject);
+			strcat (imgfile[4], prm.ftracer);
+			strcpy (imgfile[5], subject);
+			strcat (imgfile[5], prm.vtracer);
+			for (i = 3; i <= 5; i++) {
+				itoa (scanset_field[i - 3], string);
+				strcat (imgfile[i], string);
+			}
+			*nfiles = 6;
+		}
+	} else if (imgmode == WELDED_IMAGE_MODE) {
+		if (strlen (imglist.scanset2_id) == 0) {
+			fprintf (stderr, "welded image list must be paired\n");
+			return FAIL;
+		}
+		strcpy (imgfile[0], cbuffer);
+		strcat (imgfile[0], imglist.scanset1_id);
+		strcat (imgfile[0], "w");
+		strcat (imgfile[0], imglist.scanset2_id);
+		*nfiles = 1;
+	} else {
+		fprintf (stderr, "Unknown image mode: %d\n", imgmode);
+		return FAIL;
+	}
+
+/* Add extension */
+
+	if (strlen (prm.extension) == 0 && imgmode == DIFIMAGE_MODE)
+		strcpy (extension, DIFF_EXT);
+	else
+		strcpy (extension, prm.extension);
+	for (i = 0; i < *nfiles; i++) {
+		strcat (imgfile[i], prm.suffix);
+		if (filter_type != FILTER_NONE)
+			strcat (imgfile[i], fsuffix);
+		strcat (imgfile[i], extension);
+	}
+
+/* Construct matfile name */
+
+	strcpy (matfile, subject);
+	if (strlen (imglist.sxrid) > 0)
+		strcat (matfile, imglist.sxrid);
+	else
+		strcat (matfile, ".map");
+
+	return SUCCEED;
+}
+@

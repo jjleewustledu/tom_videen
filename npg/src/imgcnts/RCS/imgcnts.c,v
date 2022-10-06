@@ -1,0 +1,372 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	2008.08.21.18.03.52;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2008.08.20.18.01.19;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2008.07.25.16.23.58;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2005.09.13.20.27.40;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2005.06.23.21.09.17;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2004.02.16.17.24.54;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.01.16.17.32.54;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@kludge for last plane of focus
+@
+text
+@/*	$Log: imgcnts.c,v $
+ * Revision 1.7  2008/08/20  18:01:19  tom
+ * add column for voxel max
+ *
+ * Revision 1.6  2008/07/25  16:23:58  tom
+ * expand info to include start, duration and overall totals
+ *
+ * Revision 1.5  2005/09/13  20:27:40  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  2005/06/23  21:09:17  tom
+ * print counts for multiple frames
+ *
+ * Revision 1.3  2004/02/16  17:24:54  tom
+ * Feb 2004
+ *
+ * Revision 1.1  2003/01/16  17:32:54  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			imgcnts.c
+ *	Date:			Jul 2008
+ *	Author:			Tom Videen
+ *	Description:	Compute total counts in an ECAT image
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgcnts/RCS/imgcnts.c,v 1.7 2008/08/20 18:01:19 tom Exp $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <pettable.h>
+
+int main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	MainHeader     *mh;
+	SubHeader      *sh;
+	float        ***img;
+	char           *fname;
+	int             frm, nfrms, n, frm1;
+	unsigned long   dim1, dim2, dim3;
+	long            i, j, k;
+	double          sum, total;
+	float			maxc;
+	float			dur, totdur;
+	float           start = -1;
+
+	fname = argv[1];
+	frm = atoi (argv[2]);
+
+	if (frm > 0)
+		indx.frm = frm;
+	else
+		indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [imgcnts]: Could not open %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [imgcnts]: Could not get MainHeader from %s\n", fname);
+		return (ERROR);
+	}
+	frm1 = firstimgfrm (file);
+	indx.frm = frm1;
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [imgcnts]: Could not read file subheader in %s\n", fname);
+		return (ERROR);
+	}
+	mh = file->mh;
+	sh = file->sh;
+
+	nfrms = mh->nframe;
+	dim1 = (unsigned long) sh->dim1;
+	dim2 = (unsigned long) sh->dim2;
+	dim3 = (unsigned long) sh->dim3;
+
+	if (frm != 0)
+		nfrms = frm;
+	else
+		frm = frm1;
+
+	total = 0;
+	totdur = 0;
+	for (n = frm; n <= nfrms; n++) {
+		indx.frm = n;
+		if (get_sh (file, &indx) == OK) {
+			if (start < 0) {
+				start = (float) file->sh->start_time / 1000;
+				printf ("------------------------------------------------------------------\n");
+				printf ("%s     %s  %d slices   %d frames  (%s)\n", file->name, mh->date_time,
+					mh->nplane, mh->nframe, mh->isotope);
+				printf ("Frame  Start  Duration  Total Counts  Voxel Maximum\n");
+				printf ("-----  -----  --------  ------------  -------------\n");
+			}
+		}
+		if ((img = readtensor (file, &indx)) == NULL)
+			return (ERROR);
+
+		sum = 0;
+		maxc = 0;
+		for (i = 1; i <= dim3; i++)
+			for (j = 1; j <= dim2; j++)
+				for (k = 1; k <= dim1; k++) {
+					sum = sum + img[i][j][k];
+					if (i != dim3) {
+						if (img[i][j][k] > maxc)
+							maxc = img[i][j][k];
+
+/*	kludge to skip last 2 rows of last plane of focus images */
+
+					} else if (j < dim2-1) {
+						if (img[i][j][k] > maxc)
+							maxc = img[i][j][k];
+					}
+				}
+
+		free_f3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+		dur = (float) file->sh->duration / 1000.;
+		totdur = dur + totdur;
+		total = total + sum;
+		printf ("%3d  %7.0f %7.1f %15.3f %14.3f\n", n, ((float) file->sh->start_time / 1000.) - start, dur, sum, maxc);
+	}
+	if (nfrms-frm > 1)
+		fprintf (stdout, "Total = %12.1f %15.3f\n", totdur, total);
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.7
+log
+@add column for voxel max
+@
+text
+@d2 3
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgcnts/RCS/imgcnts.c,v 1.6 2008/07/25 16:23:58 tom Exp tom $";
+d120 10
+a129 2
+					if (img[i][j][k] > maxc)
+						maxc = img[i][j][k];
+@
+
+
+1.6
+log
+@expand info to include start, duration and overall totals
+@
+text
+@d2 3
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgcnts/RCS/imgcnts.c,v 1.5 2005/09/13 20:27:40 tom Exp tom $";
+d35 1
+a35 1
+main (argc, argv)
+d50 1
+d104 2
+a105 2
+				printf ("Frame  Start  Duration  Total Counts\n");
+				printf ("-----  -----  --------  ------------\n");
+d112 1
+d115 1
+a115 1
+				for (k = 1; k <= dim1; k++)
+d117 3
+d125 1
+a125 1
+		printf ("%3d  %7.0f %7.1f %15.3f\n", n, ((float) file->sh->start_time / 1000.) - start, dur, sum);
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			Jan 2003
+d22 1
+a22 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgcnts/RCS/imgcnts.c,v 1.4 2005/06/23 21:09:17 tom Exp tom $";
+d39 1
+d42 1
+a42 1
+	char           *fname1;
+d47 2
+d50 1
+a50 1
+	fname1 = argv[1];
+d62 1
+a62 1
+	file = make_imgfile (fname1);
+d64 1
+a64 1
+		fprintf (stderr, "ERROR [imgcnts]: Could not open %s\n", fname1);
+d68 1
+a68 1
+		fprintf (stderr, "ERROR [imgcnts]: Could not get MainHeader from %s\n", fname1);
+d71 1
+a71 1
+	frm1 = firstimgfrm(file);
+d74 1
+a74 1
+		fprintf (stderr, "ERROR [imgcnts]: Could not read file subheader in %s\n", fname1);
+d77 1
+d80 1
+a80 1
+	nfrms = file->mh->nframe;
+d85 3
+a87 1
+	if (frm == 0)
+a88 2
+	else
+		nfrms = frm;
+d91 1
+d94 10
+d106 1
+d113 3
+d117 1
+a117 2
+		fprintf (stdout, "Frm = %2d  Total Cnts = %.3f\n", n, sum);
+		free_f3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+d119 2
+a120 2
+	if (nfrms > 1)
+		fprintf (stdout, "          Total = %.3f\n", total);
+@
+
+
+1.4
+log
+@print counts for multiple frames
+@
+text
+@d2 3
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgcnts/RCS/imgcnts.c,v 1.3 2004/02/16 17:24:54 tom Exp tom $";
+d42 1
+a42 1
+	double          sum;
+d83 1
+d94 1
+d98 2
+@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgcnts/RCS/imgcnts.c,v 1.1 2003/01/16 17:32:54 tom Exp tom $";
+d36 1
+a36 1
+	int             frm;
+d38 2
+a39 1
+	long            sum, i, j, k;
+d44 4
+a47 1
+	indx.frm = frm;
+d52 1
+d62 2
+d70 1
+d75 4
+a78 2
+	if ((img = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+d80 9
+a88 5
+	sum = 0;
+	for (i = 1; i <= dim3; i++)
+		for (j = 1; j <= dim2; j++)
+			for (k = 1; k <= dim1; k++)
+				sum = sum + img[i][j][k];
+d90 3
+a92 3
+	fprintf (stdout, "Total counts = %ld\n", sum);
+
+	free_f3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 2
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgcnts/RCS/imgcnts.c,v 2.18 2000/09/06 19:03:44 tom Exp $";
+d24 1
+@

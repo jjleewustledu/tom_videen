@@ -1,0 +1,1119 @@
+head	3.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+3.1
+date	2009.10.19.14.22.43;	author tom;	state Exp;
+branches;
+next	3.0;
+
+3.0
+date	2008.10.13.19.22.18;	author tom;	state Exp;
+branches;
+next	2.4;
+
+2.4
+date	2008.09.18.20.28.29;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	2008.09.08.17.36.12;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	2008.08.21.18.02.38;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	2008.08.20.17.48.36;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2008.08.07.19.44.28;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2008.05.08.21.11.25;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2007.08.31.16.07.27;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2006.04.28.20.58.33;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2005.09.08.19.42.43;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2005.06.23.20.30.47;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2005.06.21.14.00.44;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2004.10.05.19.02.42;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2004.09.07.19.26.08;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2004.08.27.20.27.08;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+3.1
+log
+@read pixel_size from older version headers that don't specify _x or _y
+@
+text
+@/*	$Log: focus2img.c,v $
+ * Revision 3.0  2008/10/13  19:22:18  tom
+ * decay-correction handling should finally be consistent with the way ECAT files are handled
+ *
+ * Revision 2.4  2008/09/18  20:28:29  tom
+ * force pixel size to be less than 1x1x0.1 cm in file header
+ *
+ * Revision 2.3  2008/09/08  17:36:12  tom
+ * try to get pixel_size right
+ *
+ * Revision 2.2  2008/08/21  18:02:38  tom
+ * *** empty log message ***
+ *
+ * Revision 2.1  2008/08/20  17:48:36  tom
+ * declare main as int
+ *
+ * Revision 2.0  2008/08/07  19:44:28  tom
+ * correct handling of decay-correction
+ *
+ * Revision 1.9  2008/05/08  21:11:25  tom
+ * fixed pixel size (now in mm instead of cm)
+ *
+ * Revision 1.8  2007/08/31  16:07:27  tom
+ * read x, y, z voxel dimensions from pixel_size_x, pixel_size_y, pixel_size_z
+ *
+ * Revision 1.7  2006/04/28  20:58:33  tom
+ * default pixel sizes
+ *
+ * Revision 1.6  2005/09/08  19:42:43  tom
+ * fix scaling for attenuation images
+ *
+ * Revision 1.5  2005/06/23  20:30:47  tom
+ * multiply by frame duration so ECAT files are saved properly scaled
+ *
+ * Revision 1.4  2005/06/21  14:00:44  tom
+ * skip extra comments at beginning of hdr files
+ *
+ * Revision 1.3  2004/10/05  19:02:42  tom
+ * flip images right/left
+ *
+ * Revision 1.2  2004/09/07  19:26:08  tom
+ * dynamic images
+ *
+ * Revision 1.1  2004/08/27  20:27:08  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			focus2img.c
+ *	Date:			Aug 2004
+ *	Author:			Tom Videen
+ *	Description:	Convert FOCUS images into ECAT Matrix 7 format
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 3.0 2008/10/13 19:22:18 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+
+int main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	ImageFile      *file;
+	Index           indx;
+	FILE           *ffh;			 /* FOCUS file header */
+	FILE           *ffi;			 /* FOCUS file image */
+	char           *ffhname;		 /* FOCUS header filename  */
+	char           *ffiname;		 /* FOCUS image filename */
+	char           *ecatimg;		 /* output PET image filename */
+	char            runstamp[40];		 /* version, date and userid info */
+	char            isotope[8];
+	char            compound[32];
+	char            facility_name[20];
+	char           *ptr;
+	char            str[256];
+	short          *simg;
+	float           val;
+	float           size[3];
+	long            dim[4];
+	int             nframes = 1;
+	int             i, k, m, n;
+	long            len;
+	long            nbytes;
+	long            itmp, itmp0;
+	int             fnum = 0;
+	float           ftmp;
+	int             order = 0;
+	int             ftype = 0;
+	int             ntype = 0;
+	int             ndim = 0;
+	int             scatcor = 0;
+	int             filter = 0;
+	float           cutoff = 0;
+	float           cal_factor = 0;
+	float           bed_hor = 0;
+	float           bed_ver = 0;
+
+	float          *frm_start;
+	float          *frm_duration;
+	float          *scl_factor;
+	float          *deadtime_cor;
+	float          *decay_cor;
+	float           scaler;
+
+	float           global_max = 0;
+	float           global_min = 0;
+	long            ndim1, ndim2, ndim3;	 /* dimensions of image */
+	float        ***image;			 /* output image */
+
+	union {
+		unsigned short  s[2];
+		float           f;
+	}               conv;
+
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 11) {
+		(void) printf ("Usage: focus2img focus.img.hdr focus.img ecat.v\n");
+		return (ERROR);
+	}
+	ffhname = argv[1];
+	ffiname = argv[2];
+	ecatimg = argv[3];
+
+	n = 4;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n + 1], argv[n + 2],
+			argv[n + 4], argv[n + 5], argv[n + 6]);
+
+	size[0] = 0.189808;
+	size[1] = 0.189808;
+	size[2] = 0.0796;
+
+/*
+ * Read FOCUS file
+ */
+
+	if ((ffh = fopen (ffhname, "r")) == 0) {
+		(void) printf ("ERROR [focus2img]: opening FOCUS header %s\n", ffhname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), ffh) == NULL) {
+		(void) printf ("ERROR [focus2img]: reading %s\n", ffhname);
+		return (ERROR);
+	}
+	if (strncmp (str, "#", 1) != 0) {
+		(void) printf ("%s\n", str);
+		(void) printf ("ERROR [focus2img]: %s is not in FOCUS format\n", ffhname);
+		return (ERROR);
+	}
+	while (strncmp (str, "# Header file", 13) != 0) {
+		if (fgets (str, sizeof (str), ffh) == NULL) {
+			(void) printf ("ERROR [focus2img]: reading %s\n", ffhname);
+			return (ERROR);
+		}
+	}
+	while (fgets (str, sizeof (str), ffh) != NULL) {
+		if (strncmp (str, "#", 1) != 0) {
+			if (strstr (str, "end_of_header") != NULL)
+				break;
+			ptr = strstr (str, " ");
+			if (ptr != NULL) {
+				ptr++;
+				if (strstr (str, "data_type") != NULL) {
+					(void) sscanf (ptr, "%d", &ntype);
+					continue;
+				}
+				if (strstr (str, "number_of_dimensions") != NULL) {
+					(void) sscanf (ptr, "%d", &ndim);
+					continue;
+				}
+				if (strstr (str, "x_dimension") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[0]);
+					continue;
+				}
+				if (strstr (str, "y_dimension") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[1]);
+					continue;
+				}
+				if (strstr (str, "z_dimension") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[2]);
+					continue;
+				}
+				if (strstr (str, "x_filter") != NULL) {
+					(void) sscanf (ptr, "%d %f", &filter, &cutoff);
+					continue;
+				}
+				if (strstr (str, "scatter_correction") != NULL) {
+					(void) sscanf (ptr, "%d", &scatcor);
+					continue;
+				}
+				if (strstr (str, "calibration_factor") != NULL) {
+					(void) sscanf (ptr, "%f", &cal_factor);
+					continue;
+				}
+				if (strstr (str, "total_frames") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[3]);
+					nframes = dim[3];
+					continue;
+				}
+				if (strstr (str, "pixel_size_x") != NULL) {
+					(void) sscanf (ptr, "%f", &val);
+					if (val > 0 && val < 1.0) size[0] = val;
+					continue;
+				}
+				if (strstr (str, "pixel_size_y") != NULL) {
+					(void) sscanf (ptr, "%f", &val);
+					if (val > 0 && val < 1.0) size[1] = val;
+					continue;
+				}
+				if (strstr (str, "pixel_size_z") != NULL) {
+					(void) sscanf (ptr, "%f", &val);
+					if (val > 0 && val < 0.1) size[2] = val;
+					continue;
+				}
+				if (strstr (str, "pixel_size") != NULL) {
+					(void) sscanf (ptr, "%f", &val);
+					if (val > 0 && val < 0.1) {
+						size[0] = val;
+						size[1] = val;
+					}
+					continue;
+				}
+				if (strstr (str, "file_type") != NULL) {
+					(void) sscanf (ptr, "%d", &ftype);
+					if (ftype != 5 && ftype != 8) {
+						(void) printf ("ERROR [focus2img]: file_type must be 5 or 8 for images and not %d\n", ftype);
+						return (ERROR);
+					}
+					continue;
+				}
+				if (strstr (str, "data_order") != NULL) {
+					(void) sscanf (ptr, "%d", &order);
+					if (order != 1) {
+						(void) printf ("ERROR [focus2img]: data_order must be 1 for images and not %d\n", order);
+						return (ERROR);
+					}
+					continue;
+				}
+				if (strstr (str, "isotope ") != NULL) {
+					(void) strncpy (isotope, ptr, 7);
+					continue;
+				}
+				if (strstr (str, "injected_compound") != NULL) {
+					(void) strncpy (compound, ptr, 31);
+					continue;
+				}
+				if (strstr (str, "institution") != NULL) {
+					(void) strncpy (facility_name, ptr, 19);
+					continue;
+				}
+			}
+		}
+	}
+	fprintf (stdout, "dim: %ldx%ldx%ld  frames: %ld  pixel_size: %f x %f x %f cm   datatype: %d\n",
+		dim[0], dim[1], dim[2], dim[3], size[0], size[1], size[2], ntype);
+
+/* Read Frame Data */
+
+	frm_start = calloc (nframes, sizeof (float));
+	frm_duration = calloc (nframes, sizeof (float));
+	scl_factor = calloc (nframes, sizeof (float));
+	deadtime_cor = calloc (nframes, sizeof (float));
+	decay_cor = calloc (nframes, sizeof (float));
+
+	while (fgets (str, sizeof (str), ffh) != NULL) {
+		if (strncmp (str, "#", 1) != 0) {
+			ptr = strstr (str, " ");
+			if (ptr != NULL) {
+				ptr++;
+				if (strstr (str, "frame ") != NULL) {
+					(void) sscanf (ptr, "%ld", &itmp);
+					fnum = itmp;
+					continue;
+				}
+				if (strstr (str, "data_file_pointer") != NULL) {
+					(void) sscanf (ptr, "%ld %ld", &itmp0, &itmp);
+					continue;
+				}
+				if (strstr (str, "frame_start") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					frm_start[fnum] = 1000 * ftmp;
+					continue;
+				}
+				if (strstr (str, "frame_duration") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					frm_duration[fnum] = 1000 * ftmp;
+					continue;
+				}
+				if (strstr (str, "scale_factor") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					scl_factor[fnum] = ftmp;
+					continue;
+				}
+				if (strstr (str, "deadtime_correction") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					deadtime_cor[fnum] = ftmp;
+					continue;
+				}
+				if (strstr (str, "decay_correction") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					decay_cor[fnum] = ftmp;
+					/* fprintf (stdout, "%d %f\n",fnum, decay_cor[fnum]); */
+					continue;
+				}
+				if (strstr (str, "vertical_bed_offset") != NULL) {
+					(void) sscanf (ptr, "%f", &bed_ver);
+					continue;
+				}
+				if (strstr (str, "bed_offset") != NULL) {
+					(void) sscanf (ptr, "%f", &bed_hor);
+					continue;
+				}
+				if (strstr (str, "end_of_header") != NULL) {
+					break;
+				}
+			}
+		}
+	}
+	(void) fclose (ffh);
+
+/*
+ *	Read first frame of image data (fnum=0) and compute min and max
+ */
+
+	ndim1 = dim[0];
+	ndim2 = dim[1];
+	ndim3 = dim[2];
+	fnum = 0;
+	if (ftype == 8) 
+		scaler = scl_factor[fnum];		/* attenuation file	*/
+	else
+		scaler = scl_factor[fnum] * frm_duration[fnum] / decay_cor[fnum];
+	len = ndim1;
+	if ((image = f3tensor (1, ndim3, 1, ndim2, 1, ndim1)) == NULL) {
+		fprintf (stderr, "ERROR [focus2img]: malloc image\n");
+		return (ERROR);
+	}
+	if ((ffi = fopen (ffiname, "r")) == 0) {
+		(void) printf ("ERROR [focus2img]: opening FOCUS image %s\n", ffiname);
+		return (ERROR);
+	}
+	switch (ntype) {
+	case 2:				 /* VAX short integer */
+		nbytes = len * sizeof (short);
+		simg = (short *) calloc (len, sizeof (short));
+		if (simg == NULL)
+			return (ERROR);
+		for (m = 1; m <= dim[2]; m++) {
+			for (k = 1; k <= dim[1]; k++) {
+				if (fread (simg, nbytes, 1, ffi) != 1) {
+					(void) printf ("ERROR [focus2img]: reading %s   frm %d\n", ffiname, fnum + 1);
+					return (ERROR);
+				} else {
+					swap_byte ((char *) simg, nbytes);
+					for (i = 0; i < len; i++) {
+						val = scaler * (float) simg[i];
+						image[m][k][len - 1 - i] = val;
+						if (val > global_max)
+							global_max = val;
+						else if (val < global_min)
+							global_min = val;
+					}
+				}
+			}
+		}
+		free (simg);
+		break;
+
+	case 4:				 /* VAX float */
+		nbytes = len * sizeof (long);
+		simg = (short *) calloc (2 * len, sizeof (short));
+		if (simg == NULL)
+			return (ERROR);
+		for (m = 1; m <= dim[2]; m++) {
+			for (k = 1; k <= dim[1]; k++) {
+				if (fread (simg, nbytes, 1, ffi) != 1) {
+					(void) printf ("ERROR [focus2img]: reading %s   frm %d\n", ffiname, fnum + 1);
+					return (ERROR);
+				} else {
+					swap_word (simg, nbytes / 2);
+					swap_byte ((char *) simg, nbytes);
+					for (i = 0; i < len; i++) {
+						conv.s[0] = simg[2 * i];
+						conv.s[1] = simg[2 * i + 1];
+						val = scaler * conv.f;
+						image[m][k][len - 1 - i] = val;
+						if (val > global_max)
+							global_max = val;
+						else if (val < global_min)
+							global_min = val;
+					}
+				}
+			}
+		}
+		free (simg);
+		break;
+
+	default:
+		(void) printf ("ERROR [focus2img]: unrecognized data_type %d\n", ntype);
+		return (ERROR);
+	}
+
+/*
+ *	Create ECAT file
+ */
+
+	file = make_imgfile (ecatimg);
+	if (make_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [focus2img]: making mh for %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (make_sh (file) == ERROR) {
+		fprintf (stderr, "ERROR [focus2img]: making sh for %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ *	Define ECAT file properties
+ */
+
+	file->mh->file_format = MATRIX_REV7;
+	file->mh->filetype = PetVolume;
+	file->mh->scanner_type = 220;
+	file->mh->start_time = frm_start[fnum];
+	k = strlen (isotope);
+	if (k < 0)
+		k = 1;
+	for (i = 0; i < k; i++)
+		file->mh->isotope[i] = isotope[i];
+	for (i = k - 1; i < 8; i++)
+		file->mh->isotope[i] = ' ';
+	k = strlen (compound);
+	if (k < 0)
+		k = 1;
+	for (i = 0; i < k; i++)
+		file->mh->radiopharmaceutical[i] = compound[k];
+	for (i = k - 1; i < 32; i++)
+		file->mh->radiopharmaceutical[i] = ' ';
+	file->mh->bed_elevation = bed_ver;
+	file->mh->wobble_speed = 0;
+	file->mh->calibration_factor = cal_factor;
+	file->mh->sw_revision = (char *) calloc (32, sizeof (char));
+	file->mh->filetime = (char *) calloc (32, sizeof (char));
+	file->mh->nplane = ndim3;
+	file->mh->nframe = nframes;
+	file->mh->ngate = 1;
+	file->mh->nbed = 1;
+	file->mh->init_bed_pos = bed_hor;
+	for (i = 0; i < 16; i++)
+		file->mh->bed_off[i] = 0;
+	file->mh->slicesep = size[2];
+
+	file->sh->number_format = SHORT_DATA;
+	file->sh->ndim = 3;
+	file->sh->dim1 = ndim1;
+	file->sh->dim2 = ndim2;
+	file->sh->dim3 = ndim3;
+	file->sh->sample_size_1 = size[0];
+	file->sh->sample_size_2 = size[0];
+	file->sh->sample_size_3 = size[2];
+	file->sh->start_time = frm_start[fnum];
+	file->sh->duration = frm_duration[fnum];
+	file->mh->nplane = ndim3;
+	file->mh->orientation = 0;
+	file->sh->dim3 = ndim3;
+	file->sh->decay_corr = decay_cor[fnum];
+	file->sh->max = global_max;
+	file->sh->min = global_min;
+	file->sh->filter_code = filter;
+	file->sh->filter_cutoff_frequency = cutoff;
+	file->sh->filter_scatter_fraction = scatcor;
+	file->sh->filter_scatter_slope = scatcor;
+
+
+	if (make_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [focus2img]: making mh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+	(void) fill_mh7 (file);
+	if (make_sh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [focus2img]: making sh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+	(void) strncpy (file->m7->mh->original_file_name, ffiname, 31);
+	(void) strncpy (file->m7->mh->facility_name, facility_name, 19);
+	file->m7->mh->system_type = 220;
+	file->m7->mh->plane_separation = size[2];
+	file->m7->sh->decay_corr_fctr = decay_cor[fnum];
+	file->m7->sh->x_pixel_size = size[0];
+	file->m7->sh->y_pixel_size = size[0];
+	file->m7->sh->z_pixel_size = size[2];
+	file->m7->sh->image_max = global_max;
+	file->m7->sh->image_min = global_min;
+	file->m7->sh->frame_duration = frm_duration[fnum];
+	(void) save_rcs (file, rcsid, runstamp);
+
+/*
+ *	Write ECAT image file
+ */
+
+	(void) strcpy (file->name, ecatimg);
+	(void) strcpy (file->mode, "w");
+
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [focus2img]: opening %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [focus2img]: writing %s\n", ecatimg);
+		return (ERROR);
+	}
+	indx.frm = fnum + 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	fprintf (stderr, "Writing %s  frm: %2d  len: %6.1f  max: %f  min: %f  decay_cor: %.2f\n",
+		 ecatimg, indx.frm, frm_duration[fnum] / 1000., global_max, global_min, decay_cor[fnum]);
+	if (writetensor (file, &indx, image) == ERROR) {
+		fprintf (stderr, "ERROR [focus2img]: writing %s\n", ecatimg);
+		return (ERROR);
+	}
+
+/* Repeat for additional frames */
+
+	for (fnum = 1; fnum < nframes; fnum++) {
+		scaler = scl_factor[fnum] * frm_duration[fnum] / decay_cor[fnum];
+		indx.frm = fnum + 1;
+		global_max = 0;
+		global_min = 0;
+		switch (ntype) {
+		case 2:			 /* VAX short integer */
+			nbytes = len * sizeof (short);
+			simg = (short *) calloc (len, sizeof (short));
+			for (m = 1; m <= dim[2]; m++) {
+				for (k = 1; k <= dim[1]; k++) {
+					if (fread (simg, nbytes, 1, ffi) != 1) {
+						(void) printf ("ERROR [focus2img]: reading %s   frm %d\n", ffiname, indx.frm);
+						return (ERROR);
+					} else {
+						swap_byte ((char *) simg, nbytes);
+						for (i = 0; i < len; i++) {
+							val = scaler * (float) simg[i];
+							image[m][k][len - 1 - i] = val;
+							if (val > global_max)
+								global_max = val;
+							else if (val < global_min)
+								global_min = val;
+						}
+					}
+				}
+			}
+			free (simg);
+			break;
+
+		case 4:			 /* VAX float */
+			nbytes = len * sizeof (long);
+			simg = (short *) calloc (2 * len, sizeof (short));
+			for (m = 1; m <= dim[2]; m++) {
+				for (k = 1; k <= dim[1]; k++) {
+					if (fread (simg, nbytes, 1, ffi) != 1) {
+						(void) printf ("ERROR [focus2img]: reading %s   frm %d\n", ffiname, indx.frm);
+						return (ERROR);
+					} else {
+						swap_word (simg, nbytes / 2);
+						swap_byte ((char *) simg, nbytes);
+						for (i = 0; i < len; i++) {
+							conv.s[0] = simg[2 * i];
+							conv.s[1] = simg[2 * i + 1];
+							val = scaler * conv.f;
+							image[m][k][len - 1 - i] = val;
+							if (val > global_max)
+								global_max = val;
+							else if (val < global_min)
+								global_min = val;
+						}
+					}
+				}
+			}
+			free (simg);
+			break;
+
+		}
+		file->sh->start_time = frm_start[fnum];
+		file->sh->duration = frm_duration[fnum];
+		file->sh->decay_corr = decay_cor[fnum];
+		file->sh->max = global_max;
+		file->sh->min = global_min;
+		file->m7->sh->decay_corr_fctr = decay_cor[fnum];
+		file->m7->sh->image_max = global_max;
+		file->m7->sh->image_min = global_min;
+		file->m7->sh->frame_start_time = frm_start[fnum];
+		file->m7->sh->frame_duration = frm_duration[fnum];
+		fprintf (stderr, "Writing %s  frm: %2d  len: %6.1f  max: %f  min: %f  decay_cor: %.2f\n",
+			ecatimg, indx.frm, frm_duration[fnum] / 1000., global_max, global_min, decay_cor[fnum]);
+		if (writetensor (file, &indx, image) == ERROR) {
+			fprintf (stderr, "ERROR [focus2img]: writing %s frm %d\n", ecatimg, indx.frm);
+			return (ERROR);
+		}
+	}
+
+/*
+ *	Free & Exit
+ */
+
+	(void) fclose (ffi);
+	free_imgfile (file);
+	free (simg);
+	free_f3tensor (image, 1, ndim3, 1, ndim2, 1, ndim1);
+	free (frm_start);
+	free (frm_duration);
+	free (scl_factor);
+	free (deadtime_cor);
+	free (decay_cor);
+	return (OK);
+}
+@
+
+
+3.0
+log
+@decay-correction handling should finally be consistent with the way ECAT files are handled
+@
+text
+@d2 3
+d54 1
+a54 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 2.4 2008/09/18 20:28:29 tom Exp $";
+d225 8
+@
+
+
+2.4
+log
+@force pixel size to be less than 1x1x0.1 cm in file header
+@
+text
+@d2 3
+d51 1
+a51 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 2.3 2008/09/08 17:36:12 tom Exp tom $";
+d331 1
+a331 1
+		scaler = scl_factor[fnum] * frm_duration[fnum];
+d525 1
+a525 1
+		scaler = scl_factor[fnum] * frm_duration[fnum];
+@
+
+
+2.3
+log
+@try to get pixel_size right
+@
+text
+@d2 3
+d48 1
+a48 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 2.2 2008/08/21 18:02:38 tom Exp tom $";
+d206 1
+a206 1
+					if (val > 0) size[0] = val;
+d211 1
+a211 1
+					if (val > 0) size[1] = val;
+d216 1
+a216 1
+					if (val > 0) size[2] = val;
+d250 2
+a251 1
+	fprintf (stdout, "dim: %ldx%ldx%ld  frames: %ld  datatype: %d\n", dim[0], dim[1], dim[2], dim[3], ntype);
+@
+
+
+2.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d45 1
+a45 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 2.1 2008/08/20 17:48:36 tom Exp tom $";
+d202 2
+a203 2
+					(void) sscanf (ptr, "%f", &size[0]);
+					size[0] *= 0.1;
+d207 2
+a208 2
+					(void) sscanf (ptr, "%f", &size[1]);
+					size[1] *= 0.1;
+d212 2
+a213 2
+					(void) sscanf (ptr, "%f", &size[2]);
+					size[2] *= 0.1;
+@
+
+
+2.1
+log
+@declare main as int
+@
+text
+@d2 3
+d42 1
+a42 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 2.0 2008/08/07 19:44:28 tom Exp tom $";
+d355 1
+d384 1
+d521 2
+d541 1
+d545 2
+d568 1
+@
+
+
+2.0
+log
+@correct handling of decay-correction
+@
+text
+@d2 3
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.9 2008/05/08 21:11:25 tom Exp tom $";
+d50 1
+a50 1
+main (argc, argv)
+@
+
+
+1.9
+log
+@fixed pixel size (now in mm instead of cm)
+@
+text
+@d2 3
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.8 2007/08/31 16:07:27 tom Exp tom $";
+d285 1
+d497 2
+a498 2
+	fprintf (stderr, "Writing %s  frm: %2d  len: %6.1f  max: %f  min: %f\n",
+		 ecatimg, indx.frm, frm_duration[fnum] / 1000., global_max, global_min);
+d503 1
+d568 2
+a569 2
+		fprintf (stderr, "Writing %s  frm: %2d  len: %6.1f  max: %f  min: %f\n",
+			 ecatimg, indx.frm, frm_duration[fnum] / 1000., global_max, global_min);
+@
+
+
+1.8
+log
+@read x, y, z voxel dimensions from pixel_size_x, pixel_size_y, pixel_size_z
+@
+text
+@d2 3
+d33 1
+a33 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.7 2006/04/28 20:58:33 tom Exp tom $";
+d191 1
+d196 1
+d201 1
+@
+
+
+1.7
+log
+@default pixel sizes
+@
+text
+@d2 3
+d30 1
+a30 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.6 2005/09/08 19:42:43 tom Exp tom $";
+d186 1
+a186 1
+				if (strstr (str, "pixel_size") != NULL) {
+a187 1
+					size[1] = size[0];
+d190 5
+a194 1
+				if (strstr (str, "axial_plane_size") != NULL) {
+@
+
+
+1.6
+log
+@fix scaling for attenuation images
+@
+text
+@d2 3
+d27 1
+a27 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.5 2005/06/23 20:30:47 tom Exp tom $";
+d112 4
+@
+
+
+1.5
+log
+@multiply by frame duration so ECAT files are saved properly scaled
+@
+text
+@d2 3
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.4 2005/06/21 14:00:44 tom Exp $";
+d289 4
+a292 1
+	scaler = scl_factor[fnum] * frm_duration[fnum];
+@
+
+
+1.4
+log
+@skip extra comments at beginning of hdr files
+@
+text
+@d2 3
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.3 2004/10/05 19:02:42 tom Exp tom $";
+d72 6
+a77 5
+	float           *frm_start;
+	float           *frm_duration;
+	float           *scl_factor;
+	float           *deadtime_cor;
+	float           *decay_cor;
+d217 5
+a221 5
+	frm_start = calloc(nframes, sizeof(float));
+	frm_duration = calloc(nframes, sizeof(float));
+	scl_factor = calloc(nframes, sizeof(float));
+	deadtime_cor = calloc(nframes, sizeof(float));
+	decay_cor = calloc(nframes, sizeof(float));
+d286 1
+d310 2
+a311 2
+						val = scl_factor[fnum] * (float) simg[i];
+						image[m][k][len-1-i] = val;
+d338 2
+a339 2
+						val = scl_factor[fnum] * conv.f;
+						image[m][k][len-1-i] = val;
+d469 1
+a469 1
+		ecatimg, indx.frm, frm_duration[fnum]/1000., global_max, global_min);
+d477 1
+d491 2
+a492 2
+							val = scl_factor[fnum] * (float) simg[i];
+							image[m][k][len-1-i] = val;
+d515 2
+a516 2
+							val = scl_factor[fnum] * conv.f;
+							image[m][k][len-1-i] = val;
+d539 1
+a539 1
+			ecatimg, indx.frm, frm_duration[fnum]/1000., global_max, global_min);
+d554 5
+a558 5
+	free(frm_start);
+	free(frm_duration);
+	free(scl_factor);
+	free(deadtime_cor);
+	free(decay_cor);
+@
+
+
+1.3
+log
+@flip images right/left
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.2 2004/09/07 19:26:08 tom Exp tom $";
+d119 5
+a123 3
+	if (fgets (str, sizeof (str), ffh) == NULL) {
+		(void) printf ("ERROR [focus2img]: reading %s\n", ffhname);
+		return (ERROR);
+a124 5
+	if (strncmp (str, "# Header file", 13) != 0) {
+		(void) printf ("%s\n", str);
+		(void) printf ("ERROR [focus2img]: %s is not in FOCUS format\n", ffhname);
+		return (ERROR);
+	}
+@
+
+
+1.2
+log
+@dynamic images
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.1 2004/08/27 20:27:08 tom Exp tom $";
+d306 1
+a306 1
+						image[m][k][i] = val;
+d334 1
+a334 1
+						image[m][k][i] = val;
+d486 1
+a486 1
+							image[m][k][i] = val;
+d510 1
+a510 1
+							image[m][k][i] = val;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2img/RCS/focus2img.c,v 1.5 2004/04/14 16:36:50 tom Exp $";
+d45 1
+d50 1
+d62 7
+a68 3
+	float           decay_cor = 1;
+	float           frm_duration = 0;
+	float           scl_factor = 1;
+d163 1
+d206 1
+a206 1
+	fprintf (stdout, "dim: %ldx%ldx%ld  datatype: %d\n", dim[0], dim[1], dim[2], ntype);
+d210 6
+d223 1
+d232 1
+d236 2
+a237 1
+					(void) sscanf (ptr, "%f", &frm_duration);
+d241 2
+a242 1
+					(void) sscanf (ptr, "%f", &scl_factor);
+d247 1
+d251 2
+a252 1
+					(void) sscanf (ptr, "%f", &decay_cor);
+d272 1
+a272 1
+ *	Read image data and compute min and max
+d278 1
+d294 2
+a295 2
+		for (m = 1; m <= dim[3]; m++) {
+			for (k = 1; k <= dim[2]; k++) {
+d297 1
+a297 1
+					(void) printf ("ERROR [focus2img]: reading %s\n", ffiname);
+d302 1
+a302 1
+						val = scl_factor * (float) simg[i];
+d322 1
+a322 1
+					(void) printf ("ERROR [focus2img]: reading %s %d %d\n", ffiname, m, k);
+d330 1
+a330 1
+						val = scl_factor * conv.f;
+a345 1
+	(void) fclose (ffi);
+a346 6
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+d367 1
+a367 1
+	file->mh->start_time = 0;
+d388 1
+a388 1
+	file->mh->nframe = 1;
+d404 2
+a405 2
+	file->sh->start_time = 0;
+	file->sh->duration = 1000. * frm_duration;
+d409 1
+a409 1
+	file->sh->decay_corr = decay_cor;
+d431 1
+a431 1
+	file->m7->sh->decay_corr_fctr = decay_cor;
+d437 1
+a437 1
+	file->m7->sh->frame_duration = frm_duration;
+a438 1
+	(void) printf ("max: %f  min: %f  len: %f\n", global_max, global_min, frm_duration);
+d446 1
+a446 1
+	indx.frm = 1;
+d455 7
+d466 71
+d541 1
+d545 5
+@

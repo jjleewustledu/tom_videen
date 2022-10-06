@@ -1,0 +1,228 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2005.06.01.13.52.32;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*  $Log$ */
+/* =============================================================================
+ *  Module:         merge_dynecat.c
+ *  Date:           Jun 2005
+ *  Author:         Tom Videen
+ *  Description:    Merge multiple ECAT frames into a single image
+ * =============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/merge_dynecat/RCS/merge_dynecat.c,v 1.5 2005/01/25 20:58:29 tom Exp $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <imgutil.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+
+{
+	ImageFile      *file1, *file2;
+	Index           indx;
+	MainHeader     *mh;
+	SubHeader      *sh;
+	FILE           *recfp;			 /* rec file pointer */
+	char           *recfile;		 /* rec filename */
+	float        ***img;			 /* input tensor */
+	char           *root;			 /* root of file to read */
+	char            infile[256];		 /* file to read */
+	char            frame[10];		 /* frame to read */
+	char           *ext;			 /* extension of file to read */
+	char           *outfile;		 /* file to write */
+	char            runstamp[40];		 /* version, date and userid info */
+	int             firstfrm, lastfrm;
+	int             frm, nframes;
+	int             nx, ny, nz;		 /* array dimensions */
+	int             fformat;
+	int             i;
+
+/* Get command line arguments	*/
+
+	if (argc < 14) {
+		printf ("Usage: merge_dynecat in firstfrm lastfrm ext out rec\n");
+		return (1);
+	}
+	root = argv[1];
+	firstfrm = atoi (argv[2]);
+	lastfrm = atoi (argv[3]);
+	ext = argv[4];
+	outfile = argv[5];
+	recfile = argv[6];
+	if (lastfrm < firstfrm) {
+		printf ("Last frame (%d) must be >= first frame (%d)\n", lastfrm, firstfrm);
+		return (1);
+	}
+	nframes = lastfrm - firstfrm + 1;
+	i = 6;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[i + 1], argv[i + 2], argv[i + 3],
+			argv[i + 4], argv[i + 6], argv[i + 7]);
+
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*	Open rec file */
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [merge_dynecat]: Cannot open %s\n", recfile);
+		return (ERROR);
+	}
+/*
+ *	Get main header and subheader of first image.
+ *	Store RCS version in mh->sw_revision.
+ */
+
+	(void) strcpy (infile, root);
+	(void) sprintf (frame, "%d", firstfrm);
+	(void) strcat (infile, frame);
+	(void) strcat (infile, ext);
+	file1 = make_imgfile (infile);
+	(void) strcpy (file1->mode, "r");
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [merge_dynecat]: Cannot open %s\n", infile);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [merge_dynecat]: Reading mainheader of %s\n", infile);
+		return (ERROR);
+	}
+	indx.frm = firstfrm;
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [merge_dynecat]: Reading subheader of %s\n", infile);
+		return (ERROR);
+	}
+	mh = file1->mh;
+	sh = file1->sh;
+	nx = sh->dim1;
+	ny = sh->dim2;
+	nz = sh->dim3;
+	if ((img = f3tensor (1, nz, 1, ny, 1, nx)) == NULL) {
+		fprintf (stderr, "ERROR [merge_dynecat]: Cannot malloc img\n");
+		return (ERROR);
+	}
+	printf ("Reading  %s  frm %d\n", infile, firstfrm);
+	if ((img = readtensor (file1, &indx)) == NULL) {
+		fprintf (stderr, "ERROR [merge_dynecat]: Reading %s\n", infile);
+		return (ERROR);
+	}
+	recout (recfp, infile);
+	(void) save_rcs (file1, rcsid, runstamp);
+	close_imgfile (file1);
+
+/*	Write first frame 	*/
+
+	file2 = make_imgfile (outfile);
+	file2->mh = mh;
+	file2->sh = sh;
+	file2->mh->nframe = lastfrm;
+	fformat = file1->mh->file_format;
+	if (fformat == MATRIX_REV7) {
+		(void) make_mh7 (file2);
+		(void) make_sh7 (file2);
+		file2->m7->mh = file1->m7->mh;
+		file2->m7->sh = file1->m7->sh;
+	} else if (fformat == MATRIX_REV6) {
+		(void) make_mh6 (file2);
+		(void) make_sh6 (file2);
+		file2->m6->mh = file1->m6->mh;
+		file2->m6->sh = file1->m6->sh;
+	} else if (fformat == PETT6) {
+		(void) make_hp6 (file2);
+		file2->p6 = file1->p6;
+	} else {
+		fprintf (stderr, "ERROR [merge_dynecat]: file format %d from %s\n", fformat, infile);
+		return (ERROR);
+	}
+
+	(void) strcpy (file2->mode, "w");
+	indx.pln = 1;
+	printf ("Writing  %s  frm %d\n", outfile, firstfrm);
+	if (open_imgfile (file2) == ERROR) {
+		fprintf (stderr, "ERROR [merge_dynecat]: Cannot open %s\n", outfile);
+		return (ERROR);
+	}
+	if (put_mh (file2) == ERROR) {
+		fprintf (stderr, "ERROR [merge_dynecat]: Writing mainheader of %s\n", outfile);
+		return (ERROR);
+	}
+	if (writetensor (file2, &indx, img) == ERROR) {
+		fprintf (stderr, "ERROR [merge_dynecat]: Writing data to %s\n", outfile);
+		return (ERROR);
+	}
+
+/*	Loop over all frames	*/
+
+	if (nframes > 1) {
+		for (frm = firstfrm + 1; frm <= lastfrm; frm++) {
+			(void) strcpy (infile, root);
+			(void) sprintf (frame, "%d", frm);
+			(void) strcat (infile, frame);
+			(void) strcat (infile, ext);
+			printf ("Reading  %s  frm %d\n", infile, frm);
+			indx.frm = frm;
+			indx.pln = 1;
+			file1->name = infile;
+			if (open_imgfile (file1) == ERROR) {
+				fprintf (stderr, "ERROR [merge_dynecat]: Cannot open %s\n", infile);
+				return (ERROR);
+			}
+			if (get_mh (file1) == ERROR) {
+				fprintf (stderr, "ERROR [merge_dynecat]: Reading mainheader of %s\n", infile);
+				return (ERROR);
+			}
+			if (get_sh (file1, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [merge_dynecat]: Reading subheader of %s\n", infile);
+				return (ERROR);
+			}
+			if ((img = readtensor (file1, &indx)) == NULL) {
+				fprintf (stderr, "ERROR [merge_dynecat]: Reading data from %s\n", infile);
+				return (ERROR);
+			}
+			recout (recfp, infile);
+			(void) save_rcs (file1, rcsid, runstamp);
+			close_imgfile (file1);
+			printf ("Writing  %s  frm %d\n", outfile, frm);
+			indx.pln = 1;
+			if (writetensor (file2, &indx, img) == ERROR) {
+				fprintf (stderr, "ERROR [merge_dynecat]: Writing data to %s\n", outfile);
+				return (ERROR);
+			}
+		}
+	}
+	close_imgfile (file2);
+	free_f3tensor (img, 1, nz, 1, ny, 1, nx);
+	free_imgfile (file1);
+	free_imgfile (file2);
+	(void) fclose (recfp);
+	return (OK);
+}
+@

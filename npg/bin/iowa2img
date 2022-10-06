@@ -1,0 +1,74 @@
+#!/bin/csh
+#	Module:	iowa2img
+#	Date:	Dec 2003
+#	Author:	Tom Videen
+#	Use:	Convert 1-3 Iowa Interfile image files to ECAT version 7 image file
+
+if ($#argv < 3 || $#argv > 5) then
+	echo "Usage:  iowa2img ecat inhdr img1 [img2 [img3]]"
+	echo " e.g.,  iowa2img cs20-001-ho1.v COS1.HDR COS1.IMG COS2.IMG COS3.IMG"
+	exit 1
+endif
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+set ecat = $1
+set hdr  = $2
+set img1 = $3
+set img2 = $4
+set img3 = $5
+
+if ($ecat:e != "v") then
+	echo "ERROR [iowa2img]: output file must have extension 'v'"
+	exit 1
+endif
+if (-e $ecat) echo "Replacing: $ecat"
+if (! -e $hdr) then
+	echo "ERROR [iowa2img]: $hdr does not exist"
+	exit 1
+endif
+if (! -e $img1) then
+	echo "ERROR [iowa2img]: $img1 does not exist"
+	exit 1
+endif
+if ($img2 != '') then
+	if (! -e $img2) then
+		echo "ERROR [iowa2img]: $img2 does not exist"
+		exit 1
+	endif
+endif
+if ($img3 != '') then
+	if (! -e $img3) then
+		echo "ERROR [iowa2img]: $img3 does not exist"
+		exit 1
+	endif
+endif
+
+# Byte-swap each IMG; then concatenate them to iowa2img$$.ifi
+switch ($#argv)
+case 3:
+	dd if=$img1 of=iowa2img$$.ifi conv=swab
+	breaksw
+case 4:
+	dd if=$img1 of=tmp1$$ conv=swab
+	dd if=$img2 of=tmp2$$ conv=swab
+	cat tmp1$$ tmp2$$ >! iowa2img$$.ifi
+	breaksw
+case 5:
+	dd if=$img1 of=tmp1$$ conv=swab
+	dd if=$img2 of=tmp2$$ conv=swab
+	dd if=$img3 of=tmp3$$ conv=swab
+	cat tmp1$$ tmp2$$ tmp3$$ >! iowa2img$$.ifi
+	breaksw
+endsw
+
+# Create Interfile header (iowa2img$$.ifh) from HDR
+set bytes = `ls -g iowa2img$$.ifi | cut -c22-32`
+set frames = `echo $bytes / 491520 | bc`
+sed -f ${NPG}/sed/iowa2if.sed $hdr >! tmp1$$
+sed "s/NEWNAME/iowa2img$$.ifi/" tmp1$$ >! tmp2$$
+sed "s/NEWFRAMES/$frames/" tmp2$$ >! iowa2img$$.ifh
+rm tmp?$$
+# Convert Interfile to ECAT format
+${NPG}/bin/iowa2img.bin $ecat iowa2img$$.ifh iowa2img$$.ifi
+rm iowa2img$$.if?

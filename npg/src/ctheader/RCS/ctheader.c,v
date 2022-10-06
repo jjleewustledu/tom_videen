@@ -1,0 +1,986 @@
+head	1.11;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.11
+date	2004.02.13.21.37.41;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2002.11.27.19.56.06;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2002.11.26.20.43.11;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.03.10.16.28.12;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.02.26.21.17.45;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.02.26.18.52.06;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.02.26.18.36.46;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.02.26.18.33.02;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.02.26.23.17.57;	author jane;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.06.10.06.00.36;	author jane;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial revision
+@
+
+
+1.11
+log
+@Feb 2004
+@
+text
+@/*$Log: ctheader.c,v $
+ * Revision 1.9  2002/11/27  19:56:06  tom
+ * *** empty log message ***
+ *
+ * Revision 1.8  2002/11/26  20:43:11  tom
+ * *** empty log message ***
+ *
+ * Revision 1.7  1999/03/10  16:28:12  tom
+ * add Table Position to non-verbose output
+ *
+ * Revision 1.6  1999/02/26  21:17:45  tom
+ * add check slices to output
+ *
+ * Revision 1.5  1999/02/26  18:52:06  tom
+ * revised printout
+ *
+ * Revision 1.4  1999/02/26  18:36:46  tom
+ * modify printout
+ *
+ * Revision 1.3  1999/02/26  18:33:02  tom
+ * added table increment to output
+ *
+ * Revision 1.2  1997/02/26  23:17:57  jane
+ * Updates to correspond to changes in get_sspct_head.c (libsspct):
+ *    1. 6th argument needed when calling get_sspct_head
+ *    2. table_incr --> exp_time ("TI" was misinterpreted)
+ *
+ * Revision 1.1  1996/06/10  06:00:36  jane
+ * Initial revision
+ **/
+/*  ===============================================================================
+ *  File:         ctheader.c
+ *  Date:         03-April-96
+ *  Author:       Jane Dunford-Shore
+ *  Description:  Read headers from specified Siemens Somatom Plus CT image files
+ *                (*.ima), and print selected header information to STDOUT.
+ *  Functions:    get_usage()
+ *                main()
+ *  Dependencies: This application assumes the Siemens Somatom Plus CT image file
+ *                format that was in use during at least the time period of Nov.,
+ *                1995 through the present (April, 1996). Currently, this
+ *                application does not verify the image format in any way.
+ *                The user should examine the values returned by ctheader for
+ *                reasonableness.
+ *  ===============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ANALYZE.h>
+#include <errhand.h>
+#include <sspct.h>
+#include <stringfns.h>
+
+#define MAXSTR 256
+
+/* ---------------------
+ * Function:    get_usage
+ * Synopsis:    static char *get_usage()
+ * Description: Define command-line syntax string for this application
+ * Purpose:     Make command-line syntax for application easy to locate and
+ *              change within source code
+ * Arguments:   None
+ * Modifies:    No external variables modified
+ * Returns:     Pointer to command syntax string
+ * Note:        Max. length of command syntax string is determined by constant
+ *              MAXLEN_CMDSYN, currently (5/8/96) defined as 1000 in errhand.h
+ * Example:
+ *              Example 1: err_handler(CMD_SYNTAX, get_usage());
+ *              Example 2: strcpy(string, get_usage());
+ * ---------------------
+ */
+
+static char    *get_usage ()
+{
+	static char     cmd_syntax[MAXLEN_CMDSYN];
+	strcpy (cmd_syntax, "Usage:    ctheader [ -v ] firstfile# lastfile#\n");
+	strcat (cmd_syntax, "Options:  -v (verbose) Print detailed header info. for each file.\n");
+	strcat (cmd_syntax, "Examples:\n");
+	strcat (cmd_syntax, "   ctheader 1 42    [Summary only for files 00001.ima - 00042.ima]\n");
+	strcat (cmd_syntax, "   ctheader -v 3 6  [Detailed info for files 00003.ima - 00006.ima]\n");
+	strcat (cmd_syntax, "   ctheader -v 1 1  [Detailed info. for file 00001.ima only]\n");
+	return cmd_syntax;
+}
+
+
+/* ---------------------
+ * Function:    main
+ * Synopsis:    int main (int argc, char *argv[])
+ * Description: Read headers from specified Siemens Somatom Plus CT image files
+ *              (*.ima), and print selected header information to STDOUT. If -v
+ *              option is specified, report separately on each file. Otherwise,
+ *              report summary information for entire set of images.
+ * Purpose:     Program ctheader is meant to be run prior to running ct2analyze
+ *              in order to make sure that the proper set of images is specified
+ *              to ct2analyze. The image header files are checked in two ways:
+ *              1. Any images which are localizers are identified.
+ *                 (Localizers should NOT be specified when ct2analyze is run.)
+ *                 The filenames of any localizers are listed in the summary
+ *                 report, and individual file reports for localizers contain the
+ *                 string "***Localizer***" if the -v option is specified.
+ *              2. Images that do not belong in the set are identified.
+ *                 ctheader checks to make sure that all of the images are from
+ *                 the same patient (name and birthdate) and the same study (date
+ *                 and time). Since all Somatom Plus CT image files have similar
+ *                 names (00001.ima, 00002.ima, etc.), there would otherwise be
+ *                 no way to know whether a set of images is homogeneous. Patient
+ *                 and study values from the first file specified are compared to
+ *                 values from subsequent files, and any mismatches are reported.
+ *              Program ctheader is also meant to be used for viewing values
+ *              that would normally appear on CT films for each image.
+ * Usage:       ctheader [ -v ] firstfile# lastfile#
+ * Options:     -v  Verbose. Print all field values for each file, in addition to
+ *              summary information. Fields displayed correspond roughly to those
+ *              which are displayed on image films. If -v option is not specified,
+ *              only summary information is printed.
+ * ------------
+ */
+
+int            main (int argc, char *argv[])
+{
+
+	/* Input files and associated structures and buffers */
+
+	char            input_file[MAXSTR];	 /* filename for input file (.ima) */
+	FILE           *fp_input = NULL;	 /* input file (*.ima) */
+	SSPCT_HDR      *header_info = NULL;	 /* (array of) SSPCT_HDR structures */
+	SSPCT_INIT      str_hdr_init;		 /* header values that get_sspct_head() needs */
+
+	/* Command line options/parameters and associated variables */
+
+	int             argno;				 /* argument number of interest */
+	BOOL            verbose = FALSE;	 /* print verbose (all details for each file) */
+										 /* set to TRUE if -v option specified */
+
+	int             first_fileno = 0;	 /* first file number (slice) */
+	int             last_fileno = 0;	 /* last file number (slice) */
+	int             num_slices = 0;		 /* number of slices or frames in CT */
+	int             slice;				 /* which slice is being dealt with -- */
+										 /* corresponds to number in filename  */
+
+	/* Multipurpose variables */
+	int             i;					 /* counter */
+	char            tmp[MAXSTR];		 /* for holding misc. strings */
+	char            tmp1[MAXSTR];		 /* for holding misc. strings */
+
+	/* Miscellaneous -- for reading header, reporting on values */
+	int             slice_index;		 /* ordinal position of slice in set (array index) */
+	int             localizer_ct;		 /* num of localizers (vs. axial slices) */
+
+	int				tpos[200];			 /* table positions */
+	int				incr[10];			 /* table increments (0-8,>8) */
+	int				step;				 /* table increment */
+	int				num;
+
+/*---------------------*
+ * End of Declarations *
+ *---------------------*/
+
+/* Initialize error handler */
+
+	err_handler_init (PROGNAME, argv[0]);
+	err_handler_init (CMD_SYNTAX, get_usage ());
+
+/* Get command-line parameters -- option(s) and slice numbers */
+
+	if (argc < 3)
+		err_handler (CMD_SYNTAX_ERR, "");
+
+/* See if any options specified on command line */
+
+	for (argno = 1; argno < argc && argv[argno][0] == '-'; argno++) {
+		switch (argv[argno][1]) {
+		case 'v':
+			verbose = TRUE;
+			break;
+		default:
+			err_handler (CMD_SYNTAX_ERR, "");
+		}
+	}
+
+/* After options, exactly two parameters should be left */
+
+	if (argc - argno != 2) 
+		err_handler (CMD_SYNTAX_ERR, "");
+
+/* Last two parameters should contain only digits */
+
+	if (!isalldigits (argv[argc - 2]))
+		err_handler (CMD_SYNTAX_ERR, "");
+	else
+		first_fileno = atoi (argv[argc - 2]);
+
+/* Last parameter (lastfile#) */
+
+	if (!isalldigits (argv[argc - 1]))
+		err_handler (CMD_SYNTAX_ERR, "");
+	else
+		last_fileno = atoi (argv[argc - 1]);
+
+/* Make sure file nos. not reversed. File numbers can be the same, however.
+ * Only one file is examined in that case. */
+
+	if (first_fileno > last_fileno) 
+		err_handler (CMD_SYNTAX_ERR, "");
+	num_slices = last_fileno - first_fileno + 1;
+
+/* Allocate space for SSPCT_HDR structures */
+
+	if ((header_info = (SSPCT_HDR *) malloc (sizeof (SSPCT_HDR) * num_slices)) == NULL) {
+		err_handler (MEM_ALLOC_ERR, "header_info structures");
+	}
+
+/*  For each file, read header bytes into buffer and extract info. from buffer. */
+
+	for (slice = first_fileno; slice <= last_fileno; slice++) {
+		slice_index = slice - first_fileno;
+		sprintf (input_file, "%05d.ima", slice);
+		if ((fp_input = fopen (input_file, "r")) == NULL)
+			err_handler (FILE_OPEN_ERR, input_file);
+
+	/* Provide values that cannot currently be extracted from header */
+
+		memset (&str_hdr_init, 0, sizeof (str_hdr_init));
+		str_hdr_init.num_slices = num_slices;
+		strcpy (str_hdr_init.infile, input_file);
+
+	/* Get info. that can be directly extracted from header */
+
+		get_sspct_head (fp_input, str_hdr_init, &header_info[slice_index], NULL, NULL, FALSE);
+		(void) fclose (fp_input);
+		tpos[slice] = atoi(header_info[slice_index].slice.table_pos);
+	}	 /* end for slice */
+
+/* If -v (verbose) option specified, print header to stdout */
+
+	if (verbose == TRUE) {
+		for (i = 0; i < num_slices; i++) {
+			fprintf (stdout, "----------\n");
+			fprintf (stdout, "%s:", header_info[i].slice.filename);
+			if (header_info[i].slice.image_type == LOCALIZER)
+				fprintf (stdout, " ***LOCALIZER***");
+			fprintf (stdout, "\n----------\n");
+
+			/* Pt. name and birthdate, and scan institution */
+			fprintf (stdout, "%-28s ", header_info[i].pt.pt_name_birth);
+			fprintf (stdout, "%s\n", header_info[i].scan.institution);
+
+			/* Scan id and scanner */
+			fprintf (stdout, "%-28s ", header_info[i].scan.scan_id);
+			fprintf (stdout, "%s\n", header_info[i].scan.system);
+
+			/* Image number (00001.ima is usually image 1, etc.) */
+			/* ordinal number in image set -- should be unique   */
+			fprintf (stdout, "Image %s\n", header_info[i].slice.image_no);
+
+			/* Slice time: format as HH:MM:SS */
+			strftime (tmp, 9, "%H:%M:%S", &(header_info[i].slice.str_date));
+			fprintf (stdout, "%s\n", tmp);
+
+			/* Scan number (00002.ima is usually scan 2, etc.)       */
+			/* If there is more than one output image for a given    */
+			/* slice scan, this number may be the same for more than */
+			/* one image -- e.g., see p5067 image set                */
+			fprintf (stdout, "Scan %s\n", header_info[i].slice.scan_no);
+
+			/* Table position and table increment */
+			fprintf (stdout, "TP %s\n", header_info[i].slice.table_pos);
+			fprintf (stdout, "TI %s\n", header_info[i].scan.exp_time);
+
+			/* kV, slice width, mAs, gantry tilt, and zoom */
+			fprintf (stdout, "kV %s\n", header_info[i].scan.kV);
+			fprintf (stdout, "SL %s\n", header_info[i].scan.slice_width);
+			fprintf (stdout, "mAs %s\n", header_info[i].scan.mAs);
+			fprintf (stdout, "GT %s\n", header_info[i].scan.gantry_tilt);
+			fprintf (stdout, "ZO %s\n", header_info[i].scan.zoom);
+
+			/* Center of image -- x and y in field */
+			fprintf (stdout, "CE %s\n", header_info[i].scan.ce_x);
+			fprintf (stdout, "   %s\n", header_info[i].scan.ce_y);
+
+			/* Field starting with "AH" or "TH", comments, scan date */
+			fprintf (stdout, "%-16s", header_info[i].slice.unknown);
+			fprintf (stdout, "%s\n", header_info[i].scan.comment1);
+			fprintf (stdout, "%-16s", header_info[i].scan.date);
+			fprintf (stdout, "%s\n", header_info[i].scan.comment2);
+
+		}
+
+/* Print summary if not (verbose) */
+
+	} else {
+
+/* Study date and time: Print values from first file and any values that don't match. */
+/* Use date/time from first image for comparison */
+
+		fprintf (stdout, "Study date:        ");
+		sprintf (tmp, "%s %s", header_info[0].scan.date, header_info[0].scan.time);
+		fprintf (stdout, "%s\n", tmp);
+
+/* Compare date/time from first image to date/time from each following image */
+
+		for (i = 1; i < num_slices; i++) {
+			sprintf (tmp1, "%s %s", header_info[0].scan.date, header_info[i].scan.time);
+			if (strcmp (tmp, tmp1)) {
+				fprintf (stdout, "   --->Error: %s doesn't match: ", header_info[i].slice.filename);
+				fprintf (stdout, "%s\n", tmp1);
+			}
+		}
+
+/* Patient name and birth date: Print value from first file, and any values that don't match */
+
+		fprintf (stdout, "Patient:           ");
+		strcpy (tmp, header_info[0].pt.pt_name_birth);	/* for comparison */
+		fprintf (stdout, "%s\n", tmp);
+		for (i = 1; i < num_slices; i++) {
+			if (strcmp (tmp, header_info[i].pt.pt_name_birth)) {
+				fprintf (stdout, "   --->Error: %s doesn't match: ", header_info[i].slice.filename);
+				fprintf (stdout, "%s\n", header_info[i].pt.pt_name_birth);
+			}
+		}
+
+/* Localizers (topograms, scouts): Print filenames of localizers if any. Otherwise "None" */
+
+		fprintf (stdout, "Check slices:%3i to %3i\n", first_fileno, last_fileno);
+		fprintf (stdout, "Localizers: ");
+		localizer_ct = 0;
+		for (i = 0; i < num_slices; i++) {
+			if (header_info[i].slice.image_type == LOCALIZER) {
+				fprintf (stdout, "\n   %s", header_info[i].slice.filename);
+				localizer_ct++;
+			}
+		}
+		if (localizer_ct == 0)
+			fprintf (stdout, "   None\n");
+		else
+			fprintf (stdout, "\n");
+	}	/* end not verbose */
+
+	for (i = 0; i < 10; i++)
+		incr[0] = 0;
+	num = 0;
+	for (slice = first_fileno+1; slice <= last_fileno; slice++) {
+		for (i = slice-1; i >= first_fileno; i--) {
+			if (tpos[slice] == tpos[i]) {
+				if (num == 0)
+					fprintf (stdout, "Duplicates:\n");
+				num++;
+				fprintf (stdout, "%6i mm   %3i %3i\n",tpos[slice], slice, i);
+			}
+		}
+		step = tpos[slice] - tpos[slice-1];
+		if (step <= 8)
+			incr[step]++;
+		else 
+			incr[9]++;
+	}
+	if (num_slices > 1) {
+		fprintf (stdout, "Table Incr  #Slices\n");
+		fprintf (stdout, "----------  -------\n");
+		for (i = 0; i < 9; i++) {
+			if (incr[i] > 0)
+				fprintf (stdout, "%6i %10i\n", i, incr[i]);
+		}
+		if (incr[9] > 0)
+			fprintf (stdout, "   > 8 %10i\n", incr[9]);
+	}
+
+	fprintf (stdout, "-----------------------------------------------\n");
+
+	if (verbose != TRUE) {
+		fprintf (stdout, "\n============================\n");
+		fprintf (stdout, " Filename    Table Position \n");
+		fprintf (stdout, "============================\n");
+		for (i = 0; i < num_slices; i++) 
+			fprintf (stdout, " %9s    %7d\n", header_info[i].slice.filename, tpos[first_fileno+i]);
+	}
+
+/* Clean up and exit */
+
+	if (header_info != NULL) {
+		free (header_info);
+		header_info = NULL;
+	}
+	if (fp_input != NULL) {
+		(void) fclose (fp_input);
+		fp_input = NULL;
+	}
+	return (0);
+}
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d232 1
+a232 1
+		fclose (fp_input);
+d387 1
+a387 1
+		fclose (fp_input);
+d390 1
+a390 1
+	exit (0);
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d87 1
+a87 1
+ * Synopsis:    void main (int argc, char *argv[])
+d118 1
+a118 1
+void            main (int argc, char *argv[])
+@
+
+
+1.7
+log
+@add Table Position to non-verbose output
+@
+text
+@d2 3
+a44 1
+#include <math.h>
+@
+
+
+1.6
+log
+@add check slices to output
+@
+text
+@d2 3
+d331 1
+a331 1
+	}
+d362 10
+a381 1
+	fprintf (stdout, "-----------------------------------------------\n");
+@
+
+
+1.5
+log
+@revised printout
+@
+text
+@d2 3
+d315 1
+@
+
+
+1.4
+log
+@modify printout
+@
+text
+@d2 3
+d141 1
+a275 7
+	}
+/*
+ * Print summary:
+ * If -v (verbose) option specified, summary will follow info. on individual files.
+ * If -v (verbose) option NOT specified, only the summary is printed.
+ */
+	fprintf (stdout, "-----------\n  SUMMARY  \n-----------\n");
+d277 4
+d284 3
+a286 3
+	fprintf (stdout, "Study date:        ");
+	sprintf (tmp, "%s %s", header_info[0].scan.date, header_info[0].scan.time);
+	fprintf (stdout, "%s\n", tmp);
+d290 6
+a295 5
+	for (i = 1; i < num_slices; i++) {
+		sprintf (tmp1, "%s %s", header_info[0].scan.date, header_info[i].scan.time);
+		if (strcmp (tmp, tmp1)) {
+			fprintf (stdout, "   --->Error: %s doesn't match: ", header_info[i].slice.filename);
+			fprintf (stdout, "%s\n", tmp1);
+a296 1
+	}
+d300 8
+a307 7
+	fprintf (stdout, "Patient:           ");
+	strcpy (tmp, header_info[0].pt.pt_name_birth);	/* for comparison */
+	fprintf (stdout, "%s\n", tmp);
+	for (i = 1; i < num_slices; i++) {
+		if (strcmp (tmp, header_info[i].pt.pt_name_birth)) {
+			fprintf (stdout, "   --->Error: %s doesn't match: ", header_info[i].slice.filename);
+			fprintf (stdout, "%s\n", header_info[i].pt.pt_name_birth);
+a308 1
+	}
+d312 7
+a318 6
+	fprintf (stdout, "Localizers: ");
+	localizer_ct = 0;
+	for (i = 0; i < num_slices; i++) {
+		if (header_info[i].slice.image_type == LOCALIZER) {
+			fprintf (stdout, "\n   %s", header_info[i].slice.filename);
+			localizer_ct++;
+d320 4
+a324 4
+	if (localizer_ct == 0)
+		fprintf (stdout, "   None\n");
+	else
+		fprintf (stdout, "\n");
+d328 1
+d331 6
+a336 3
+			if (tpos[slice] == tpos[i]) 
+				fprintf (stdout, "Duplicate positions (%4i) for: %3i, %3i\n",
+					tpos[slice], slice, i);
+@
+
+
+1.3
+log
+@added table increment to output
+@
+text
+@d2 3
+d329 1
+a329 1
+				fprintf (stdout, "Duplicate table position %5i for %3i, %3i\n",
+@
+
+
+1.2
+log
+@Updates to correspond to changes in get_sspct_head.c (libsspct):
+   1. 6th argument needed when calling get_sspct_head
+   2. table_incr --> exp_time ("TI" was misinterpreted)
+@
+text
+@a0 1
+/*$Id: ctheader.c,v 1.1 1996/06/10 06:00:36 jane Exp jane $*/
+d2 5
+d15 1
+a15 1
+ *                (*.ima), and print selected header information to STDOUT. 
+d19 1
+a19 1
+ *                format that was in use during at least the time period of Nov., 
+d31 4
+a35 5
+#include "ANALYZE.h"
+#include "errhand.h"
+#include "sspct.h"
+#include "stringfns.h"
+ 
+a53 2
+ 
+static char *get_usage() { 
+d55 10
+a64 9
+    static char cmd_syntax[MAXLEN_CMDSYN];
+
+    strcpy(cmd_syntax, "Usage:    ctheader [ -v ] firstfile# lastfile#\n");
+    strcat(cmd_syntax, "Options:  -v (verbose) Print detailed header info. for each file.\n");        
+    strcat(cmd_syntax, "Examples:\n");
+    strcat(cmd_syntax, "   ctheader 1 42    [Summary only for files 00001.ima - 00042.ima]\n");
+    strcat(cmd_syntax, "   ctheader -v 3 6  [Detailed info for files 00003.ima - 00006.ima]\n");
+    strcat(cmd_syntax, "   ctheader -v 1 1  [Detailed info. for file 00001.ima only]\n"); 
+    return cmd_syntax;
+d74 3
+a76 3
+ *              report summary information for entire set of images. 
+ * Purpose:     Program ctheader is meant to be run prior to running ct2analyze 
+ *              in order to make sure that the proper set of images is specified 
+d84 1
+a84 1
+ *                 ctheader checks to make sure that all of the images are from 
+d88 2
+a89 2
+ *                 no way to know whether a set of images is homogeneous. Patient 
+ *                 and study values from the first file specified are compared to 
+d91 1
+a91 1
+ *              Program ctheader is also meant to be used for viewing values 
+d94 3
+a96 3
+ * Options:     -v  Verbose. Print all field values for each file, in addition to 
+ *              summary information. Fields displayed correspond roughly to those 
+ *              which are displayed on image films. If -v option is not specified, 
+d101 2
+a102 1
+void main (int argc, char *argv[]) {
+d104 1
+a104 3
+/*-----------------------*
+ * Start of Declarations *
+ *-----------------------*/
+d106 4
+a109 1
+ /* Input files and associated structures and buffers */
+d111 1
+a111 4
+    char        input_file[MAXSTR];  /* filename for input file (.ima) */
+    FILE        *fp_input    = NULL; /* input file (*.ima) */
+    SSPCT_HDR   *header_info = NULL; /* (array of) SSPCT_HDR structures */
+    SSPCT_INIT  str_hdr_init;	/* header values that get_sspct_head() needs */
+d113 3
+a115 9
+ /* Command line options/parameters and associated variables */
+    int     argno;		/* argument number of interest */
+    BOOL    verbose  = FALSE;	/* print verbose (all details for each file) */
+				/* set to TRUE if -v option specified */
+    int     first_fileno = 0;	/* first file number (slice) */
+    int     last_fileno  = 0;	/* last file number (slice) */
+    int     num_slices   = 0;	/* number of slices or frames in CT */
+    int     slice;		/* which slice is being dealt with -- */
+				/* corresponds to number in filename  */
+d117 19
+a135 9
+ /* Multipurpose variables */
+    int     i;                  /* counter */
+    char    tmp[MAXSTR];	/* for holding misc. strings */
+    char    tmp1[MAXSTR];       /* for holding misc. strings */
+ 
+ /* Miscellaneous -- for reading header, reporting on values */
+    int     slice_index;	/* ordinal position of slice in set of slices -- array index */
+    int     localizer_ct;	/* how many of the images are localizers (vs. axial) */
+ 
+d140 1
+a140 5
+/*
+ * Initialize error handler
+ */
+    err_handler_init(PROGNAME, argv[0]);
+    err_handler_init(CMD_SYNTAX, get_usage());
+d142 2
+a143 6
+/*
+ * Get command-line parameters -- option(s) and slice numbers
+ */   
+    if (argc < 3) {
+        err_handler(CMD_SYNTAX_ERR, "");
+    }
+d145 1
+a145 11
+    /*  See if any options specified on command line 
+     */
+    for (argno = 1; argno < argc && argv[argno][0] == '-'; argno++) {
+        switch (argv[argno][1]) {
+        case 'v':
+            verbose = TRUE;
+            break;
+        default:
+            err_handler(CMD_SYNTAX_ERR, "");
+        }
+    }
+d147 2
+a148 5
+    /* After options, exactly two parameters should be left 
+     */
+    if (argc - argno != 2) {
+        err_handler(CMD_SYNTAX_ERR, "");
+    }
+d150 1
+a150 9
+    /* Last two parameters should contain only digits 
+     */  
+    /* Next-to-last parameter (firstfile#) */
+    if (!isalldigits(argv[argc - 2])) {
+        err_handler(CMD_SYNTAX_ERR, "");
+    }
+    else {
+        first_fileno = atoi(argv[argc - 2]);
+    }
+d152 9
+a160 7
+    /* Last parameter (lastfile#) */
+    if (!isalldigits(argv[argc - 1])) {
+        err_handler(CMD_SYNTAX_ERR, "");
+    }
+    else {
+        last_fileno = atoi(argv[argc - 1]);
+    }
+d162 1
+a162 6
+    /* Make sure file nos. not reversed. File numbers can be the same, however.
+     * Only one file is examined in that case.
+     */
+    if (first_fileno > last_fileno) {
+        err_handler(CMD_SYNTAX_ERR, "");
+    }
+d164 2
+a165 1
+    num_slices = last_fileno - first_fileno + 1;  
+d167 1
+a167 6
+/*
+ * Allocate space for SSPCT_HDR structures 
+ */
+    if ((header_info = (SSPCT_HDR *)malloc(sizeof(SSPCT_HDR)*num_slices)) == NULL) {
+        err_handler(MEM_ALLOC_ERR, "header_info structures");
+    }
+d169 4
+a172 11
+/*
+ *  Read header bytes into buffer and extract info. from buffer.
+ *  Do this for each file in turn.
+ */
+    for (slice = first_fileno; slice <= last_fileno; slice++) {
+        
+        /* Get ordinal position of this slice in set of slices to use as array index */
+        slice_index = slice - first_fileno;
+      
+        /* Get full file name */
+        sprintf(input_file, "%05d.ima", slice);
+d174 1
+a174 4
+        /* Open input file */
+        if ((fp_input = fopen(input_file,"r")) == NULL) {
+           err_handler(FILE_OPEN_ERR, input_file);
+        }
+d176 4
+a179 2
+     /* Extract info. from header. This is the workhorse.
+      */ 
+d181 2
+a182 4
+       /* Provide values that cannot currently be extracted from header */
+        memset(&str_hdr_init, 0, sizeof(str_hdr_init));
+        str_hdr_init.num_slices = num_slices;
+        strcpy(str_hdr_init.infile, input_file);
+d184 3
+a186 2
+        /* Get info. that can be directly extracted from header */
+        get_sspct_head(fp_input, str_hdr_init, &header_info[slice_index], NULL, NULL, FALSE); 
+d188 1
+a188 3
+     /* Close input file 
+      */        
+        fclose(fp_input);
+d190 3
+a192 1
+    }    /* end for (slice = first_fileno; slice <= last_fileno; slice++) */
+d194 1
+a194 12
+/*
+ * If -v (verbose) option specified, 
+ * print header info. extracted from each file to stdout.
+ */
+    if (verbose == TRUE) {
+        for (i = 0; i < num_slices; i++) {
+            fprintf(stdout, "----------\n");
+            fprintf(stdout, "%s:", header_info[i].slice.filename); 
+            if (header_info[i].slice.image_type == LOCALIZER) {   
+                fprintf(stdout, " ***LOCALIZER***");
+            } 
+            fprintf(stdout, "\n----------\n");
+d196 5
+a200 3
+            /* Pt. name and birthdate, and scan institution */ 
+            fprintf(stdout, "%-28s ", header_info[i].pt.pt_name_birth);
+            fprintf(stdout, "%s\n", header_info[i].scan.institution);
+d202 1
+a202 3
+            /* Scan id and scanner*/
+            fprintf(stdout, "%-28s ", header_info[i].scan.scan_id);
+            fprintf(stdout, "%s\n", header_info[i].scan.system);
+d204 3
+a206 3
+            /* Image number (00001.ima is usually image 1, etc.) */
+            /* ordinal number in image set -- should be unique   */
+            fprintf(stdout, "Image %s\n", header_info[i].slice.image_no);
+d208 1
+a208 3
+            /* Slice time: format as HH:MM:SS */
+            strftime(tmp, 9, "%H:%M:%S", &(header_info[i].slice.str_date));
+            fprintf(stdout, "%s\n", tmp);
+d210 4
+a213 5
+            /* Scan number (00002.ima is usually scan 2, etc.)       */
+            /* If there is more than one output image for a given    */
+            /* slice scan, this number may be the same for more than */
+            /* one image -- e.g., see p5067 image set                */
+            fprintf(stdout, "Scan %s\n", header_info[i].slice.scan_no);
+d215 1
+a215 3
+            /* Table position and table increment */
+            fprintf(stdout, "TP %s\n", header_info[i].slice.table_pos);
+            fprintf(stdout, "TI %s\n", header_info[i].scan.exp_time);
+d217 7
+a223 6
+            /* kV, slice width, mAs, gantry tilt, and zoom */
+            fprintf(stdout, "kV %s\n", header_info[i].scan.kV);
+            fprintf(stdout, "SL %s\n", header_info[i].scan.slice_width);
+            fprintf(stdout, "mAs %s\n", header_info[i].scan.mAs);
+            fprintf(stdout, "GT %s\n", header_info[i].scan.gantry_tilt);
+            fprintf(stdout, "ZO %s\n", header_info[i].scan.zoom);
+d225 3
+a227 3
+            /* Center of image -- x and y in field */
+            fprintf(stdout, "CE %s\n", header_info[i].scan.ce_x);
+            fprintf(stdout, "   %s\n", header_info[i].scan.ce_y);
+d229 3
+a231 5
+            /* Field starting with "AH" or "TH", comments, scan date */
+            fprintf(stdout, "%-16s", header_info[i].slice.unknown);
+            fprintf(stdout, "%s\n", header_info[i].scan.comment1);
+            fprintf(stdout, "%-16s", header_info[i].scan.date);
+            fprintf(stdout, "%s\n", header_info[i].scan.comment2);
+d233 3
+a235 2
+        } 
+    }   
+d237 33
+d275 1
+a275 1
+    fprintf(stdout, "-----------\n  SUMMARY  \n-----------\n");
+d277 2
+a278 4
+    /* Study date and time: 
+     * Print values from first file and any values that don't match. 
+     */
+    fprintf(stdout, "Study date and time:     ");
+d280 3
+a282 3
+    /* Use date/time from first image for comparison */
+    sprintf(tmp, "%s %s", header_info[0].scan.date, header_info[0].scan.time);
+    fprintf(stdout, "%s\n", tmp);
+d284 1
+a284 8
+    /* Compare date/time from first image to date/time from each following image */
+    for (i = 1; i < num_slices; i++) {
+        sprintf(tmp1, "%s %s", header_info[0].scan.date, header_info[i].scan.time);  
+        if (strcmp(tmp, tmp1)) {
+            fprintf(stdout, "   --->Error: %s doesn't match: ", header_info[i].slice.filename);
+            fprintf(stdout, "%s\n", tmp1);
+        }
+    }    
+d286 7
+a292 24
+    /* Patient name and birth date: 
+     * Print value from first file, and any values that don't match. 
+     */
+    fprintf(stdout, "Pt. name and birthdate:  ");
+    strcpy(tmp, header_info[0].pt.pt_name_birth);   /* for comparison */
+    fprintf(stdout, "%s\n", tmp);
+    for (i = 1; i < num_slices; i++) {   
+        if (strcmp(tmp, header_info[i].pt.pt_name_birth)) {
+            fprintf(stdout, "   --->Error: %s doesn't match: ", header_info[i].slice.filename);
+            fprintf(stdout, "%s\n", header_info[i].pt.pt_name_birth);
+        }
+    }    
+ 
+    /* Localizers (topograms, scouts): 
+     * Print filenames of localizers if any. Print "None" otherwise. 
+     */
+    fprintf(stdout, "Localizers: ");
+    localizer_ct = 0;
+    for (i = 0; i < num_slices; i++) {   
+        if (header_info[i].slice.image_type == LOCALIZER) {
+            fprintf(stdout, "\n   %s", header_info[i].slice.filename);
+            localizer_ct++;
+        }
+    }
+d294 1
+a294 15
+    if (localizer_ct == 0) {        /* no localizers identified */
+        fprintf(stdout, "   None\n");
+    }  
+    else {   
+        /* Tack on final newline after last localizer filename */
+        fprintf(stdout, "\n");
+    }    
+       
+/*
+ * Clean up and exit
+ */ 
+    if (header_info != NULL) {
+        free(header_info);
+        header_info = NULL;
+    }
+d296 9
+a304 4
+    if (fp_input != NULL) {
+        fclose(fp_input);
+        fp_input = NULL;
+    }
+d306 1
+a306 2
+    fprintf(stdout, "\nctheader completed successfully\n");
+    exit(0);
+d308 50
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d226 1
+a226 1
+        get_sspct_head(fp_input, str_hdr_init, &header_info[slice_index], NULL, NULL); 
+d271 1
+a271 1
+            fprintf(stdout, "TI %s\n", header_info[i].scan.table_incr);
+@

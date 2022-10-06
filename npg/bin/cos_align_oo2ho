@@ -1,0 +1,172 @@
+#!/bin/csh
+#	Name:	cos_align_oo2ho_emory
+#	Author:	Tom Videen
+#	Date:	Apr 2002
+#	Created for: COSS PET Processing
+#	Intent: Coregister OO to HO
+#	Requires:
+#		cs01-001-ho1_g3.v (img)
+#		cs01-001-oo1_g3.v (img)
+#	Creates:
+#		cs01-001-ho1_lat.v
+#		cs01-001-lat.v
+#		cs01-001-mask.v
+#		cs01-001-oo1_to_ho1.air
+#		rcs01-001-oo1_g3.v
+#		cs01-001-oo1_to_ho1.log
+
+if (! $?STUDY) then
+	echo "ERROR: env STUDY not defined"
+	exit 1
+else if (! $?OO) then
+	echo "ERROR: env OO not defined"
+	exit 1
+else if (! $?HO) then
+	echo "ERROR: env HO not defined"
+	exit 1
+else if (! $?LOGFILE) then
+	echo "ERROR: env LOGFILE not defined"
+	exit 1
+endif
+
+set VER   = 1.0
+set PID   = $STUDY-
+set GAUSS = _g3
+set HO1   = $PID$HO$GAUSS
+set OO1   = $PID$OO$GAUSS
+set OOHO  = $PID${OO}_to_$HO
+set MASK  = ${PID}mask.v
+set AMASK = a$MASK:r
+set THR   = 50
+
+if (! -e $HO1.v) then
+	echo "ERROR: cannot find $HO1.v"
+	exit 1
+else if (! -e $OO1.v) then
+	echo "ERROR: cannot find $OO1.v"
+	exit 1
+endif
+
+echo "==========================================================================" >>! $LOGFILE
+echo "cos_align_oo2ho  Version:" $VER `whoami` `date` >> $LOGFILE
+
+# Create mask from HO1:
+# --------------------
+set lateralview = ${HO1}_lat.v
+set max = `imghdr $HO1.v | grep Max | cut -f2 -d= | cut -f1 -d.`
+set min = `echo "$max / 100" | bc`
+set thr = 10
+set PLANES = `imghdr $HO1.v | grep slices | cut -f1 -d" "`
+unalias cp
+cp $HO1.v $MASK
+
+maskslc $MASK $MASK 1to1
+maskslc $MASK $MASK ${PLANES}to$PLANES
+sumlateral $MASK $MASK $min $max
+maskpct $MASK $MASK.tmp $thr
+maskimg $MASK $MASK.tmp $lateralview 1
+set max = `imghdr $lateralview | grep Max | cut -f2 -d= | cut -f1 -d.`
+while ($max > 32767) 
+	scaleimage $lateralview 0.1
+	set max = `imghdr $lateralview | grep Max | cut -f2 -d= | cut -f1 -d.`
+end
+echo $max
+
+prompt1:
+echo "============================================================"
+echo "Use vidi to edit the lateral projection of the mask"
+echo "   Get Files->Image 1:   $lateralview"
+echo "   Edit->Image 1"
+echo "      Outline nose and tissue below base of cranium"
+echo "      Fill using Fill Value = 0"
+echo "   Save Image->Image 1:  ${PID}lat.img"
+echo "   Press RETURN to continue (CTRL-C to quit)"
+set data = `line`
+ 
+if (! -e ${PID}lat.ifh) then
+	echo "ERROR: Save as ${PID}lat.img"
+	goto prompt1
+endif
+if2analyze ${PID}lat
+analyze2img ${PID}lat ${PID}lat.v
+masklateral $HO1.v ${PID}lat.v $MASK 10
+maskslc $MASK $MASK 1to1
+if ($status != 0) exit 1
+
+# Scale oxygen after masking (Mar 2004)
+# -------------------------------------
+#maskimg $OO1.v $MASK $MASK.tmp 1
+#set maxOO = `imghdr $MASK.tmp | grep Max | cut -f2 -d= | cut -f1 -dM`
+#set scl = `echo 1550 / $maxOO | bc -l`
+#echo "$OO1.v    Max = $maxOO   Scaler = $scl"
+#scaleimage $OO1.v $scl
+
+# Convert images to Analyze format:
+# --------------------------------
+img2analyze $MASK $AMASK
+img2analyze $HO1.v a$HO1
+img2analyze $OO1.v a$OO1
+setanamin $AMASK 0
+setanamin a$HO1 0
+setanamin a$OO1 0
+
+# Align OO to HO, then reslice OO:
+# --------------------------------
+echo "Aligning:  $OO1 to $HO1"
+
+# -----
+# Add this for testing:
+#set PRM = "-m 6 -p1 1 -t1 $THR -p2 1 -t2 $THR -e1 $AMASK -e2 $AMASK -x 3"
+#alignlinear a$HO1 a$OO1 ${OOHO}x3.air $PRM 
+# -----
+
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK -x 1 -v"
+echo alignlinear a$HO1 a$OO1 $OOHO.air $PRM >> $LOGFILE
+
+alignlinear a$HO1 a$OO1 $OOHO.air $PRM >! log
+set ERROR = `grep HESSIAN log`
+if (`echo $ERROR | wc -w` != 0) then
+	echo $ERROR
+	echo "Alignment failed and will require manual processing"
+	exit 1
+endif
+tail -7 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file"
+	echo $ERROR >> $LOGFILE
+	exit 1
+endif
+#imgreslice a$OO1 ${OOHO}x3
+#analyze2img ra$OO1 r${OO1}x3.v
+imgreslice a$OO1 $OOHO
+analyze2img ra$OO1 r$OO1.v
+if (! -e null.air) alignlinear a$HO1 a$HO1 null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 $OOHO.air null.air $MASK >> $LOGFILE
+#echo "sd of ratio (standard) vs. lsqrs (x3)" >> $LOGFILE
+#airdif1 $OOHO.air ${OOHO}x3.air $MASK >> $LOGFILE
+tail -4 $LOGFILE
+
+echo "============================================================"
+echo "Use vidi to check alignment of $OO vs. $HO"
+echo "   Image 1: r$OO1.v   (PET Rainbow)"
+echo "   Image 2: $HO1.v    (Hot Metal)"
+echo "   Compare composite transverse, sagittal, and coronal views."
+echo "   Press RETURN to cleanup and finish (CTRL-C to quit)"
+set data = `line`
+
+unalias rm
+rm $MASK.tmp
+rm a$OO1.*
+rm a$HO1.*
+rm ra$OO1.*
+rm a$MASK:r.???
+rm null.air
+rm log
+cvl
+
+echo "OO-to-HO AIR file:  $OOHO.air" | tee -a $LOGFILE
+echo "============================================================"
+

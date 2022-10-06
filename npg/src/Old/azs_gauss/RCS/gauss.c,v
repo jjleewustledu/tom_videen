@@ -1,0 +1,1429 @@
+head	1.25;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.25
+date	95.12.07.15.43.10;	author tom;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	95.11.10.23.34.14;	author tom;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	95.11.10.17.12.06;	author tom;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	95.11.09.22.10.59;	author ty7777;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	95.11.09.21.55.08;	author ty7777;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	95.09.25.16.20.40;	author ty7777;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	94.02.01.16.40.25;	author ty7777;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	93.11.08.21.47.46;	author ty7777;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	93.11.05.19.27.18;	author ty7777;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	93.11.05.16.46.59;	author ty7777;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	93.11.05.16.16.32;	author ty7777;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	93.11.05.15.46.44;	author ty7777;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	93.10.26.15.06.37;	author ty7777;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	93.10.05.21.18.06;	author ty7777;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	93.09.29.17.10.24;	author ty7777;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	93.08.03.16.42.48;	author ty7777;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	93.07.14.20.27.28;	author ty7777;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	93.06.22.22.28.46;	author ty7777;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	93.05.14.15.49.01;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.05.10.20.58.20;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.05.04.15.45.26;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.04.30.15.02.55;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.04.29.17.42.46;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.03.08.21.37.48;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.01.29.16.42.39;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Working version for gauss.c
+@
+
+
+1.25
+log
+@*** empty log message ***
+@
+text
+@/*$Id: gauss.c,v 1.25 1995/12/02 00:01:10 avi Exp $*/
+/*$Log: gauss.c,v $
+ * Revision 1.25  1995/12/02  00:01:10  avi
+ * Avi's version.
+ **/
+
+/*_________________________________________________________________
+  Description:	This program filter an ECAT or PETT VI image by using 
+		the Gaussian filter.
+
+  History:	Created by Tom Yang and Avi Snyder on 12/17/92. 
+		Modified by AZS on 10/25/95.
+_________________________________________________________________*/
+
+#include <fcntl.h>
+#include <petutil/imglist.h>
+#include <petutil/matrix7.h>
+
+static char rcsid []= "$Header: /home/npggw/tom/src/azs_gauss/temp/RCS/gauss.c,v 1.25 1995/12/02 00:01:10 avi Exp $";
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	extern int	npad_ ();
+	extern		imgpad_ ();
+	extern		imgdap_ ();
+	extern		get_date_log_ ();
+	extern		gauss3d_ ();
+	BOOLEAN		create_recfile = FALSE;
+	BOOLEAN		debug = FALSE;
+	COMMENT_INFO	comment_info_data;
+	FILE		*recfp;
+	Image_subheader	**subheader_list;
+	Main_header	*main_header;
+	char		date [MAXLINE];
+	char		*filter_image_file;
+	char		*image_file;
+	char		image_recfile [MAXPATH];
+	char		recfile [MAXPATH];
+	float		cmpix [3];
+	float		f0;
+	float		*image3d;
+	float		*padimage3d;
+	float		pixel_size;
+	float		plane_separation;
+	float		val;
+	int		dimension;
+	int		i;
+	int		margin;
+	int		nx, ny, nz;
+	int		nxp, nyp, nzp;
+	int		scanner;
+	int		order;
+	short		width;
+	short		height;
+	short		num_slices;
+	struct Matval	matval;
+
+	/*______________________________________________________
+	 * Get command line arguments.
+	 *______________________________________________________*/
+	if (argc < 4) {
+		printf ("synopsis: gauss image filtered_image f0 [1]\n");
+		printf ("    e.g.: gauss p1234ho5.img p1234ho5_6b7.img 0.7 1\n");
+		exit (FAIL);
+	}
+	image_file		= argv [1];
+	filter_image_file	= argv [2];
+	f0			= atof (argv [3]);
+	if (argc > 4) if (atoi (argv [4]) > 0) create_recfile = TRUE;
+
+	/*______________________________________________________
+	 * Initialize matval.
+	 *______________________________________________________*/
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+	if (getimagedim (image_file, matval, &scanner, &width, &height, &num_slices, 
+		&pixel_size, &pixel_size, &plane_separation) == FAIL) 
+	{
+		fprintf (stderr, "getimagedim () error.\n");
+		exit (FAIL);
+	}
+
+	subheader_list	= (Image_subheader **) malloc (num_slices * sizeof (caddr_t));
+
+	dimension	= width * height * num_slices;
+	image3d		= (float *) malloc (dimension * sizeof (float));
+	main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+
+	if (getrealimg (image_file, scanner, matval, width, height, num_slices, image3d, 
+		main_header, subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in getrealimg ().\n");
+		free (image3d);
+		exit (FAIL);
+	}
+
+	cmpix [0]	= pixel_size;
+	cmpix [1]	= pixel_size;
+	cmpix [2]	= plane_separation;
+	nx		= width;
+	ny		= height;
+	nz		= num_slices;
+
+	/*______________________________________________________
+	 * Pad the 3D image array at head and tail.
+	 *______________________________________________________*/
+	val = (0.5 + (2.0 * 0.1874 / (cmpix [0] * f0))); margin = val; nxp = npad_ (&nx, &margin);
+	if (debug) printf ("x margin %f %d\n", val, margin);
+	val = (0.5 + (2.0 * 0.1874 / (cmpix [1] * f0))); margin = val; nyp = npad_ (&ny, &margin);
+	if (debug) printf ("y margin %f %d\n", val, margin);
+	val = (0.5 + (4.0 * 0.1874 / (cmpix [2] * f0))); margin = val; nzp = npad_ (&nz, &margin);
+	if (debug) printf ("z margin %f %d\n", val, margin);
+	printf ("image dimensions %d %d %d padded to %d %d %d \n", nx, ny, nz, nxp, nyp, nzp);
+
+	padimage3d	= (float *) calloc (nxp * nyp * nzp,  sizeof (float));
+	if (padimage3d == (float *) NULL)
+	{
+		fprintf (stderr, "Error: Can't allocate padimage3d.\n");
+		exit (FAIL);
+	}
+	imgpad_ (image3d, &nx, &ny, &nz, padimage3d, &nxp, &nyp, &nzp);
+
+	/*______________________________________________________
+	 * Filter padded image by using the Gauss filter.
+	 *______________________________________________________*/
+	gauss3d_ (padimage3d, &nxp, &nyp, &nzp, cmpix, &f0);
+
+	/*______________________________________________________
+	 * Trim the 3D padded image array at head, tail, and boundary.
+	 *______________________________________________________*/
+	imgdap_ (image3d, &nx, &ny, &nz, padimage3d, &nxp, &nyp, &nzp);
+	free (padimage3d);
+
+	get_date_log_ (date);
+	/*
+	 * Construct the rec file name and creates the rec file header.
+	 */
+	if (create_recfile)
+	{
+		strcpy (recfile, filter_image_file);
+		strcat (recfile, REC_EXT);
+
+		recfp	= fopen (recfile, "w");
+		if (recfp == (FILE *) NULL)
+		{
+			fprintf (stderr, "Error in opening rec file %s\n", recfile);
+			exit (FAIL);
+		}
+		fprintf (recfp, "rec %s %s\n", filter_image_file, date);
+		for (i = 0; i < argc; i++) fprintf (recfp, "%s ", argv [i]);
+		fprintf (recfp, "\n%s\n", rcsid);
+
+		/*
+	 	 * Copy the image rec files if there are any.
+	 	 */
+		strcpy (image_recfile, image_file);
+		strcat (image_recfile, REC_EXT);
+		copyrec (recfp, image_recfile);
+		fprintf (recfp, "endrec\n");
+		fclose (recfp);
+	}
+
+	/*
+	 * Write the 3D array to filter file.
+	 */
+	strncpy (main_header->physician_name, rcsid + 5, sizeof (main_header->physician_name) - 1);
+	strncpy (main_header->operator_name, date, sizeof (main_header->operator_name) - 1);
+	comment_info (main_header->study_description, &comment_info_data);
+	comment_info_data.gauss3d_filter	= TRUE;
+	info2comment (comment_info_data, main_header->study_description);
+
+	for (i = 0; i < num_slices; i++)
+	{
+		(subheader_list [i])->filter_code	+= GAUSSIAN_FILTER_CODE;
+		(subheader_list [i])->filter_ramp_slope	= f0;
+	}
+
+	if (writerealimg (filter_image_file, matval, width, height, num_slices, image3d, 
+			main_header, subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in writerealimg ().\n");
+	}
+
+	for (i = 0; i < num_slices; i++)
+	{
+		free (subheader_list [i]);
+	}
+	free (subheader_list);
+	free (main_header);
+	free (image3d);
+}
+@
+
+
+1.24
+log
+@*** empty log message ***
+@
+text
+@d1 5
+a5 13
+/*	$Id$
+	$Log$ */
+/* ===============================================================================
+ *	Module:			gauss.c
+ *	Date:			12/17/92
+ *	Author:			Tom Yang
+ *	Description:	Snyder/Yang 3D gaussian filter
+ *	
+ * ===============================================================================
+ */
+#include <fcntl.h>
+#include <imglist.h>
+#include <matrix7.h>
+d7 3
+a9 1
+static char     rcsid[] = "$Id: gauss.c,v 1.23 1995/11/10 17:12:06 tom Exp tom $";
+d11 3
+a13 4
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+d15 3
+a17 2
+#ifdef HP
+	extern          gauss3d ();
+d19 1
+a19 2
+#else
+	extern          gauss3d_ ();
+d21 38
+a58 33
+#endif
+
+	BOOLEAN         create_recfile;
+	COMMENT_INFO    comment_info_data;
+	FILE           *recfp;
+	Image_subheader **subheader_list;
+	Main_header    *main_header;
+	char            date[MAXLINE];
+	char           *filter_image_file;
+	char           *image_file;
+	char            image_recfile[MAXPATH];
+	char            recfile[MAXPATH];
+	char           *uid;
+	float           cmpix[3];
+	float           f0;
+	float          *image3d;
+	float          *padimage3d;
+	float           pixel_size;
+	float           plane_separation;
+	int             dimension;
+	int             first_slice_index;
+	int             i;
+	int             last_slice_index;
+	int             nx;
+	int             ny;
+	int             nz;
+	int             scanner;
+	int             xmargin;
+	int             ymargin;
+	short           width;
+	short           height;
+	short           num_slices;
+	struct Matval   matval;
+d60 12
+a71 9
+/*
+ * Get command line arguments.
+ */
+	image_file = argv[1];
+	filter_image_file = argv[2];
+	f0 = atof (argv[3]);
+	sprintf (date, "%s %s %s %s %s %s", argv[4], argv[5], argv[6], argv[7], argv[8], argv[9]);
+	uid = argv[10];
+	create_recfile = atoi (argv[11]);
+d73 8
+a80 8
+/*
+ * Initialization for matval.
+ */
+	matval.frame = 1;
+	matval.plane = 1;
+	matval.gate = 1;
+	matval.data = 0;
+	matval.bed = 0;
+d82 4
+a85 3
+	if (getimagedim (image_file, matval, &scanner, &width, &height, &num_slices,
+			 &pixel_size, &pixel_size, &plane_separation) == FAIL) {
+		fprintf (stderr, "ERROR [gauss]: cannot find %s\n", image_file);
+a87 2
+	subheader_list = (Image_subheader **) pkg_malloc (num_slices * sizeof (caddr_t), "gauss",
+							  "subheader_list");
+d89 1
+a89 3
+	dimension = width * height * num_slices;
+	image3d = (float *) pkg_malloc (dimension * sizeof (float), "gauss", "image3d");
+	main_header = (Main_header *) calloc (1, sizeof (Main_header));
+d91 8
+a98 3
+	if (getrealimg (image_file, scanner, matval, width, height, num_slices, image3d,
+			main_header, subheader_list) == FAIL) {
+		fprintf (stderr, "ERROR [gauss]: cannot read image %s\n", image_file);
+d103 6
+a108 6
+/*
+ * Pad the 3D image array at head and tail.
+ */
+	nx = FILTER_XDIM;
+	ny = FILTER_YDIM;
+	nz = 144;
+d110 10
+a119 4
+	first_slice_index = (nz - num_slices) / 2;
+	last_slice_index = first_slice_index + (num_slices - 1);
+	xmargin = (nx - width) / 2;
+	ymargin = (ny - height) / 2;
+d121 4
+a124 4
+	dimension = nx * ny * nz;
+	padimage3d = (float *) calloc (dimension, sizeof (float));
+	if (padimage3d == (float *) NULL) {
+		fprintf (stderr, "ERROR [gauss]: cannot allocate padimage3d\n");
+d127 1
+a127 3
+	padimage (image3d, width, height, num_slices, nx, ny, nz,
+		  first_slice_index, last_slice_index, xmargin, ymargin, padimage3d);
+	free (image3d);
+d129 4
+a132 6
+/*
+ * Filtering padded image by using the Butterworth filter.
+ */
+	cmpix[0] = pixel_size;
+	cmpix[1] = pixel_size;
+	cmpix[2] = plane_separation;
+d134 4
+a137 13
+#ifdef HP
+	gauss3d (padimage3d, &nx, &ny, &nz, cmpix, &f0);
+#else
+	gauss3d_ (padimage3d, &nx, &ny, &nz, cmpix, &f0);
+#endif
+
+/*
+ * Trim the 3D padded image array at head, tail, and boundary.
+ */
+	dimension = width * height * num_slices;
+	image3d = (float *) pkg_malloc (dimension * sizeof (float), "filter", "image3d");
+	trim (padimage3d, nx, ny, nz, width, height, num_slices,
+	      first_slice_index, last_slice_index, xmargin, ymargin, image3d);
+d140 6
+a145 4
+/*
+ * Construct the rec file name and creates the rec file header.
+ */
+	if (create_recfile) {
+d149 4
+a152 3
+		recfp = fopen (recfile, "w");
+		if (recfp == (FILE *) NULL) {
+			fprintf (stderr, "ERROR [gauss]: cannot open %s\n", recfile);
+d155 3
+a157 3
+		fprintf (recfp, "rec %s %s %s\n", filter_image_file, date, uid);
+		fprintf (recfp, "%s %s %f\n", argv[0], image_file, f0);
+		fprintf (recfp, "   %s\n\n", rcsid);
+d159 3
+a161 3
+/*
+ * Copy the image rec files if there are any.
+ */
+d169 3
+a171 3
+/*
+ * Write the 3D array to filter file.
+ */
+d175 1
+a175 1
+	comment_info_data.gauss3d_filter = TRUE;
+d178 4
+a181 3
+	for (i = 0; i < num_slices; i++) {
+		(subheader_list[i])->filter_code += GAUSSIAN_FILTER_CODE;
+		(subheader_list[i])->filter_ramp_slope = f0;
+d184 4
+a187 3
+	if (writerealimg (filter_image_file, matval, width, height, num_slices, image3d,
+			  main_header, subheader_list) == FAIL) {
+		fprintf (stderr, "ERROR [gauss]: cannot write image\n");
+d189 4
+a192 2
+	for (i = 0; i < num_slices; i++) {
+		free (subheader_list[i]);
+@
+
+
+1.23
+log
+@remove petutil parent directory from include statements
+@
+text
+@d1 10
+a10 34
+/*$Id: gauss.c,v 1.22 1995/11/09 22:10:59 ty7777 Exp tom $*/
+/*$Log: gauss.c,v $
+ * Revision 1.22  1995/11/09  22:10:59  ty7777
+ * Use filter instead of rfilter.
+ *
+ * Revision 1.21  1995/11/09  21:55:08  ty7777
+ * Use libnpg.a.
+ *
+ * Revision 1.20  1995/09/25  16:20:40  ty7777
+ * Changed nz to 144.
+ *
+ * Revision 1.19  1994/02/01  16:40:25  ty7777
+ * Allowed filtering images with number of slices greater than 75.
+ *
+ * Revision 1.18  1993/11/08  21:47:46  ty7777
+ * Added \n to endrec.
+ *
+ * Revision 1.17  1993/11/05  19:27:18  ty7777
+ * Combining the date components.
+ *
+ * Revision 1.16  1993/11/05  16:46:59  ty7777
+ * Added processing for recfile creation.
+ *
+ * Revision 1.15  1993/11/05  16:16:32  ty7777
+ * Testing version.
+ **/
+
+/*_________________________________________________________________
+  Description:	This program filter an ECAT or PETT VI image by using 
+		the Gaussian filter.
+
+  History:	Created by Tom Yang on 12/17/92. 
+_________________________________________________________________*/
+
+d15 1
+a15 1
+static char rcsid [] = "$Id: gauss.c,v 1.22 1995/11/09 22:10:59 ty7777 Exp tom $";
+d18 2
+a19 2
+	int	argc;
+	char	**argv;
+d21 1
+d23 2
+a24 1
+	extern		gauss3d ();
+d26 2
+a27 1
+	extern		gauss3d_ ();
+d30 31
+a60 31
+	BOOLEAN		create_recfile;
+	COMMENT_INFO	comment_info_data;
+	FILE		*recfp;
+	Image_subheader	**subheader_list;
+	Main_header	*main_header;
+	char		date [MAXLINE];
+	char		*filter_image_file;
+	char		*image_file;
+	char		image_recfile [MAXPATH];
+	char		recfile [MAXPATH];
+	char		*uid;
+	float		cmpix [3];
+	float		f0;
+	float		*image3d;
+	float		*padimage3d;
+	float		pixel_size;
+	float		plane_separation;
+	int		dimension;
+	int		first_slice_index;
+	int		i;
+	int		last_slice_index;
+	int		nx;
+	int		ny;
+	int		nz;
+	int		scanner;
+	int		xmargin;
+	int		ymargin;
+	short		width;
+	short		height;
+	short		num_slices;
+	struct Matval	matval;
+d62 6
+a67 6
+	/*______________________________________________________
+	 * Get command line arguments.
+	 *______________________________________________________*/
+	image_file		= argv [1];
+	filter_image_file	= argv [2];
+	f0			= atof (argv [3]);
+d69 2
+a70 2
+	uid			= argv [10];
+	create_recfile		= atoi (argv [11]);
+d72 8
+a79 8
+	/*______________________________________________________
+	 * Initialization for matval.
+	 *______________________________________________________*/
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+d81 3
+a83 4
+	if (getimagedim (image_file, matval, &scanner, &width, &height, &num_slices, 
+		&pixel_size, &pixel_size, &plane_separation) == FAIL) 
+	{
+		fprintf (stderr, "Error: image file %s cannot be found\n", image_file);
+d86 2
+d89 3
+a91 2
+	subheader_list	= (Image_subheader **) pkg_malloc (num_slices * sizeof (caddr_t), "gauss", 
+						"subheader_list");
+d93 3
+a95 8
+	dimension	= width * height * num_slices;
+	image3d		= (float *) pkg_malloc (dimension * sizeof (float), "gauss", "image3d");
+	main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+
+	if (getrealimg (image_file, scanner, matval, width, height, num_slices, image3d, 
+		main_header, subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in getrealimg ().\n");
+d100 6
+a105 23
+	/*______________________________________________________
+	 * Pad the 3D image array at head and tail.
+	 *______________________________________________________*/
+	nx	= FILTER_XDIM;
+	ny	= FILTER_YDIM;
+	nz	= 144;
+	/*
+	if (num_slices <= FILTER_STHRESH_NUM)
+		nz	= FILTER_ZDIMS;
+	else if (num_slices <= FILTER_MTHRESH_NUM)
+		nz	= FILTER_ZDIMM;
+	else if (num_slices <= FILTER_BTHRESH_NUM)
+		nz	= FILTER_ZDIMB;
+	else
+	{
+		fprintf (stderr, 
+		"The maximum number of slices in a image which is to be filtered is %d\n",
+		FILTER_BTHRESH_NUM);
+		fprintf (stderr, 
+		"Please see Tom Yang (ty7777@@petadmin.wustl.edu) for a quick fix.\n");
+		exit (FAIL);
+	}
+	*/
+d107 4
+a110 4
+	first_slice_index	= (nz - num_slices) / 2;
+	last_slice_index	= first_slice_index + (num_slices - 1);
+	xmargin			= (nx - width) / 2;
+	ymargin			= (ny - height) / 2;
+d112 4
+a115 5
+	dimension	= nx * ny * nz;
+	padimage3d	= (float *) calloc (dimension,  sizeof (float));
+	if (padimage3d == (float *) NULL)
+	{
+		fprintf (stderr, "Error: Can't allocate padimage3d.\n");
+d118 2
+a119 3
+
+	padimage (image3d, width, height, num_slices, nx, ny, nz, 
+		first_slice_index, last_slice_index, xmargin, ymargin, padimage3d);
+d122 6
+a127 6
+	/*______________________________________________________
+	 * Filtering padded image by using the Butterworth filter.
+	 *______________________________________________________*/
+	cmpix [0]	= pixel_size;
+	cmpix [1]	= pixel_size;
+	cmpix [2]	= plane_separation;
+d135 7
+a141 7
+	/*
+	 * Trim the 3D padded image array at head, tail, and boundary.
+	 */
+	dimension	= width * height * num_slices;
+	image3d		= (float *) pkg_malloc (dimension * sizeof (float), "filter", "image3d");
+	trim (padimage3d, nx, ny, nz, width, height, num_slices, 
+		first_slice_index, last_slice_index, xmargin, ymargin, image3d);
+d144 4
+a147 5
+	/*
+	 * Construct the rec file name and creates the rec file header.
+	 */
+	if (create_recfile)
+	{
+d151 3
+a153 4
+		recfp	= fopen (recfile, "w");
+		if (recfp == (FILE *) NULL)
+		{
+			fprintf (stderr, "Error in opening rec file %s\n", recfile);
+d157 1
+a157 1
+		fprintf (recfp, "%s %s %f\n", argv [0], image_file, f0);
+d160 3
+a162 3
+		/*
+	 	 * Copy the image rec files if there are any.
+	 	 */
+d170 3
+a172 3
+	/*
+	 * Write the 3D array to filter file.
+	 */
+d176 1
+a176 1
+	comment_info_data.gauss3d_filter	= TRUE;
+d179 3
+a181 4
+	for (i = 0; i < num_slices; i++)
+	{
+		(subheader_list [i])->filter_code		+= GAUSSIAN_FILTER_CODE;
+		(subheader_list [i])->filter_cutoff_frequency 	= f0;
+d184 3
+a186 4
+	if (writerealimg (filter_image_file, matval, width, height, num_slices, image3d, 
+			main_header, subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in writerealimg ().\n");
+d188 2
+a189 4
+
+	for (i = 0; i < num_slices; i++)
+	{
+		free (subheader_list [i]);
+@
+
+
+1.22
+log
+@Use filter instead of rfilter.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.21 1995/11/09 21:55:08 ty7777 Exp ty7777 $*/
+d3 3
+d36 2
+a37 2
+#include <petutil/imglist.h>
+#include <petutil/matrix7.h>
+d39 1
+a39 1
+static char rcsid [] = "$Id: gauss.c,v 1.21 1995/11/09 21:55:08 ty7777 Exp ty7777 $";
+@
+
+
+1.21
+log
+@Use libnpg.a.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.20 1995/09/25 16:20:40 ty7777 Exp ty7777 $*/
+d3 3
+d36 1
+a36 1
+static char rcsid [] = "$Id: gauss.c,v 1.20 1995/09/25 16:20:40 ty7777 Exp ty7777 $";
+d223 2
+a224 2
+		(subheader_list [i])->rfilter_code	+= GAUSSIAN_FILTER_CODE;
+		(subheader_list [i])->rfilter_cutoff 	= f0;
+@
+
+
+1.20
+log
+@Changed nz to 144.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.19 1994/02/01 16:40:25 ty7777 Exp ty7777 $*/
+d3 3
+d31 1
+a31 1
+#include <petutil/matrix.h>
+d33 1
+a33 1
+static char rcsid [] = "$Id: gauss.c,v 1.19 1994/02/01 16:40:25 ty7777 Exp ty7777 $";
+d220 2
+a221 2
+		(subheader_list [i])->filter_code	+= GAUSSIAN_FILTER_CODE;
+		(subheader_list [i])->filter_params [2]	= f0;
+@
+
+
+1.19
+log
+@Allowed filtering images with number of slices greater than 75.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.18 1993/11/08 21:47:46 ty7777 Exp ty7777 $*/
+d3 3
+d30 1
+a30 1
+static char rcsid [] = "$Id: gauss.c,v 1.18 1993/11/08 21:47:46 ty7777 Exp ty7777 $";
+d120 2
+d137 1
+@
+
+
+1.18
+log
+@Added \n to endrec.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.17 1993/11/05 19:27:18 ty7777 Exp ty7777 $*/
+d3 3
+d27 1
+a27 1
+static char rcsid [] = "$Id: gauss.c,v 1.17 1993/11/05 19:27:18 ty7777 Exp ty7777 $";
+d117 1
+a117 1
+	if (num_slices <= FILTER_THRESH_NUM)
+d119 4
+d124 8
+a131 1
+		nz	= FILTER_ZDIMB;
+@
+
+
+1.17
+log
+@Combining the date components.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.16 1993/11/05 16:46:59 ty7777 Exp ty7777 $*/
+d3 3
+d24 1
+a24 1
+static char rcsid [] = "$Id: gauss.c,v 1.16 1993/11/05 16:46:59 ty7777 Exp ty7777 $";
+d182 1
+a182 1
+		fprintf (recfp, "endrec");
+@
+
+
+1.16
+log
+@Added processing for recfile creation.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.15 1993/11/05 16:16:32 ty7777 Exp ty7777 $*/
+d3 3
+d21 1
+a21 1
+static char rcsid [] = "$Id: gauss.c,v 1.15 1993/11/05 16:16:32 ty7777 Exp ty7777 $";
+d33 1
+d38 1
+a41 1
+	char		*now;
+d71 3
+a73 2
+	now			= argv [4];
+	uid			= argv [5];
+d158 4
+a161 2
+	strcpy (recfile, filter_image_file);
+	strcat (recfile, REC_EXT);
+d163 18
+a180 5
+	recfp	= fopen (recfile, "w");
+	if (recfp == (FILE *) NULL)
+	{
+		fprintf (stderr, "Error in opening rec file %s\n", recfile);
+		exit (FAIL);
+a181 3
+	fprintf (recfp, "rec %s %s %s\n", filter_image_file, now, uid);
+	fprintf (recfp, "%s %s %f\n", argv [0], image_file, f0);
+	fprintf (recfp, "   %s\n\n", rcsid);
+a183 9
+	 * Copy the image rec files if there are any.
+	 */
+	strcpy (image_recfile, image_file);
+	strcat (image_recfile, REC_EXT);
+	copyrec (recfp, image_recfile);
+	fprintf (recfp, "endrec");
+	fclose (recfp);
+
+	/*
+d187 1
+a187 1
+	strncpy (main_header->operator_name, now, sizeof (main_header->operator_name) - 1);
+@
+
+
+1.15
+log
+@Testing version.
+@
+text
+@d1 5
+a5 2
+/*$Id: gauss.c,v 1.13 1993/10/26 15:06:37 ty7777 Exp $*/
+/*$Log$*/
+d18 1
+a18 1
+static char rcsid [] = "$Id$";
+d36 1
+d141 1
+a141 1
+	/*______________________________________________________
+d143 1
+a143 1
+	 *______________________________________________________*/
+d163 1
+a163 1
+	fprintf (recfp, "gauss %s %f\n", image_file, f0);
+d165 8
+d175 9
+a188 4
+
+	comment_info (main_header->study_description, &comment_info_data);
+	comment_info_data.gauss3d_filter	= TRUE;
+	info2comment (comment_info_data, main_header->study_description);
+@
+
+
+1.14
+log
+@Added rcsid.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.13 1993/10/26 15:06:37 ty7777 Exp ty7777 $*/
+d159 1
+a159 1
+	fprintf (recfp, "gauss %s %s\n", image_file, f0);
+a162 3
+	/*______________________________________________________
+	 * Write the 3D real image.
+	 *______________________________________________________*/
+@
+
+
+1.13
+log
+@Moved initizlization of matval to begining of the code.
+@
+text
+@d1 2
+a2 1
+/*$Id: gauss.c,v 1.12 1993/10/05 21:18:06 ty7777 Exp ty7777 $*/
+d12 1
+a12 1
+#include <petutil/petutil.h>
+d15 2
+d28 1
+d33 3
+d63 2
+d146 20
+@
+
+
+1.12
+log
+@Use comment_info ().
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.11 1993/09/29 17:10:24 ty7777 Exp ty7777 $*/
+d57 9
+a145 9
+
+	/*
+	 * Assign default values for matval.
+	 */
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+@
+
+
+1.11
+log
+@Changed error message.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.10 1993/08/03 16:42:48 ty7777 Exp ty7777 $*/
+d24 1
+a24 1
+	BOOLEAN		scale_in_comment;
+a26 1
+	char		comments [MAXLINE];
+a28 1
+	char		label [MAXLINE];
+a34 1
+	float		scaling_factor;
+a56 9
+	/*
+	 * Assign default values for matval.
+	 */
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+d134 3
+a136 16
+	if (main_header->study_description != NULL && strlen (main_header->study_description) > 0)
+	{
+		i	= sscanf (main_header->study_description, "%s %f", label, &scaling_factor);
+		if (i == 2 && strcmp (label, SCALE_LABEL) == 0)
+		{
+			scale_in_comment	= TRUE;
+		}
+		else
+		{
+			scale_in_comment	= FALSE;
+		}
+	}
+	else
+	{
+		scale_in_comment	= FALSE;
+	}
+d138 8
+a145 8
+	if (scale_in_comment)
+	{
+		sprintf (comments, "%s %f ", SCALE_LABEL, scaling_factor);
+		strcat (comments, "3D Gauss"); 
+	}
+	else
+		strcpy (comments, "3D Gauss Filtered Image"); 
+	strncpy (main_header->study_description, comments, sizeof (main_header->study_description));
+@
+
+
+1.10
+log
+@Change BUTTERWORTH_FILTER_CODE to GAUSSIAN_FILTER_CODE.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.9 1993/07/14 20:27:28 ty7777 Exp ty7777 $*/
+d72 1
+a72 1
+		fprintf (stderr, "getimagedim () error.\n");
+@
+
+
+1.9
+log
+@Code works for both Sun and HP workstations.
+@
+text
+@d1 1
+a1 1
+/*$Id: gauss.c,v 1.8 1993/06/22 22:28:46 ty7777 Exp ty7777 $*/
+d142 1
+a142 1
+		(subheader_list [i])->filter_code	+= BUTTERWORTH_FILTER_CODE;
+@
+
+
+1.8
+log
+@OpenEcat () in libhp.a is changed.
+@
+text
+@d1 1
+a1 1
+/*$Id$*/
+d18 3
+d22 1
+a22 3
+	/*
+	extern		gauss3d ();
+	*/
+d125 3
+d129 1
+a129 3
+	/*
+	gauss3d (padimage3d, &nx, &ny, &nz, cmpix, &f0);
+	*/
+@
+
+
+1.7
+log
+@Checking scaling factors.
+@
+text
+@d1 1
+a1 17
+/*$Log: gauss.c,v $
+ * Revision 1.6  1993/05/10  20:58:20  ty7777
+ * filter code -1 is correct.
+ *
+ * Revision 1.5  1993/05/04  15:45:26  ty7777
+ * Checking for filter code.
+ *
+ * Revision 1.4  1993/04/30  15:02:55  ty7777
+ * Assigned study_description field of the main_header.
+ *
+ * Revision 1.3  1993/04/29  17:42:46  ty7777
+ * Calling getrealimg () and writerealimg ().
+ *
+ * Revision 1.2  1993/03/08  21:37:48  ty7777
+ * Sun version, changed write3dreal ().
+ **/
+/*$Header: /home/petsun4/ty7777/src/gauss/RCS/gauss.c,v 1.6 1993/05/10 20:58:20 ty7777 Exp ty7777 $*/
+d19 3
+d125 3
+a137 3
+	/*______________________________________________________
+	 * Write 3D image to an ECAT matrix file.
+	 *______________________________________________________*/
+d140 1
+a140 1
+		(subheader_list [i])->filter_code	+= GAUSSIAN_FILTER_CODE;
+d164 1
+a164 1
+		strcat (comments, "3D Gaussian"); 
+d167 1
+a167 1
+		strcpy (comments, "3D Gaussian Filtered Image"); 
+@
+
+
+1.6
+log
+@filter code -1 is correct.
+@
+text
+@d2 3
+d17 1
+a17 1
+/*$Header: /home/petsun4/ty7777/src/gauss/RCS/gauss.c,v 1.5 1993/05/04 15:45:26 ty7777 Exp ty7777 $*/
+d36 1
+d39 2
+d42 1
+a42 1
+	char		*filter_image_file;
+d49 1
+d157 26
+a182 1
+	strcpy (main_header->study_description, "NPG Gaussian Filtered Image");
+@
+
+
+1.5
+log
+@Checking for filter code.
+@
+text
+@d2 3
+d14 1
+a14 1
+/*$Header: /home/petsun4/ty7777/src/gauss/RCS/gauss.c,v 1.4 1993/04/30 15:02:55 ty7777 Exp ty7777 $*/
+a32 1
+	BOOLEAN		encoded_flag;
+a34 1
+	MatrixFile	*fptr;
+a43 1
+	int		fd;
+d99 6
+a104 3
+	nx	= BUTTERWORTH_XDIM;
+	ny	= BUTTERWORTH_YDIM;
+	nz	= BUTTERWORTH_ZDIM;
+d146 1
+a146 8
+		if (subheader_list [i]->filter_code < 0)
+		{
+			fprintf (stderr, "Warning: filter code %d might be wrong in the image file %s.\n",
+				subheader_list [i]->filter_code, image_file);
+			subheader_list [i]->filter_code	= GAUSSIAN_FILTER_CODE;
+		}
+		else
+			(subheader_list [i])->filter_code	+= GAUSSIAN_FILTER_CODE;
+@
+
+
+1.4
+log
+@Assigned study_description field of the main_header.
+@
+text
+@d2 3
+d11 1
+a11 1
+/*$Header: /home/petsun4/ty7777/src/gauss/RCS/gauss.c,v 1.3 1993/04/29 17:42:46 ty7777 Exp ty7777 $*/
+d138 3
+d143 8
+a150 1
+		(subheader_list [i])->filter_code	+= GAUSSIAN_FILTER_CODE;
+@
+
+
+1.3
+log
+@Calling getrealimg () and writerealimg ().
+@
+text
+@d2 3
+d8 1
+a8 1
+/*$Header: /home/petsun4/ty7777/src/gauss/RCS/gauss.c,v 1.2 1993/03/08 21:37:48 ty7777 Exp ty7777 $*/
+d11 2
+a12 2
+  Description:	This program filter an ECAT image by using the Butterworth
+		filter.
+d31 1
+a31 1
+	char		*ecat_image_file;
+d58 1
+a58 1
+	ecat_image_file		= argv [1];
+d71 1
+a71 1
+	if (getimagedim (ecat_image_file, matval, &scanner, &width, &height, &num_slices, 
+d85 1
+a85 1
+	if (getrealimg (ecat_image_file, scanner, matval, width, height, num_slices, image3d, 
+d141 1
+@
+
+
+1.2
+log
+@Sun version, changed write3dreal ().
+@
+text
+@d1 5
+a5 2
+/*$Log$*/
+/*$Header$*/
+a17 7
+#define DEFAULT_SEP		0.3375
+#define BUTTERWORTH_XDIM	144
+#define BUTTERWORTH_YDIM	144
+#define BUTTERWORTH_ZDIM	48
+
+char list [] = "*;*;*;*"; /* any frame plane gate bed */
+
+d24 1
+d26 1
+a27 1
+	Mlist		*mlist;
+d37 1
+a37 1
+	int		diff;  /* number of differences between spec and actual */
+d44 1
+a58 3
+	/*______________________________________________________
+	 * Open ECAT image and get image dimensions and voxel sizes.
+	 *______________________________________________________*/
+d68 2
+a69 3
+	fptr	= OpenEcat (ecat_image_file, &num_slices, &width, &height, 
+				&pixel_size, &plane_separation, matval);
+	if (fptr == (MatrixFile *) NULL)
+d71 1
+a71 1
+		fprintf (stderr, "OpenEcat error in filter.c.\n");
+d75 2
+a76 2
+	if (plane_separation == 0.0)
+		plane_separation	= DEFAULT_SEP;
+d78 6
+a83 6
+	/*
+	 * The number of mats in a list always gives the correct number of
+	 * slices.
+	 */
+	mlist	= make_list (ecat_image_file, (char *) NULL, list, &diff);
+	if (!mlist) 
+d85 2
+a86 2
+		fprintf (stderr, "make_list error.\n");
+		matrix_close (fptr);
+a88 1
+	num_slices	= mlist->nmats;
+a89 3
+	subheader_list	= (Image_subheader **) pkg_malloc (num_slices * sizeof (caddr_t), "filter", 
+						"subheader_list");
+
+a90 8
+	 * Build an 3D image array.
+	 *______________________________________________________*/
+	dimension	= width * height * num_slices;
+	image3d		= (float *) pkg_malloc (dimension * sizeof (float), "filter", "image3d");
+
+	get3dreal (fptr, width, height, num_slices, mlist, image3d, subheader_list);
+
+	/*______________________________________________________
+d104 1
+a104 1
+	if (image3d == (float *) NULL)
+d132 5
+a136 5
+	/*______________________________________________________
+	 * Write 3D image to an ECAT matrix file.
+	 *______________________________________________________*/
+	mlist->frames	= 1;
+	mlist->planes	= num_slices;
+d138 5
+a142 3
+	write3dreal (filter_image_file, fptr->mhptr->file_type, mlist, matval, width, height, 
+		num_slices, pixel_size, plane_separation, GAUSSIAN_FILTER_CODE, f0, 0,
+		image3d, fptr->mhptr, subheader_list);
+d144 4
+d149 1
+a150 2
+	free_Mlist (mlist);
+	matrix_close (fptr);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d5 1
+a5 1
+  Description:	This program filter an ECAT image by using the Gaussian
+a8 1
+						Modified by Tom Videen 7-Jan-92
+d13 1
+a13 1
+#include <datacalc/datacalc.h>
+a39 1
+	int		fd;
+a42 2
+	int		j;
+	int		k;
+a63 2
+	fd	= open (ecat_image_file, O_RDONLY, 0);
+
+d73 1
+a73 1
+	fptr	= OpenEcat (fd, ecat_image_file, &num_slices, &width, &height, 
+d77 1
+a77 1
+		close (fd);
+d92 1
+a92 2
+		matrixx_close (fptr);
+		close (fd);
+d157 2
+a158 1
+		num_slices, pixel_size, plane_separation, image3d, fptr->mhptr, subheader_list);
+d160 1
+d163 1
+a163 2
+	matrixx_close (fptr);
+	close (fd);
+@

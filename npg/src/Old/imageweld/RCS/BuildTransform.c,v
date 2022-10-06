@@ -1,0 +1,544 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	95.07.13.22.02.09;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.07.11.21.57.35;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.11.04.21.07.32;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.11.03.22.21.46;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.29.14.47.37;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.10.26.18.11.55;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.10.15.20.50.38;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Before interpolation.
+@
+
+
+1.7
+log
+@After implemented simple_mean.
+@
+text
+@/*$Id: BuildTransform.c,v 1.6 1995/07/11 21:57:35 ty7777 Exp ty7777 $*/
+/*$Log: BuildTransform.c,v $
+ * Revision 1.6  1995/07/11  21:57:35  ty7777
+ * After introducing noisy_slices.
+ *
+ * Revision 1.5  1993/11/04  21:07:32  ty7777
+ * Processing for rec file.
+ *
+ * Revision 1.4  1993/11/03  22:21:46  ty7777
+ * Processing for literal matrix file.
+ *
+ * Revision 1.3  1993/10/29  14:47:37  ty7777
+ * Added processing for literal list.
+ *
+ * Revision 1.2  1993/10/26  18:11:55  ty7777
+ * Added information on matrix file.
+ *
+ * Revision 1.1  1993/10/15  20:50:38  ty7777
+ * Initial revision
+ **/
+
+/*_________________________________________________________________
+  File:		BuildTransform.c
+
+  Function:	int BuildTransform (PARAMETER_DATA parameter_data, 
+		IMAGE_LIST_DATA image_list, int image_mode, char *top_short_file,
+		char *bottom_short_file, BOOLEAN simple_weld, int noisy_slices, 
+		float topT4 [][4], float bottomT4 [][4], float *normalization_factor, FILE *recfp);
+
+  Arguments:	parameter_data:		data structure contains all the parameters from
+					the parameter file. PARAMETER_DATA is defined in
+					/usr/local/include/petutil/imglist.h.
+		image_list:		data structure containing scan identification,
+					activation scan number, and control scan number.
+					IMAGE_LIST_DATA is defined in 
+					/usr/locla/include/petutil/imglist.h.
+		image_mode:		image mode. Used here to determine the image
+					category.
+		top_short_file:		short file name for top scan.
+		bottom_short_file:	short file name for bottom scan.
+		simple_weld:		1: simple weld; 0: normal weld.
+		noisy_slices:		number of noisy slices for 3D scan.
+		topT4:			T4 matrix for top scan.
+		bottomT4:		T4 matrix for bottom scan.
+		normalization_factor:	normalization factor between the
+					top and bottom scans.
+		recfp:			recfile file pointer.
+
+  Return Value:	SUCCEED:	successful;
+		FAIL:		failed.
+
+  Description:	This function reads the matrix file and returns the
+		T4 matrices for both the top and the bottom scans. The 
+		normalization factor between the top and the bottom is 
+		also returned.
+
+  Calling:	readmat () in readmat.c.
+
+  Called by:
+
+  Author:	Created by Tom Yang on 10/13/93. 
+_________________________________________________________________*/
+
+#include <petutil/imglist.h>
+#include "imageweld.h"
+
+PRIVATE int FindT4 ();
+
+static char rcsid [] = "$Header: /data/petsun4/src/simple_weld/RCS/BuildTransform.c,v 1.6 1995/07/11 21:57:35 ty7777 Exp ty7777 $";
+
+PUBLIC int BuildTransform (parameter_data, image_list, image_mode, short_top_scan, 
+	short_bottom_scan, complete_top_scan, complete_bottom_scan, simple_weld, noisy_slices,
+	topT4, bottomT4, top_scaling_factor, bottom_scaling_factor, normalization_factor,
+	short_matrix_file, recfp)
+	PARAMETER_DATA		parameter_data;
+	IMAGE_LIST_DATA		image_list;
+	int			image_mode;
+	char			*short_top_scan;
+	char			*short_bottom_scan;
+	char			*complete_top_scan;
+	char			*complete_bottom_scan;
+	BOOLEAN			simple_weld;
+	int			noisy_slices;
+	float			topT4 [][4];
+	float			bottomT4 [][4];
+	float			*top_scaling_factor;
+	float			*bottom_scaling_factor;
+	float			*normalization_factor;
+	char			*short_matrix_file;
+	FILE			*recfp;
+{
+	BOOLEAN		demigrate;
+	BOOLEAN		matrix_file_exist;
+	BOOLEAN		top_bottom_flipped;
+	MATRIX_DATA	*matrix_list;
+	char		cbuffer [MAXLINE];
+	char		complete_matrix_file [MAXPATH];
+	float		mmppix [3];
+	int		list_size;
+
+	demigrate		= TRUE;
+	matrix_file_exist	= TRUE;
+
+	/* 
+ 	 * Find the matrix file and read data from matrix file.
+ 	 */
+	if (CheckDataFile (parameter_data, image_list, demigrate, short_matrix_file, 
+	complete_matrix_file) == FAIL)
+	{
+		matrix_file_exist	= FALSE;
+		list_size		= 0;
+	}
+
+	matrix_list	= (MATRIX_DATA *) malloc (sizeof (MATRIX_DATA) 
+			* MAX_MATRIX_LIST_SIZE);
+	if (matrix_list == (MATRIX_DATA *) NULL)
+	{
+		fprintf (stderr, 
+		"Error: memory allocation for matrix_list in BuildTransform ().\n");
+		return FAIL;
+	}
+
+	if (matrix_file_exist && 
+	readmat (complete_matrix_file, mmppix, matrix_list, &list_size) == FAIL)
+		matrix_file_exist	= FALSE;
+
+	if (matrix_file_exist)
+	{
+		fprintf (stdout, "Matrix file %s is used.\n", complete_matrix_file);
+		fprintf (recfp, "Matrix file %s is used.\n", complete_matrix_file);
+		copyrec (recfp, complete_matrix_file);
+		fprintf (recfp, "\n");
+	}
+	else if (!simple_weld)
+	{
+		fprintf (stdout, "Matrix file %s is not found.\n", short_matrix_file);
+		fprintf (recfp, "Matrix file %s is not found.\n", short_matrix_file);
+	}
+
+	/* 
+	 * Get the reference scans and compute the normalization factor.
+	 */
+	if (getfactor (parameter_data, image_list, image_mode, demigrate, matrix_list, 
+	list_size, complete_top_scan, complete_bottom_scan, simple_weld, noisy_slices, 
+	normalization_factor, &top_bottom_flipped, mmppix, recfp) == FAIL)
+	{
+		free (matrix_list);
+		return FAIL;
+	}
+
+	if (top_bottom_flipped)
+	{
+		strcpy (cbuffer, short_top_scan);	
+		strcpy (short_top_scan, short_bottom_scan);	
+		strcpy (short_bottom_scan, cbuffer);	
+	}
+
+	/* 
+	 * Find the top and bottom T4 matrices.
+	 */
+	if (matrix_file_exist && !simple_weld)
+		fprintf (recfp, "\nmat\n");
+	FindT4 (matrix_list, list_size, short_top_scan, mmppix, topT4, 
+		top_scaling_factor, recfp);
+	FindT4 (matrix_list, list_size, short_bottom_scan, mmppix, bottomT4, 
+		bottom_scaling_factor, recfp);
+	if (matrix_file_exist && !simple_weld)
+		fprintf (recfp, "endmat\n\n");
+
+	free (matrix_list);
+
+	if (simple_weld)
+	{
+		if (pkg_abs (image_list.mean1) <= ERROR_BOUND)
+		{
+			fprintf (stderr, "Error: the mean for %s is 0.0\n", short_top_scan);
+			return FAIL;
+		}
+
+		if (pkg_abs (image_list.mean2) <= ERROR_BOUND)
+		{
+			fprintf (stderr, "Error: the mean for %s is 0.0\n", short_bottom_scan);
+			return FAIL;
+		}
+
+		*top_scaling_factor	= NORMAL_MEAN / image_list.mean1;
+		*bottom_scaling_factor	= NORMAL_MEAN / image_list.mean2;
+	}
+
+	return SUCCEED;
+}
+
+
+PRIVATE int FindT4 (matrix_list, list_size, short_scan, mmppix, T4, scaling_factor, recfp)
+	MATRIX_DATA	*matrix_list;
+	int		list_size;
+	char		*short_scan;
+	float		*mmppix;
+	float		T4 [][4];
+	float		*scaling_factor;
+	FILE		*recfp;
+{
+	extern		t4set_ ();
+
+	char	scanid [MAXLINE];
+	int	i;
+	int	index;
+	int	j;
+
+	/*
+	 * Initialization.
+	 */
+	for (j = 0; j < 4; j++)
+	{
+		for (i = 0; i < 4; i++)
+		{
+			if (i == j)
+				T4 [i][j]	= 1.0;
+			else
+				T4 [i][j]	= 0.0;
+		}
+	}
+	*scaling_factor	= 1.0;
+
+	for (i = 0; i < list_size; i++)
+	{
+
+		if (strstr (short_scan, matrix_list [i].scanid) != NULL)
+			break;
+	}
+
+	if (i < list_size)
+	{	
+		fprintf (recfp, "%s %8.5f %7.4f %7.4f %7.4f %7.4f %7.4f %7.4f %6.2f %6.2f %6.2f\n",
+			matrix_list [i].scanid, 
+			matrix_list [i].scale_factor,
+			matrix_list [i].displacement [0],
+			matrix_list [i].displacement [1],
+			matrix_list [i].displacement [2],
+			radian2deg (matrix_list [i].rotation_angle [0]),
+			radian2deg (matrix_list [i].rotation_angle [1]),
+			radian2deg (matrix_list [i].rotation_angle [2]),
+			matrix_list [i].rotation_center [0],
+			matrix_list [i].rotation_center [1],
+			matrix_list [i].rotation_center [2]);
+
+		t4set_ (mmppix, matrix_list [i].displacement, matrix_list [i].rotation_angle,
+		matrix_list [i].rotation_center, T4);
+		*scaling_factor	= matrix_list [i].scale_factor;
+	}
+
+	return	SUCCEED;
+}
+@
+
+
+1.6
+log
+@After introducing noisy_slices.
+@
+text
+@d1 1
+a1 1
+/*$Id: BuildTransform.c,v 1.5 1993/11/04 21:07:32 ty7777 Exp ty7777 $*/
+d3 3
+d27 2
+a28 2
+		char *bottom_short_file, int noisy_slices, float topT4 [][4], 
+		float bottomT4 [][4], float *normalization_factor, FILE *recfp);
+d41 1
+d69 1
+a69 1
+static char rcsid [] = "$Header: /data/petsun4/src/simple_weld/RCS/BuildTransform.c,v 1.5 1993/11/04 21:07:32 ty7777 Exp ty7777 $";
+d72 1
+a72 1
+	short_bottom_scan, complete_top_scan, complete_bottom_scan, noisy_slices,
+d82 1
+d134 1
+a134 1
+	else
+d144 2
+a145 2
+	list_size, complete_top_scan, complete_bottom_scan, noisy_slices, normalization_factor, 
+	&top_bottom_flipped, mmppix, recfp) == FAIL)
+d161 2
+a162 1
+	fprintf (recfp, "\nmat\n");
+d167 2
+a168 1
+	fprintf (recfp, "endmat\n\n");
+d171 18
+@
+
+
+1.5
+log
+@Processing for rec file.
+@
+text
+@d1 1
+a1 1
+/*$Id: BuildTransform.c,v 1.4 1993/11/03 22:21:46 ty7777 Exp ty7777 $*/
+d3 3
+d24 2
+a25 2
+		char *bottom_short_file, float topT4 [][4], float bottomT4 [][4],
+		float *normalization_factor, FILE *recfp);
+d38 1
+d65 1
+a65 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/imageweld/RCS/BuildTransform.c,v 1.4 1993/11/03 22:21:46 ty7777 Exp ty7777 $";
+d68 2
+a69 2
+	short_bottom_scan, complete_top_scan, complete_bottom_scan, topT4, 
+	bottomT4, top_scaling_factor, bottom_scaling_factor, normalization_factor,
+d78 1
+d138 3
+a140 3
+	if (getfactor (parameter_data, image_list, image_mode, demigrate, 
+	matrix_list, list_size, complete_top_scan, complete_bottom_scan, 
+	normalization_factor, &top_bottom_flipped, mmppix, recfp) == FAIL)
+@
+
+
+1.4
+log
+@Processing for literal matrix file.
+@
+text
+@d1 1
+a1 1
+/*$Id: BuildTransform.c,v 1.3 1993/10/29 14:47:37 ty7777 Exp ty7777 $*/
+d3 3
+d22 1
+a22 1
+		float *normalization_factor);
+d39 1
+d61 1
+a61 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/imageweld/RCS/BuildTransform.c,v 1.3 1993/10/29 14:47:37 ty7777 Exp ty7777 $";
+d66 1
+a66 1
+	short_matrix_file)
+d80 1
+d118 1
+d120 4
+d125 1
+d127 2
+d135 1
+a135 1
+	normalization_factor, &top_bottom_flipped, mmppix) == FAIL)
+d151 6
+a156 2
+	FindT4 (matrix_list, list_size, short_top_scan, mmppix, topT4, top_scaling_factor);
+	FindT4 (matrix_list, list_size, short_bottom_scan, mmppix, bottomT4, bottom_scaling_factor);
+d164 1
+a164 1
+PRIVATE int FindT4 (matrix_list, list_size, short_scan, mmppix, T4, scaling_factor)
+d171 1
+d204 13
+@
+
+
+1.3
+log
+@Added processing for literal list.
+@
+text
+@d1 1
+a1 1
+/*$Id: BuildTransform.c,v 1.2 1993/10/26 18:11:55 ty7777 Exp ty7777 $*/
+d3 3
+a54 2
+#define	MATRIX_FILE_EXT		".mat"
+
+d57 1
+a57 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/imageweld/RCS/BuildTransform.c,v 1.2 1993/10/26 18:11:55 ty7777 Exp ty7777 $";
+d61 2
+a62 1
+	bottomT4, top_scaling_factor, bottom_scaling_factor, normalization_factor)
+d75 1
+a82 2
+	char		short_matrix_file [MAXLINE];
+	char		subject_id [MAXNAME];
+d90 4
+a93 3
+	 * Construct the subject id.
+	 */
+	if (parameter_data.weld_lstmode != LITERAL_IMAGE_MODE)
+d95 3
+a97 4
+		strcpy (subject_id, parameter_data.species);
+		strcat (subject_id, image_list.subject_id);
+		strcpy (short_matrix_file, subject_id);
+		strcat (short_matrix_file, MATRIX_FILE_EXT);
+d99 8
+a106 8
+		/* 
+	 	 * Find the matrix file and read data from matrix file.
+	 	 */
+		if (CheckDataFile (parameter_data, image_list, demigrate, short_matrix_file, 
+		complete_matrix_file) == FAIL)
+		{
+			matrix_file_exist	= FALSE;
+		}
+d108 2
+a109 16
+		matrix_list	= (MATRIX_DATA *) malloc (sizeof (MATRIX_DATA) 
+				* MAX_MATRIX_LIST_SIZE);
+		if (matrix_list == (MATRIX_DATA *) NULL)
+		{
+			fprintf (stderr, 
+			"Error: memory allocation for matrix_list in BuildTransform ().\n");
+			return FAIL;
+		}
+
+		if (!matrix_file_exist)
+			list_size	= 0;
+		else if (readmat (complete_matrix_file, mmppix, matrix_list, &list_size) == FAIL)
+			matrix_file_exist	= FALSE;
+	}
+	else
+	{
+a110 2
+		list_size		= 0;
+	}
+@
+
+
+1.2
+log
+@Added information on matrix file.
+@
+text
+@d1 1
+a1 1
+/*$Id: BuildTransform.c,v 1.1 1993/10/15 20:50:38 ty7777 Exp ty7777 $*/
+d3 3
+d56 1
+a56 1
+static char rcsid [] = "$Header$";
+d91 6
+a96 4
+	strcpy (subject_id, parameter_data.species);
+	strcat (subject_id, image_list.subject_id);
+	strcpy (short_matrix_file, subject_id);
+	strcat (short_matrix_file, MATRIX_FILE_EXT);
+d98 24
+a121 5
+	/* 
+	 * Find the matrix file and read data from matrix file.
+	 */
+	if (CheckDataFile (parameter_data, image_list, demigrate, short_matrix_file, 
+	complete_matrix_file) == FAIL)
+d124 1
+a125 14
+
+	matrix_list	= (MATRIX_DATA *) malloc (sizeof (MATRIX_DATA) 
+			* MAX_MATRIX_LIST_SIZE);
+	if (matrix_list == (MATRIX_DATA *) NULL)
+	{
+		fprintf (stderr, 
+		"Error: memory allocation for matrix_list in BuildTransform ().\n");
+		return FAIL;
+	}
+
+	if (!matrix_file_exist)
+		list_size	= 0;
+	else if (readmat (complete_matrix_file, mmppix, matrix_list, &list_size) == FAIL)
+		matrix_file_exist	= FALSE;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d53 1
+a53 1
+static char rcsid []= "$Id$";
+d116 5
+d126 1
+a126 1
+	normalization_factor, &top_bottom_flipped) == FAIL)
+@

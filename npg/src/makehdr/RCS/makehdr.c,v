@@ -1,0 +1,569 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	2004.02.16.20.08.32;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2002.12.16.20.40.17;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.11.27.15.13.26;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.09.25.19.59.49;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.03.02.17.05.55;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.09.19.17.04.24;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.09.19.16.56.20;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@Feb 2004
+@
+text
+@/*	$Log: makehdr.c,v $
+ * Revision 1.6  2002/12/16  20:40:17  tom
+ * fix bcopy
+ *
+ *	Revision 1.5  2002/11/27 15:13:26  tom
+ *	*** empty log message ***
+ *
+ * Revision 1.4  2002/09/25  19:59:49  tom
+ * add Oxygen Counts
+ *
+ * Revision 1.3  1999/03/02  17:05:55  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1997/09/19  17:04:24  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1997/09/19  16:56:20  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:		makehdr.c
+ *	Intent:		Create an hdr file.
+ *	Author:		Tom Videen
+ *	Date:		Mar 1999
+ *	===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Id: makehdr.c,v 1.6 2002/12/16 20:40:17 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <imgutil.h>
+#include <pett6.h>
+
+#define PETT6_FILTER_LEN 12
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	FILE           *fp;
+	OS32_HEADER_DATA *os32_header;
+	PETT6HDR       *pett6_header;
+	char           *tmp;
+	char            datatype[MAXLINE];
+	char            datatype_start[MAXLINE];
+	char            filter[PETT6_FILTER_LEN + 1];
+	char           *header;
+	char           *line;
+	char           *root;
+	char           *fname;
+	char            hname[100];
+	float           rnumber;
+	int             number;
+	int             ntype;
+
+	if (argc != 3) {
+		fprintf (stderr, "Usage: makehdr root filename\n");
+		return (1);
+	}
+/*
+ *	Read the PETT VI header
+ */
+
+	root = argv[1];
+	fname = argv[2];
+	fp = fopen (fname, "r");
+	if (fp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR: Cannot open %s\n", fname);
+		return (1);
+	}
+	line = (char *) malloc (MAXLINE);
+	if (line == NULL) return (1);
+	os32_header = (OS32_HEADER_DATA *) malloc (sizeof (OS32_HEADER_DATA));
+	if (os32_header == NULL) return (1);
+	header = (char *) malloc (256);
+	if (header == NULL) return (1);
+	(void) fread (os32_header, sizeof (OS32_HEADER_DATA), 1, fp);
+	bcopy (os32_header, header, sizeof (OS32_HEADER_DATA));
+	(void) fclose (fp);
+	pett6_header = (PETT6HDR *) header;
+
+/*
+ *	Determine the data type of the file
+ */
+
+	if ((fp = fopen ("/usr/local/lib/header.tbl", "r")) == (FILE *) NULL) {
+		fprintf (stderr, "ERROR: Cannot open %s\n", "/usr/local/lib/header.tbl");
+		return (1);
+	}
+	while (fgets (line, MAXLINE, fp) != NULL) {
+		if (strncmp (line, "END", 3) == 0) {
+			strcpy (datatype, "Unknown Data Type");
+			break;
+		} else {
+			(void) sscanf (line, "%d %s", &number, datatype_start);
+			tmp = strstr (line, datatype_start);
+			strcpy (datatype, tmp);
+			if (number == (int) pett6_header->file_type)
+				break;
+		}
+	}
+	(void) fclose (fp);
+
+	if ((int) pett6_header->file_type > 2000) {
+		fprintf (stderr, "ERROR: datatype %d is not a PETT VI file\n",
+			 pett6_header->file_type);
+		return (1);
+	}
+	if ((int) pett6_header->file_type == 1010 || (int) pett6_header->file_type == 1020)
+		strncpy (filter, pett6_header->filter, PETT6_FILTER_LEN);
+	else
+		strcpy (filter, " ");
+
+/*
+ *	Open the hdr file
+ */
+
+	strcpy (hname, root);
+	strcat (hname, ".hdr");
+	fp = fopen (hname, "w");
+	if (fp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR: Cannot open %s\n", hname);
+		return (1);
+	}
+	bcopy ("PETT VI       ", os32_header->scanner, 14);
+	bcopy (root, os32_header->scanname, 8);
+	os32_header->scantime = pett6_header->scan_time;
+	if (pett6_header->number_of_slices == 0)
+		os32_header->slices = 7;
+	else
+		os32_header->slices = pett6_header->number_of_slices;
+	os32_header->resolution = pett6_header->resolution;
+	bcopy (pett6_header->compound, os32_header->compound, 4);
+	bcopy (pett6_header->filter, os32_header->filter, PETT6_FILTER_LEN);
+	os32_header->rcontype = pett6_header->file_type;
+
+/*
+ *	Get metabolic factors
+ */
+
+	printf ("Date as MM/DD/YY: ");
+	(void) fgets (line, MAXLINE, stdin);
+	(void) sscanf (line, "%8s", os32_header->procdate);
+
+	printf ("Initials: ");
+	(void) fgets (line, MAXLINE, stdin);
+	(void) sscanf (line, "%4s", os32_header->initials);
+
+	printf ("Ntype (1=OO, 2=HO, 3=CO): ");
+	(void) fgets (line, MAXLINE, stdin);
+	(void) sscanf (line, "%d", &ntype);
+	os32_header->ntype = ntype;
+
+	printf ("Pie Slope: ");
+	(void) fgets (line, MAXLINE, stdin);
+	(void) sscanf (line, "%f", &rnumber);
+	os32_header->pieslope = ieee2pe (&rnumber);
+
+	printf ("PETT Conversion Factor: ");
+	(void) fgets (line, MAXLINE, stdin);
+	(void) sscanf (line, "%f", &rnumber);
+	os32_header->pettcnv1 = ieee2pe (&rnumber);
+
+	switch (ntype) {
+	case 1:
+		printf ("A Coefficient (Oxygen): ");
+		(void) fgets (line, MAXLINE, stdin);
+		(void) sscanf (line, "%f", &rnumber);
+		os32_header->aoxygen1 = ieee2pe (&rnumber);
+
+		printf ("B Coefficient (Oxygen): ");
+		(void) fgets (line, MAXLINE, stdin);
+		(void) sscanf (line, "%f", &rnumber);
+		os32_header->boxygen1 = ieee2pe (&rnumber);
+
+		printf ("A Coefficient (Water): ");
+		(void) fgets (line, MAXLINE, stdin);
+		(void) sscanf (line, "%f", &rnumber);
+		os32_header->awater1 = ieee2pe (&rnumber);
+
+		printf ("B Coefficient (Water): ");
+		(void) fgets (line, MAXLINE, stdin);
+		(void) sscanf (line, "%f", &rnumber);
+		os32_header->bwater1 = ieee2pe (&rnumber);
+
+		printf ("Oxygen Content : ");
+		(void) fgets (line, MAXLINE, stdin);
+		(void) sscanf (line, "%f", &rnumber);
+		os32_header->oxycont1 = ieee2pe (&rnumber);
+
+		printf ("Oxygen Counts from Scan Start: ");
+		(void) fgets (line, MAXLINE, stdin);
+		(void) sscanf (line, "%f", &rnumber);
+		os32_header->o2cnts1 = ieee2pe (&rnumber);
+		break;
+	case 2:
+	case 4:
+		printf ("A Coefficient: ");
+		(void) fgets (line, MAXLINE, stdin);
+		(void) sscanf (line, "%f", &rnumber);
+		os32_header->aflow1 = ieee2pe (&rnumber);
+
+		printf ("B Coefficient: ");
+		(void) fgets (line, MAXLINE, stdin);
+		(void) sscanf (line, "%f", &rnumber);
+		os32_header->bflow1 = ieee2pe (&rnumber);
+
+		os32_header->scancnts = 0;
+		break;
+	case 3:
+		printf ("Blood Volume Factor: ");
+		(void) fgets (line, MAXLINE, stdin);
+		(void) sscanf (line, "%f", &rnumber);
+		os32_header->bvfactor1 = ieee2pe (&rnumber);
+
+		os32_header->scancnts = 0;
+		break;
+	default:
+		fprintf (stderr, "ERROR: unrecognized ntype\n");
+		return (1);
+	}
+
+	(void) fwrite (os32_header, sizeof (OS32_HEADER_DATA), 1, fp);
+	free (line);
+	free (os32_header);
+	free (header);
+	(void) fclose (fp);
+	return (0);
+}
+@
+
+
+1.6
+log
+@fix bcopy
+@
+text
+@d2 3
+d24 1
+a24 1
+ *	Date:		Mar-99
+d27 3
+a39 2
+static char     rcsid[] = "$Id: makehdr.c,v 1.5 2002/11/27 15:13:26 tom Exp tom $";
+
+d76 1
+d78 1
+d80 2
+a81 1
+	fread (os32_header, sizeof (OS32_HEADER_DATA), 1, fp);
+d83 1
+a83 1
+	fclose (fp);
+d99 1
+a99 1
+			sscanf (line, "%d %s", &number, datatype_start);
+d106 1
+a106 1
+	fclose (fp);
+d147 1
+a147 1
+	sscanf (line, "%8s", os32_header->procdate);
+d151 1
+a151 1
+	sscanf (line, "%4s", os32_header->initials);
+d155 1
+a155 1
+	sscanf (line, "%d", &ntype);
+d160 1
+a160 1
+	sscanf (line, "%f", &rnumber);
+d165 1
+a165 1
+	sscanf (line, "%f", &rnumber);
+d172 1
+a172 1
+		sscanf (line, "%f", &rnumber);
+d177 1
+a177 1
+		sscanf (line, "%f", &rnumber);
+d182 1
+a182 1
+		sscanf (line, "%f", &rnumber);
+d187 1
+a187 1
+		sscanf (line, "%f", &rnumber);
+d192 1
+a192 1
+		sscanf (line, "%f", &rnumber);
+d197 1
+a197 1
+		sscanf (line, "%f", &rnumber);
+d204 1
+a204 1
+		sscanf (line, "%f", &rnumber);
+d209 1
+a209 1
+		sscanf (line, "%f", &rnumber);
+d217 1
+a217 1
+		sscanf (line, "%f", &rnumber);
+d227 1
+a227 1
+	fwrite (os32_header, sizeof (OS32_HEADER_DATA), 1, fp);
+d231 1
+a231 1
+	fclose (fp);
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d34 1
+a34 1
+static char     rcsid[] = "$Id: makehdr.c,v 1.4 2002/09/25 19:59:49 tom Exp tom $";
+d131 1
+a131 1
+	bcopy (pett6_header->filter, os32_header->filter);
+@
+
+
+1.4
+log
+@add Oxygen Counts
+@
+text
+@d2 3
+d22 1
+d31 1
+a31 1
+static char     rcsid[] = "$Id: makehdr.c,v 1.3 1999/03/02 17:05:55 tom Exp tom $";
+a47 1
+	char            str[100];
+d50 1
+a50 1
+	int             number, itmp;
+d55 1
+a55 1
+		exit (1);
+d66 1
+a66 1
+		exit (1);
+d82 1
+a82 1
+		exit (1);
+d101 1
+a101 1
+		exit (1);
+d117 1
+a117 1
+		exit (1);
+d136 1
+a136 1
+	fgets (line, MAXLINE, stdin);
+d140 1
+a140 1
+	fgets (line, MAXLINE, stdin);
+d144 1
+a144 1
+	fgets (line, MAXLINE, stdin);
+d149 1
+a149 1
+	fgets (line, MAXLINE, stdin);
+d154 1
+a154 1
+	fgets (line, MAXLINE, stdin);
+d161 1
+a161 1
+		fgets (line, MAXLINE, stdin);
+d166 1
+a166 1
+		fgets (line, MAXLINE, stdin);
+d171 1
+a171 1
+		fgets (line, MAXLINE, stdin);
+d176 1
+a176 1
+		fgets (line, MAXLINE, stdin);
+d181 1
+a181 1
+		fgets (line, MAXLINE, stdin);
+d186 1
+a186 1
+		fgets (line, MAXLINE, stdin);
+d193 1
+a193 1
+		fgets (line, MAXLINE, stdin);
+d198 1
+a198 1
+		fgets (line, MAXLINE, stdin);
+d206 1
+a206 1
+		fgets (line, MAXLINE, stdin);
+d214 1
+a214 1
+		exit (1);
+d218 3
+d222 1
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d27 1
+a27 1
+static char     rcsid[] = "$Id: makehdr.c,v 1.2 1997/09/19 17:04:24 tom Exp tom $";
+d181 5
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d8 1
+a8 1
+/*	-------------------------------------------------------------------------
+d12 2
+a13 2
+ *	Date:		Sep-97
+ *	-------------------------------------------------------------------------
+d24 1
+a24 1
+static char     rcsid[] = "$Id: makehdr.c,v 1.1 1997/09/19 16:56:20 tom Exp tom $";
+d129 4
+a136 4
+	printf ("Date as MMDDYY: ");
+	fgets (line, MAXLINE, stdin);
+	sscanf (line, "%6s", os32_header->procdate);
+
+d142 1
+a142 1
+	printf ("PET conversion factor (PIESLOPE): ");
+d147 1
+a147 1
+	printf ("PET decay-corrected conversion factor: ");
+d154 1
+a154 1
+		printf ("coefficient 1): ");
+d159 1
+a159 1
+		printf ("coefficient 2): ");
+d164 1
+a164 1
+		printf ("coefficient 3): ");
+d169 1
+a169 1
+		printf ("coefficient 4): ");
+d174 1
+a174 1
+		printf ("Oxygen Counts : ");
+d177 1
+a177 1
+		os32_header->o2cnts1 = ieee2pe (&rnumber);
+d181 1
+a181 1
+		printf ("coefficient 1): ");
+d186 1
+a186 1
+		printf ("coefficient 2): ");
+d194 1
+a194 1
+		printf ("coefficient 1): ");
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d21 1
+a21 1
+static char     rcsid[] = "$Id: makehdr.c,v 1.2 1996/08/23 19:35:02 tom Exp $";
+a27 4
+/*
+	OS32_HEAD 	   *os32_header;
+	PETT6_HEAD     *pett6_header;
+*/
+d37 1
+d39 1
+a39 1
+	char            fname[100];
+d44 2
+a45 2
+	if (argc != 2) {
+		fprintf (stderr, "Usage: makehdr filename\n");
+d53 1
+a53 2
+	strcpy (fname, root);
+	strcat (fname, ".img");
+d103 3
+a105 3
+	strcpy (fname, root);
+	strcat (fname, ".hdr");
+	fp = fopen (fname, "w");
+d107 1
+a107 1
+		fprintf (stderr, "ERROR: Cannot open %s\n", fname);
+@

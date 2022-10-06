@@ -1,0 +1,334 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2007.10.10.21.46.54;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2007.10.10.21.19.20;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2007.10.04.18.29.25;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@/*$Log: ecat2analyze.c,v $
+ * Revision 1.2  2007/10/10  21:19:20  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2007/10/04  18:29:25  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			ecat2analyze.c
+ *	Date:			Oct 2007
+ *	Author:			Tom Videen
+ *	Description:	Transform ECAT images into Analyze format as Floating Pt preserving Bq/cc
+ *		Input images may be any format recognizable by getrealimg.
+ *		Output images will be displayed by Analyze with left brain on the RIGHT
+ *		and with the lower slices first.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ecat2analyze/RCS/ecat2analyze.c,v 1.2 2007/10/10 21:19:20 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <ANALYZE.h>				 /* dsr */
+
+#define MAXSTR 256
+#define TRANSVERSE '\000'
+#define CORONAL    '\001'
+#define SAGITTAL   '\002'
+
+/*	----------------------------
+ *	Function:			ecat2analyze
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	ImageFile      *file;
+	Index           indx;
+	struct dsr      hdr;			 /* header for Analyze */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* output Analyze image  */
+
+	char           *ECAT_img;		 /* input ECAT image filename */
+	char           *Analyze_hdr;		 /* output Analyze header filename  */
+	char           *Analyze_img;		 /* output Analyze image filename */
+	char           *xorg, *yorg, *zorg;	 /* atlas origin */
+	long            dim[3];			 /* dimensions of tensors */
+	int             z0;
+	int             i, j, k;
+
+	float           scaler;			 /* restore ECAT counts to Bq */
+	float           framelen;		 /* frame time in msec	*/
+	float           bfrac;			 /* branching fraction */
+
+	float        ***image;			 /* input ECAT image */
+	float          *row;			 /* single row of output image */
+
+/*
+ *  Initializations
+ */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	xorg = hdr.hist.originator + 1;
+	yorg = hdr.hist.originator + 3;
+	zorg = hdr.hist.originator + 5;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 4) {
+		fprintf (stderr, "Usage: ecat2analyze ECAT_img Analyze_img Analyze_hdr\n");
+		return (ERROR);
+	}
+	ECAT_img = argv[1];
+	Analyze_img = argv[2];
+	Analyze_hdr = argv[3];
+
+	if ((fd_hdr = fopen (Analyze_hdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [ecat2analyze]: creating Analyze header %s\n", Analyze_hdr);
+		return (ERROR);
+	}
+	if ((fd_img = fopen (Analyze_img, "w")) == 0) {
+		fprintf (stderr, "ERROR [ecat2analyze]: create Analyze image %s\n", Analyze_img);
+		return (ERROR);
+	}
+/*
+ *	Read the image.
+ */
+
+	file = make_imgfile (ECAT_img);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [ecat2analyze]: opening %s\n", ECAT_img);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [ecat2analyze]: reading MainHeader from %s\n", ECAT_img);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (indx.frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR) {
+					fprintf (stderr, "ERROR [ecat2analyze]: cannot find %s frame 1, 2 or 3\n", ECAT_img);
+					return (ERROR);
+				}
+			}
+		} else {
+			fprintf (stderr, "ERROR [ecat2analyze]: cannot find %s frame %d\n",
+				 ECAT_img, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [ecat2analyze]: reading subheader in %s\n", ECAT_img);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	framelen = (float) file->sh->duration;
+	z0 = file->mh->zorigin;
+
+/*
+	if (file->m7->mh->system_type == 961)
+		bfrac = file->m7->mh->branching_fraction;
+	else if (file->m7->mh->system_type == 962)
+		bfrac = file->m7->mh->branching_fraction;
+	else
+		bfrac = 1;
+	fprintf (stdout, "Branching Fraction = %f\n", bfrac);
+	fprintf (stdout, "Sec    = %f\n", framelen);
+	fprintf (stdout, "Scaler = %f\n", scaler);
+ */
+
+	scaler = 1.0 / (REV7SCALER * framelen);
+
+	if ((image = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	if (NULL == (row = (float *) calloc (dim[0], sizeof (float)))) {
+		fprintf (stderr, "ERROR [ecat2analyze]: malloc row\n");
+		return (ERROR);
+	}
+/*
+ * Flip X, Y & Z, and write to output file
+ */
+
+	for (i = dim[2]; i > 0; i--) {
+		for (j = dim[1]; j > 0; j--) {
+			for (k = 1; k <= dim[0]; k++)
+				row[k - 1] = scaler * image[i][j][dim[0] - (k - 1)];
+			if ((fwrite (row, sizeof (float), dim[0], fd_img)) != dim[0]) {
+				fprintf (stderr, "ERROR [ecat2analyze]: writing to: %s\n", Analyze_img);
+				return (ERROR);
+			}
+		}
+	}
+
+/*
+ * Create Analyze hdr file
+ */
+
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	strncpy (hdr.hk.data_type, "dsr", 9);
+	strncpy (hdr.hk.db_name, Analyze_hdr, 17);
+	hdr.hk.extents = 0;
+	hdr.hk.session_error = 0;
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.hk.hkey_un0 = '0';			 /* required by developers */
+	hdr.dime.dim[0] = 4;			 /* typically only 4 dimensions  */
+	hdr.dime.dim[1] = dim[0];		 /* x dimension of atlas   */
+	hdr.dime.dim[2] = dim[1];		 /* y dimension of atlas   */
+	hdr.dime.dim[3] = dim[2];		 /* number of slices in volume */
+	hdr.dime.dim[4] = 1;			 /* only one volume typically  */
+	hdr.dime.dim[5] = 0;			 /* only one volume typically  */
+	hdr.dime.dim[6] = 0;			 /* only one volume typically  */
+	hdr.dime.dim[7] = 0;			 /* only one volume typically  */
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 16;			 /* float  */
+	hdr.dime.bitpix = 32;			 /* number of bits/pixel */
+	hdr.dime.dim_un0 = 0;
+	hdr.dime.pixdim[0] = 0;
+	hdr.dime.pixdim[1] = 10 * file->sh->sample_size_1;	/* in mm */
+	hdr.dime.pixdim[2] = 10 * file->sh->sample_size_2;	/* in mm */
+	hdr.dime.pixdim[3] = 10 * file->sh->sample_size_3;	/* in mm */
+	hdr.dime.pixdim[4] = 0;
+	hdr.dime.pixdim[5] = 0;
+	hdr.dime.pixdim[6] = 0;
+	hdr.dime.pixdim[7] = 0;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 1.0;		 /* Analyze sets this to 1 */
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.compressed = 0;
+	hdr.dime.verified = 0;
+	hdr.dime.glmax = 1;
+	hdr.dime.glmin = 0;
+	strncpy (hdr.hist.descrip, ECAT_img, 79);
+	strncpy (hdr.hist.aux_file, "ecat2analyze", 23);
+	hdr.hist.orient = TRANSVERSE;
+	strncpy (hdr.hist.originator, "", 9);
+	strncpy (hdr.hist.generated, "", 9);
+	strncpy (hdr.hist.scannum, "", 9);
+	strncpy (hdr.hist.patient_id, "", 9);
+	strncpy (hdr.hist.exp_date, "", 9);
+	strncpy (hdr.hist.exp_time, "", 9);
+	strncpy (hdr.hist.hist_un0, "", 2);
+
+	if (dim[0] == 128)
+		*xorg = 64;
+	if (dim[1] == 128)
+		*yorg = 65;
+	if (z0 > 0)
+		*zorg = dim[2] + 1 - z0;
+
+	hdr.hist.views = 0;
+	hdr.hist.vols_added = 0;
+	hdr.hist.start_field = 0;
+	hdr.hist.field_skip = 0;
+	hdr.hist.omax = 0;
+	hdr.hist.omin = 0;
+	hdr.hist.smax = 0;
+	hdr.hist.smin = 0;
+
+	if ((fwrite ((char *) &hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [ecat2analyze]: writing to: %s\n", Analyze_hdr);
+		return (ERROR);
+	}
+	fprintf (stdout, "Converted: %s to %s\n", ECAT_img, Analyze_img);
+	free (image);
+	free (row);
+	(void) fclose (fd_hdr);
+	(void) fclose (fd_img);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ecat2analyze/RCS/ecat2analyze.c,v 1.1 2007/10/04 18:29:25 tom Exp tom $";
+d139 1
+a145 4
+
+	scaler = 1.0 / (bfrac * REV7SCALER * framelen);
+
+/*
+d151 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 1
+a2 1
+ * Revision 1.1  2007/06/21  15:17:34  tom
+d7 1
+a7 1
+ *	Date:			Jun 2007
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ecat2analyze/RCS/ecat2analyze.c,v 1.1 2007/06/21 15:17:34 tom Exp tom $";
+d56 3
+d133 1
+d143 3
+d147 3
+d164 1
+a164 1
+				row[k - 1] = bfrac * image[i][j][dim[0] - (k - 1)];
+@

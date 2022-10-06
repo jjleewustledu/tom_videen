@@ -1,0 +1,101 @@
+#!/bin/csh
+#	Name:	cos_align_oo2ho_emory
+#	Author:	Tom Videen
+#	Date:	Dec 2006
+#	Created for: COSS PET Processing
+#	Intent: Coregister OO to HO
+
+if (! $?STUDY) then
+	echo "ERROR: env STUDY not defined"
+	exit 1
+else if (! $?OO) then
+	echo "ERROR: env OO not defined"
+	exit 1
+else if (! $?HO) then
+	echo "ERROR: env HO not defined"
+	exit 1
+else if (! $?LOGFILE) then
+	echo "ERROR: env LOGFILE not defined"
+	exit 1
+endif
+
+set VER   = 1.0
+set PID   = $STUDY-
+set GAUSS = _g3
+set HO1   = $PID$HO$GAUSS
+set OO1   = $PID$OO$GAUSS
+set OOHO  = $PID${OO}_to_$HO
+set MASK  = ${PID}mask
+set THR   = 50
+
+if (! -e $HO1.img) then
+	echo "ERROR: cannot find $HO1.img"
+	exit 1
+else if (! -e $OO1.img) then
+	echo "ERROR: cannot find $OO1.img"
+	exit 1
+endif
+
+echo "==========================================================================" >>! $LOGFILE
+echo "cos_align_oo2ho  Version:" $VER `whoami` `date` >> $LOGFILE
+
+# Create mask from HO1:
+# --------------------
+prompt1:
+echo "============================================================"
+echo "Use vidi to create mask"
+echo "   Edit->Image 1"
+echo "      Outline nose and tissue below base of cranium"
+echo "      Fill using Fill Value = 0"
+echo "   Save Image->Image 1:  $MASK.img"
+echo "   Press RETURN to continue (CTRL-C to quit)"
+set data = `line`
+ 
+if2analyze $MASK
+
+# Convert images to Analyze format:
+# --------------------------------
+setanamin $MASK 0
+setanamin $HO1 0
+setanamin $OO1 0
+
+# Align OO to HO, then reslice OO:
+# --------------------------------
+echo "Aligning:  $OO1 to $HO1"
+
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $MASK -e2 $MASK -x 1 -v"
+echo alignlinear $HO1 $OO1 $OOHO.air $PRM >> $LOGFILE
+
+alignlinear $HO1 $OO1 $OOHO.air $PRM >! log
+set ERROR = `grep HESSIAN log`
+if (`echo $ERROR | wc -w` != 0) then
+	echo $ERROR
+	echo "Alignment failed and will require manual processing"
+	exit 1
+endif
+tail -7 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file"
+	echo $ERROR >> $LOGFILE
+	exit 1
+endif
+imgreslice $OO1 $OOHO
+
+echo "============================================================"
+echo "Use vidi to check alignment of $OO vs. $HO"
+echo "   Image 1: r$OO1.img   (PET Rainbow)"
+echo "   Image 2: $HO1.img    (Hot Metal)"
+echo "   Compare composite transverse, sagittal, and coronal views."
+echo "   Press RETURN to cleanup and finish (CTRL-C to quit)"
+set data = `line`
+
+unalias rm
+rm log
+cvl
+
+echo "OO-to-HO AIR file:  $OOHO.air" | tee -a $LOGFILE
+echo "============================================================"
+

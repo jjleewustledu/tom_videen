@@ -1,0 +1,349 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	2008.01.14.18.33.13;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2007.09.10.21.17.23;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2005.02.21.21.08.14;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2004.02.20.15.03.22;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.04.23.15.27.36;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@fix to write all 96 uncor singles for 962
+@
+text
+@/*	$Log: sumsino7.c,v $
+ * Revision 1.5  2007/09/10  21:17:23  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  2005/02/21  21:08:14  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  2004/02/20  15:03:22  tom
+ * Feb 2004
+ *
+ * Revision 1.1  2003/04/23  15:27:36  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			sumsino7.c
+ *	Date:			Apr 2003
+ *	Author:			Tom Videen
+ *	Description:	Sum frames of ECAT Matrix 7 sinogram.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumsino7/RCS/sumsino7.c,v 1.5 2007/09/10 21:17:23 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <image.h>
+#include <libimage.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	short          *matrix;
+	short          *sino;
+	char           *inname;
+	char           *outname;
+	int             frm, frm1, frm2, nframes, pln;
+	int             nsingles;
+	long            i, k, sizepln;
+	long            prompts, delayed, multiples, trues;
+	long            rate, duration;
+	long            start_time;
+	float           tot_avg_cor;
+	float           tot_avg_uncor;
+	float           uncor_singles[96];
+	float           ucs, sum_ucs;
+	int				dim1, dim2, dim3;
+
+	if (argc != 5) {
+		fprintf (stdout, "ERROR [sumsino7]: Usage: sumsino7 in out frm1 frm2\n");
+		return (ERROR);
+	}
+	inname = argv[1];
+	outname = argv[2];
+	frm1 = atoi (argv[3]);
+	frm2 = atoi (argv[4]);
+	nframes = frm2 - frm1 + 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (inname);
+    if (make_mh (file) == ERROR) {
+        fprintf (stderr, "ERROR [analyze2img]: Cannot make mh for %s\n", inname);
+        return (ERROR);
+    }
+    if (make_sh (file) == ERROR) {
+        fprintf (stderr, "ERROR [analyze2img]: Cannot make sh for %s\n", inname);
+        return (ERROR);
+    }
+
+	(void) strcpy (file->mode, "r+");
+	fprintf (stdout, "Open %s\n", file->name);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stdout, "ERROR [sumsino7]: Opening %s\n", inname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stdout, "ERROR [sumsino7]: Reading MainHeader from %s\n", inname);
+		return (ERROR);
+	}
+	if (file->mh->file_format != MATRIX_REV7) {
+		fprintf (stdout, "ERROR [sumsino7]: Not Matrix 7 file  %s\n", inname);
+		return (ERROR);
+	}
+	nsingles = 96;
+	fprintf (stdout, "%d  %d\n", file->mh->scanner_type, nsingles);
+	for (frm = frm1; frm <= frm2; frm++) {
+		indx.frm = frm;
+		if (existimgfrm (file, &indx) == ERROR) {
+			fprintf (stdout, "ERROR [sumsino7]: Cannot find %s frame %d\n", inname, indx.frm);
+			return (ERROR);
+		}
+		if (get_ss7 (file, &indx) == ERROR) {
+			fprintf (stdout, "ERROR [sumsino7]: Reading subheader of %s\n", inname);
+			return (ERROR);
+		}
+		if (use_ss7 (file, &indx) == ERROR) {
+			fprintf (stdout, "ERROR [sumsino7]: Converting subheader of %s\n", inname);
+			return (ERROR);
+		}
+
+		if (frm == frm1) {
+			dim1 = file->sh->dim1;
+			dim2 = file->sh->dim2;
+			dim3 = file->sh->dim3;
+			sizepln = dim1 * dim2;
+			sino = (short *) calloc (dim1 *dim2 * dim3, sizeof (short));
+			start_time = file->m7->s3d->frame_start_time;
+			prompts = file->m7->s3d->prompts;
+			delayed = file->m7->s3d->delayed;
+			multiples = file->m7->s3d->multiples;
+			trues = file->m7->s3d->net_trues;
+			rate = file->m7->s3d->total_coin_rate;
+			duration = file->m7->s3d->frame_duration;
+			tot_avg_cor = file->m7->s3d->tot_avg_cor;
+			tot_avg_uncor = file->m7->s3d->tot_avg_uncor;
+			for (i = 0; i < nsingles; i++)
+				uncor_singles[i] = file->m7->s3d->uncor_singles[i];
+		} else {
+			prompts += file->m7->s3d->prompts;
+			delayed += file->m7->s3d->delayed;
+			multiples += file->m7->s3d->multiples;
+			trues += file->m7->s3d->net_trues;
+			rate += file->m7->s3d->total_coin_rate;
+			duration += file->m7->s3d->frame_duration;
+			tot_avg_cor += file->m7->s3d->tot_avg_cor;
+			tot_avg_uncor += file->m7->s3d->tot_avg_uncor;
+			for (i = 0; i < nsingles; i++)
+				uncor_singles[i] += file->m7->s3d->uncor_singles[i];
+		}
+
+		fprintf (stdout, "Reading %s  frame %d\n", file->name, indx.frm);
+		for (pln = 0; pln < dim3; pln++) {
+			k = pln * sizepln;
+			indx.pln = pln + 1;
+			if ((matrix = rdscan7 (file, indx)) == NULL) {
+				fprintf (stdout, "ERROR [sumsino7]: Reading frame %d plane %d of %s\n",
+					 indx.frm, pln + 1, inname);
+				return (ERROR);
+			}
+			for (i = 0; i < sizepln; i++)
+				sino[k + i] += matrix[i];
+			if (pln < dim3 - 1)
+				free (matrix);
+		}
+	}
+
+	close_imgfile (file);
+
+/*	Write the new sinogram to the output file */
+
+	(void) strcpy (file->name, outname);
+	(void) strcpy (file->mode, "w");
+	file->mh->nframe = 1;
+	file->m7->mh->num_frames = 1;
+	indx.frm = 1;
+
+	fprintf (stdout, "Open %s\n", file->name);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stdout, "ERROR [sumsino7]: Opening %s\n", file->name);
+		return (ERROR);
+	}
+	if (put_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [sumsino7]: Writing MainHeader to %s\n", outname);
+		return (ERROR);
+	}
+	fprintf (stdout, "Writing frame %d of %s\n", indx.frm, file->name);
+
+	file->m7->s3d->frame_start_time = start_time;
+	file->m7->s3d->prompts = prompts;
+	file->m7->s3d->delayed = delayed;
+	file->m7->s3d->multiples = multiples;
+	file->m7->s3d->net_trues = trues;
+	file->m7->s3d->total_coin_rate = rate / nframes;
+	file->m7->s3d->frame_duration = duration;
+	file->m7->s3d->tot_avg_cor = tot_avg_cor / nframes;
+	file->m7->s3d->tot_avg_uncor = tot_avg_uncor / nframes;
+	sum_ucs = 0;
+	for (i = 0; i < nsingles; i++) {
+		ucs = uncor_singles[i] / nframes;
+		file->m7->s3d->uncor_singles[i] = ucs;
+		sum_ucs += ucs;
+	}
+
+	if (put_ss7 (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [sumsino7]: Writing subheader to %s\n", outname);
+		return (ERROR);
+	}
+	for (pln = 0; pln < dim3; pln++) {
+		k = pln * sizepln;
+		indx.pln = pln + 1;
+		for (i = 0; i < sizepln; i++)
+			matrix[i] = sino[k + i];
+		if (wrscan7 (file, indx, matrix) != OK) {
+			fprintf (stdout, "ERROR [sumsino7]: Writing frame %d plane %d of %s\n",
+				 indx.frm, pln + 1, outname);
+			return (ERROR);
+		}
+	}
+	close_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumsino7/RCS/sumsino7.c,v 1.4 2005/02/21 21:08:14 tom Exp tom $";
+d52 1
+a52 1
+	unsigned long   dim1, dim2, dim3;
+d69 9
+d92 1
+a92 3
+	nsingles = 42;
+	if (file->mh->scanner_type == 962)
+		nsingles = 96;
+d108 1
+d110 3
+a112 3
+			dim1 = (unsigned long) file->sh->dim1;
+			dim2 = (unsigned long) file->sh->dim2;
+			dim3 = (unsigned long) file->sh->dim3;
+d114 1
+a114 1
+			sino = (short *) calloc (dim1 * dim2 * dim3, sizeof (short));
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumsino7/RCS/sumsino7.c,v 1.3 2004/02/20 15:03:22 tom Exp $";
+d40 1
+d47 1
+a47 1
+	float           uncor_singles[42];
+d80 4
+d113 1
+a113 1
+			for (i = 0; i < 42; i++)
+d124 1
+a124 1
+			for (i = 0; i < 42; i++)
+d175 1
+a175 1
+	for (i = 0; i < 42; i++) {
+@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@d2 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumsino7/RCS/sumsino7.c,v 1.1 2003/04/23 15:27:36 tom Exp tom $";
+d41 2
+a42 1
+	float           cor_singles;
+d103 2
+a104 1
+			cor_singles = file->m7->s3d->tot_avg_cor;
+d114 2
+a115 1
+			cor_singles += file->m7->s3d->tot_avg_cor;
+d164 2
+a165 1
+	file->m7->s3d->tot_avg_cor = cor_singles / nframes;
+a171 1
+	file->m7->s3d->tot_avg_uncor = sum_ucs;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumsino7/RCS/sumsino7.c,v 1.3 2002/11/27 14:31:13 tom Exp $";
+@

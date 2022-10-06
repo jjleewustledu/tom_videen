@@ -1,0 +1,93 @@
+#!/usr/local/bin/perl
+
+# Date:    17-Oct-96
+# Author:  Jane Dunford-Shore
+# Usage:   findfn [-e] funcname
+# Example: findfn [-e] matrix
+# Purpose: Search libraries for specified function.
+#          If function found, print lib path, object name, 
+#          and object file to stdout.
+#          If -e (exact) is not used, any function *containing* specified name
+#          will be retrieved (e.g., "findfn matrix" will return matrix(), but 
+#          also read_matrix(), etc.).
+# Note:    This only runs under Solaris 2 right now, as nm utility
+#          under BSD4.1 does not produce the same output.
+
+# Paths in which to look for libraries to search
+@libpaths = ("/usr/lib",
+             "/usr/local/lib",
+             "/usr/local/npg/lib");
+
+# Get command-line parameter
+$EXACT = 0;   # default is non-exact searcing
+if ($#ARGV < 0) {
+   print "Usage: findfn [-e] function_name\n";
+   exit;
+}
+elsif ($#ARGV == 0) {
+    $fn = $ARGV[0];
+}
+else {   # $#ARGV > 0
+    if ($ARGV[0] =~ /^-e/) {
+        $EXACT = 1;
+        $fn = $ARGV[1];
+    }
+    else {
+        print "Usage: findfn [-e] function_name\n";
+        exit;
+    }
+}
+
+# For each path specified above:
+#    1. Get list of libraries (*.a files)
+#    2. Use UNIX nm utility to get list of objects in library 
+#    3. Search object list for lines with specified function name
+#    4. Parse these lines, looking for objects with specified
+#       name and data type of "FUNC"
+#    5. If match, print library path, object name, and object file to stdout
+#
+# Example of output from `nm -r libarc.a`:
+# [Index]   Value      Size    Type  Bind  Other Shndx   Name
+# [16]    |        16|     492|FUNC |GLOB |0    |2      |petpath.o:petpath
+
+foreach $libpath (@libpaths) {
+    print "Searching libraries in $libpath...\n";
+    chdir "$libpath";
+
+    #get file list for directory and extract "*.a" files
+    @files = `ls`;
+    @libs = grep(/\.a$/, @files);
+
+    foreach $lib (@libs) {
+
+        chop($lib); # remove newline at end of filename (as printed)
+	@nmout = `nm -r $lib`;  #get list of objects in library
+        
+        if ($EXACT) {
+            @lines = grep(/:$fn$/, @nmout);
+        }
+        else {
+            @lines = grep(/:.*$fn/, @nmout);
+        }
+
+        if ($#lines > -1) {
+            foreach $line (@lines) {
+                chop($line);                    # remove newline at end 
+                $lineplus = "|" . $line . "|";  # add "|" to beg. and end
+                ($index, $value, $size, $type, $bind, $other, $shndx, $name) = split(/\|/, $line);
+
+                # parse the name field (e.g., "petpath.o:petpath")
+                $name =~ /(.+):(.+)/;
+                $objfile = $1;
+                $obj = $2;
+
+                # Specified fn name must = object name, and object type must be "FUNC"
+                if (($obj =~ /$fn/) && ($type =~ /FUNC/)) {
+                    print "$libpath\/$lib\: $obj ($objfile)\n";
+                }
+            }
+        }
+    }
+}
+
+

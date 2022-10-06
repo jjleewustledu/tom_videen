@@ -1,0 +1,206 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	2007.04.09.14.31.53;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2006.02.23.15.32.52;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@add error check for out of range points
+@
+text
+@/* $Log: addpoints.c,v $
+ * Revision 1.1  2006/02/23  15:32:52  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			addpoints.c
+ *	Date:			Feb 2006
+ *	Author:			Tom Videen
+ *	Description:	Fill 2 points in an Analyze image
+ *	===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/addpoints/RCS/addpoints.c,v 1.1 2006/02/23 15:32:52 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <imgutil.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+#include <ANALYZE.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;
+	FILE           *fd_hdr;
+	FILE           *fd_img;
+	char           *hdrfile;
+	char           *imgfile;
+	int             dim[3];
+	int             x1, x2, y1, y2, z1, z2;
+	int             val;
+	int             xpix, ypix, zpix;
+	float           size, xsize, ysize, zsize;
+	int             i, j, k, m, n;
+	short        ***img;
+	short          *row;
+
+	if (argc != 11) {
+		fprintf (stderr, "Usage:  addpoints hdr image x1 y1 z1 x2 y2 z2 size value\n");
+		return (ERROR);
+	}
+	hdrfile = argv[1];
+	imgfile = argv[2];
+	x1 = ROUND(atof (argv[3]));
+	y1 = ROUND(atof (argv[4]));
+	z1 = ROUND(atof (argv[5]));
+	x2 = ROUND(atof (argv[6]));
+	y2 = ROUND(atof (argv[7]));
+	z2 = ROUND(atof (argv[8]));
+	size = atof (argv[9]);
+	val = atoi (argv[10]);
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (hdrfile, "r")) == 0) {
+		fprintf (stderr, "ERROR [addpoints]: opening %s\n", hdrfile);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [addpoints]: reading: %s\n", hdrfile);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [addpoints]: reading %s\n", hdrfile);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4 && hdr.dime.datatype != 16) {
+		fprintf (stderr, "ERROR [addpoints]: reading %s\n", hdrfile);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [addpoints]: reading %s\n", hdrfile);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim[0] = hdr.dime.dim[1];
+	dim[1] = hdr.dime.dim[2];
+	dim[2] = hdr.dime.dim[3];
+	xsize = hdr.dime.pixdim[1];
+	ysize = hdr.dime.pixdim[2];
+	zsize = hdr.dime.pixdim[3];
+	(void) fclose (fd_hdr);
+
+/*
+ *	Read the img and flip X, Y & Z from Analyze convention
+ */
+
+	if ((fd_img = fopen (imgfile, "r")) == 0) {
+		fprintf (stderr, "ERROR [addpoints]: opening %s\n", imgfile);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, dim[2], 1, dim[1], 1, dim[0])) == NULL) {
+		fprintf (stderr, "ERROR [addpoints]: malloc img\n");
+		return (ERROR);
+	}
+	if ((row = (short *) calloc (dim[0], sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [addpoints]: malloc row\n");
+		return (ERROR);
+	}
+	for (k = dim[2]; k > 0; k--) {
+		for (j = dim[1]; j > 0; j--) {
+			(void) fread (row, sizeof (short), dim[0], fd_img);
+			for (i = 1; i <= dim[0]; i++) {
+				n = dim[0] - i;
+				img[k][j][i] = row[n];
+			}
+		}
+	}
+	(void) fclose (fd_img);
+
+	xpix = ROUND(0.5*size/xsize);
+	ypix = ROUND(0.5*size/ysize);
+	zpix = ROUND(0.5*size/zsize);
+	for (m = -zpix; m <= zpix; m++) {
+		for (k = -ypix; k <= ypix; k++) {
+			for (j = -xpix; j <= xpix; j++) {
+				if (x1+j > 0 && y1+k > 0 && z1+m > 0 && z1+j <= dim[0] && y1+k <= dim[1] && z1+m <= dim[2]) 
+					img[z1 + m][y1 + k][x1 + j] = val;
+				else {
+					fprintf (stderr, "ERROR [addpoints]: referenced point is out of range:  x=%d y=%d z=%d\n", x1+j, y1+k, z1+m);
+					fprintf (stderr, "Image size is x=%d y=%d z=%d\n", dim[0], dim[1], dim[2]);
+					return (ERROR);
+				}
+				if (x2+j > 0 && y2+k > 0 && z2+m > 0 && z2+j <= dim[0] && y2+k <= dim[1] && z2+m <= dim[2]) 
+					img[z2 + m][y2 + k][x2 + j] = val;
+				else {
+					fprintf (stderr, "ERROR [addpoints]: referenced point is out of range:  x=%d y=%d z=%d\n", x2+j, y2+k, z2+m);
+					fprintf (stderr, "Image size is x=%d y=%d z=%d\n", dim[0], dim[1], dim[2]);
+					return (ERROR);
+				}
+			}
+		}
+	}
+
+	if ((fd_img = fopen (imgfile, "w")) == 0) {
+		fprintf (stderr, "ERROR [addpoints]: opening %s\n", imgfile);
+		return (ERROR);
+	}
+	for (k = dim[2]; k > 0; k--) {
+		for (j = dim[1]; j > 0; j--) {
+			for (i = 1; i <= dim[0]; i++) {
+				n = dim[0] - i;
+				row[n] = img[k][j][i];
+			}
+			(void) fwrite (row, sizeof (short), dim[0], fd_img);
+		}
+	}
+	(void) fclose (fd_img);
+	free (row);
+	free_s3tensor (img, 1, dim[2], 1, dim[1], 1, dim[0]);
+	return (0);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/addpoints/RCS/addpoints.c,v 1.2 2005/08/16 16:51:38 tom Exp $";
+d125 14
+a138 2
+				img[z1 + m][y1 + k][x1 + j] = val;
+				img[z2 + m][y2 + k][x2 + j] = val;
+@

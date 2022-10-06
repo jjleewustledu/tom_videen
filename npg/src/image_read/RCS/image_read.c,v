@@ -1,0 +1,307 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.16.16.39.07;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2003.12.23.19.03.25;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.26.22.21.42;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.10.08.20.48.52;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.09.11.19.09.52;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/*	$Log: image_read.c,v $
+ * Revision 1.4  2003/12/23  19:03:25  tom
+ * flipimg
+ *
+ * Revision 1.3  2002/11/26  22:21:42  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1997/10/08  20:48:52  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1997/09/11  19:09:52  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			image_read.c
+ *	Date:			Sep 1997
+ *	Author:			Tom Videen
+ *	Description:	Read image file for IDL
+ *	Notes:
+ *		If error, write -1 followed by string message to stdout
+ *	Otherwise write:
+ *		file_format (integer)
+ *		first frame	(integer)
+ *		dim1, dim2, dim3 (3 integers)
+ *	if (file_format eq 1)
+ *		mh6		sizeof (Main_header)
+ *		sh6		sizeof (Image_subheader)
+ *	if (file_format eq 2)
+ *		mh7		sizeof (Main_header7)
+ *		sh7		sizeof (Image_subheader7)
+ *	then writes each plane as dim1 x dim2 floats
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/image_read/RCS/image_read.c,v 1.4 2003/12/23 19:03:25 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+#include <pettable.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	float          *img;
+	char           *fname;
+	int             frm, reverse;
+	long            pln, sizepln;
+	unsigned long   dim1, dim2, dim3;
+
+	fname = argv[1];
+	frm = atoi (argv[2]);
+	indx.frm = frm;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stdout, "-1  Cannot open %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stdout, "-1  Cannot get MainHeader from %s\n", fname);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (indx.frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR) {
+					fprintf (stdout, "-1  Cannot find %s frame 1, 2 or 3\n", fname);
+					return (ERROR);
+				}
+			}
+		} else {
+			fprintf (stdout, "-1  Cannot find %s frame %d\n",
+				 fname, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stdout, "-1  Cannot read file subheader in %s\n", fname);
+		return (ERROR);
+	}
+	dim1 = (unsigned long) file->sh->dim1;
+	dim2 = (unsigned long) file->sh->dim2;
+	dim3 = (unsigned long) file->sh->dim3;
+	sizepln = dim1 * dim2;
+	reverse = file->mh->orientation;
+
+	fprintf (stdout, "%d\n", file->mh->file_format);
+	fprintf (stdout, "%d\n", indx.frm);
+	fprintf (stdout, "%ld %ld %ld\n", (long) dim1, (long) dim2, (long) dim3);
+
+	if (file->mh->file_format == MATRIX_REV6) {
+		(void) fwrite (file->m6->mh, sizeof (Main_header), 1, stdout);
+		(void) fwrite (file->m6->sh, sizeof (Image_subheader), 1, stdout);
+	} else if (file->mh->file_format == MATRIX_REV7) {
+		(void) fwrite (file->m7->mh, sizeof (Main_header7), 1, stdout);
+		(void) fwrite (file->m7->sh, sizeof (Image_subheader7), 1, stdout);
+	} else if (file->mh->file_format == PETT6) {
+		(void) fwrite (file->p6, sizeof (PETT6HDR), 1, stdout);
+	}
+	for (pln = 1; pln <= dim3; pln++) {
+		indx.pln = pln;
+		if ((img = rdimg (file, indx)) == NULL) {
+			fprintf (stdout, "-1  Cannot read frame %d plane %ld of %s\n",
+				 indx.frm, pln, fname);
+			return (ERROR);
+		}
+		if (reverse != 0)
+			img = flipimg (file, img);
+		(void) fwrite (img, sizeof (float), sizepln, stdout);
+		free (img);
+	}
+	if (reverse != 0)
+		file->mh->orientation = 0;
+	close_imgfile (file);
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.4
+log
+@flipimg
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			Sep-97
+d34 2
+a35 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/image_read/RCS/image_read.c,v 1.3 2002/11/26 22:21:42 tom Exp tom $";
+d45 1
+d101 1
+a101 1
+	fprintf (stdout, "%ld %ld %ld\n", dim1, dim2, dim3);
+d104 2
+a105 2
+		fwrite (file->m6->mh, sizeof (Main_header), 1, stdout);
+		fwrite (file->m6->sh, sizeof (Image_subheader), 1, stdout);
+d107 2
+a108 2
+		fwrite (file->m7->mh, sizeof (Main_header7), 1, stdout);
+		fwrite (file->m7->sh, sizeof (Image_subheader7), 1, stdout);
+d110 1
+a110 1
+		fwrite (file->p6, sizeof (PETT6HDR), 1, stdout);
+d121 1
+a121 1
+		fwrite (img, sizeof (float), sizepln, stdout);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d31 1
+a31 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/image_read/RCS/image_read.c,v 1.2 1997/10/08 20:48:52 tom Exp tom $";
+d93 1
+a93 1
+	
+d96 1
+a96 1
+	fprintf (stdout,"%ld %ld %ld\n", dim1, dim2, dim3);
+d99 2
+a100 2
+		fwrite (file->m6->mh, sizeof(Main_header), 1, stdout);
+		fwrite (file->m6->sh, sizeof(Image_subheader), 1, stdout);
+d102 2
+a103 2
+		fwrite (file->m7->mh, sizeof(Main_header7), 1, stdout);
+		fwrite (file->m7->sh, sizeof(Image_subheader7), 1, stdout);
+d105 1
+a105 1
+		fwrite (file->p6, sizeof(PETT6HDR), 1, stdout);
+a106 1
+
+d116 1
+a116 1
+		fwrite (img, sizeof(float), sizepln, stdout);
+d119 2
+a120 1
+
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/image_read/RCS/image_read.c,v 1.1 1997/09/11 19:09:52 tom Exp tom $";
+a31 1
+#include <math.h>
+a33 2
+#include <libnrimg.h>
+#include <nr.h>
+d45 1
+a45 1
+	int             k,frm, reverse;
+d93 1
+a93 1
+	fprintf (stdout,"%d %d %d\n", dim1, dim2, dim3);
+d108 1
+a108 1
+			fprintf (stdout, "-1  Cannot read frame %d plane %d of %s\n",
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 11
+a22 2
+ *		Otherwise, write dimensions (dim1, dim2, dim3) as 3 integers
+ *			then writes each plane as dim1 x dim2 floats
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/image_read/RCS/read_image.c,v 2.14 1997/03/10 15:47:34 tom Exp $";
+d45 1
+a45 1
+	int             reverse;
+d50 2
+a51 1
+	indx.frm = atoi (argv[2]);
+d66 14
+a79 3
+		fprintf (stdout, "-1  Cannot find %s frame %d\n",
+			 fname, indx.frm);
+		return (ERROR);
+d88 1
+a88 1
+	sizepln = dim1 * dim2 * sizeof (float);
+d90 4
+d95 10
+a104 1
+	fprintf (stdout,"%d %d %d\n", dim1, dim2, dim3);
+d114 1
+a114 1
+		fwrite (&img, sizepln, 1, stdout);
+@

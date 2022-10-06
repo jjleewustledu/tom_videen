@@ -1,0 +1,1870 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.02.11.16.55.10;	author jmo;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial checking in, working version.
+@
+
+
+1.2
+log
+@No changes
+@
+text
+@/*$Id: recon.c,v 1.1 1995/01/19 22:40:20 ty7777 Exp jmo $*/
+/*$Log: recon.c,v $
+ * Revision 1.1  1995/01/19  22:40:20  ty7777
+ * Initial revision
+ **/
+
+/*-------------------------------------------------------------
+
+Subroutine: recon
+
+Perpetrator: John Ollinger
+
+Date of infraction: August 5, 1989
+
+-------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <math.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include <petutil/matrix.h>
+#include "cube.h"
+#include "scatter.h"
+#include "cti_proto.h"
+
+#define IMGDIM_MAX 1024	 /* Image dimension. */
+#define	INTERP_FCT 20	/* Interpolation dsamp_factor.		*/
+#define INTERP_LEN_MAX  INTERP_FCT*(IMGDIM_MAX+2) /* Length of interpolated data.*/
+#define FFT_LEN 2048
+#define CCW 1.	/* CCW backprojection in bakpro. */
+#define CW -1.	/* CW backprojection in bakpro. */
+#define MU_MIN .01	/* Transmission pixels with atten coef less than this
+			   are assumed to correspond to air. */
+
+#define CTI953_START .26179
+#define CTI953_OFFSET .5
+
+static float  start_angle; 	/* Starting angle in radians. 		*/
+static int    bakpro_dir;  	/* Rotation of backprojection.		*/
+static float  sino_offset; 	/* Offset of sinogram center from image center. */
+float  gaus_fwhm;	/* FWHM for Gaussian filter.		*/
+
+int	ang_dsamp,numray_fft;
+
+char   filnam[MAXNAME];
+
+/* CUB_WR(filnam,image,xdim,ydim,type,id)*/
+#define CUB_WR(A,B,C,D,E) PutCubePlaneZero(A,B,C,D,E,A);
+
+static char rcsid [] = "$Header: /home/usrb/jmo/tmp/RCS/recon.c,v 1.1 1995/01/19 22:40:20 ty7777 Exp jmo $";
+
+/*********************************************************************************/
+recon (emis_file, tran_file, blank_file, matchfile, nrmtrfil, nrmscfil, sc, 
+	emis_img, tran_img, iter, scat_sino, quiet)
+/*********************************************************************************/
+
+char	*emis_file,
+	*tran_file,
+	*blank_file,
+	*matchfile,
+	*nrmtrfil,*nrmscfil;
+
+struct 	scatter_tab *sc;
+
+float 	***emis_img,
+	***tran_img,
+	*scat_sino[NUM_PLANE];
+
+int	iter,
+	quiet;
+
+{
+
+float	tran_duration,blank_duration,emis_duration,min,scat,corrtr,corrsc,
+	tran_scl,x,y,z,sum,total_sum,max,sum1,sum2,sclm1,sclp1,scl,sclsum,
+	pixm1,pixm2,pixp1,pixp2,thresh,d,lshld,theta,nmax,maxsum,
+	scatfrac,
+	*get_2d_sino(),
+	*get_emis_sino(),
+	*fbp(),
+	*image,
+	*scatpln;
+
+static float emis_scl,emis_dsamp_sum=0,
+	**mask,			/* Mask giving support of transmission images.*/
+	**tran_sino_dsamp,
+	**blank_sino_dsamp,
+	**blank_sino,
+	**emis_sino,
+	**tran_sino,
+	**emis_sino_dsamp,
+	**emis_sino_corr,
+	**attn_dsamp,
+	**normtr,**normsc,**normtr_dsamp,**normsc_dsamp;
+
+void	sino_axl_dsamp(),get_tran_support();
+float	scatscl();
+
+int	i,j,k,m,p,ioff,joff,koff,moff,j1,j2,plnmin,plnmax,iang,
+	plane,pln,ring1,ring2,pln_3d,offset,plnm1,plnp1,pln_f3d,
+	recon_emis = TRUE, numring, ring, itht, i1, i2,
+	dsamp_factor = 2,		/* Sinogram downsampling dsamp_factor. */
+	plnnum_f3d();
+
+static int 	first=TRUE,imgdimm1=-1,
+		recon_tran = FALSE,
+		numraym1 = -1,
+		numangm1 = -1;
+
+static FILE 	*fd_emis,*fd_tran,*fd_emis_cube,*fd_tran_cube;
+
+char	emis_cube[MAXNAME],
+	attn_cube[MAXNAME],
+	tran_cube[MAXNAME],
+	emis_corr_file[MAXNAME],
+	*dot;
+
+struct bed_pos *getbed();
+
+static struct bed_pos *ebed,*tbed,*mbed;
+static struct cube_header *emis_cubhdr,*emis_corr_cubhdr,*match_cubhdr,
+		*tmp_cubhdr,*tran_cubhdr,*mask_cubhdr,*attn_cubhdr;
+
+if(first == TRUE) {
+    first = FALSE;
+    /* Scan files to determine which bed positions are present. */
+    ebed = getbed(emis_file,sc,sc->frame);
+    tbed = getbed(tran_file,sc,1);
+    sc->numpln = (tbed->num_virtplns+1)/2;
+
+    /* Force number of planes to be odd.*/
+    if(2*(ebed->num_virtplns/2) == ebed->num_virtplns)
+        ebed->num_virtplns = ebed->num_virtplns - 1;
+    if(2*(ebed->num_virtplns/2) == ebed->num_virtplns)
+        ebed->num_virtplns = ebed->num_virtplns - 1;
+
+    /* Get bed position of file we are testing against. */
+    if(matchfile != NULL) {
+        mbed = getbed(matchfile,sc,sc->frame);
+
+        /* Get alignment of emission scan with scan to be matched. */
+        if(mbed->npos > 1) {
+            fprintf(stderr,"Algorithm assumes match scan has one bed position.\n");
+            exit(ERROR);
+            }
+        min = 10000;
+        for(i=0;i<tbed->npos;i++) {
+            if(ebed->pos[i] < min)
+    	        min = ebed->pos[i];
+            }
+        if((sc->phys_ring = (int *)malloc((sc->numpln+1)*sizeof(int))) == NULL) {
+            fprintf(stderr,"Malloc failed of *emis_sino_dsamp in recon.\n");
+            return;
+            }
+        offset = (mbed->pos[0] - min)/RINGTHK;
+        for(i=0;i<sc->num_dir_rings;i++)
+            sc->dir_ring_list[i] += offset;
+        for(i=0;i<sc->num_scat_rings;i++)
+            sc->scat_ring_list[i] += offset;
+        for(i=1;i<=sc->numpln;i++)
+	    sc->phys_ring[i] = i - offset;
+        }
+
+    if((emis_sino = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *emis_sino in recon.\n");
+        return;
+        }
+    if((tran_sino = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *tran_sino in recon.\n");
+        return;
+        }
+    if((blank_sino = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *blank_sino in recon.\n");
+        return;
+        }
+    if((emis_sino_dsamp = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *emis_sino_dsamp in recon.\n");
+        return;
+        }
+    if((emis_sino_corr = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *emis_sino_corr in recon.\n");
+        return;
+        }
+    if((blank_sino_dsamp = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *blank_sino_dsamp in recon.\n");
+        return;
+        }
+    if((tran_sino_dsamp = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *tran_sino_dsamp in recon.\n");
+        return;
+        }
+    if((attn_dsamp = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *attn_dsamp in recon.\n");
+        return;
+        }
+    if((normtr = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *normtr in recon.\n");
+        return;
+        }
+    if((normsc = (float **)
+		malloc((tbed->num_virtplns+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *normsc in recon.\n");
+        return;
+        }
+    if((normtr_dsamp = (float **) 
+			malloc((sc->numpln+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *normtr_dsamp in recon.\n");
+        return;
+        }
+    if((normsc_dsamp = (float **)
+		malloc((sc->numpln+1)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of *normsc_dsamp in recon.\n");
+        return;
+        }
+    if((*emis_img = (float **)malloc(5*(sc->numpln+2)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of **emis_img in recon.\n");
+        return;
+        }
+    *emis_img += 2*sc->numpln;
+    if((*tran_img = (float **)malloc(5*(sc->numpln+2)*sizeof(float *))) == NULL) {
+        fprintf(stderr,"Malloc failed of **tran_img in recon.\n");
+        return;
+        }
+    *tran_img += 2*sc->numpln;
+    
+#ifdef cti953b
+        start_angle = -PI/2 - CTI953_START;
+        bakpro_dir = CCW;
+        sino_offset = CTI953_OFFSET;
+#endif
+
+    strcpy(emis_cube,emis_file);
+    dot = strrchr(emis_cube,(int)'.');
+    *dot = NULL;
+    sprintf(emis_cube,"%s_%dx%d_%d_h%3.2f_s0.cub",
+			emis_cube,sc->imgdim,sc->imgdim,sc->numang,sc->emis_cutoff);
+    strcpy(tran_cube,tran_file);
+    dot = strrchr(tran_cube,'.');
+    *dot = NULL;
+    sprintf(tran_cube,"%s_%dx%d_%d_h%3.2f.cub",
+			tran_cube,sc->imgdim,sc->imgdim,sc->numang,sc->tran_cutoff);
+    if((fd_emis_cube=fopen(emis_cube,"r")) == NULL)
+	recon_emis = TRUE;
+    else
+	fclose(fd_emis);
+    if((fd_tran_cube=fopen(tran_cube,"r")) == NULL)
+	recon_tran = TRUE;
+    else
+	fclose(fd_tran);
+
+    if(recon_emis == TRUE) {
+        emis_cubhdr = MakeCubeHeader(sc->imgdim,sc->imgdim,1,FLOAT);
+        emis_corr_cubhdr = MakeCubeHeader(sc->numray,sc->numang,1,FLOAT);
+	}
+    tran_cubhdr = MakeCubeHeader(sc->imgdim,sc->imgdim,1,FLOAT);
+/*    tmp_cubhdr = MakeCubeHeader(sc->numang,sc->imgdim,1,FLOAT);*/
+/*    mask_cubhdr = MakeCubeHeader(sc->imgdim,sc->imgdim,1,FLOAT);
+    attn_cubhdr = MakeCubeHeader(sc->numray,sc->numang,1,FLOAT);*/
+    }
+
+if(sc->numang != numangm1 || sc->numray != numraym1) {
+    /* Extract and combine sinograms. */
+    numraym1 = sc->numray;
+    numangm1 = sc->numang;
+    recon_tran = TRUE;
+    if(iter > 1) {
+        for(plane=1;plane<=sc->numpln;plane++) {
+	    free(attn_dsamp[plane]);
+	    free(emis_sino_corr[plane]);
+	    free(*(*emis_img+plane));
+	    free(sc->psi_shldmin[plane]);
+	    free(sc->psi_shldmax[plane]);
+	    free(normtr_dsamp[plane]);
+	    free(normsc_dsamp[plane]);
+	    }
+	for(plane=1;plane<=tbed->num_virtplns;plane++) {
+	    free(normtr[plane]);
+	    free(normsc[plane]);
+	    }
+	free(sc->psi_shldmin);
+	free(sc->psi_shldmax);
+        for(plane=-sc->numpln/2+1;plane<2*sc->numpln-sc->numpln/2+1;plane++) 
+	    free(*(*tran_img+plane));
+	for(i=0;i<LEN_RING_LIST;i++) {
+	    free(sc->tran_width[i][0]);
+	    free(sc->tran_width[i]);
+	    free(sc->mult_scl[i][0]);
+	    free(sc->mult_scl[i]);
+	    }
+	}
+
+    /* Allocate memory for trans image width table for mult scat model. */
+    for(i=0;i<LEN_RING_LIST;i++) {
+	sc->tran_width[i]=(float **)malloc(sc->numang*sizeof(float *));
+	sc->tran_width[i][0] = 
+			(float *)malloc(NUMANG_OUT*sc->imgdim*sizeof(float));
+	for(j=1;j<sc->numang;j++)
+	    sc->tran_width[i][j] = sc->tran_width[i][j-1] + sc->imgdim;
+	}
+    for(i=0;i<LEN_RING_LIST*LEN_RING_LIST;i++) {
+	for(j=0;j<sc->numang;j++)
+	    sc->mult_scl[i] = (float *)malloc(NUMANG_OUT*sizeof(float));
+        }
+    /* allocate memory for normalization data. */
+    for(plane=1;plane<=tbed->num_virtplns;plane++) {
+	normtr[plane] = (float *)malloc(sc->lensin*sizeof(float));
+	normsc[plane] = (float *)malloc(sc->lensin*sizeof(float));
+	for(i=0;i<sc->lensin;i++) {
+	    normsc[plane][i] = 0.;
+	    normtr[plane][i] = 0.;
+	    }
+	}
+    for(plane=1;plane<=sc->numpln;plane++) {
+	normtr_dsamp[plane] = (float *)malloc(sc->lensin*sizeof(float));
+	normsc_dsamp[plane] = (float *)malloc(sc->lensin*sizeof(float));
+	for(i=0;i<sc->lensin;i++) {
+	    normsc_dsamp[plane][i] = 0.;
+	    normtr_dsamp[plane][i] = 0.;
+	    }
+	}
+    if(quiet == FALSE)
+        fprintf(stdout,"Generating sinograms.\n");
+    for(plane=1;plane<=tbed->num_virtplns;plane++) {
+
+        pln = tbed->phys_plane[plane] + tbed->pln_offset[plane];
+	tran_sino[plane] 
+		= get_2d_sino(tran_file,pln,&tran_duration,tbed,sc);
+        pln = tbed->phys_plane[plane];
+	blank_sino[plane]
+		= get_2d_sino(blank_file,pln,&blank_duration,tbed,sc);
+	emis_sino[plane] = get_emis_sino(emis_file,nrmtrfil,nrmscfil,
+				normtr,normsc,plane,&emis_duration,sc,ebed);
+	}
+
+    /* Downsample sinograms to final axial width. */
+    sino_axl_dsamp(emis_sino,emis_sino_dsamp,sc,dsamp_factor,tbed);
+    sino_axl_dsamp(tran_sino,tran_sino_dsamp,sc,dsamp_factor,tbed);
+    sino_axl_dsamp(blank_sino,blank_sino_dsamp,sc,dsamp_factor,tbed);
+    sino_axl_dsamp(normtr,normtr_dsamp,sc,dsamp_factor,tbed);
+    sino_axl_dsamp(normsc,normsc_dsamp,sc,dsamp_factor,tbed);
+    /* Correct for FOV of a single ring, subsampling of data in the
+	backprojection routine, fraction of each scattering element that
+	scatters into current set of detectors (assume that adjacent
+	pixels summed after rotation, so each pixel represents a width
+	RAYSPC mm wide, and divide by number of 
+	angles because radiation isotropic. */
+/*    emis_scl = DIRECT_SCL*((float)sc->numray/(float)sc->imgdim)*
+	       (WCT_TOT/OUT_RAYSPC)/sc->numang;*/
+    emis_scl = DIRECT_SCL*((float)sc->numray/(float)sc->imgdim)/NUMANG;
+    if(mbed->duration > 0) 
+	emis_scl *= mbed->duration/emis_duration;
+    tran_scl = tran_duration/blank_duration;
+
+    for(plane=1;plane<=sc->numpln;plane++) {
+        /* Fix regions of sinograms not sampled by rotating rod sources. */
+        i1 = sc->numray/2 - (int)(PATIENT_APERTURE/(2.*RAYSIZ));
+        i2 = sc->numray/2 + (int)(PATIENT_APERTURE/(2.*RAYSIZ));
+        for(iang=0,ioff=0;iang<sc->numang;iang++,ioff+=sc->numray) {
+	    for(i=0;i<=i1;i++) {
+	        blank_sino_dsamp[plane][i+ioff] = 1.;
+	        tran_sino_dsamp[plane][i+ioff] = -1.;
+	        normtr[plane][i+ioff] = 1.;
+	        normsc[plane][i+ioff] = 1.;
+	        }
+	    for(i=i2;i<sc->numray;i++) {
+	        blank_sino_dsamp[plane][i+ioff] = 1.;
+	        tran_sino_dsamp[plane][i+ioff] = -1.;
+	        normtr[plane][i+ioff] = 1.;
+	        normsc[plane][i+ioff] = 1.;
+	        }
+	    }
+
+        attn_dsamp[plane] = (float *)malloc(sc->lensin*sizeof(float));
+        emis_sino_corr[plane] = (float *)malloc(sc->lensin*sizeof(float));
+        for(i=0;i<sc->lensin;i++) {
+            if(tran_sino_dsamp[plane][i] > 0) {
+                x = blank_sino_dsamp[plane][i]/tran_sino_dsamp[plane][i];
+                tran_sino_dsamp[plane][i]  = (float)log((double)(tran_scl*x));
+		}
+            else {
+                x  = 0.;
+                tran_sino_dsamp[plane][i]  = 0;
+		}
+            attn_dsamp[plane][i] = tran_scl*x;
+	    emis_sino_corr[plane][i] = emis_scl*normtr_dsamp[plane][i]*
+			    attn_dsamp[plane][i]*emis_sino_dsamp[plane][i];
+	    emis_dsamp_sum += emis_sino_dsamp[plane][i];
+            }
+        free(blank_sino[plane]);
+        free(tran_sino[plane]);
+        free(emis_sino[plane]);
+	}
+    /* Build table defining regions that do not sample the subject. */
+    get_tran_support(tran_sino_dsamp,sc);
+    }
+
+/* Subtract scatter estimate from emission data.  First, downsample 
+   estimated scatter in angle. */
+if(iter > 1) {
+    scatpln = (float *)malloc(sc->lensin*sizeof(float));
+/*    sum = 0.;*/
+    sclsum = 0.;
+    for(plane=0;plane<sc->num_dir_rings;plane++) {
+        for(i=0,joff=0,koff=0;i<sc->numang;
+		i++,joff+=sc->numray,koff+=ang_dsamp*sc->numray) {
+            for(j=0;j<sc->numray;j++) {
+	        scat_sino[plane][j+joff] = scat_sino[plane][j+koff];
+	        for(k=1,moff=sc->numray;k<ang_dsamp;k++,moff+=sc->numray) 
+	            scat_sino[plane][j+joff] += scat_sino[plane][j+koff+moff];
+/*		sum += scat_sino[plane][j+joff];*/
+	        }
+	    }
+        }
+/*    scatfrac = (sum*sc->numpln)/(emis_dsamp_sum*sc->num_dir_rings);
+    printf("Estimated scatter fraction: %6.2f\%\n",scatfrac*100);*/
+    for(plane=1;plane<=sc->numpln;plane++) {
+	plnm1 = NUM_RINGS;
+	plnp1 = 0;
+	pln_f3d = plnnum_f3d(plane,plane);
+	if(plane <= sc->dir_ring_list[0]) {
+	    plnp1 = 0;
+	    plnm1 = -1;
+	    }
+	else if(plane >= sc->dir_ring_list[sc->num_dir_rings-1]) {
+	    plnp1 = sc->num_dir_rings - 1;
+	    plnm1 = -1;
+	    }
+	else {
+	    for(i=1;i<sc->num_dir_rings;i++) {
+	       if(plane>=sc->dir_ring_list[i-1] && plane<sc->dir_ring_list[i]) {
+		   plnm1 = i - 1;
+		   plnp1 = i;
+		   }
+		}
+	    }
+	if(plnm1 < 0) { /* Must be slice at the end. */
+	/* Use multiplicative correction. */
+	    if(sc->iter_type == EM) {
+                for(i=0;i<sc->lensin;i++) {
+		    corrtr = attn_dsamp[plane][i]*emis_scl*normtr_dsamp[plane][i];
+		    corrsc = attn_dsamp[plane][i]*emis_scl*normsc_dsamp[plane][i];
+	            emis_sino_corr[plane][i] = 
+		    corrtr*emis_sino_dsamp[plane][i]*emis_sino_corr[plane][i]/
+		    (emis_sino_corr[plane][i]+corrsc*scat_sino[plnp1][i]);
+		    }
+	 	 }
+	    else { /* Use successive substitution. */
+                for(i=0;i<sc->lensin;i++)
+		    scatpln[i] = scat_sino[plnp1][i]*normsc_dsamp[plane][i];
+		if(sc->line_source == TRUE)
+		    scl = 1.;
+		else
+		    scl = scatscl(sc,pln_f3d,scatpln,
+					emis_sino_dsamp[plane],sc->numang);
+		sclsum += scl;
+                for(i=0;i<sc->lensin;i++)
+	            emis_sino_corr[plane][i] = 
+		        attn_dsamp[plane][i]*emis_scl*normtr_dsamp[plane][i]*
+                        (emis_sino_dsamp[plane][i] - scl*scat_sino[plnp1][i]);
+	         }
+	    }
+	else {
+	    sclm1 = (float)(sc->dir_ring_list[plnp1] - plane)/
+		(float)(sc->dir_ring_list[plnp1] - sc->dir_ring_list[plnm1]);
+	    sclp1 = (float)(plane - sc->dir_ring_list[plnm1])/
+		(float)(sc->dir_ring_list[plnp1] - sc->dir_ring_list[plnm1]);
+	    if(sc->iter_type == EM) {
+                for(i=0;i<sc->lensin;i++)  {
+		    scat = sclm1*scat_sino[plnm1][i] + sclp1*scat_sino[plnp1][i];
+		    corrtr = attn_dsamp[plane][i]*emis_scl*normtr_dsamp[plane][i];
+		    corrsc = attn_dsamp[plane][i]*emis_scl*normsc_dsamp[plane][i];
+	            emis_sino_corr[plane][i] = 
+	     	      corrtr*emis_sino_dsamp[plane][i]*emis_sino_corr[plane][i]/
+		        (emis_sino_corr[plane][i] + corrsc*scat);
+		    }
+		}
+	    else { /* Use successive substitution. */
+		for(i=0;i<sc->lensin;i++)
+		    scatpln[i] = normsc_dsamp[plane][i]*
+		        (sclm1*scat_sino[plnm1][i] + sclp1*scat_sino[plnp1][i]);
+		if(sc->line_source == TRUE)
+		    scl = 1.;
+		else
+		    scl=scatscl(sc,pln_f3d,scatpln,emis_sino_dsamp[plane],
+								sc->numang);
+		sclsum += scl;
+		for(i=0;i<sc->lensin;i++)
+                    emis_sino_corr[plane][i] = normtr_dsamp[plane][i]*
+			attn_dsamp[plane][i]*emis_scl*
+                        (emis_sino_dsamp[plane][i] - scl*scatpln[i]);
+		}
+	    }
+	}
+    printf("Average scatter scale factor: %f\n",sclsum/16.);
+    free(scatpln);
+    }
+
+if (recon_tran == TRUE) {
+    recon_tran = FALSE;
+    if((mask=(float **)malloc((sc->numpln+1)*sizeof(float *)))==NULL) {
+        fprintf(stderr,"Malloc failed for mask in recon.\n");
+        return;
+        }
+/*    if(quiet == FALSE)
+        printf("Reconstructing transmission images.\n");*/
+    strcpy(tran_cube,tran_file);
+    dot = strrchr(tran_cube,'.');
+    *dot = NULL;
+    sprintf(tran_cube,"%s_%dx%d_%d_h%3.2f.cub",
+			tran_cube,sc->imgdim,sc->imgdim,sc->numang,sc->tran_cutoff);
+    tran_cubhdr->xdim = sc->imgdim;
+    tran_cubhdr->ydim = sc->imgdim;
+    thresh = (float)exp((double)(-sc->pixsiz*MU_MIN/10.));
+    numring = 0;
+    image = (float *)malloc(sc->imgsq*sizeof(float));
+    maxsum = 0.;
+    nmax = 0.;
+    for(plane=1;plane<=sc->numpln;plane++) {
+        if((mask[plane]=(float *)malloc(sc->imgsq*sizeof(float)))==NULL) {
+            fprintf(stderr,"Malloc failed for mask in recon.\n");
+            return;
+            }
+	*(*tran_img+plane) = fbp(sc,tran_sino_dsamp[plane],sc->tran_cutoff);
+	if(plane == sc->dir_ring_list[numring]) {
+ 	  for(itht=0;itht<NUMANG_OUT;itht++) {
+	    theta = PI*THETA_DIR*(float)itht/(float)NUMANG_OUT + THETA_START;
+	    rotate_2d(theta,*(*tran_img+plane),image,sc);
+	    max = 0.;
+	    for(i=0,joff=0;i<sc->imgdim;i++,joff+=sc->imgdim) {
+		sc->tran_width[numring][itht][i] =0.;
+		for(j=0;j<sc->imgdim;j++) 
+		    sc->tran_width[numring][itht][i] += image[j+joff];
+	        sc->tran_width[numring][itht][i] /= (MU_H2O*(float)sc->numang);
+	    if(sc->tran_width[numring][itht][i] > max)
+		max = sc->tran_width[numring][itht][i];
+		}
+	    maxsum += max;
+	    nmax += 1.;
+/*	    PutCubePlane("tran_width.cub",tmp_cubhdr,itht,sc->tran_width[numring]);*/
+	    }
+	    ++numring;
+            if(numring > sc->num_dir_rings-1)
+		numring = sc->num_dir_rings - 1;
+	  }
+	for(i=0;i<sc->imgsq;i++) {
+            if((*(*tran_img+plane))[i] < 0) {
+		(*(*tran_img+plane))[i] = 1.;
+		x = 0.;
+		}
+	    else {
+	        x = -(*(*tran_img+plane))[i]/(float)sc->numang;
+	        (*(*tran_img+plane))[i] = (float)exp((double)x);
+	        }
+            if((*(*tran_img+plane))[i] > thresh) 
+		(*(*tran_img+plane))[i] = 1.;
+	    if(x < -.01)
+		mask[plane][i] = 1.;
+	    else
+		mask[plane][i] = 0.;
+	    }
+	free(tran_sino_dsamp[plane]);
+
+	/* Process mask to eliminate holes. */
+	for(i=0,joff=0;i<sc->imgdim;i++,joff+=sc->imgdim) {
+	    pixm1 = 0; pixm2 = 0; j1 = 0; j2 = 0;
+	    pixp1 = 0; pixp2 = 0;
+	    for(j=joff,k=joff+sc->imgdim-1;j<joff+sc->imgdim;j++,k--) {
+		if(((mask[plane][j] + pixm1 + pixm2) > 2.9) && (j1 == 0)) 
+		    j1 = j;
+		if(((mask[plane][k] + pixp1 + pixp2) > 2.9) && (j2 == 0)) 
+		    j2 = k;
+		pixm2 = pixm1; pixm1 = mask[plane][j];
+		pixp2 = pixp1; pixp1 = mask[plane][k];
+		}
+	    for(m=j1;m<j2;m++)
+	        mask[plane][m] = 1.;
+	    }
+        if(quiet == FALSE)  {
+	    PutCubePlane(tran_cube,tran_cubhdr,plane-1,*(*tran_img+plane));
+/*	    PutCubePlane("mask.cub",mask_cubhdr,plane-1,mask[plane]);*/
+	    }
+	}
+    if(quiet == FALSE) {
+        PutCubeHeader(tran_cube,tran_cubhdr);
+/*        PutCubeHeader("tran_width.cub",tmp_cubhdr);*/
+        CloseCube(tran_cube);
+/*        CloseCube("tran_width.cub");*/
+/*        PutCubeHeader("mask.cub",mask_cubhdr);
+        CloseCube("mask.cub");*/
+	}
+    printf("Maximum path length through transmission image: %f cm.\n",maxsum/nmax);
+    }
+
+
+/* Calculate scale factor for multiple scatter model. */
+if(iter == 1) {
+    for(ring=0;ring<sc->num_dir_rings;ring++) {
+        numring = ring*(LEN_RING_LIST+1);
+        plane = sc->dir_ring_list[ring];
+        for(itht=0,joff=0;itht<NUMANG_OUT;
+				itht++,joff+=sc->numray*sc->ang_step) {
+    	    sc->mult_scl[numring][itht] = 0.;
+	    sum = 0.;
+	    for(k=0,j=0;k<sc->numray/sc->ray_step;k++) {
+	        for(m=0,sum1=0.;m<sc->ray_step;m++,j++)
+		    /* Use attenuation-corrected emission sinogram. */
+	            sum1 += emis_sino_dsamp[plane][j+m+joff];
+	        sc->mult_scl[numring][itht]+=sum1*sc->tran_width[ring][itht][k];
+	        sum += sum1;
+	        }
+    	    sc->mult_scl[numring][itht] *= MULT_SCALE/sum;
+	    }
+        }
+    }
+
+/* Approximate scale factor for cross-planes as the average of the
+   scale factor for the two rings that are involved. */
+for(ring1=0;ring1<sc->num_dir_rings;ring1++) {
+    for(ring2=0;ring2<sc->num_dir_rings;ring2++) {
+	if(ring1 != ring2) {
+	    i1 = ring1*LEN_RING_LIST + ring1;
+	    i2 = ring2*LEN_RING_LIST + ring2;
+	    k =  ring1*LEN_RING_LIST + ring2;
+	    for(itht=0;itht<NUMANG_OUT;itht++) 
+	        sc->mult_scl[k][itht] = 
+		    .5*(sc->mult_scl[i1][itht]+ sc->mult_scl[i2][itht]);
+	    }
+	}
+    }
+
+
+if (recon_emis == TRUE) {
+    strcpy(emis_cube,emis_file);
+    dot = strrchr(emis_cube,(int)'.');
+    *dot = NULL;
+    sprintf(emis_cube,"%s_%dx%d_%d_h%3.2f_s%d.cub",
+		emis_cube,sc->imgdim,sc->imgdim,sc->numang,sc->emis_cutoff,iter-1);
+/*    sprintf(attn_cube,"attn_dsamp.cub");*/
+    sprintf(emis_corr_file,"emis_sino_corr_%dx%d_%d_s%d.cub",
+				sc->imgdim,sc->imgdim,sc->numang,iter-1);
+/*    if(quiet == FALSE)
+        printf("Reconstructing emission images.\n");*/
+    for(plane=1;plane<=sc->numpln;plane++) {
+        *(*emis_img+plane) = fbp(sc,emis_sino_corr[plane],sc->emis_cutoff);
+	/* Set pixels outside support of transmission image to zero. */
+	for(i=0;i<sc->imgsq;i++) 
+	    (*(*emis_img+plane))[i] *= mask[plane][i];
+	if(sc->line_source == TRUE) {
+	    /* For line sources set all negative pixels to zero. */
+	    for(i=0;i<sc->imgsq;i++)
+                if((*(*emis_img+plane))[i] < 0)
+			(*(*emis_img+plane))[i] = 0.;
+	    }
+	if(quiet == FALSE) {
+for(itht=0;itht<sc->numang;itht++) {
+i = (NUMRAY_CTI - sc->numray)/2;
+emis_sino_corr[plane][itht*sc->numray+sc->tran_sup[plane-1][itht][0]-i] = 20000.;
+emis_sino_corr[plane][itht*sc->numray+sc->tran_sup[plane-1][itht][1]-i] = 20000.;
+}
+            PutCubePlane(emis_corr_file,emis_corr_cubhdr,plane-1,
+						emis_sino_corr[plane]);
+            PutCubePlane(emis_cube,emis_cubhdr,plane-1,*(*emis_img+plane));
+/*            PutCubePlane(attn_cube,attn_cubhdr,plane-1,attn_dsamp[plane]);*/
+	    }
+        }
+    if(quiet == FALSE) {
+        PutCubeHeader(emis_cube,emis_cubhdr);
+        PutCubeHeader(emis_corr_file,emis_corr_cubhdr);
+/*        PutCubeHeader(attn_cube,attn_cubhdr);*/
+        CloseCube(emis_cube);
+/*        CloseCube(attn_cube);*/
+        CloseCube(emis_corr_file);
+	}
+    if(iter > 1) {
+    	if(sc->ext_emis_up > 0.) {
+            for(plane=sc->emis_plnmin;plane<1;plane++) {
+                for(i=0;i<sc->imgsq;i++)
+        	    (*(*emis_img+plane))[i] = (*(*emis_img+1))[i];
+	        }
+	    }
+	if(sc->ext_emis_dwn > 0.) {
+            for(plane=sc->numpln+1;plane<sc->emis_plnmax;plane++) {
+                for(i=0;i<sc->imgsq;i++)
+    	            (*(*emis_img+plane))[i] = (*(*emis_img+sc->numpln))[i];
+	  	}
+            }
+        }
+    }
+
+if(quiet == FALSE && iter == 1) {
+    total_sum = 0.;
+    for(plane=1;plane<=sc->numpln;plane++) {
+        sum = 0.;
+        for(i=0;i<sc->imgsq;i++)
+            sum += (*(*emis_img+plane))[i];
+        total_sum += sum;
+        printf("Emission plane %d sums to %6.3f million counts.\n",plane,sum/1.e6);
+        }
+	printf("Volume sums to %8.3f million counts.\n",total_sum*1.e-6);
+    }
+
+if( sc->imgdim != imgdimm1) {
+    imgdimm1 = sc->imgdim;
+    if((sc->psi_shldmin = (float **)malloc((sc->numpln+1)*sizeof(int)))==NULL) {
+        fprintf(stderr,"Malloc failed of *sc->shldmin in recon.\n");
+        return;
+        }
+    if((sc->psi_shldmax = (float **)malloc((sc->numpln+1)*sizeof(int)))==NULL) {
+        fprintf(stderr,"Malloc failed of *sc->shldmax in recon.\n");
+        return;
+        }
+        for(plane=1;plane<=sc->numpln;plane++) {
+    	    if((sc->psi_shldmin[plane] = (float *)
+				malloc((sc->imgdim)*sizeof(int)))==NULL) {
+                fprintf(stderr,"Malloc failed of sc->shldmin in recon.\n");
+                return;
+                }
+    	    if((sc->psi_shldmax[plane] = (float *)
+				malloc((sc->imgdim)*sizeof(int)))==NULL) {
+                fprintf(stderr,"Malloc failed of sc->shldmax in recon.\n");
+                return;
+	    }
+	}
+    for(i=0,d=(-sc->pixsiz*(sc->imgdim-1)/2.);i<sc->imgdim;i++,d+=sc->pixsiz) {
+        lshld = sqrt(SHLD_ORSQ - d*d) - sqrt(SHLD_IRSQ - d*d) + GS;
+        for(plane=1;plane<=sc->numpln;plane++) {
+	    sc->psi_shldmin[plane][i] = -atan(((plane-1)*SLCTHK+WC2)/lshld);
+	    sc->psi_shldmax[plane][i] =  atan(((sc->numpln-plane )*SLCTHK+WC2)/lshld);
+	    }
+	}
+    
+    /* Extend volume to account for scatter from ouside the FOV. */
+    if(sc->ext_tran_up > 0.) {
+        plnmin = 1 - (sc->ext_tran_up/SLCTHK + .5) - 2;
+	if(plnmin < -2*sc->numpln) plnmin = -2*sc->numpln;
+        for(plane=plnmin;plane<1;plane++) {
+            (*(*tran_img+plane))=(float *)malloc(sc->imgsq*sizeof(float));
+            for(i=0;i<sc->imgsq;i++)
+                (*(*tran_img+plane))[i] = (*(*tran_img+1))[i];
+	    }
+        sc->tran_plnmin = plnmin + 2;
+        }
+    else
+        sc->tran_plnmin = 1;
+    if(sc->ext_tran_dwn > 0.) {
+	plnmax = sc->numpln + (sc->ext_tran_dwn/SLCTHK + .5) + 3;
+	if(plnmax > 3*sc->numpln) plnmax = 3*sc->numpln;
+        for(plane=sc->numpln+1;plane<=plnmax;plane++) {
+            (*(*tran_img+plane))=(float *)malloc(sc->imgsq*sizeof(float));
+            for(i=0;i<sc->imgsq;i++)
+    	        (*(*tran_img+plane))[i] = (*(*tran_img+sc->numpln))[i];
+	    }
+        sc->tran_plnmax = plnmax - 2;
+	}
+    else
+        sc->tran_plnmax = sc->numpln;
+    if(sc->ext_emis_up > 0.) {
+        plnmin = 1 - (sc->ext_emis_up/SLCTHK + .5) - 2;
+        if(plnmin < -2*sc->numpln) 
+	    plnmin = -2*sc->numpln;
+        for(plane=plnmin;plane<1;plane++) {
+            (*(*emis_img+plane))=(float *)malloc(sc->imgsq*sizeof(float));
+            for(i=0;i<sc->imgsq;i++)
+                (*(*emis_img+plane))[i] = (*(*emis_img+1))[i];
+            }
+        for(i=0;i<sc->imgsq;i++) {
+            (*(*emis_img+plnmin))[i] = 0.;
+            (*(*emis_img+plnmin+1))[i] = 0.;
+    	    }
+        sc->emis_plnmin = plnmin + 2;
+        }
+    else
+        sc->emis_plnmin = 1;
+    if(sc->ext_emis_dwn > 0.) {
+        plnmax = sc->numpln + (sc->ext_emis_dwn/SLCTHK + .5) + 3;
+        if(plnmax > 3*sc->numpln) 
+	    plnmax = 3*sc->numpln;
+        for(plane=sc->numpln+1;plane<=plnmax;plane++) {
+            (*(*emis_img+plane))=(float *)malloc(sc->imgsq*sizeof(float));
+            for(i=0;i<sc->imgsq;i++)
+    	        (*(*emis_img+plane))[i] = (*(*emis_img+sc->numpln))[i];
+	    }
+        for(i=0;i<sc->imgsq;i++) {
+	    (*(*emis_img+plnmax))[i] = 0.;
+    	    (*(*emis_img+plnmax-1))[i] = 0.;
+	    }
+        sc->emis_plnmax = plnmax - 2;
+        }
+    else
+        sc->emis_plnmax = sc->numpln;
+    }
+
+}
+
+/******************************************************/
+void sino_axl_dsamp(sino,sino_dsamp,sc,dsamp_factor,bed)
+/******************************************************/
+
+float 	**sino,
+	**sino_dsamp;
+struct  scatter_tab *sc;
+int	dsamp_factor;		/* Downsampling dsamp_factor. */
+struct	bed_pos *bed;
+
+{
+
+int	i,j,pln,pln_ds,maxpln;
+
+float	scl;
+
+maxpln = bed->num_virtplns;
+for(i=1;i<=sc->numpln;i++) {
+    if((sino_dsamp[i] = (float *)malloc(sc->lensin*sizeof(float))) == NULL) {
+        fprintf(stderr,"Malloc failed in sino_dsamp.\n");
+        return;
+        }
+    }
+
+if(dsamp_factor == 1) {
+    /* Do nothing, sampling OK. */
+    }
+else if(dsamp_factor == 2) {
+    for(i=0;i<sc->lensin;i++) {
+	sino_dsamp[1][i] = (.75*sino[1][i]+.25*sino[2][i]);
+	sino_dsamp[sc->numpln][i] =
+	   		.75*sino[maxpln][i]+.25*sino[maxpln-1][i];
+        for(pln=3,pln_ds=2;pln_ds<sc->numpln;pln+=2,pln_ds++)
+	    sino_dsamp[pln_ds][i] = .5*sino[pln][i] +
+	        		.25*(sino[pln-1][i] + sino[pln+1][i]);
+	}
+    }
+else if(dsamp_factor == 4) {
+fprintf(stderr,"Fix downsampling for factor of 4.\n");
+    for(i=0;i<sc->lensin;i++) {
+	sino_dsamp[1][i] = (.375*sino[1][i] + .125*sino[4][i])
+	        	 +  .25*(sino[2][i] +      sino[3][i]);
+	sino_dsamp[sc->numpln][i] = 
+	    		   .375*sino[maxpln][i]   + .125*sino[maxpln-3][i]
+	    		 + .250*(sino[maxpln-1][i] +    sino[maxpln-2][i]);
+        for(pln=6,pln_ds=2;pln_ds<sc->numpln;pln+=4,pln_ds++)
+	    sino_dsamp[pln_ds][i] = .25*(sino[pln][i] +
+	           		    sino[pln-1][i] + sino[pln+1][i] +
+	        	        .5*(sino[pln-2][i] + sino[pln+2][i]));
+	}
+    }
+else if(dsamp_factor == 8) {
+fprintf(stderr,"Fix downsampling for factor of 8.\n");
+    for(i=0;i<sc->lensin;i++) {
+	sino_dsamp[0][i] = 1.5*sino[0][i] + .75*sino[8][i];
+	for(pln=2;pln<8;pln++)
+	    sino_dsamp[0][i] += sino[pln][i];
+ 	sino_dsamp[0][i] *= .125;
+	sino_dsamp[sc->numpln][i] = 1.5*sino[maxpln][i]+.5*sino[maxpln-7][i];
+	for(pln=sc->numpln-6;pln<sc->numpln;pln++)
+	    sino_dsamp[sc->numpln][i]+=sino[pln][i];
+	sino_dsamp[sc->numpln][i] *= .125;
+        for(pln=12,pln_ds=2;pln_ds<sc->numpln;pln+=4,pln_ds++){
+	    sino_dsamp[pln_ds][i] = .5*(sino[pln-4][i] + sino[pln+4][i]);
+	    for(j=-3;j<=3;j++)
+	        sino_dsamp[pln_ds][i] += sino[pln+j][i];
+	    }
+	    sino_dsamp[pln_ds][i] *= .125;
+	}
+    }
+else {
+    fprintf(stderr,"Invalid downsampling dsamp_factor in sino_axl_dsamp.\n");
+    exit(ERROR);
+    }
+/*CUB_WR("dsamp_0.cub",sino_dsamp[1],sc->numray,numang,BYTE)
+CUB_WR("dsamp_1.cub",sino_dsamp[2],sc->numray,numang,BYTE)
+CUB_WR("dsamp_2.cub",sino_dsamp[3],sc->numray,numang,BYTE)*/
+
+}
+
+/********************************************************************/
+float *get_emis_sino(sinofile,nrmtrfil,nrmscfil,normtr,normsc,
+						plane,duration,sc,bed)
+/********************************************************************/
+
+char	*sinofile;
+char	*nrmtrfil,*nrmscfil;	/* Normalization files. */
+float   **normtr,**normsc;
+int	plane;
+float	*duration;
+struct scatter_tab *sc;
+struct bed_pos *bed;
+
+{
+
+static int first=TRUE,septa_out=FALSE;
+
+struct  cube_header *cubhdr;
+Main_header    *mhdr;
+
+int	stat,pln,iang;
+
+float	*get_3dto2d_sino(),*get_2d_sino(),*sino;
+
+if(first == TRUE) {
+    first = FALSE;
+    if(strstr(sinofile,".cub")) {
+	if((cubhdr = GetCubeHeader(sinofile,plane-1)) == NULL) {
+	    fprintf(stderr,"Call to GetCubeHeader failed in get_cube_sino.\n");
+	    return(NULL);
+	    }
+	if(cubhdr->zdim > 3*MAX_PLANE)
+	    septa_out = TRUE;
+	}
+    else {
+	if((mhdr = getmhdr(sinofile)) == NULL) {
+	    printf("Error in getmhdr, %s.\n",sinofile);
+	    exit(ERROR);
+	    }
+	if(mhdr->num_planes > MAX_PLANE)
+	    septa_out = TRUE;
+	}
+    }
+
+if(septa_out == TRUE) 
+    sino = get_3dto2d_sino(sinofile,nrmtrfil,nrmscfil,normtr,normsc,
+						plane,duration,bed,sc);
+else {
+    pln = bed->phys_plane[plane] + bed->pln_offset[plane];
+    sino = get_2d_sino(sinofile,pln,duration,bed,sc);
+    }
+
+return(sino);
+
+}
+    
+
+/********************************************************************/
+float *get_3dto2d_sino(sinofile,nrmtrfil,nrmscfil,normtr,normsc,
+						plane,duration,bed,sc)
+/********************************************************************/
+
+/* Get sinogram "plane" using combinations to yield 31 planes, with
+   straight slices from two crosses, one straight and cross planes
+   from four crosses. */
+
+char	*sinofile;
+char	*nrmtrfil,*nrmscfil;	/* Normalization files. */
+float   **normtr,**normsc;
+int	plane;
+float	*duration;
+struct scatter_tab *sc;
+struct bed_pos *bed;
+
+{
+
+int 	i,ring,pln_offset;
+
+float	*sino,*sino1,*sino2,*sino3,
+	*get_3d_sino();
+
+
+static	int first=TRUE;
+
+pln_offset = bed->pln_offset[plane];
+if(plane == 1 || plane == MAX_PLANE) {
+    /* No planes to combine for this straight slice. */
+    ring = (bed->phys_plane[plane]-1)/2;
+    sino = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring,ring,duration,sc,pln_offset);
+    for(i=0;i<sc->lensin;i++) {
+	normtr[plane][i] /= (float)ang_dsamp;
+	normsc[plane][i] /= (float)ang_dsamp;
+	}
+    }
+else if(plane == 2 || plane == MAX_PLANE-1) {
+    /* Combine two cross slices for this cross slice. */
+    ring = (bed->phys_plane[plane]-1)/2;
+    sino = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring,ring+1,duration,sc,pln_offset);
+
+    sino1 = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring+1,ring,duration,sc,pln_offset);
+    for(i=0;i<sc->lensin;i++) {
+	sino[i] = .5*(sino1[i] + sino[i]);
+	normtr[plane][i] /= (2*(float)ang_dsamp);
+	normsc[plane][i] /= (2*(float)ang_dsamp);
+	}
+    free(sino1);
+    }
+else if(2*(plane/2) != plane) {
+    /* Odd planes are straight, combine three planes. */
+    ring = (bed->phys_plane[plane]-1)/2 - 1;
+    sino = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring,ring+2,duration,sc,pln_offset);
+    sino1 = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring+2,ring,duration,sc,pln_offset);
+    sino2 = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring+1,ring+1,duration,sc,pln_offset);
+
+    for(i=0;i<sc->lensin;i++) { 
+	sino[i] = (sino[i] + sino1[i] + sino2[i])/3.;
+	normtr[plane][i] /= (3*(float)ang_dsamp);
+	normsc[plane][i] /= (3*(float)ang_dsamp);
+	}
+
+    free(sino1);
+    free(sino2);
+    }
+else {
+    /* Must be cross plane, combine four crosses. */
+    ring = bed->phys_plane[plane]/2 - 2;
+    sino = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring,ring+3,duration,sc,pln_offset);
+    sino1 = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring+3,ring,duration,sc,pln_offset);
+    sino2 = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring+1,ring+2,duration,sc,pln_offset);
+    sino3 = get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr[plane],normsc[plane],
+					ring+2,ring+1,duration,sc,pln_offset);
+
+    for(i=0;i<sc->lensin;i++) {
+	sino[i] = .25*(sino[i] + sino1[i] + sino2[i] + sino3[i]);
+	normtr[plane][i] /= (4*(float)ang_dsamp);
+	normsc[plane][i] /= (4*(float)ang_dsamp);
+	}
+    free(sino1);
+    free(sino2);
+    free(sino3);
+    }
+
+return(sino);
+
+}
+
+/*************************************************************************/
+float *get_3d_sino(sinofile,nrmtrfil,nrmscfil,normtr,normsc,
+					ring1,ring2,duration,sc,pln_offset)
+/*************************************************************************/
+
+char	*sinofile;	/* Sinogram file to be read. */
+char	*nrmtrfil,*nrmscfil;	/* Normalization files. */
+float   *normtr,*normsc;
+int	ring1,ring2;	/* Rings defining plane to read. */
+float	*duration;	/* Duration in seconds. */
+struct 	scatter_tab *sc;
+int	pln_offset;	/* Plane offset for multiple bed positions.*/
+
+{
+
+float 	*sino,
+	*get_cti_sino(),
+	*get_cube_sino(),
+	norm,sum;
+
+int 	i,iang,pln_3d,ring_pair,ioff,plnoff;
+
+static int first = TRUE;
+
+if(strstr(sinofile,".scn")) {
+    pln_3d = plnnum_f3d(ring1+1,ring2+1);
+    sino = get_cti_sino(sinofile,nrmtrfil,nrmscfil,normtr,normsc,pln_3d,
+					duration,sc,sc->frame);
+    }
+
+return(sino);
+
+}
+
+/************************************************/
+float *get_2d_sino(sinofile,plane,duration,bed,sc)
+/************************************************/
+
+char	*sinofile;	/* Sinogram file to be read. 	*/
+int	plane;		/* Plane to read. 		*/
+float	*duration;	/* Duration in seconds. 	*/
+struct 	bed_pos *bed;
+struct	scatter_tab *sc;
+
+{
+
+float 	*sino,
+	*get_cti_sino(),
+	*get_cube_sino(),
+	norm;
+
+int	i,pln,iang,
+	frame=1;
+
+char 	*nrmdum=NULL;
+    
+if(strstr(sinofile,".scn")) {
+    sino = get_cti_sino(sinofile,nrmdum,nrmdum,nrmdum,nrmdum,plane,duration,sc,
+							frame);
+    }
+
+return(sino);
+
+}
+
+
+/**********************************************************************/
+float *get_cti_sino(sinofile,nrmtrfil,nrmscfil,normtr,normsc,
+						plane,duration,sc,frame)
+/**********************************************************************/
+
+/* Read specified plane from cti-file, returns sinogram.  Note that
+   the returned array is overwritten on the next call. */
+
+char	*sinofile;	/* Sinogram file to be read. */
+char	*nrmtrfil,*nrmscfil;	/* Normalization files. */
+float   *normtr,*normsc;
+int	plane;		/* Plane number in 3D file. */
+float	*duration;	/* Duration in seconds. */
+struct	scatter_tab *sc;
+int	frame;
+
+{
+
+float	*sino=NULL,scl,*normtr1,*normsc1;
+
+static int first=TRUE;
+
+int	i,j,k,iang,joff,koff,moff,gate=1,data=0,bed=0,
+	stat,filnum,ioff,length,xdim,ydim,nrmfrm=1;
+
+static FILE	*fd,
+		*fdtab[3] = {NULL, NULL, NULL};
+
+static char	filnam[3][MAXNAME];
+
+Scan_subheader *shdr;
+Norm_subheader *shnrmtr,*shnrmsc;
+
+if((shdr = getsbhdr(sinofile,plane,frame,gate,data,bed)) == NULL) {
+    printf("Error in getsbhdr, %s.\n",sinofile);
+    exit(ERROR);
+    }
+xdim = shdr->dimension_1;
+ydim = shdr->dimension_2;
+length = xdim*ydim;
+if((sino=rdimg(sinofile,plane,frame,gate,data,bed)) == NULL) {
+    printf("Error while reading %s in rdimg.\n",sinofile);
+    return(NULL);
+    }
+
+if(sc->numang*(ydim/sc->numang) != ydim) {
+    fprintf(stderr,"Invalid value of numang in get_cti_sino.\n");
+    exit(ERROR);
+    }
+else
+    ang_dsamp = ydim/sc->numang;
+
+if(nrmtrfil != NULL) {
+    /* Must be emission sinogram. */
+    if((shnrmtr = getsbhdr(nrmtrfil,plane,nrmfrm,gate,data,bed)) == NULL) {
+        printf("Error in getsbhdr, %s.\n",nrmtrfil);
+        exit(ERROR);
+        }
+    if((normtr1=rdimg(nrmtrfil,plane,nrmfrm,gate,data,bed)) == NULL) {
+        printf("Error while reading %s in rdimg.\n",nrmtrfil);
+        return(NULL);
+        }
+    if((shnrmsc = getsbhdr(nrmscfil,plane,nrmfrm,gate,data,bed)) == NULL) {
+        printf("Error in getsbhdr, %s.\n",nrmscfil);
+        exit(ERROR);
+        }
+    if((normsc1=rdimg(nrmscfil,plane,nrmfrm,gate,data,bed)) == NULL) {
+        printf("Error while reading %s in rdimg.\n",nrmscfil);
+        return(NULL);
+        }
+    for(i=0,koff=0,joff=0;i<ydim;i++,koff+=xdim,joff+=sc->numray) {
+        for(j=0,k=(xdim - sc->numray)/2;j<sc->numray;j++,k++) {
+            normtr1[j+joff] = shnrmtr->scale_factor*normtr1[k+koff];
+	    if(normsc1[k+koff] > 0)
+                normsc1[j+joff] = shnrmsc->scale_factor/normsc1[k+koff];
+	    }
+	}
+    if(ang_dsamp > 1) {
+        /* Sum adjacent sinogram angles. */
+        for(i=0,joff=0,koff=0;i<sc->numang;
+    		i++,joff+=sc->numray,koff+=ang_dsamp*sc->numray) {
+            for(j=0;j<sc->numray;j++) {
+    	        normtr1[j+joff] = normtr1[j+koff];
+    	        normsc1[j+joff] = normsc1[j+koff];
+    	        for(k=1,moff=sc->numray;k<ang_dsamp;k++,moff+=sc->numray) {
+    	            normsc1[j+joff] += normsc1[j+koff+moff];
+    	            normtr1[j+joff] += normtr1[j+koff+moff];
+    		    }
+		}
+    	    }
+	}
+    for(i=0;i<sc->lensin;i++) {
+	normsc[i] += normsc1[i];
+	normtr[i] += normtr1[i];
+	}
+    free(normtr1);
+    free(normsc1);
+    free(shnrmsc);
+    free(shnrmtr);
+    }
+
+/* Correct overflows and reduce number of rays. */
+if(shdr->scan_min*shdr->scale_factor < -3000) {
+    printf("Assuming overflow in \"get_sino\"\n");
+    for(i=0,koff=0,joff=0;i<ydim;i++,koff+=xdim,joff+=sc->numray) {
+        for(j=0,k=(xdim - sc->numray)/2;j<sc->numray;j++,k++) {
+            if(sino[j+joff] < -5000)
+                sino[j+joff] = sino[k+koff] + 65535.;
+	    else
+		sino[j+joff] = sino[k+koff];
+            }
+	}
+    }
+else {
+    for(i=0,koff=0,joff=0;i<ydim;i++,koff+=xdim,joff+=sc->numray) {
+        for(j=0,k=(xdim - sc->numray)/2;j<sc->numray;j++,k++) 
+            sino[j+joff] = sino[k+koff];
+	}
+    }
+
+if(ang_dsamp > 1) {
+    /* Sum adjacent sinogram angles. */
+    for(i=0,joff=0,koff=0;i<sc->numang;
+		i++,joff+=sc->numray,koff+=ang_dsamp*sc->numray) {
+        for(j=0;j<sc->numray;j++) {
+	    sino[j+joff] = sino[j+koff];
+	    for(k=1,moff=sc->numray;k<ang_dsamp;k++,moff+=sc->numray) 
+	        sino[j+joff] += sino[j+koff+moff];
+	    }
+        }
+    }
+
+*duration = .001*(float)shdr->frame_duration;
+free(shdr);
+
+return(sino);
+
+}
+
+/*----------------------*/
+float *fbp(sc,sino,cutoff)
+/*----------------------*/
+
+struct  scatter_tab *sc;
+float	sino[];
+float	cutoff;
+
+{
+
+float   filter[FFT_LEN],
+	*image,
+	scl;
+
+int	i;
+
+static float ramp[FFT_LEN];
+
+static int first = TRUE,imgdimm1;
+
+if(first == TRUE || imgdimm1 != sc->imgdim) { /* Calculate ramp filter.	*/
+    first = FALSE;
+    imgdimm1 = sc->imgdim;
+    if(sc->numray > 128)
+	numray_fft = 256;
+    else
+	numray_fft = 128;
+    ramp_fltr_c(ramp,numray_fft);
+    }
+
+/* Copy ramp to filter to be windowed.		*/
+for(i=0;i<2*numray_fft;i++) {
+    filter[i] = ramp[i];
+    }
+
+hanning_fltr(sc,filter,cutoff);
+/* Scale for FFT and for zooming in backprojection routine. */
+/* Scale up by numray/imgdim to account for change in pixel size, and
+   incorporate into usual scale dsamp_factor of PI/numray. */
+scl = (PI*sc->numray)/((float)sc->imgdim*(float)numray_fft);
+for(i=0;i<2*numray_fft;i++)
+    filter[i] *= scl;
+
+if(NULL==(image=(float *)malloc((unsigned)(sc->imgsq*sizeof(float))))) {
+    printf("Could not malloc memory for image.\n");
+    exit(NULL);
+    }
+
+recfbp(sc,sino,image,filter);
+
+return(image);
+
+}
+
+
+/*--------------------------*/
+hanning_fltr(sc,filter,cutoff)
+/*--------------------------*/
+
+struct  scatter_tab *sc;
+float	filter[];
+float	cutoff;
+
+{
+
+float 	epsilon = 1.0e-03,
+	scale,
+	dsamp_factor,
+	smooth;
+
+int	i,j;
+
+/* Compute the filter window (sinc(x)-0.5*sinc(x/2)**2) */
+
+/* Scale dsamp_factor for filter. */
+scale = 1.;
+if(cutoff > .001)
+    smooth = PI/(cutoff*2.*(float)numray_fft);
+else
+    smooth = 0.;
+
+/* Window ramp with raised cosine.	*/
+filter[0] = scale*filter[0];
+for(i=0,j=2;i<numray_fft-1;i++,j+=2) {
+    dsamp_factor = .5*(1. + (float)cos((double)(smooth*(float)(i+1))) );
+    if(dsamp_factor < epsilon) 
+	scale = 0.;
+    filter[j] *= scale*dsamp_factor;
+    filter[j+1] = filter[j];
+    }
+filter[1] *= scale*.5*
+	     (1. + (float)cos((double)(smooth*(float)numray_fft )));
+
+}
+
+/*----------------------*/
+ramp_fltr_c(filter,numray)
+/*----------------------*/
+/* Compute ramp filter using Colsher method. */
+
+float	filter[];
+int	numray;
+
+{
+#ifdef HP
+	extern		realft ();
+#else
+	extern		realft_ ();
+#endif
+
+int	i,ifwd=1;
+
+filter[0] = .25;
+for(i=1;i<numray+1;) {
+    filter[i] =  1./(PI*(float)i); 
+    filter[i] *= -filter[i];
+    filter[i+1] = 0.;
+    filter[2*numray-i] = filter[i];
+    filter[2*numray-i-1] = 0.;
+    i += 2;
+    }
+
+/* Forward transform filter. */
+#ifdef HP
+	realft (filter, &numray, &ifwd);
+#else
+	realft_(filter, &numray, &ifwd);
+#endif
+
+}
+
+/*--------------------*/
+ramp_fltr(filter,numray)
+/*--------------------*/
+/* 
+Purpose: Compute ramp filter with no window using a
+	 direct method.*/
+
+float	filter[];
+int	numray;
+
+{
+
+int	i,j;
+
+/* Compute ramp in frequency domain.  Since a real FFT 
+   routine is used, only half of the frequency components
+   are computed. */
+filter[0] = 0.; /* DC component.*/
+filter[1] = (float)numray/(2.*(float)numray);/* Highest frequency.*/
+for(i=2,j=1;i<2*numray;i+=2,j++) {
+    filter[i] = (float)j/(2.*(float)numray);
+    filter[i+1] = filter[i];
+    }
+
+/* Transform to spatial domain.*/
+/*realft_(filter,&numray,&inv);*/
+
+/* Zero out pad and rescale.*/
+/*scl = 1./(float)numray;
+for(i=numray/2;i<numray+numray/2;i++)
+    filter[i] = 0.;
+for(i=0;i<numray/2;i++)
+    filter[i] *= scl;
+for(i=numray+numray/2;i<2*numray;i++)
+    filter[i] *= scl;*/
+
+/* Forward transform filter.*/
+/*realft_(filter,&numray,&fwd);*/
+
+}
+
+
+/*-------------------------*/
+recfbp(sc,sino,image,filter)
+/*-------------------------*/
+/*
+Purpose: Implement filtered backprojection.
+	 sino: Input sinogram.
+	 image: Output image
+	 filter: Filter computed in hann_fltr or gauss_fltr
+*/
+
+struct 	scatter_tab *sc;
+float	*sino,
+	*image,
+	filter[];
+
+{
+#ifdef HP
+	extern		realft ();
+#else
+	extern		realft_ ();
+#endif
+
+float	prodat[FFT_LEN],theta;
+
+int	iang,iangoff,nray,jray,i,ifwd,irev,pad;
+
+void 	bakpro();
+
+/* Zero out image.*/
+for(i=0;i<sc->imgsq;i++)
+    image[i] = 0.;
+for(i=0;i<FFT_LEN;i++)
+    prodat[i] = 0.;
+
+/* Loop over projections. */
+pad = (numray_fft - sc->numray)/2;
+for(iang=0,iangoff=0;
+    iang<sc->numang;iang++,iangoff+=sc->numray) {
+
+    /* Convert data to float and store in padded vector.*/
+    for(i=0;i<pad;i++)
+	prodat[i] = 0;
+    for(nray=0,i=pad;nray<sc->numray;nray++,i++) 
+        prodat[i]  = sino[nray+iangoff];
+
+    /* Avoid circular convolution effects by extending projection
+       data by zero filling. */
+    for(nray=numray_fft-pad;nray<2*numray_fft;nray++)
+        prodat[nray] = 0;
+
+    /* Forward transform projection. */
+    ifwd = 1;
+#ifdef HP
+	realft (prodat, &numray_fft, &ifwd);
+#else
+	realft_(prodat, &numray_fft, &ifwd);
+#endif
+
+    /* Filter in frequency domain. */
+    for(nray=0;nray<2*numray_fft;nray++) 
+        prodat[nray] *= filter[nray];
+
+    /*  Inverse transform filtered projection. */
+    irev = 0;
+#ifdef HP
+	realft (prodat, &numray_fft, &irev);
+#else
+	realft_(prodat, &numray_fft, &irev);
+#endif
+
+    /* Remove pad from filtered data. */
+    for(i=0;i<sc->numray;i++)
+	prodat[i] = prodat[i+pad];
+
+/*    if(12*(iang/12) == iang) 
+	printf("Backprojecting angle #%d\n",iang);*/
+/* Add offset to theta to account for downsampling of sinogram. */
+    theta = bakpro_dir*(float)iang*PI/(float)sc->numang + start_angle 
+	  + .5*bakpro_dir*ANG_INC*NUMANG/sc->numang;
+    bakpro(theta,prodat,image,sino_offset,sc); 
+
+    }
+
+}
+/*---------------------------------------------------------------
+
+Subroutine: bakpro
+
+Purpose: Backproject a single angle into an image by 
+          interpolating projection array and using a nearest 
+          neighbor scheme.  The algorithm is implemented using
+	   primarily vector operations.
+
+Coordinate system: This routine assumes that the pixel represented
+	by image[0][0] in "C" lies at the upper left corner of 
+	the image.  A back-projection at theta=0
+	sums into pixels lying along a vertical path in the image,
+	i.e., along the first index to the array.  The projection is
+	assumed to lie above the image, with the projection
+	indexed by prodat[0] lying above image[0][0].  Theta is
+	defined such that increasing theta would rotate the 
+	displayed projecton in the counter-clockwise direction.
+
+Calling sequence: call bakpro(theta,prodat,image,numray,numang)
+	theta: Angle of projection in radians.
+	prodat: Projection data.
+	image: Image
+	numray: Number of rays per projection.
+
+By: John Ollinger
+
+Date: September 15, 1989
+
+----------------------------------------------------------------*/
+
+void bakpro(theta,prodat,image,sino_offset,sc)
+
+float	theta,		/* Angle of projection in radians.	*/
+	prodat[],	/* Projection data.			*/
+	image[];	/* Reconstructed image.			*/
+float	sino_offset;	/* Offset of sinogram center from image center. */
+struct  scatter_tab *sc;
+
+{
+
+float	proint[INTERP_LEN_MAX];	/* Interpolated projection.	*/
+
+
+static int ilow[IMGDIM_MAX],	/* Starting pixel of circle.	*/
+	ihigh[IMGDIM_MAX],	/* Ending pixel of circle.	*/
+	inum[IMGDIM_MAX],	/* Number of pixels in chord.	*/
+	first_pass = TRUE,	/* First pass flag.		*/
+	imgdimm1;		/* Image dimension. 		*/
+
+int	i,j,intray,nray,n,joff,interp_len,i0;
+
+static int imin,ii;
+
+static float center,radsq;
+
+float	xcord,cdsq,ctht,stht,prodf1,cnst,scl,kd,xioff,xooff,zoom_tot,
+	zoom,xi,del;
+
+if(sc->imgdim != imgdimm1) {
+    /* Compute boundaries of circular region to be reconstructed.*/
+    imgdimm1 = sc->imgdim;
+    center = (float)(sc->imgdim-1)/2.;
+    radsq  = center*center;
+    imin = 1;
+    for(j=0;j<sc->imgdim;j++) {
+        cdsq = (float)j - center;
+	cdsq = radsq - cdsq*cdsq;
+	if(cdsq > 0) 
+            xcord = (float)sqrt( (double)cdsq);
+	else
+	    xcord = 0;
+        ilow[j]  = (int)(center - xcord) + imin; 
+        ihigh[j] = (int)(center + xcord) - imin;
+	inum[j] = ihigh[j] - ilow[j] + 1;
+        }
+    for(i=0;i<INTERP_LEN_MAX;i++)
+	proint[i] = 0.;
+    }
+
+xioff = ((float)sc->numray - 1.)/2.;
+xooff = (float)INTERP_FCT*(sc->imgdim - 1)/2.;
+zoom_tot = (float)sc->imgdim/(float)sc->numray;
+i0 = xooff - INTERP_FCT*xioff*zoom_tot;
+if(i0 < 0) i0 = 0;
+for(i=0;i<INTERP_FCT*sc->imgdim;i++) {
+    xi = xioff + (((float)i - xooff)/(INTERP_FCT*zoom_tot) + sino_offset);
+    ii = (int)xi;
+    del = xi - (float)ii;
+    proint[i] = (1. - del)*prodat[ii] + del*prodat[ii+1];
+    }
+
+/* Backproject.	*/
+ctht =  INTERP_FCT*(float)cos((double)theta);
+stht =  INTERP_FCT*(float)sin((double)theta);
+
+/*cnst = center*(INTERP_FCT - ctht + stht) + ctht*(float)imin + INTERP_FCT;*/
+cnst = center*(INTERP_FCT - ctht + stht) + ctht*(float)imin;
+for(i=imin,joff=imin*sc->imgdim;i<sc->imgdim-imin;i++,joff+=sc->imgdim) {
+    kd = -(float)ilow[i]*stht + cnst;
+    for(j=ilow[i];j<ihigh[i];j++) {
+        image[j+joff] += proint[(int)kd];
+        kd -= stht;
+	}
+    cnst += ctht;
+    }
+
+}
+
+/***************************************/
+struct bed_pos *getbed(sinofile,sc,frame)
+/***************************************/
+
+/* Return structure containing info on bed positions.  This routine 
+assumes the same format for emission and transmission files. */
+
+char	*sinofile;	/* File containing emission data. */
+struct	scatter_tab *sc;
+
+{
+
+struct  bed_pos  *bed;
+struct  cube_header *chdr;
+Scan_subheader *shdr;
+
+int	i,pln,*pos,pln_per_scan,last_bed,vpln,stat;
+
+
+if((bed = (struct bed_pos *)malloc(sizeof(struct bed_pos))) == NULL) {
+    fprintf(stderr,"Malloc failed in get_bed.\n");
+    return;
+    }
+
+if(strstr(sinofile,".scn")) {
+    /* This is a CTI format file, only one bed position. */
+    if((shdr = getsbhdr(sinofile,1,frame,1,0,0)) == NULL) {
+        printf("Error in getsbhdr, plane 1 of %s.\n",sinofile);
+        exit(ERROR);
+        }
+    matclose(sinofile);
+    if((bed->pos = (float *)malloc(sizeof(float))) == NULL) {
+        fprintf(stderr,"Malloc failed in get_bed.\n");
+        return;
+        }
+    bed->min = 0;
+    bed->max = 0;
+    bed->npos = 1;
+    bed->pos[0] = 0;
+    bed->num_virtplns = MAX_PLANE;
+    bed->duration = .001*(float)shdr->frame_duration;
+    if((bed->phys_plane=(int *)
+			malloc(((bed->num_virtplns+1)*sizeof(int))))==NULL) {
+        fprintf(stderr,"Malloc failed in get_bed.\n");
+        return;
+        }
+    if((bed->pln_offset=(int *)
+			malloc(((bed->num_virtplns+1)*sizeof(int))))==NULL) {
+        fprintf(stderr,"Malloc failed in get_bed.\n");
+        return;
+        }
+    for(i=1;i<bed->num_virtplns+1;i++) {
+	bed->pln_offset[i] = 0;
+	bed->phys_plane[i] = i;
+  	}
+    }
+else if(strstr(sinofile,".cub")) {
+    /* Cube file can have arbitrary number of rings. */
+    chdr = GetCubeHeader(sinofile,0);
+    bed->duration = chdr->time;
+    if(chdr->zdim > 3*MAX_PLANE) {
+	bed->F3d = TRUE;	/* Too big for septa retracted scan. */
+	bed->npos = chdr->zdim/MAX_PLANE_3D;
+	bed->num_virtplns = bed->npos*MAX_PLANE_3D;
+	pln_per_scan = MAX_PLANE_3D;
+	}
+    else {
+	bed->F3d = FALSE;
+	bed->npos = chdr->zdim/MAX_PLANE;
+	bed->num_virtplns = bed->npos*MAX_PLANE;
+	pln_per_scan = MAX_PLANE;
+	}
+    if((bed->pos = (float *)malloc((bed->npos*sizeof(float)))) == NULL) {
+        fprintf(stderr,"Malloc failed in get_bed.\n");
+        return;
+        }
+    if((bed->phys_plane=(int *)
+			malloc(((bed->num_virtplns+1)*sizeof(int))))==NULL) {
+        fprintf(stderr,"Malloc failed in get_bed.\n");
+        return;
+        }
+    if((bed->pln_offset=(int *)
+			malloc(((bed->num_virtplns+1)*sizeof(int))))==NULL) {
+        fprintf(stderr,"Malloc failed in get_bed.\n");
+        return;
+        }
+    for(i=0;i<bed->num_virtplns;i++)
+	bed->pln_offset[i] = -1;
+    if((pos=(int *)malloc(((bed->num_virtplns+1)*sizeof(int))))==NULL) {
+        fprintf(stderr,"Malloc failed in get_bed.\n");
+        return;
+        }
+    bed->max = 0;
+    bed->min = 32768;
+    bed->npos = 0;
+    last_bed = -1;
+    for(pln=0;pln<chdr->zdim;pln++) {
+        chdr = GetCubeHeader(sinofile,pln);
+	if((int)chdr->position != last_bed) {
+	    last_bed = chdr->position;
+	    bed->pos[bed->npos] = chdr->position;
+	    ++bed->npos;
+	    }
+	if(chdr->position > bed->max)
+	    bed->max = chdr->position;
+   	if(chdr->position < bed->min)
+	    bed->min = chdr->position;
+	pos[pln] = bed->npos - 1;
+	}
+    for(pln=0;pln<chdr->zdim;pln++) {
+	vpln = 2*(bed->pos[pos[pln]]-bed->min)/RINGTHK + pln 
+					- pln_per_scan*(pln/pln_per_scan) + 1;
+	bed->phys_plane[vpln] = pln - pln_per_scan*(pln/pln_per_scan) + 1;
+	bed->pln_offset[vpln] = pln_per_scan*(pln/pln_per_scan);
+	}
+    for(i=1;i<bed->num_virtplns;i++) {
+	if(bed->pln_offset[i] < 0) {
+	    bed->num_virtplns = i-1;
+	    break;
+	    }
+	}
+    free(pos);
+    }
+else {
+    fprintf(stderr,"Invalid file format.\n");
+    exit(ERROR);
+    }
+
+return(bed);
+
+}
+
+/***************************************/
+void get_tran_support(tran_sino_dsamp,sc)
+/***************************************/
+
+/* Get support of transmission data. Results are approximate, and
+   are intended for use in determining ROIs that do not sample the
+   subject and for parameter determination in the multiple scatter
+   model. */
+
+float	**tran_sino_dsamp;	/* Transmission strip integrals. */
+struct scatter_tab *sc;
+
+{
+
+int	i,j,k,ioff,joff,iang,plane,ray,lb,ub,pad;
+
+float	*tmpsino,max,mean;
+
+tmpsino = (float *)malloc(sc->numray*sizeof(float));
+for(i=0;i<sc->numray;i++)
+    tmpsino[i] = 0.;
+sc->tran_sup = (int ***)malloc(sc->numpln*sizeof(int **));
+for(plane=0;plane<sc->numpln;plane++) {
+    sc->tran_sup[plane] = (int **)malloc(sc->numang*sizeof(int *));
+    sc->tran_sup[plane][0] = (int *)malloc(2*sc->numang*sizeof(int));
+    for(iang=1;iang<sc->numang;iang++)
+	sc->tran_sup[plane][iang] = sc->tran_sup[plane][iang-1] + 2;
+    }
+
+for(plane=1;plane<=sc->numpln;plane++) {
+    for(iang=0,ioff=0;iang<sc->numang;ioff+=sc->numray,iang++) {
+        /* First smooth transaxially with a boxcar filter. */
+        for(ray=1;ray<sc->numray-2;ray++)   
+	    tmpsino[ray] = (tran_sino_dsamp[plane][ioff+ray-1] + 
+			    tran_sino_dsamp[plane][ioff+ray]   + 
+			    tran_sino_dsamp[plane][ioff+ray-1])/3.;
+        max = 0.;
+        for(ray=1;ray<sc->numray-2;ray++) {
+	    if(tmpsino[ray] > max)
+		max = tmpsino[ray];
+	    }
+
+        /* Get approximate value by thresholding at percentage of max. */
+        for(ray=1;ray<sc->numray-2;ray++) {
+	    if(tmpsino[ray] > .1*max && 
+	       tmpsino[ray]>tmpsino[ray-1]&&tmpsino[ray]<tmpsino[ray+2]) {
+		lb = ray;
+		break;
+	    	}
+	    }
+	for(ray=sc->numray-3;ray>0;ray--) {
+	    if(tmpsino[ray] > .1*max && 
+	       tmpsino[ray]<tmpsino[ray-2]&&tmpsino[ray]>tmpsino[ray+1]) {
+		ub = ray;
+		break;
+	    	}
+	    }
+
+        /* Get better value by thresholding at percentage of average. */
+	for(mean=0,ray=lb;ray<=ub;ray++)
+	    mean += tmpsino[ray];
+	mean /= (float)(ub-lb+1);
+	pad = (NUMRAY_CTI-sc->numray)/2;
+        for(ray=2;ray<sc->numray-3;ray++) {
+	    if(tmpsino[ray] > .1*mean && 
+	       tmpsino[ray]>tmpsino[ray-1]&&tmpsino[ray]<tmpsino[ray+2]) {
+		sc->tran_sup[plane-1][iang][0] = ray + pad;
+		break;
+	    	}
+	    }
+	for(ray=sc->numray-2;ray>1;ray--) {
+	    if(tmpsino[ray] > .1*mean && 
+	       tmpsino[ray]<tmpsino[ray-2]&&tmpsino[ray]>tmpsino[ray+1]) {
+		sc->tran_sup[plane-1][iang][1] = ray + pad;
+		break;
+	    	}
+	    }
+	}
+    }
+
+free(tmpsino);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d53 1
+a53 1
+static char rcsid [] = "$Header$";
+@

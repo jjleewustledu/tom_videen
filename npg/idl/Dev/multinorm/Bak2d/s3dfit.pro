@@ -1,0 +1,85 @@
+;+
+; NAME:
+;	S3DFIT
+;
+; PURPOSE:
+;	Solve for n weights, wi, and 4 coefficients (a,b,c,d)
+;	given m basis points (xi,yi,zi) and the values of F at those points (val)
+;
+; CATEGORY:
+;	Surface fitting.
+;
+; CALLING SEQUENCE:
+;	Result = S3DFIT(basis, val)
+;
+; INPUTS:
+; 	Basis:	Array of m basis points (xi, yi, zi) 
+; 	Val:	Values of F at the basis points
+;
+; OUTPUT:
+;	Array of m+4 coefficients (wi for i=0,m-1 plus a,b,c,d)
+;
+; PROCEDURE:
+; 	Based on Wang, et al, SPIE 2001;4322:1411-1422.
+; 	V = vector of function values at the basis points
+; 	F = square array of Fi's evaluated at the basis points
+; 	W = vector of weighting coefficients for the basis functions, Fi
+;
+; MODIFICATION HISTORY:
+;	Sep 2002 - Tom Videen
+;-
+
+FUNCTION s3dfit, basis, val
+
+   on_error, 2
+   m = (size(basis))[1]     ; num of basis points
+   nv = (size(val))[1]     ; num of basis points
+   IF (nv NE m) THEN BEGIN
+       message,"ERROR [s3dfit]: number of basis points differs from values"
+       return, -1
+   ENDIF
+   ;n = m+4					; num of coefficients to solve
+   ;v = transpose([val, 0, 0, 0, 0])
+   n = m+3
+   v = transpose([val, 0, 0, 0])
+
+   const = 1.
+   f = dblarr(n,n)
+   FOR j=0,m-1 DO BEGIN
+      FOR i=0,m-1 DO BEGIN
+         ;f[i,j] = sqrt((basis[j,0]-basis[i,0])^2 + (basis[j,1]-basis[i,1])^2 + (basis[j,2]-basis[i,2])^2 + const^2)
+         f[i,j] = sqrt((basis[j,0]-basis[i,0])^2 + (basis[j,1]-basis[i,1])^2 + const^2)
+         f[m,j] = 1
+         f[m+1,j] = basis[j,0]
+         f[m+2,j] = basis[j,1]
+         ;f[m+3,j] = basis[j,2]
+         f[j,j] = 0.
+      ENDFOR
+   ENDFOR
+
+   f[0:m-1,m] = replicate(1.,m)
+   f[0:m-1,m+1] = basis[0:m-1,0]
+   f[0:m-1,m+2] = basis[0:m-1,1]
+   ;f[0:m-1,m+3] = basis[0:m-1,2]
+
+   ;f[m:m+3,m] = replicate(0.,4)
+   ;f[m:m+3,m+1] = replicate(0.,4)
+   ;f[m:m+3,m+2] = replicate(0.,4)
+   ;f[m:m+3,m+3] = replicate(0.,4)
+   f[m:m+2,m] = replicate(0.,3)
+   f[m:m+2,m+1] = replicate(0.,3)
+   f[m:m+2,m+2] = replicate(0.,3)
+
+;  v = f##w, therefore
+
+   ff = invert(f, status, /double)
+   IF (status NE 0) THEN BEGIN
+      print,format='("Matrix Inversion ERROR =",I2)',status
+      return, -1
+   ENDIF
+   w = ff##v
+   ;print,v
+   ;print,'  '
+   ;print,f##w
+   return, transpose(w)
+END

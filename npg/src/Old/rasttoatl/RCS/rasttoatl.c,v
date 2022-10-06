@@ -1,0 +1,209 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2000.02.14.14.15.52;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*______________________________________________________________________
+ *	rasttoatl.c
+ *
+ *	Converts the Sun raster file to the 16-bit format used
+ *	by view25d.
+ *
+ *	Author: Tom Yang
+ *	Date:	03/12/92
+ *
+ *	Information for Sun Raster Files
+ *
+ *	The format of a Sun raster file is as follows.  First, a struct
+ *	rasterfile.  Note the 32-bit magic number at the beginning; this
+ *	identifies the file type and lets you figure out whether you need
+ *	to do little-endian / big-endian byte-swapping or not.  (The PBMPLUS
+ *	implementation does not do byte-swapping; instead, it reads all
+ *	multi-byte values a byte at a time.)
+ *
+ *	After the struct is an optional colormap.  If ras_maptype is RMT_NONE,
+ *	no map is present; if it's RMT_EQUAL_RGB then the map consists of
+ *	three unsigned-char arrays ras_maplength long, one each for r g and b.
+ *	I don't know what RMT_RAW means.  Black and white bitmaps are stored
+ *	as ras_maptype == RMT_NONE and ras_depth == 1, with the bits stored
+ *	eight to a byte MSB first.
+ *
+ *	Finally comes the image data.  If ras_type is RT_OLD or RT_STANDARD,
+ *	the data is just plain old uncompressed bytes, padded out to a multiple
+ *	of 16 bits in each row.  If ras_type is RT_BYTE_ENCODED, a run-length
+ *	compression scheme is used: an escape-byte of 128 indicates a run;
+ *	the next byte is a count, and the one after that is the byte to be
+ *	replicated.  The one exception to this is if the count is 1; then
+ *	there is no third byte in the packet, it means to put a single 128
+ *	in the data stream.
+ _______________________________________________________________________*/
+
+
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+
+#define	ARGS_NUM	5
+#define	PERMS		0755
+#define	LINELEN		255
+#define	CENTERX		270
+#define	CENTERY		274
+#define	ROWLEN		540
+#define	COLLEN		690
+
+struct rasterfile {
+	long            ras_magic;		 /* A 32-bit magic number identifies the file type */
+#define	RAS_MAGIC	0x59a66a95
+	long            ras_width;		 /* image width */
+	long            ras_height;		 /* image height */
+	long            ras_depth;		 /* bits for a pixel */
+	long            ras_length;		 /* image size in bytes */
+	long            ras_type;		 /* raster image type */
+#define RT_OLD		0			 /* OLd raw pixrect image in 68000 byte order */
+#define RT_STANDARD	1			 /* Raw pixrect image in 68000 byte order */
+#define RT_BYTE_ENCODED	2			 /* Run-length compression of bytes */
+#define RT_FORMAT_RGB	3			 /* XRGB or RGB instead of XBGR or BGR */
+#define RT_FORMAT_TIFF	4			 /* tiff <-> standard rasterfile */
+#define RT_FORMAT_IFF	5			 /* iff (TAAC format) <-> standard rasterfile */
+#define RT_EXPERIMENTAL 0xffff			 /* Reserved for testing */
+	long            ras_maptype;
+#define RMT_NONE	0
+#define RMT_EQUAL_RGB	1
+#define RMT_RAW		2
+	long            ras_maplength;
+};
+
+char           *progname;
+
+usage ()
+{
+	fprintf (stderr, "usage: %s [-r <raster_file>] [-a <atlas_file>] [-help]\n", progname);
+	exit (1);
+}
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	FILE           *ifp = stdin;
+	int             fd = 2;
+	struct rasterfile header;
+	char           *temp_colormap;
+	char           *char_buffer;
+	short int      *atl_out;
+	char           *ras_name;
+	char           *atl_name;
+	int             rows, cols, depth, row;
+	register int    i;
+	register int    size;
+
+	progname = argv[0];
+
+	if (argc != ARGS_NUM)
+		usage ();
+
+	for (i = 1; i < argc; i++) {
+		if (strcmp (argv[i], "-r") == 0) {
+			if (++i >= argc)
+				usage ();
+			ras_name = argv[i];
+			continue;
+		}
+		if (strcmp (argv[i], "-a") == 0) {
+			if (++i >= argc)
+				usage ();
+			atl_name = argv[i];
+			continue;
+		}
+		usage ();
+	}
+
+	ifp = fopen (ras_name, "rb");
+
+	/*
+	 * Read in the rasterfile. First the header.
+	 */
+	if (fread (&header, sizeof (header), 1, ifp) != 1)
+		printf (stderr, "unable to read in rasterfile header\n");
+
+	cols = header.ras_width;
+	rows = header.ras_height;
+	depth = header.ras_depth;
+
+	if (cols <= 0)
+		fprintf (stderr, "invalid cols: %d", cols);
+	if (rows <= 0)
+		fprintf (stderr, "invalid rows: %d", rows);
+
+	/*
+	 * If there is a color map, read it.
+	 */
+	if (header.ras_maplength != 0 && header.ras_maptype == RMT_EQUAL_RGB) {
+		temp_colormap = (char *) malloc (header.ras_maplength);
+
+		if (fread (temp_colormap, header.ras_maplength, 1, ifp) != 1)
+			printf (stderr, "unable to read in rasterfile colormap\n");
+
+		free (temp_colormap);
+	}
+
+	/*
+	 * Read in the image data and convert all the 8-bit pixels to 16-bit..
+	 */
+	if (header.ras_type == RT_STANDARD && depth == 8) {
+
+		/*
+		 * Read in image data.
+		 */
+		size = cols * rows;
+		char_buffer = (char *) malloc (size);
+		if (fread (char_buffer, size, 1, ifp) != 1)
+			printf (stderr, "unable to read in rasterfile data\n");
+
+		/*
+		 * Convert image data.
+		 */
+		atl_out = (short *) malloc (size * sizeof (short));
+		for (i = 0; i < size; i++)
+			atl_out[i] = (short) char_buffer[i];
+
+		free (char_buffer);
+
+		/*
+		 * Clear the 4 refrence points.
+		 */
+		atl_out[0 * ROWLEN + CENTERX] = 0;
+
+		atl_out[CENTERY * ROWLEN + 0] = 0;
+
+		atl_out[CENTERY * ROWLEN + ROWLEN - 1] = 0;
+
+		atl_out[(COLLEN - 1) * ROWLEN + CENTERX] = 0;
+
+		fd = open (atl_name, O_WRONLY | O_CREAT, PERMS);
+		i = write (fd, atl_out, size * sizeof (short));
+
+		if (i < size * sizeof (short))
+			printf ("Error: Only %d bytes are written.\n", i);
+
+		free (atl_out);
+	}
+}
+@

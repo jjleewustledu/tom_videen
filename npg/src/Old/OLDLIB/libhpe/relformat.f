@@ -1,0 +1,58 @@
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  relformat.f
+C
+C  This procedure formats a real no. to a specified field to
+C     a string.
+C
+C  Variables:
+C     R = real number;
+C     LLEN = length of the field (character spaces);
+C     NUMSTR = output string.
+C
+C  Subroutine of FIELDS.LIB
+C
+C  Tom Yang -- 17-Oct-91
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+      SUBROUTINE RELFORMT(R,LLEN,NUMSTR)
+C
+      INTEGER*4    LLEN
+      REAL         R
+      CHARACTER*80 NUMSTR
+C
+      IF (LLEN.EQ.2) THEN
+        WRITE (NUMSTR,8202) R
+      ELSE IF (LLEN.EQ.3) THEN
+        WRITE (NUMSTR,8203) R
+      ELSE IF (LLEN.EQ.4) THEN
+        WRITE (NUMSTR,8204) R
+      ELSE IF (LLEN.EQ.5) THEN
+        WRITE (NUMSTR,8205) R
+      ELSE IF (LLEN.EQ.6) THEN
+        WRITE (NUMSTR,8206) R
+      ELSE IF (LLEN.EQ.7) THEN
+        WRITE (NUMSTR,8207) R
+      ELSE IF (LLEN.EQ.8) THEN
+        WRITE (NUMSTR,8208) R
+      ELSE IF (LLEN.EQ.9) THEN
+        WRITE (NUMSTR,8209) R
+      ELSE IF (LLEN.EQ.10) THEN
+        WRITE (NUMSTR,8210) R
+      ELSE
+        WRITE (NUMSTR,*) R 
+      END IF
+C
+      RETURN
+8100  FORMAT(A)
+8202  FORMAT(F2.0)
+8203  FORMAT(F3.0)
+8204  FORMAT(F4.0)
+8205  FORMAT(F5.0)
+8206  FORMAT(F6.0)
+8207  FORMAT(F7.0)
+8208  FORMAT(F8.0)
+8209  FORMAT(F9.0)
+8210  FORMAT(F10.0)
+      END

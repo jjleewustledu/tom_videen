@@ -1,0 +1,1397 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	96.03.12.22.43.12;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.01.03.17.32.31;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.11.28.20.11.33;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@/*  $Id: interfile.c,v 1.2 1996/01/03 17:32:31 tom Exp tom $
+    $Log: interfile.c,v $
+ * Revision 1.2  1996/01/03  17:32:31  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1995/11/28  20:11:33  tom
+ * Initial revision
+ *
+ */
+/* =============================================================================
+ *  Module:         interfile.c
+ *  Date:           Nov-95
+ *  Author:         John Ollinger
+ *  Description:    Routines for Interfile image format I/O
+ *	Functions:
+ *		getsbhdr_if	-	Read subheader
+ *		getmhdr_if	-	Read main header
+ *		putsbhdr_if	-	Write subheader
+ *		putmhdr_if	-	Write main header
+ *		wrimg7		-	Write image
+ *		rdimg7		-	Read image
+ * =============================================================================
+ */
+#ifndef lint
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/libimg/RCS/interfile.c,v 1.2 1996/01/03 17:32:31 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <interfile.h>
+#include <imagio.h>
+
+#define MAX_FILES 50
+#define MAX_LINE 200
+#define TRUE 1
+#define FALSE 0
+#define NUM_KEYS 30
+#define NUM_MHKEYS (NUM_KEYS - 9)
+
+void            close_if (), free_ifmh (), free_ifh ();
+SubHeader_if   *getsbhdr_if ();
+MainHeader_if  *getmhdr_if ();
+IFheader       *get_ifh ();
+
+FILE           *fp_list[MAX_FILES] =
+					{NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+char            file_list[MAX_FILES][MAXFNAME];
+char            hdr_list[MAX_FILES][MAXFNAME];
+char            mode_list[MAX_FILES][4];	 /* Access modes of opened files. */
+IFheader       *ifh_list[MAX_FILES] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+
+FILE           *getfp ();
+FILE           *write_fp ();
+char           *header_file ();
+void            put_ifh ();
+
+static char    *key[NUM_KEYS] =
+{"INTERFILE",
+	"originating system",
+	"number of dimensions",
+	"matrix size [1]",
+	"matrix size [2]",
+	"matrix size [3]",
+	"matrix size [4]",
+	"scaling factor (mm/pixel) [1]",
+	"scaling factor (mm/pixel) [2]",
+	"scaling factor (mm/pixel) [3]",
+	"number of bytes per pixel",
+	"name of data file",
+	"patient ID",
+	"study date",
+	"number format",
+	"volume scale factor",
+	"bed elevation",
+	"number of bed positions",
+	"initial bed position",
+	"bed offset",
+	"frame number",
+	"frame starting time",
+	"frame duration",
+	"plane number",
+	"storage scale factor",
+	"number of trues",
+	"number of randoms",
+	"number of multiples",
+	"deadtime correction factor",
+"user defined comment"};
+
+
+/* =============================================================================
+ *	Function:		gethdr_if
+ *	Description:	Get Interfile header.
+ * =============================================================================
+ */
+IFheader       *gethdr_if (filnam)
+	char           *filnam;
+
+{
+	FILE           *fp;
+	char            line[MAX_LINE], number[20], *string, *getstr (), *hdrfil;
+	int             i, bytes_pix, plane, frame, bed = 0;
+	IFheader       *ifh;
+
+	ifh = (IFheader *) malloc (sizeof (IFheader));
+	ifh->mh = (MainHeader_if *) malloc (sizeof (MainHeader_if));
+	ifh->mh->study_date = NULL;
+	ifh->mh->patient_id = NULL;
+	ifh->mh->data_file = NULL;
+	ifh->sh = NULL;
+
+	hdrfil = header_file (filnam);
+	if (filnam != NULL) {
+		ifh->filnam = (char *) malloc (1 + strlen (hdrfil));
+		strcpy (ifh->filnam, hdrfil);
+	}
+	put_ifh (hdrfil, ifh);
+
+	if ((fp = getfp (hdrfil, "r")) == NULL)
+		return (NULL);
+	if (fseek (fp, (long) 0, SEEK_SET) != NULL)
+		return (NULL);
+
+	if (fgets (line, MAX_LINE, fp) == NULL)
+		return (NULL);
+	else if (strstr (line, "INTERFILE") == NULL)
+			return (NULL);
+
+	plane = -1;
+	frame = -1;
+	ifh->mh->dim4 = 1;
+	while (fgets (line, 200, fp) != NULL) {
+		if (strstr (line, "originating system"))
+			ifh->mh->orig_system = atoi (getstr (line));
+		else if (strstr (line, "number of dimensions"))
+			ifh->mh->ndim = atoi (getstr (line));
+		else if (strstr (line, "matrix size [1]"))
+			ifh->mh->dim1 = atoi (getstr (line));
+		else if (strstr (line, "matrix size [2]"))
+			ifh->mh->dim2 = atoi (getstr (line));
+		else if (strstr (line, "matrix size [3]"))
+			ifh->mh->dim3 = atoi (getstr (line));
+		else if (strstr (line, "matrix size [4]")) {
+			ifh->mh->dim4 = atoi (getstr (line));
+			ifh->fh = (FrameHeader_if **)
+				malloc (ifh->mh->dim4 * sizeof (FrameHeader_if *));
+			ifh->sh = (SubHeader_if ***)
+				malloc (ifh->mh->dim4 * sizeof (SubHeader_if **));
+		} else if (strstr (line, "scaling factor (mm/pixel) [1]"))
+			sscanf (getstr (line), "%f", &ifh->mh->voxel_size_1);
+		else if (strstr (line, "scaling factor (mm/pixel) [2]"))
+			sscanf (getstr (line), "%f", &ifh->mh->voxel_size_2);
+		else if (strstr (line, "scaling factor (mm/pixel) [3]"))
+			sscanf (getstr (line), "%f", &ifh->mh->voxel_size_3);
+		else if (strstr (line, "volume scale factor"))
+			sscanf (getstr (line), "%f", &ifh->mh->scale_factor);
+		else if (strstr (line, "bed elevation"))
+			sscanf (getstr (line), "%f", &ifh->mh->bed_elevation);
+		else if (strstr (line, "initial bed position"))
+			sscanf (getstr (line), "%f", &ifh->mh->init_bed_pos);
+		else if (strstr (line, "number of bed positions"))
+			sscanf (getstr (line), "%d", &ifh->mh->nbed);
+		else if (strstr (line, "bed offset")) {
+			sscanf (getstr (line), "%f", &ifh->mh->bed_off[bed]);
+			++bed;
+		} else if (strstr (line, "name of data file")) {
+			string = getstr (line);
+			if (string != NULL) {
+				ifh->mh->data_file = (char *) malloc (1 + strlen (string));
+				strcpy (ifh->mh->data_file, string);
+			}
+		} else if (strstr (line, "patient ID")) {
+			string = getstr (line);
+			if (string != NULL) {
+				ifh->mh->patient_id = (char *) malloc (1 + strlen (string));
+				strcpy (ifh->mh->patient_id, string);
+			}
+		} else if (strstr (line, "study date")) {
+			string = getstr (line);
+			if (string != NULL) {
+				ifh->mh->study_date = (char *) malloc (1 + strlen (string));
+				strcpy (ifh->mh->study_date, string);
+			}
+		} else if (strstr (line, "number format")) {
+			string = getstr (line);
+			strcpy (number, string);
+		} else if (strstr (line, "number of bytes per pixel"))
+			bytes_pix = atoi (getstr (line));
+		else if (strstr (line, "frame number")) {
+			frame = atoi (getstr (line));
+			frame -= 1;
+			ifh->sh[frame] = (SubHeader_if **)
+				malloc (ifh->mh->dim3 * sizeof (SubHeader_if *));
+			ifh->fh[frame] = (FrameHeader_if *) malloc (sizeof (FrameHeader_if));
+			for (i = 0; i < ifh->mh->dim3; i++)
+				ifh->sh[frame][i] = NULL;
+		} else if (strstr (line, "frame starting time")) {
+			if (frame < 0)
+				return (NULL);
+			ifh->fh[frame]->starting_time = atoi (getstr (line));
+		} else if (strstr (line, "frame duration")) {
+			if (frame < 0)
+				return (NULL);
+			ifh->fh[frame]->duration = atoi (getstr (line));
+		} else if (strstr (line, "plane number")) {
+			plane = atoi (getstr (line));
+			plane -= 1;
+			ifh->sh[frame][plane] = (SubHeader_if *) malloc (sizeof (SubHeader_if));
+		} else if (strstr (line, "storage scale factor")) {
+			if (frame < 0)
+				return (NULL);
+			if (plane < 0)
+				return (NULL);
+			sscanf (getstr (line), "%g", &ifh->sh[frame][plane]->storage_sf);
+		} else if (strstr (line, "number of trues")) {
+			if (frame < 0)
+				return (NULL);
+			if (plane < 0)
+				return (NULL);
+			ifh->sh[frame][plane]->trues = atoi (getstr (line));
+		} else if (strstr (line, "number of randoms")) {
+			if (frame < 0)
+				return (NULL);
+			if (plane < 0)
+				return (NULL);
+			ifh->sh[frame][plane]->randoms = atoi (getstr (line));
+		} else if (strstr (line, "number of multiples")) {
+			if (frame < 0)
+				return (NULL);
+			if (plane < 0)
+				return (NULL);
+			ifh->sh[frame][plane]->multiples = atoi (getstr (line));
+		} else if (strstr (line, "deadtime correction factor")) {
+			if (frame < 0)
+				return (NULL);
+			if (plane < 0)
+				return (NULL);
+			sscanf (getstr (line), "%g", &ifh->sh[frame][plane]->deadtime_corr);
+		} else if (strstr (line, "user defined comment")) {
+			string = getstr (line);
+			if (string != NULL) {
+				ifh->sh[frame][plane]->comment = (char *) malloc (strlen (string));
+				strcpy (ifh->sh[frame][plane]->comment, string);
+			}
+		}
+	}
+
+	if (!strcmp (number, "signed integer") && bytes_pix == 1)
+		ifh->mh->number_format = BYTE_IF;
+	if (!strcmp (number, "signed integer") && bytes_pix == 2)
+		ifh->mh->number_format = SHORT_IF;
+	else if (!strcmp (number, "float") && bytes_pix == 4)
+		ifh->mh->number_format = FLOAT_IF;
+	else
+		ifh->mh->number_format = UNKNOWN;
+
+	if (ifh->sh == NULL) {
+		ifh->fh = (FrameHeader_if **)
+			malloc (ifh->mh->dim4 * sizeof (FrameHeader_if *));
+		ifh->sh = (SubHeader_if ***)
+			malloc (ifh->mh->dim4 * sizeof (SubHeader_if **));
+		ifh->sh[0] = (SubHeader_if **) malloc (ifh->mh->dim3 * sizeof (SubHeader_if *));
+		for (i = 0; i < ifh->mh->dim3; i++)
+			ifh->sh[0][i] = NULL;
+		ifh->fh[0] = (FrameHeader_if *) malloc (sizeof (FrameHeader_if));
+	}
+	for (frame = 0; frame < ifh->mh->dim4; frame++) {
+		for (plane = 0; plane < ifh->mh->dim3; plane++) {
+			if (ifh->sh[frame][plane] == NULL)
+				ifh->sh[frame][plane] = (SubHeader_if *) malloc (sizeof (SubHeader_if));
+			ifh->sh[frame][plane]->voxel_size_1 = ifh->mh->voxel_size_1;
+			ifh->sh[frame][plane]->voxel_size_2 = ifh->mh->voxel_size_2;
+			ifh->sh[frame][plane]->voxel_size_3 = ifh->mh->voxel_size_3;
+			ifh->sh[frame][plane]->dim1 = ifh->mh->dim1;
+			ifh->sh[frame][plane]->dim2 = ifh->mh->dim2;
+			ifh->sh[frame][plane]->dim3 = ifh->mh->dim3;
+			ifh->sh[frame][plane]->ndim = ifh->mh->ndim;
+			ifh->sh[frame][plane]->number_format = ifh->mh->number_format;
+			ifh->sh[frame][plane]->starting_time = ifh->fh[frame]->starting_time;
+			ifh->sh[frame][plane]->duration = ifh->fh[frame]->duration;
+		}
+	}
+	free (hdrfil);
+	return (ifh);
+}
+
+/* =============================================================================
+ *	Function:		getstr
+ *	Description:	Get line from Interfile header.
+ * =============================================================================
+ */
+char           *getstr (line)
+	char           *line;
+
+{
+	char           *ptr, *ptr1;
+
+	ptr = strstr (line, ":=");
+	ptr += 2;
+	ptr1 = strstr (line, "\n");
+	if (ptr1 != NULL)
+		*ptr1 = NULL;
+	while (ptr[0] == ' ')
+		++ptr;
+	return (ptr);
+}
+
+/* =============================================================================
+ *	Function:		getsbhdr_if
+ *	Description:	Get Interfile subheader.
+ * =============================================================================
+ */
+SubHeader_if   *getsbhdr_if (filnam, plane, frame)
+	char           *filnam;
+	int             plane, frame;
+
+{
+	SubHeader_if   *sh;
+	IFheader       *ifh;
+	char           *hdrfil;
+
+	hdrfil = header_file (filnam);
+	if ((ifh = get_ifh (hdrfil)) == NULL) {
+		if ((ifh = gethdr_if (hdrfil)) == NULL) {
+			fprintf (stderr, "Could not read header from %s in getsbhdr_if.\n", hdrfil);
+			return (NULL);
+		}
+		put_ifh (hdrfil, ifh);
+	}
+	sh = (SubHeader_if *) malloc (sizeof (SubHeader_if));
+	sh->dim1 = ifh->sh[frame - 1][plane - 1]->dim1;
+	sh->dim2 = ifh->sh[frame - 1][plane - 1]->dim2;
+	sh->dim3 = ifh->sh[frame - 1][plane - 1]->dim3;
+	sh->ndim = ifh->sh[frame - 1][plane - 1]->ndim;
+	sh->number_format = ifh->sh[frame - 1][plane - 1]->number_format;
+	sh->voxel_size_1 = ifh->sh[frame - 1][plane - 1]->voxel_size_1;
+	sh->voxel_size_2 = ifh->sh[frame - 1][plane - 1]->voxel_size_2;
+	sh->voxel_size_3 = ifh->sh[frame - 1][plane - 1]->voxel_size_3;
+	sh->storage_sf = ifh->sh[frame - 1][plane - 1]->storage_sf;
+	sh->deadtime_corr = ifh->sh[frame - 1][plane - 1]->deadtime_corr;
+	sh->trues = ifh->sh[frame - 1][plane - 1]->trues;
+	sh->randoms = ifh->sh[frame - 1][plane - 1]->randoms;
+	sh->multiples = ifh->sh[frame - 1][plane - 1]->multiples;
+	sh->starting_time = ifh->fh[frame - 1]->starting_time;
+	sh->duration = ifh->fh[frame - 1]->duration;
+	if (ifh->sh[frame][plane]->comment != NULL) {
+		sh->comment = (char *) malloc (strlen (ifh->sh[frame][plane]->comment));
+		strcpy (sh->comment, ifh->sh[frame][plane]->comment);
+	}
+	free (hdrfil);
+	return (sh);
+}
+
+/* =============================================================================
+ *	Function:		putmhdr_if
+ *	Description:	Write Interfile main header
+ * =============================================================================
+ */
+int             putmhdr_if (mh, filnam_in)
+	MainHeader_if  *mh;
+	char           *filnam_in;
+
+{
+	IFheader       *ifh;
+	FILE           *fpr, *fpw;
+	char            string[MAX_LINE], *hdrfil, *file[2000];
+	int             i, frm, pln, ikey, key_written[NUM_KEYS], bed, line, num_lines;
+
+	for (i = 0; i < NUM_KEYS; i++)
+		key_written[i] = 0;
+
+	hdrfil = header_file (filnam_in);
+	ifh = get_ifh (hdrfil);
+
+	if (ifh == NULL) {
+		ifh = (IFheader *) malloc (sizeof (IFheader));
+		ifh->mh = (MainHeader_if *) malloc (sizeof (MainHeader_if));
+		ifh->sh = (SubHeader_if ***) malloc (mh->dim4 * sizeof (SubHeader_if **));
+		for (frm = 0; frm < mh->dim4; frm++) {
+			ifh->sh[frm] = (SubHeader_if **) malloc (mh->dim3 * sizeof (SubHeader_if *));
+			for (pln = 0; pln < mh->dim3; pln++)
+				ifh->sh[frm][pln] = (SubHeader_if *) malloc (sizeof (SubHeader_if));
+		}
+		ifh->fh = (FrameHeader_if **) malloc (sizeof (FrameHeader_if *));
+		for (frm = 0; frm < mh->dim4; frm++)
+			ifh->fh[frm] = (FrameHeader_if *) malloc (sizeof (FrameHeader_if));
+	} else {
+		free (ifh->mh->data_file);
+		free (ifh->mh->patient_id);
+		free (ifh->mh->study_date);
+	}
+	if (mh->data_file != NULL) {
+		ifh->mh->data_file = (char *) malloc (1 + strlen (mh->data_file));
+		strcpy (ifh->mh->data_file, mh->data_file);
+	}
+	if (mh->patient_id != NULL) {
+		ifh->mh->patient_id = (char *) malloc (1 + strlen (mh->patient_id));
+		strcpy (ifh->mh->patient_id, mh->patient_id);
+	}
+	if (mh->study_date != NULL) {
+		ifh->mh->study_date = (char *) malloc (1 + strlen (mh->study_date));
+		strcpy (ifh->mh->study_date, mh->study_date);
+	}
+	ifh->mh->file_type = mh->file_type;
+	ifh->mh->number_format = mh->number_format;
+	ifh->mh->ndim = mh->ndim;
+	ifh->mh->dim1 = mh->dim1;
+	ifh->mh->dim2 = mh->dim2;
+	ifh->mh->dim3 = mh->dim3;
+	ifh->mh->dim4 = mh->dim4;
+	ifh->mh->orig_system = mh->orig_system;
+	ifh->mh->voxel_size_1 = mh->voxel_size_1;
+	ifh->mh->voxel_size_2 = mh->voxel_size_2;
+	ifh->mh->voxel_size_3 = mh->voxel_size_3;
+	ifh->mh->scale_factor = mh->scale_factor;
+	ifh->mh->nbed = mh->nbed;
+	ifh->mh->bed_elevation = mh->bed_elevation;
+	ifh->mh->init_bed_pos = mh->init_bed_pos;
+	for (i = 0; i < 16; i++)
+		ifh->mh->bed_off[i] = mh->bed_off[i];
+
+	num_lines = 0;
+	if ((fpr = fopen (hdrfil, "r")) != NULL) {
+		while (fgets (string, 200, fpr) != NULL) {
+			if (string != NULL) {
+				file[num_lines] = (char *) malloc (1 + strlen (string));
+				strcpy (file[num_lines], string);
+			}
+			++num_lines;
+		}
+		fclose (fpr);
+	}
+	if ((fpw = fopen (hdrfil, "w")) == NULL)
+		return (NULL);
+	put_ifh (hdrfil, ifh);
+
+	bed = 0;
+	for (line = 0; line < num_lines; line++) {
+		for (ikey = 0; ikey < NUM_KEYS; ikey++) {
+			if (strstr (file[line], key[ikey])) {	/* Line is in my header definition */
+				break;
+			}
+		}
+		if (ikey == NUM_KEYS)		 /* Line is not in my header definition */
+			fprintf (fpw, "%s", file[line]);
+		else if (key_written[ikey] == 0) {	/* Update value of line and write it out. */
+			key_written[ikey] = 1;
+			write_key (fpw, file[line], ifh, bed);
+			if (!strcmp (key[ikey], "bed offset"))
+				++bed;
+		}
+		free (file[line]);
+	}
+
+	for (ikey = 0; ikey < NUM_MHKEYS; ikey++) {
+		if (key_written[ikey] == 0)
+			if (!strcmp (key[ikey], "bed offset")) {
+				++bed;
+				write_key (fpw, key[ikey], ifh, bed);
+			} else
+				write_key (fpw, key[ikey], ifh, bed);
+	}
+
+	fflush (fpw);
+	fclose (fpw);
+	free (hdrfil);
+	return (NULL);
+}
+
+/* =============================================================================
+ *	Function:		write_key
+ *	Description:	Write Interfile key.
+ * =============================================================================
+ */
+int             write_key (fpw, line, ifh, bed)
+	FILE           *fpw;
+	char           *line;
+	IFheader       *ifh;
+	int             bed;
+
+{
+	if (strstr (line, "originating system"))
+		fprintf (fpw, "originating system := %d\n", ifh->mh->orig_system);
+	else if (strstr (line, "INTERFILE"))
+		fprintf (fpw, "INTERFILE :=\n");
+	else if (strstr (line, "number of dimensions"))
+		fprintf (fpw, "number of dimensions:= %d\n", ifh->mh->ndim);
+	else if (strstr (line, "matrix size [1]"))
+		fprintf (fpw, "matrix size [1] := %d\n", ifh->mh->dim1);
+	else if (strstr (line, "matrix size [2]"))
+		fprintf (fpw, "matrix size [2] := %d\n", ifh->mh->dim2);
+	else if (strstr (line, "matrix size [3]"))
+		fprintf (fpw, "matrix size [3] := %d\n", ifh->mh->dim3);
+	else if (strstr (line, "matrix size [4]"))
+		fprintf (fpw, "matrix size [4] := %d\n", ifh->mh->dim4);
+	else if (strstr (line, "scaling factor (mm/pixel) [1]"))
+		fprintf (fpw, "scaling factor (mm/pixel) [1] := %f\n", ifh->mh->voxel_size_1);
+	else if (strstr (line, "scaling factor (mm/pixel) [2]"))
+		fprintf (fpw, "scaling factor (mm/pixel) [2] := %f\n", ifh->mh->voxel_size_2);
+	else if (strstr (line, "scaling factor (mm/pixel) [3]"))
+		fprintf (fpw, "scaling factor (mm/pixel) [3] := %f\n", ifh->mh->voxel_size_3);
+	else if (strstr (line, "volume scale factor"))
+		fprintf (fpw, "volume scale factor := %f\n", ifh->mh->scale_factor);
+	else if (strstr (line, "name of data file"))
+		fprintf (fpw, "name of data file := %s\n", ifh->mh->data_file);
+	else if (strstr (line, "patient ID"))
+		fprintf (fpw, "patient ID := %s\n", ifh->mh->patient_id);
+	else if (strstr (line, "study date"))
+		fprintf (fpw, "study date := %s\n", ifh->mh->study_date);
+	else if (strstr (line, "number of bed positions"))
+		fprintf (fpw, "number of bed positions := %d\n", ifh->mh->nbed);
+	else if (strstr (line, "bed elevation"))
+		fprintf (fpw, "bed elevation := %f\n", ifh->mh->bed_elevation);
+	else if (strstr (line, "initial bed position"))
+		fprintf (fpw, "initial bed position := %f\n", ifh->mh->init_bed_pos);
+	else if (strstr (line, "bed offset"))
+		fprintf (fpw, "bed offset := %f\n", ifh->mh->bed_off[bed]);
+	else if (strstr (line, "number format")) {
+		if (ifh->mh->number_format == BYTE_IF) {
+			fprintf (fpw, "number format := signed integer\n");
+			fprintf (fpw, "number of bytes per pixel := 1\n");
+		} else if (ifh->mh->number_format == SHORT_IF) {
+			fprintf (fpw, "number format := signed integer\n");
+			fprintf (fpw, "number of bytes per pixel := 2\n");
+		} else if (ifh->mh->number_format == FLOAT_IF) {
+			fprintf (fpw, "number format := float\n");
+			fprintf (fpw, "number of bytes per pixel := 4\n");
+		} else {
+			fprintf (stderr, "Invalid number format specified in write_key.\n");
+			return (ERROR);
+		}
+	} else if (strstr (line, "number of bytes per pixel")) {
+	} else if (strstr (line, "frame number")) {
+	} else if (strstr (line, "frame starting time")) {
+	} else if (strstr (line, "frame duration")) {
+	} else if (strstr (line, "plane number")) {
+	} else if (strstr (line, "storage scale factor")) {
+	} else if (strstr (line, "number of trues")) {
+	} else if (strstr (line, "number of randoms")) {
+	} else if (strstr (line, "number of multiples")) {
+	} else if (strstr (line, "deadtime correction factor")) {
+	} else if (strstr (line, "user defined comment")) {
+	} else {
+		fprintf (stderr, "Could not match key string in write_key.\n");
+		return (ERROR);
+	}
+	return (OK);
+}
+
+/* =============================================================================
+ *	Function:		putsbhdr_if
+ *	Description:	Write Interfile subheader.
+ * =============================================================================
+ */
+int             putsbhdr_if (sh, filnam_in, plane, frame)
+	SubHeader_if   *sh;
+	char           *filnam_in;
+	int             plane, frame;
+
+{
+	IFheader       *ifh;
+	FILE           *fpr;
+	char            line[MAX_LINE], *hdrfil;
+	int             last_frame = 0, pln;
+
+	hdrfil = header_file (filnam_in);
+	ifh = get_ifh (hdrfil);
+
+	if (ifh == NULL) {
+		fprintf (stderr, "Main header must be written before subheader.\n");
+		return (ERROR);
+	}
+	if (frame > ifh->mh->dim4) {
+		fprintf (stderr, "Frame number inconsistent with number of frames in main header in putsbhdr_if, %s\n", hdrfil);
+		return (ERROR);
+	}
+	if (plane > ifh->mh->dim3) {
+		fprintf (stderr, "Plane number inconsistent with number of planes in main header in putsbhdr_if, %s\n", hdrfil);
+		return (ERROR);
+	}
+	if (ifh->sh[frame - 1][plane - 1] == NULL)
+		ifh->sh[frame - 1][plane - 1] = (SubHeader_if *) malloc (sizeof (SubHeader_if));
+	ifh->sh[frame - 1][plane - 1]->dim1 = sh->dim1;
+	ifh->sh[frame - 1][plane - 1]->dim2 = sh->dim2;
+	ifh->sh[frame - 1][plane - 1]->voxel_size_1 = sh->voxel_size_1;
+	ifh->sh[frame - 1][plane - 1]->voxel_size_2 = sh->voxel_size_2;
+	ifh->sh[frame - 1][plane - 1]->storage_sf = sh->storage_sf;
+	ifh->sh[frame - 1][plane - 1]->deadtime_corr = sh->deadtime_corr;
+	ifh->sh[frame - 1][plane - 1]->trues = sh->trues;
+	ifh->sh[frame - 1][plane - 1]->randoms = sh->randoms;
+	ifh->sh[frame - 1][plane - 1]->multiples = sh->multiples;
+	if (sh->comment != NULL) {
+		ifh->sh[frame - 1][plane - 1]->comment = (char *) malloc (strlen (sh->comment));
+		strcpy (ifh->sh[frame - 1][plane - 1]->comment, sh->comment);
+	}
+	if (ifh->fh[frame - 1] == NULL)
+		ifh->fh[frame - 1] = (FrameHeader_if *) malloc (sizeof (FrameHeader_if));
+	ifh->fh[frame - 1]->starting_time = sh->starting_time;
+	ifh->fh[frame - 1]->duration = sh->duration;
+
+	if ((fpr = fopen (hdrfil, "r+")) == NULL)
+		return (ERROR);
+	while (fgets (line, 200, fpr) != NULL) {
+		if (strstr (line, "frame number"))
+			last_frame = atoi (getstr (line));
+		else if (strstr (line, "plane number"))
+			pln = atoi (getstr (line));
+		if (last_frame == frame && pln == plane) {
+			fprintf (fpr, "storage scale factor := %g\n", ifh->sh[frame - 1][plane - 1]->storage_sf);
+			fprintf (fpr, "number of trues := %d\n", ifh->sh[frame - 1][plane - 1]->trues);
+			fprintf (fpr, "number of randoms := %d\n", ifh->sh[frame - 1][plane - 1]->randoms);
+			fprintf (fpr, "number of multiples := %d\n", ifh->sh[frame - 1][plane - 1]->multiples);
+			fprintf (fpr, "deadtime correction factor := %f\n", ifh->sh[frame - 1][plane - 1]->deadtime_corr);
+			fprintf (fpr, "user defined comment := %f\n", ifh->sh[frame - 1][plane - 1]->comment);
+			fflush (fpr);
+			fclose (fpr);
+			free (hdrfil);
+			return (NULL);
+		}
+	}
+
+	if (frame > last_frame) {
+		fprintf (fpr, "frame number := %d\n", frame);
+		fprintf (fpr, "frame duration := %d\n", ifh->fh[frame - 1]->duration);
+		fprintf (fpr, "frame starting time := %d\n", ifh->fh[frame - 1]->starting_time);
+	} else if (frame < last_frame) {
+		fprintf (stderr, "Frames written out of order, putsbhdr_if aborted.\n");
+		return (ERROR);
+	}
+	fprintf (fpr, "plane number := %d\n", plane);
+	fprintf (fpr, "storage scale factor := %g\n", ifh->sh[frame - 1][plane - 1]->storage_sf);
+	fprintf (fpr, "number of trues := %d\n", ifh->sh[frame - 1][plane - 1]->trues);
+	fprintf (fpr, "number of randoms := %d\n", ifh->sh[frame - 1][plane - 1]->randoms);
+	fprintf (fpr, "number of multiples := %d\n", ifh->sh[frame - 1][plane - 1]->multiples);
+	fprintf (fpr, "deadtime correction factor := %f\n", ifh->sh[frame - 1][plane - 1]->deadtime_corr);
+	fprintf (fpr, "user defined comment := %f\n", ifh->sh[frame - 1][plane - 1]->comment);
+
+	fflush (fpr);
+	fclose (fpr);
+	free (hdrfil);
+	return (NULL);
+}
+
+/* =============================================================================
+ *	Function:		header_file
+ *	Description:	Get Interfile header filename.
+ * =============================================================================
+ */
+char           *header_file (filnam)
+	char           *filnam;
+
+{
+	char           *ptr, *hdrfil;
+
+	hdrfil = (char *) malloc (1 + strlen (filnam));
+	strcpy (hdrfil, filnam);
+	ptr = strrchr (hdrfil, '.');
+	if (ptr != NULL)
+		*ptr = NULL;
+	strcat (hdrfil, ".ifh");
+	return (hdrfil);
+}
+
+/* =============================================================================
+ *	Function:		getmhdr_if
+ *	Description:	Get Interfile mainheader.
+ * =============================================================================
+ */
+MainHeader_if  *getmhdr_if (filnam)
+	char           *filnam;
+
+{
+	int             i;
+	char           *hdrfil;
+	MainHeader_if  *mh;
+	IFheader       *ifh;
+
+	hdrfil = header_file (filnam);
+	if ((ifh = get_ifh (hdrfil)) == NULL) {
+		if ((ifh = gethdr_if (hdrfil)) == NULL) {
+			fprintf (stderr, "Could not read header from %s in getmhdr_if.\n", hdrfil);
+			return (NULL);
+		}
+		put_ifh (hdrfil, ifh);
+	}
+	mh = (MainHeader_if *) malloc (sizeof (MainHeader_if));
+	if (ifh->mh->data_file != NULL) {
+		mh->data_file = (char *) malloc (1 + strlen (ifh->mh->data_file));
+		strcpy (mh->data_file, ifh->mh->data_file);
+	} else
+		mh->data_file = NULL;
+	if (ifh->mh->patient_id != NULL) {
+		mh->patient_id = (char *) malloc (1 + strlen (ifh->mh->patient_id));
+		strcpy (mh->patient_id, ifh->mh->patient_id);
+	} else
+		mh->patient_id = NULL;
+	if (ifh->mh->study_date != NULL) {
+		mh->study_date = (char *) malloc (1 + strlen (ifh->mh->study_date));
+		strcpy (mh->study_date, ifh->mh->study_date);
+	} else
+		mh->study_date = NULL;
+
+	mh->file_type = ifh->mh->file_type;
+	mh->number_format = ifh->mh->number_format;
+	mh->ndim = ifh->mh->ndim;
+	mh->dim1 = ifh->mh->dim1;
+	mh->dim2 = ifh->mh->dim2;
+	mh->dim3 = ifh->mh->dim3;
+	mh->dim4 = ifh->mh->dim4;
+	mh->orig_system = ifh->mh->orig_system;
+	mh->voxel_size_1 = ifh->mh->voxel_size_1;
+	mh->voxel_size_2 = ifh->mh->voxel_size_2;
+	mh->voxel_size_3 = ifh->mh->voxel_size_3;
+	mh->nbed = ifh->mh->nbed;
+	mh->bed_elevation = ifh->mh->bed_elevation;
+	mh->init_bed_pos = ifh->mh->init_bed_pos;
+	for (i = 0; i < 16; i++)
+		mh->bed_off[i] = ifh->mh->bed_off[i];
+
+	free (hdrfil);
+	return (mh);
+
+}
+
+/* =============================================================================
+ *	Function:		free_ifh
+ *	Description:	Free Interfile header.
+ * =============================================================================
+ */
+void            free_ifh (ifh)
+	IFheader       *ifh;
+
+{
+	int             i, j;
+
+	for (i = 0; i < ifh->mh->dim4; i++) {
+		free (ifh->fh[i]);
+		for (j = 0; j < ifh->mh->dim3; j++)
+			free (ifh->sh[i][j]);
+	}
+	free_ifmh (ifh->mh);
+	free (ifh);
+}
+
+/* =============================================================================
+ *	Function:		free_ifmh
+ *	Description:	Get Interfile mainheader.
+ * =============================================================================
+ */
+void            free_ifmh (mh)
+	MainHeader_if  *mh;
+
+{
+	free (mh->data_file);
+	free (mh->patient_id);
+	free (mh->study_date);
+	free (mh);
+}
+
+/* =============================================================================
+ *	Function:		rdimg_if
+ *	Description:	Read Interfile image.
+ * =============================================================================
+ */
+float          *rdimg_if (filnam, plane, frame)
+	char           *filnam;
+	int             plane, frame;
+
+{
+	MainHeader_if  *mh;
+	SubHeader_if   *sh;
+	FILE           *fp;
+	int             i, bytes_per_pix, count, pln1;
+	long            dskptr;
+	char           *bytimg, *hdrfil;
+	short          *shtimg;
+	float          *fltimg, scale_factor;
+
+	hdrfil = header_file (filnam);
+	if ((mh = getmhdr_if (filnam)) == NULL) {
+		fprintf (stderr, "Error reading mainheader from %s in rdimg.\n", filnam);
+		return (NULL);
+	}
+	if (plane <= 0)
+		pln1 = 1;
+	else
+		pln1 = plane;
+	if ((sh = getsbhdr_if (filnam, pln1, frame)) == NULL) {
+		fprintf (stderr, "Error reading subheader from %s in rdimg.\n", filnam);
+		return (NULL);
+	}
+	if (sh->storage_sf > 0)
+		scale_factor = sh->storage_sf;
+	else {
+		if (mh->scale_factor > 0)
+			scale_factor = mh->scale_factor;
+		else
+			scale_factor = 1;
+	}
+
+	if ((fp = getfp (mh->data_file, "r")) == NULL) {
+		fprintf (stderr, "Error opening %s in rdimg.\n", mh->data_file);
+		return (NULL);
+	}
+	if (plane > 0) {			 /* Read one plane at a time. */
+		dskptr = ((frame - 1) * mh->dim3 + (plane - 1)) * sh->dim1 * sh->dim2;
+		count = sh->dim1 * sh->dim2;
+	} else {				 /* Read entire volume. */
+		dskptr = (frame - 1) * mh->dim3 * sh->dim1 * sh->dim2;
+		count = sh->dim1 * sh->dim2 * mh->dim3;
+	}
+	if (mh->number_format == BYTE_IF)
+		bytes_per_pix = 1;
+	else if (mh->number_format == SHORT_IF)
+		bytes_per_pix = 2;
+	else if (mh->number_format == FLOAT_IF)
+		bytes_per_pix = 4;
+
+	dskptr *= bytes_per_pix;
+	if (fseek (fp, (long) dskptr, SEEK_SET) != NULL)
+		return (NULL);
+
+	fltimg = (float *) malloc (count * sizeof (float));
+	if (mh->number_format == BYTE_IF) {
+		bytimg = (char *) malloc (count * sizeof (char));
+		if (fread (bytimg, sizeof (char), count, fp) != count)
+			return (NULL);
+		for (i = 0; i < count; i++)
+			fltimg[i] = scale_factor * bytimg[i];
+		free (bytimg);
+	} else if (mh->number_format == SHORT_IF) {
+		shtimg = (short *) malloc (count * sizeof (short));
+		if (fread (shtimg, sizeof (short), count, fp) != count)
+			return (NULL);
+		for (i = 0; i < count; i++)
+			fltimg[i] = scale_factor * shtimg[i];
+		free (shtimg);
+	} else if (mh->number_format == FLOAT_IF) {
+		if (fread (fltimg, sizeof (float), count, fp) != count)
+			return (NULL);
+		for (i = 0; i < count; i++)
+			fltimg[i] *= scale_factor;
+		free (shtimg);
+	}
+	free_ifmh (mh);
+	free (sh);
+	free (hdrfil);
+	return (fltimg);
+}
+
+/* =============================================================================
+ *	Function:		wrimg_if
+ *	Description:	Write Interfile image.
+ * =============================================================================
+ */
+int             wrimg_if (filnam_in, image, mh, sh, plane, frame)
+	char           *filnam_in;
+	float          *image;
+	MainHeader_if  *mh;
+	SubHeader_if   *sh;
+	int             plane, frame;
+
+{
+	FILE           *fp;
+	int             i, count, stat, maxnum;
+	char           *hdrfil;
+	float           scl, min, max;
+	short          *shtimg;
+	char           *bytimg;
+
+	if (plane > 0)			 /* Write one plane at a time. */
+		count = sh->dim1 * sh->dim2;
+	else					 /* Write entire volume. */
+		count = sh->dim1 * sh->dim2 * mh->dim3;
+
+	if (mh->number_format == SHORT_IF || mh->number_format == BYTE_IF) {
+		if (mh->number_format == BYTE_IF)
+			maxnum = 127;
+		else
+			maxnum = 32767;
+		max = -1.e20;
+		min = 1.e20;
+		for (i = 0; i < count; i++) {
+			if (image[i] > max)
+				max = image[i];
+			if (image[i] < min)
+				min = image[i];
+		}
+		if (max > -min) {
+			scl = maxnum / max;
+			max = maxnum;
+			min = min * scl;
+		} else {
+			scl = -maxnum / min;
+			max = max * scl;
+			min = -maxnum;
+		}
+	}
+	sh->storage_sf = 1. / scl;
+	hdrfil = header_file (filnam_in);
+	mh->data_file = filnam_in;
+	if ((fp = getfp (mh->data_file, "r+")) == NULL) {
+		fprintf (stderr, "Error opening %s in rdimg.\n", mh->data_file);
+		return (ERROR);
+	}
+	if (plane > 0)
+		mh->scale_factor = 0.;		 /* Invalid value if scaled by plane. */
+	else
+		mh->scale_factor = scl;
+
+	if (plane <= 1 && frame == 1) {
+		mh->dim1 = sh->dim1;
+		mh->dim2 = sh->dim2;
+		mh->voxel_size_1 = sh->voxel_size_1;
+		mh->voxel_size_2 = sh->voxel_size_2;
+		if ((putmhdr_if (mh, hdrfil)) != NULL) {
+			fprintf (stderr, "Error writing main header to %s in wrimg.\n", mh->data_file);
+			return (ERROR);
+		}
+	}
+	if (plane > 0) {
+		if ((putsbhdr_if (sh, hdrfil, plane, frame)) != NULL) {
+			fprintf (stderr, "Error writing subheader to %s in wrimg.\n", mh->data_file);
+			return (ERROR);
+		}
+	}
+	if (mh->number_format == BYTE_IF) {
+		bytimg = (char *) malloc (count * sizeof (char));
+		for (i = 0; i < count; i++)
+			bytimg[i] = scl * image[i];
+		if ((stat = fwrite (bytimg, sizeof (char), count, fp)) != count) {
+			printf ("Error occurred during write in wrimg_if, status = %d\n", stat);
+			return (ERROR);
+		}
+		free (bytimg);
+	} else if (mh->number_format == SHORT_IF) {
+		shtimg = (short *) malloc (count * sizeof (short));
+		for (i = 0; i < count; i++)
+			shtimg[i] = scl * image[i];
+		if ((stat = fwrite (shtimg, sizeof (short), count, fp)) != count) {
+			printf ("Error occurred during write in wrimg_if, status = %d\n", stat);
+			return (ERROR);
+		}
+		free (shtimg);
+	} else if (mh->number_format == FLOAT_IF) {
+		if ((stat = fwrite (image, sizeof (float), count, fp)) != count) {
+			printf ("Error occurred during write in wrimg_if, status = %d\n", stat);
+			return (ERROR);
+		}
+	} else {
+		fprintf (stderr, "Unsupported data type in wrimg_if.\n");
+		return (ERROR);
+	}
+	free (hdrfil);
+	return (OK);
+}
+
+/* =============================================================================
+ *	Function:		write_fp
+ *	Description:	Get file pointer for file to be written.
+ * =============================================================================
+ */
+FILE           *write_fp (filnam, mode)
+	char           *filnam;
+	char           *mode;
+
+{
+	int             fn;
+	char            cmd[MAXFNAME];
+	FILE           *fp;
+
+	if (strstr (filnam, ".scn") && strstr (filnam, ".img") && strstr (filnam, ".t88")) {
+		fprintf (stderr, "Invalid CTI file name.\n");
+		return (NULL);
+	}
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list[fn])) {
+			if (!strcmp ("r", mode_list[fn])) {
+				/* FILE opened in read-only mode. */
+				fclose (fp_list[fn]);
+				fp_list[fn] = NULL;
+			} else
+				return (fp_list[fn]);
+		}
+	}
+
+/* FILE not open, assign it available slot. */
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list[fn] == NULL)
+			break;
+	}
+	if (fn == MAX_FILES) {
+		fprintf (stderr, "Maximum number of open files exceeded in getfd\n");
+		return (NULL);
+	}
+	if ((fp = fopen (filnam, "r")) != NULL) {/* FILE exists. */
+		if (!strcmp (mode, "w")) {
+			/* Delete the file if mode is write. */
+			fclose (fp);
+			sprintf (cmd, "rm %s\n", filnam);
+			system (cmd);
+			fprintf (stderr, "*** Deleted %s ***\n", filnam);
+		}
+	} else {
+		if (!strcmp (mode, "r+")) {
+			/* Can't open in mode r+ since it doesn't exist, change mode to w. */
+			mode = "w";
+		}
+	}
+
+	if ((fp_list[fn] = fopen (filnam, mode)) == NULL)
+		return (NULL);
+
+	strcpy (file_list[fn], filnam);
+	strcpy (mode_list[fn], mode);
+	return (fp_list[fn]);
+
+}
+
+/* =============================================================================
+ *	Function:		get_ifh
+ *	Description:	Get file pointer.
+ * =============================================================================
+ */
+IFheader       *get_ifh (filnam)
+	char           *filnam;
+
+{
+	int             fn;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, hdr_list[fn]))
+			break;
+	}
+	if (fn == MAX_FILES)
+		return (NULL);
+	else
+		return (ifh_list[fn]);
+}
+
+/* =============================================================================
+ *	Function:		put_ifh
+ *	Description:	Put file pointer.
+ * =============================================================================
+ */
+void            put_ifh (hdrfil, ifh)
+	char           *hdrfil;
+	IFheader       *ifh;
+
+{
+	int             fn;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (hdrfil, hdr_list[fn]))
+			break;
+	}
+
+	if (fn < MAX_FILES) {
+		if (ifh_list[fn] != ifh)
+			free_ifh (ifh);
+		ifh_list[fn] = ifh;
+	} else {
+		for (fn = 0; fn < MAX_FILES; fn++) {
+			if (ifh_list[fn] == NULL) {
+				ifh_list[fn] = ifh;
+				strcpy (hdr_list[fn], hdrfil);
+				break;
+			}
+		}
+	}
+
+}
+
+/* =============================================================================
+ *	Function:		getfp
+ *	Description:	Get file pointer.
+ * =============================================================================
+ */
+FILE           *getfp (filnam, mode)
+	char           *filnam, *mode;
+
+{
+	int             fn;
+	FILE           *fptest;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list[fn])) {
+			if (!strcmp (mode, mode_list[fn]))
+				return (fp_list[fn]);
+			if (!strcmp (mode, "r") && !strcmp (mode_list[fn], "r+"))
+				return (fp_list[fn]);
+			else {
+				/* FILE opened with wrong read/write mode. */
+				fclose (fp_list[fn]);
+				if ((fp_list[fn] = fopen (file_list[fn], mode)) == NULL)
+					return (NULL);
+				strcpy (mode_list[fn], mode);
+				return (fp_list[fn]);
+			}
+		}
+	}
+
+/* FILE not open, assign it available slot. */
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list[fn] == NULL)
+			break;
+	}
+	if (fn == MAX_FILES) {
+		fprintf (stderr, "Maximum number of open files exceeded in getfd\n");
+		return (NULL);
+	}
+	if (!strcmp (mode, "r+")) {
+		if ((fptest = fopen (filnam, "r")) != NULL)	/* FILE exists. */
+			fclose (fptest);
+		else
+			mode = "w";
+	}
+	if ((fp_list[fn] = fopen (filnam, mode)) != NULL) {
+		strcpy (file_list[fn], filnam);
+		strcpy (mode_list[fn], mode);
+		return (fp_list[fn]);
+	} else
+		return (NULL);
+}
+
+/* =============================================================================
+ *	Function:		close_if
+ *	Description:	Close Interfile.
+ * =============================================================================
+ */
+void            close_if (filnam)
+	char           *filnam;
+
+{
+	int             fn;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list[fn])) {
+			fclose (fp_list[fn]);
+			fp_list[fn] = NULL;
+			ifh_list[fn] = NULL;
+			strcpy (file_list[fn], " ");
+			strcpy (hdr_list[fn], " ");
+		}
+	}
+}
+
+/* =============================================================================
+ *	Function:		ifsh_to_sh
+ *	Description:	Create SubHeader from Interfile subheader.
+ * =============================================================================
+ */
+SubHeader      *ifsh_to_sh (ifsh)
+	SubHeader_if   *ifsh;
+
+{
+	SubHeader      *sh;
+
+	sh = (SubHeader *) malloc (sizeof (SubHeader));
+
+	sh->file_format = INTERFILE;
+	sh->number_format = ifsh->number_format;
+	sh->ndim = ifsh->ndim;
+	sh->dim1 = ifsh->dim1;
+	sh->dim2 = ifsh->dim2;
+	sh->dim3 = ifsh->dim3;
+	sh->sample_size_1 = ifsh->voxel_size_1;
+	sh->sample_size_2 = ifsh->voxel_size_2;
+	sh->sample_size_3 = ifsh->voxel_size_3;
+	sh->scale_factor = ifsh->storage_sf;
+	sh->calibration_factor = 1.;
+	sh->start_time = ifsh->starting_time;
+	sh->duration = ifsh->duration;
+	sh->deadtime_corr = ifsh->deadtime_corr;
+	if (ifsh->comment != NULL) {
+		sh->comment = (char *) malloc (strlen (ifsh->comment));
+		strcpy (sh->comment, ifsh->comment);
+	} else
+		sh->comment = NULL;
+	sh->whole_header = (void *) ifsh;
+
+	return (sh);
+
+}
+
+/* =============================================================================
+ *	Function:		ifmh_to_mh
+ *	Description:	Create MainHeader from Interfile mainheader.
+ * =============================================================================
+ */
+MainHeader     *ifmh_to_mh (ifmh)
+	MainHeader_if  *ifmh;
+
+{
+	MainHeader     *mh;
+	int             i;
+
+	mh = (MainHeader *) malloc (sizeof (MainHeader));
+
+	if (ifmh->data_file != NULL) {
+		mh->data_file = (char *) malloc (1 + strlen (ifmh->data_file));
+		strcpy (mh->data_file, ifmh->data_file);
+	}
+	mh->file_format = INTERFILE;
+	mh->number_format = ifmh->number_format;
+	mh->scanner_type = ifmh->orig_system;
+	mh->filtyp = ifmh->file_type;
+	mh->start_time = -1;
+	if (ifmh->study_date != NULL)
+		strcpy (mh->date_time, ifmh->study_date);
+	if (ifmh->patient_id != NULL)
+		strcpy (mh->patnum, ifmh->patient_id);
+	mh->nplane = ifmh->dim3;
+	mh->ngate = 1;
+	if (ifmh->nbed == 1) {
+		mh->nframe = ifmh->dim4;
+		mh->nbed = 1;
+	} else {
+		mh->nframe = 1;
+		mh->nbed = ifmh->dim4;
+	}
+	mh->bed_elevation = ifmh->bed_elevation;
+	mh->init_bed_pos = ifmh->init_bed_pos;
+	for (i = 0; i < 15; i++)
+		mh->bed_off[i] = ifmh->bed_off[i];
+	mh->slcthk = ifmh->voxel_size_3;
+	mh->calibration_factor = ifmh->scale_factor;
+	mh->whole_header = (void *) ifmh;
+
+	return (mh);
+
+}
+
+/* =============================================================================
+ *	Function:		sh_to_ifsh
+ *	Description:	Create Interfile subheader from SubHeader.
+ * =============================================================================
+ */
+SubHeader_if   *sh_to_ifsh (sh)
+	SubHeader      *sh;
+
+{
+	SubHeader_if   *ifsh;
+
+	if (sh->whole_header != NULL && sh->file_format == INTERFILE)
+		ifsh = (SubHeader_if *) sh->whole_header;
+	else
+		ifsh = (SubHeader_if *) malloc (sizeof (SubHeader_if));
+
+	ifsh->number_format = sh->number_format;
+	ifsh->ndim = sh->ndim;
+	ifsh->dim1 = sh->dim1;
+	ifsh->dim2 = sh->dim2;
+	ifsh->dim3 = sh->dim3;
+	ifsh->voxel_size_1 = sh->sample_size_1;
+	ifsh->voxel_size_2 = sh->sample_size_2;
+	ifsh->voxel_size_3 = sh->sample_size_3;
+	ifsh->storage_sf = sh->scale_factor * sh->calibration_factor;
+	ifsh->trues = sh->total;
+	ifsh->randoms = sh->delayeds;
+	ifsh->multiples = sh->multiples;
+	ifsh->starting_time = sh->start_time;
+	ifsh->duration = sh->duration;
+	ifsh->deadtime_corr = sh->deadtime_corr;
+	if (sh->comment != NULL) {
+		ifsh->comment = (char *) malloc (strlen (sh->comment));
+		strcpy (ifsh->comment, sh->comment);
+	} else
+		ifsh->comment = NULL;
+
+	return (ifsh);
+
+}
+
+/* =============================================================================
+ *	Function:		mh_to_ifmh
+ *	Description:	Create Interfile mainheader from MainHeader.
+ * =============================================================================
+ */
+MainHeader_if  *mh_to_ifmh (mh)
+	MainHeader     *mh;
+
+{
+	MainHeader_if  *ifmh;
+	int             i;
+
+	if (mh->whole_header != NULL && mh->file_format == INTERFILE)
+		ifmh = (MainHeader_if *) mh->whole_header;
+	else
+		ifmh = (MainHeader_if *) malloc (sizeof (MainHeader_if));
+
+	if (mh->data_file != NULL) {
+		ifmh->data_file = (char *) malloc (1 + strlen (mh->data_file));
+		strcpy (ifmh->data_file, mh->data_file);
+	}
+	ifmh->number_format = mh->number_format;
+	ifmh->orig_system = mh->scanner_type;
+	ifmh->file_type = mh->filtyp;
+	if (mh->date_time != NULL) {
+		ifmh->study_date = (char *) malloc (1 + strlen (mh->date_time));
+		strcpy (ifmh->study_date, mh->date_time);
+	}
+	if (mh->date_time != NULL) {
+		ifmh->patient_id = (char *) malloc (1 + strlen (mh->patnum));
+		strcpy (ifmh->patient_id, mh->patnum);
+	}
+	ifmh->dim3 = mh->nplane;
+	if (mh->nframe > 1)
+		ifmh->dim4 = mh->nframe;
+	else if (mh->nbed > 0)
+		ifmh->dim4 = mh->nbed;
+	else
+		ifmh->dim4 = 1;
+	if (ifmh->dim3 > 1 && ifmh->dim4 > 1)
+		ifmh->ndim = 4;
+	else if (ifmh->dim3 > 1 || ifmh->dim4 > 1)
+		ifmh->ndim = 3;
+	else
+		ifmh->ndim = 2;
+	ifmh->nbed = mh->nbed;
+	ifmh->bed_elevation = mh->bed_elevation;
+	ifmh->init_bed_pos = mh->init_bed_pos;
+	for (i = 0; i < 15; i++)
+		ifmh->bed_off[i] = mh->bed_off[i];
+	ifmh->voxel_size_3 = mh->slcthk;
+	ifmh->scale_factor = mh->calibration_factor;
+
+	return (ifmh);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: interfile.c,v 1.1 1995/11/28 20:11:33 tom Exp tom $
+d3 3
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimg/RCS/interfile.c,v 1.1 1995/11/28 20:11:33 tom Exp tom $";
+d31 1
+a31 1
+#include <if.h>
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*  $Id$
+    $Log$
+d22 1
+a22 1
+static char     rcsid[] = "$Header$";
+a31 1
+#define MAXFNAME 120
+@

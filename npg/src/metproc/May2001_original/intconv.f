@@ -1,0 +1,163 @@
+c $Log: intconv.f,v $
+c Revision 2.2  2000/11/14  21:53:01  tom
+c increase array size to 400
+c
+c Revision 2.1  1993/07/15  20:25:17  tom
+c Changed RCSHEADER to ID
+c
+c Revision 2.0  1993/07/12  23:13:24  tom
+c Handles ECAT image format
+c
+c Revision 1.3  1992/10/19  15:56:10  tom
+c modified RCSHEADER length
+c
+c Revision 1.2  1992/10/16  22:32:51  tom
+c added RCSHEADER
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   INTCONV.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         02-Jun-87
+C  Written For:  METPROC
+C
+C	 History
+C			Fixed for UNIX 15-Jan-92 TOV
+C				FORMAT E14 changed to E14.7
+C
+C  Intent:
+C     This version incorporates decay explicitly.
+C     Compute the integral of a convolution for 9 values of f
+C     and then fit a 2nd order polynomial to the 9 points passing
+C     through 0.  Return the coefficients of the polynomial.
+C
+C
+C
+C
+C
+C     Use 9 values of blood flow (10,20,...,90 ml/(min * 100g)
+C     The variables R1 and R2 are the coeficients of the equation:
+C
+C               Counts= R1*Flow*Flow + R2*Flow
+C
+C     where:
+C        Flow is in units of ml/(min*100g);
+C        Counts is in units of well counts/(ml*scan period);
+C
+C     The resultant values are used in computing CMRO2 and oxygen
+C     extraction.  (Used by O2UTIL.FTN)
+C
+C  References:
+C     Herscovitch, Mintun & Raichle (1985)
+C        J. Nuclear Medicine, 26:416.
+C     Videen, Perlmutter, Herscovitch & Raichle (JCBFM - 1987)
+C
+C  Variables Passed:
+C     CNTARRAY = decay-corrected activity;
+C     R1,R2 = see equation above;
+C
+C  Common Block Variables:
+C     NUMPNTS = no. of points;
+C     TIME = time
+C     INUM = number of values in ITIME and IACTIV;
+C     ITIME = interpolated blood curve times (twice as many times);
+C     IACTIV = interpolated blood curve activities (twice as many);
+C     CONV = convolution integral of IACTIV * EXP(-A*ITIME)
+C     LAMBDA = partition coefficient
+C     SCANST = initial time
+C     SCANEND = final time
+C     SCANLEN = length of scan
+C     TAU - decay constant used for specified file (1/sec);
+C
+C  Variables:
+C     COUNTS = tissue counts estimated from true blood flow;
+C     INTEGRAL = integral of instantaneous count rate over time
+C        of scan;
+C     SUMX2,SUMX3,SUMX4,SUMX2Y,SUMXY = sums used in regression fit;
+C
+C  Uses Subroutines:
+C     CONVOLVE
+C     INTEGRAT
+C
+C  Called by:  O2UTIL
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE INTCONV(CNTARRAY,R1,R2)
+C
+      INCLUDE 'metproc.inc'
+C
+      REAL      CNTARRAY(400),R1,R2,COUNTS,INTEGRAL,
+     &          SUMX2,SUMX3,SUMX4,SUMX2Y,SUMXY
+      INTEGER*4 I,J
+			CHARACTER*256 RCSHEADER
+C
+			RCSHEADER = "$Id: intconv.f,v 2.2 2000/11/14 21:53:01 tom Exp $"
+C
+      SUMX2 = 0.
+      SUMX3 = 0.
+      SUMX4 = 0.
+      SUMX2Y= 0.
+      SUMXY = 0.
+C
+C  Interpolate CNTARRAY curve and restore decay
+C  (double no. of points to reduce TDIFF in CONVOLVE)
+C
+      ITIME(1) = 0.5*TIME(1)
+      IACTIV(1) = 0.5*CNTARRAY(1)*EXP(-ITIME(1)*TAU)
+      TIME(NUMPNTS+1) = 0.
+      CNTARRAY(NUMPNTS+1) = 0.
+      J = 2
+      DO 100 I=1,NUMPNTS
+        ITIME(J) = TIME(I)
+        IACTIV(J) = CNTARRAY(I)*EXP(-ITIME(J)*TAU)
+        J = J+1
+        ITIME(J) = 0.5*(TIME(I)+TIME(I+1))
+        IACTIV(J)=0.5*(CNTARRAY(I)+CNTARRAY(I+1))*EXP(-ITIME(J)*TAU)
+        J = J+1
+100   CONTINUE
+      INUM = 2*NUMPNTS
+C
+C  FLOW is divided by 6000 to convert from ml/(min*100 g)
+C    to FLOWSEC in ml/(sec*g) and then multiplied by BRAINDEN
+C    to convert to ml/(sec*ml)
+C  LAMBDA is in ml/ml;
+C  ITIME is in sec and IACTIV is in counts/(sec*ml);
+C  The quadratic fit is for computing well counts/(ml*sec)
+C    given a known FLOW in ml/(min*100g).
+C
+      DO 500 I=1,9
+        FLOW = I*10.
+        FLOWSEC = BRAINDEN*FLOW/6000.
+        CALL CONVOLVE((FLOWSEC/LAMBDA)+TAU)
+        CALL INTEGRAT(ITIME,CONV,SCANST,SCANEND,INTEGRAL)
+        COUNTS = FLOWSEC*INTEGRAL
+        SUMX4 = SUMX4+FLOW*FLOW*FLOW*FLOW
+        SUMX3 = SUMX3+FLOW*FLOW*FLOW
+        SUMX2 = SUMX2+FLOW*FLOW
+        SUMXY = SUMXY+FLOW*COUNTS
+        SUMX2Y = SUMX2Y+FLOW*FLOW*COUNTS
+        WRITE(USEROUT,8100) FLOW,COUNTS/1000.
+500   CONTINUE
+8100  FORMAT(1X,'FLOW = ',F4.0,' ml/(min*100g)   COUNTS/1000 =',F15.3)
+C
+C  Compute the coefficients of the best fitting 2nd order polynomial
+C
+      R2 = (SUMX3*SUMX2Y-SUMXY*SUMX4)/(SUMX3*SUMX3-SUMX2*SUMX4)
+      R1 = (SUMX2Y-R2*SUMX3)/SUMX4
+C
+C  Write values to user
+C
+      WRITE(USEROUT,8200) 'A',R1
+      WRITE(USEROUT,8200) 'B',R2
+      WRITE(USEROUT,8300) 'SUMX4 ',SUMX4
+      WRITE(USEROUT,8300) 'SUMX3 ',SUMX3
+      WRITE(USEROUT,8300) 'SUMX2 ',SUMX2
+      WRITE(USEROUT,8300) 'SUMX2Y',SUMX2Y
+      WRITE(USEROUT,8300) 'SUMXY ',SUMXY
+8200  FORMAT(' ',A1,' =',E14.7)
+8300  FORMAT(' ',A6,' = ',F20.0)
+C
+      RETURN
+      END

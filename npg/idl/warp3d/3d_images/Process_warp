@@ -1,0 +1,160 @@
+Process_warp of MPRAGE images 	(12-Nov-2002)
+===================================================================
+set PID1 = p2817
+set PID2 = p2808
+set MPR1 = ${PID1}_mprage
+set MPR2 = ${PID2}_mprage
+set BRN1 = ${PID1}_brain
+set BRN2 = ${PID2}_brain
+
+set STRIATUM1 = p2817_striatum_26nov2001
+set STRIATUM2 = p2808_striatum_joann_082902
+set STR1 = p2817_striatum
+set STR2 = p2808_striatum
+
+if2analyze $STRIATUM1 $STR1
+if2analyze $STRIATUM2 $STR2
+rm $STRIATUM1.*
+rm $STRIATUM2.*
+-----------------------
+Segment both images
+---------------------------------------
+
+1) The brain cutoff intensity is the mean of gray and csf peaks:
+	vidi
+	Load
+		Image 1: mprage
+		Image 2: 	"
+	Color
+		Image 1: Linear Greyscale
+		Image 2: PET Rainbow
+	Scale
+		Manual Max = 800
+		%Cutoff = 1
+	Segmentation (Image 2)
+		Fill Value = 0
+		Lower Thresh = 300
+		Upper Thresh = max
+		Inside; 2D
+		seed in {structure}; 3D; Remove
+
+2) Remove external tissue below temporal lobes
+	Edit (Image 2)
+		Fill Value = 0; All Below, Outside
+		draw around cerebellum + brainstem below temporal lobes
+		Fill
+		down several slices and repeat a couple times
+
+3) Protect white matter by removing vessels around chiasm (if necessary)
+	Segmentation (Image 2)
+		Fill Value = 0
+		Lower Thresh = 700
+		Upper Thresh = max
+		Inside; Irrelevant (to pick lower threshold), then 2D
+	Select and remove blood vessels around chaism.
+
+4) Remove external fat, muscle
+	Segmentation (Image 2)
+		Fill Value = 0
+		Lower Thresh = above gray matter (700)
+		Upper Thresh = max
+		Inside; Irrelevant; show Removed in Image 3
+	Set the Lower Thresh to remove white matter but sparing gray matter.
+	Then remove eye muscles, sagittal sinus, basal vessels with:
+		2D
+		seed in {structure}; 3D; Remove
+		where structure = eye muscles, sagittal sinus, basal vessels
+	Save
+		${IMG}_seg1
+
+5) Erosion
+	Segmentation (Image 2)
+		Fill Value = 0; Outside; Irrelevant; Unconditional
+		Lower Thresh = segmentation cutoff
+		Upper Thresh = max
+		Set Conditional/Mask Image
+		Erode; TWICE
+		2D; seed in brain; 3D; Remove
+
+6) Check status of segmentation and edit to remove connecting tissue
+	Edit (Image 2)
+	Segmentation
+		seed in brain; 3D; Remove
+	Save
+		${IMG}_seg2
+
+7) Dilation
+	Segmentation (Image 2)
+		Nothing; Irrelevant; Conditional
+		Dilate; TWICE
+	Save
+		${IMG}_brain
+
+8) Final check of segmentation
+	Viewer (Image 2)
+		8x4; Display; Next
+	If any significant remaining non-brain:
+		Edit (Image 2)
+		Segmentation
+			seed in brain; 3D; Remove
+		repeat viewer check
+
+9) Create MASK using mpr1_brain.img (first image only)
+	Segmentation  (expand beyond brain boundary)
+		Nothing; Irrelevant; Unconditional
+		Dilate; 5 times
+	Save
+		$MASK
+	set MASK  = ${PID1}_mask
+	if2analyze $MASK
+
+** SEGMENT Image 2
+=========================================================
+10) Coregister second MR image to first
+-------------------------------------
+(AIR: unidirectional, rigid-body, least squares with intensity scaling)
+
+	rm *seg*
+	foreach i (*.ifh)
+		if2analyze $i:r
+		end
+
+	set PRM   = "-m 6 -p1 1 -p2 0 -t1 10 -b1 5 5 5 -b2 5 5 5 -e1 $MASK -x 3 -v"
+	setanamin $BRN1 0
+	setanamin $BRN2 0
+	set AIR = ${PID2}_to_$PID1.air
+	echo alignlinear $BRN1 $BRN2 $AIR $PRM 
+
+	set t1 = `t`; alignlinear $BRN1 $BRN2 $AIR $PRM 
+	set t2 = `t`; set proctime = `echo "$t2 - $t1" | bc`
+	echo "Alignment time" $proctime "sec"
+
+11) Reslice
+	setanamin $BRN2 -1
+	reslice $AIR r$BRN2 -a $BRN2 -k -o
+	anarange r$BRN2 32767 0
+
+	Check coregistration of images with vidi:
+	Color
+		Image 1: Linear Greyscale
+		Image 2: PET Rainbow
+
+12) Clean up segmentation files
+	foreach i (*ifh)
+		if2analyze $i:r
+		end
+	rm *.ifh
+	rm vidi_stats_*.log
+
+Should have 8 images in working directory
+	ll *.img
+
+	p2817_mprage.img	- orig
+	p2808_mprage.img	- orig
+	p2817_striatum.img	- hand segmented
+	p2808_striatum.img	- hand segmented
+	p2817_brain.img		- brain segmentation
+	p2808_brain.img		- brain segmentation
+	p2817_mask.img		- mask for coregistration
+	rp2808_brain.img	- coregistered brain (AIR)
+

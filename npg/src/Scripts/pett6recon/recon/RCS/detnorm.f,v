@@ -1,0 +1,352 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.13.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      DETNORM6.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         08-Sep-88
+C  Written For:  PETT VI Image Reconstruction
+C
+C  Intent:
+C     Detector Normalization for PETT VI.
+C     This program estimates the relative sensitivity of each of the
+C     72 detectors for the 7 slices of PETT VI.  The estimate is based
+C     on the 25 coincidence lines (x 16 wobble positions) for each
+C     detector which intersect the ring on a normalization scan.
+C     It excludes the 7 coincidence lines for each detector which
+C     pass outside the ring.
+C
+C     If this program is called with logical unit 2 assigned to NULL:,
+C     the detector relative sensitiviy table is written to the user
+C     (or another device or file).  This output is intended to be used
+C     for tuning the scanner modules.
+C
+C     If this program is called with logical unit 2 assigned to a file
+C     the table does not appear as output.  Instead, the sensitivity factors
+C     are written to the file in a format which can be used by SLICESEP.FTN.
+C     this output is used to correct the number of randoms to be subtracted
+C     from each detector-detector pair in the reconstruction stream.
+C     The output to the user is a table of relative efficiency products
+C     for each slice of the scanner.
+C
+C  Definitions:
+C     There are 18 BANK PAIRS each of which is comprised of 2 BANK
+C     ELEMENTS, which are the BANK NUMBERS.  The first bank element
+C     may be bank number 1-6 and the second bank element may be bank
+C     number 4-9.  The detectors belonging to the first bank element
+C     are referred to as DETECTOR 1; those belonging to the second
+C     bank element are referred to as DETECTOR 2.
+C
+C  Logical Units:
+C     1 = Raw data (NORMn) input file (INFILE);
+C     2 = File of detector normalization factors (OUTFILE);
+C     5 = User output (USEROUT);
+C
+C  Uses Subroutines:
+C     SYSIO
+C
+C  Instructions for Compiling/Linking:  LINK7 DETNORM6
+C
+C  Ported to HP on 3/9/93 by Karen Gauvain
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM DETNORM6
+C
+C     REAL*4      MEAN(7)           ! mean detector efficiency for each slice
+      REAL*4      EFFICIENCY(8,9,7) ! detector efficiency
+C        (detector no., bank no., slice no.)
+      REAL*4      EFFPRODUCT(8,8,18,7) ! detector-detector efficiency product
+C        (detector 2, detector 1, bank pair no., slice no.)
+      REAL*4      RX           ! ratio of expected slice total/detector total
+C        (total pairs summed for slice/total pairs summed for 1 detector)
+C
+      INTEGER*2   PAIR(8,8,16,8,2) ! raw data (det-det pairs) for 1 bankpair
+C        (detector 2, detector 1, wobble, slice, frame)
+      INTEGER*2   BPAIR(2,18)  ! bank no. associated with each bankpair
+C        (bank element, bank pair no.)
+      INTEGER*2   HEADER(128)  ! file header record (read from raw file,
+C                                  altered and written to output file)
+      INTEGER*2   SCANTIME    ! length of scan (sec)
+C
+      INTEGER*4   DETTOTAL(7,9,8) ! detector totals
+C        (slice no., bank no., detector no.)
+      INTEGER*4   COUNT        ! coincidence counts
+      INTEGER*4   NBYTES       ! no. of bytes per bank pair of raw data
+      INTEGER*4   SLICETOTAL(7)! slice total coincidence counts
+      INTEGER*4   IOREAD       ! SYSIO read sequential binary wait
+      INTEGER*4   IOWRITE      ! SYSIO write sequential binary wait
+      INTEGER*4   PB(6)        ! parameter block for SYSIO
+      INTEGER*4   INFILE       ! log unit for input file (raw data)
+      INTEGER*4   OUTFILE      ! lu for output file (normalization factors)
+      INTEGER*4   USEROUT      ! log unit for output to user
+      INTEGER*4   BANKPAIR     ! bank pair number (1-18)
+      INTEGER*4   WOBBLE       ! wobble position  (1-16)
+      INTEGER*4   SLICE        ! slice number     (1-7)
+      INTEGER*4   BP           ! index to bank pair number (1-18)
+      INTEGER*4   B1           ! index to bank number of 1st bank element (1-6)
+      INTEGER*4   B2           ! index to bank number of 2nd bank element (4-9)
+      INTEGER*4   D1           ! index to detector number (1-8) of 1st bank
+      INTEGER*4   D2           ! index to detector number (1-8) of 2nd bank
+C     INTEGER*4   FSIZE        ! size of the file OUT
+      INTEGER*4   BIN          ! histogram bin number
+      INTEGER*4   HIST(9,7)    ! distribution of factors (BIN,SLICE)
+C
+C     CHARACTER*4 QUALITY      ! indicate tuning uniformity of detectors
+      CHARACTER*6 RUNNAME      ! run name
+      CHARACTER*6 SCANDATE     ! scan date
+      CHARACTER*8 SUBJECT      ! subject name of file
+      CHARACTER*11 BINNAME(9)  ! range name for each BIN of HIST
+C
+      LOGICAL*1   OUTSIDE(18,8,8)
+C        true--> do not include this detector in the efficiency sums
+C                as it is outside the ring;
+C        (bankpair, detector 1, detector 2)
+C
+      CHARACTER*20 RAWFILE,DETNORMNAME
+
+      EQUIVALENCE (HEADER(2), RUNNAME)
+      EQUIVALENCE (HEADER(8), SCANTIME)
+      EQUIVALENCE (HEADER(9), SUBJECT)
+      EQUIVALENCE (HEADER(13),SCANDATE)
+C
+C  Initializations
+C
+      DATA IOREAD, IOWRITE  /88,56/
+      DATA INFILE, OUTFILE, USEROUT /1,2,6/
+      DATA PB(6) /0/
+      DATA (BPAIR(1,I),I=1,18) /1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,5,5,6/
+      DATA (BPAIR(2,I),I=1,18) /4,5,6,7,5,6,7,8,6,7,8,9,7,8,9,8,9,9/
+      DATA OUTSIDE  /1152*.FALSE./
+
+      WRITE(USEROUT,*) '*** DETNORM6  Sep-97  {detector normalization}'
+      CALL GETARG (1, RAWFILE)
+      CALL GETARG (2, DETNORMNAME)
+      OPEN(INFILE,FILE=RAWFILE)
+      OPEN(OUTFILE,FILE=DETNORMNAME)
+      
+      NBYTES = 8*8*16*8*2*2
+C
+      BINNAME(1) = '0.0  - 0.25'
+      BINNAME(2) = '0.25 - 0.50'
+      BINNAME(3) = '0.50 - 0.75'
+      BINNAME(4) = '0.75 - 1.00'
+      BINNAME(5) = '1.0  - 1.25'
+      BINNAME(6) = '1.25 - 1.50'
+      BINNAME(7) = '1.50 - 1.75'
+      BINNAME(8) = '1.75 - 2.0 '
+      BINNAME(9) = '   >2.0    '
+C
+      DO 50 SLICE=1,7
+        SLICETOTAL(SLICE) = 0
+        DO 40 B1=1,9
+          DO 30 D1=1,8
+            DETTOTAL(SLICE,B1,D1) = 0
+30        CONTINUE
+          HIST(B1,SLICE) = 0
+40      CONTINUE
+50    CONTINUE
+C
+C  Check the file size assigned to the output file.
+C  If OUT is assigned to NULL:, the size will be 0.
+C
+c commented out the following inquire statement when porting to HP
+C      INQUIRE(OUTFILE,SIZE=FSIZE)
+C
+C  Read header
+C
+      CALL SYSIO(PB,IOREAD,INFILE,HEADER,256,0)
+C
+      WRITE(USEROUT,8010) SUBJECT,SCANDATE(1:2),SCANDATE(3:4),
+     2  SCANDATE(5:6)
+      WRITE(USEROUT,8020) RUNNAME,SCANTIME
+8010  FORMAT(1X,'Subject ID = ',A,5X,'DATE = ',A2,'/',A2,'/',A2)
+8020  FORMAT(1X,'Run Name = ',A,5X,'Scan Time = ',I,' seconds')
+C
+C  Determine detector pairs whose coincidence rays lie outside the ring
+C
+      DO 300 BANKPAIR=1,18
+        B1 = BPAIR(1,BANKPAIR)
+        B2 = BPAIR(2,BANKPAIR)
+        IF (B2-B1.EQ.3) THEN         ! outer pairs to right
+          DO 150 D1=2,8
+            DO 100 D2=1,D1-1
+              OUTSIDE(BANKPAIR,D1,D2) = .TRUE.
+100         CONTINUE
+150       CONTINUE
+        ELSE IF (B2-B1.EQ.6) THEN    ! outer pairs to left
+          DO 250 D1=1,7
+            DO 200 D2=D1+1,8
+              OUTSIDE(BANKPAIR,D1,D2) = .TRUE.
+200         CONTINUE
+250       CONTINUE
+        END IF
+300   CONTINUE
+C
+C  Total detector pair counts for rays intersecting ring
+C
+      DO 800 BANKPAIR=1,18
+        CALL SYSIO(PB,IOREAD,INFILE,PAIR,NBYTES,0)
+        B1 = BPAIR(1,BANKPAIR)
+        B2 = BPAIR(2,BANKPAIR)
+        DO 700 SLICE=1,7
+          DO 600 WOBBLE=1,16
+            DO 500 D1=1,8
+              DO 400 D2=1,8
+                IF (.NOT.OUTSIDE(BANKPAIR,D1,D2)) THEN
+                  COUNT = PAIR(D2,D1,WOBBLE,SLICE,1)
+                  SLICETOTAL(SLICE) = SLICETOTAL(SLICE) + COUNT
+                  DETTOTAL(SLICE,B1,D1) = DETTOTAL(SLICE,B1,D1) + COUNT
+                  DETTOTAL(SLICE,B2,D2) = DETTOTAL(SLICE,B2,D2) + COUNT
+                END IF
+400           CONTINUE
+500         CONTINUE
+600       CONTINUE
+700     CONTINUE
+800   CONTINUE
+C
+C  If output file is NULL:, write slice totals to user
+C
+c commented out the following if statement when porting to HP -- KMG
+C      IF (FSIZE.EQ.0) THEN
+C        WRITE(USEROUT,8000)
+C        DO 810 SLICE=1,7
+C          WRITE(USEROUT,8100) SLICE, SLICETOTAL(SLICE),
+C     2      FLOAT(SLICETOTAL(SLICE))/FLOAT(SLICETOTAL(1))
+C810     CONTINUE
+C        WRITE(USEROUT,*)
+C      END IF
+c end comment
+8000  FORMAT(1X,'Slice    Totals      Ratio')
+8100  FORMAT(1X,I3,I14,F8.2)
+C
+      RX = 14400.0/400.0 ! total pairs for slice/total pairs for 1 detector
+      DO 860 SLICE=1,7
+        DO 840 B1=1,9
+          DO 820 D1=1,8
+            EFFICIENCY(D1,B1,SLICE) = RX*FLOAT(DETTOTAL(SLICE,B1,D1))/
+     2        SLICETOTAL(SLICE)
+820       CONTINUE
+840     CONTINUE
+860   CONTINUE
+C
+C  If output file is NULL:, write detector efficiencies to user
+C
+C commented out the following if statement when porting to HP -- KMG
+C      IF (FSIZE.EQ.0) THEN
+C        WRITE(USEROUT,8200)
+C        WRITE(USEROUT,8300)
+C        DO 960 B1=1,9
+C          DO 940 D1=1,8
+C            DO 920 SLICE=1,7
+C              MEAN(SLICE) = MEAN(SLICE) + EFFICIENCY(D1,B1,SLICE)
+C920         CONTINUE
+C
+C            IF (ABS(EFFICIENCY(D1,B1,1)-1.0) .GE. 0.35 .OR.
+C     2          ABS(EFFICIENCY(D1,B1,3)-1.0) .GE. 0.35 .OR.
+C     3          ABS(EFFICIENCY(D1,B1,5)-1.0) .GE. 0.35 .OR.
+C     4          ABS(EFFICIENCY(D1,B1,7)-1.0) .GE. 0.35) THEN
+C              QUALITY = '<==='
+C           ELSE IF (ABS(EFFICIENCY(D1,B1,1)-1.0) .GE. 0.3 .OR.
+C     2          ABS(EFFICIENCY(D1,B1,3)-1.0) .GE. 0.3 .OR.
+C     3          ABS(EFFICIENCY(D1,B1,5)-1.0) .GE. 0.3 .OR.
+C     4          ABS(EFFICIENCY(D1,B1,7)-1.0) .GE. 0.3) THEN
+C              QUALITY = '--- '
+C            ELSE IF (ABS(EFFICIENCY(D1,B1,1)-1.0) .GE. 0.25 .OR.
+C     2          ABS(EFFICIENCY(D1,B1,3)-1.0) .GE. 0.25 .OR.
+C     3          ABS(EFFICIENCY(D1,B1,5)-1.0) .GE. 0.25 .OR.
+C     4          ABS(EFFICIENCY(D1,B1,7)-1.0) .GE. 0.25) THEN
+C              QUALITY = '--  '
+C            ELSE IF (ABS(EFFICIENCY(D1,B1,1)-1.0) .GE. 0.2 .OR.
+C     2          ABS(EFFICIENCY(D1,B1,3)-1.0) .GE. 0.2 .OR.
+C     3          ABS(EFFICIENCY(D1,B1,5)-1.0) .GE. 0.2 .OR.
+C     4          ABS(EFFICIENCY(D1,B1,7)-1.0) .GE. 0.2) THEN
+C              QUALITY = '-   '
+C            ELSE
+C              QUALITY = '    '
+C            END IF
+C
+C            WRITE(USEROUT,8400) B1,D1-1,
+C     2        (EFFICIENCY(D1,B1,SLICE),SLICE=1,7,2),QUALITY
+C
+C940       CONTINUE
+C960     CONTINUE
+C8200    FORMAT(1X,'RELATIVE DETECTOR EFFICIENCY:')
+C8300    FORMAT(1X,'Bank  Det  Ring A   Ring B   Ring C   Ring D   ',
+C     2    'Tuning')
+C8400    FORMAT(1X,I3,I4,4(F9.3),5X,A4)
+C
+C        DO 1000 SLICE=1,7
+C          MEAN(SLICE) = MEAN(SLICE)/72.0
+C1000    CONTINUE
+C        WRITE(USEROUT,*)
+C        WRITE(USEROUT,8500) (MEAN(SLICE),SLICE=1,7,2)
+C8500    FORMAT(1X,'Mean = ',4(F9.3))
+C
+C  Otherwise (FSIZE.GT.0)  (file size should be 126)
+C  Compute DETECTOR-DETECTOR EFFICIENCY PRODUCTS for all detector pairs
+C
+C      ELSE
+c end comment
+        DO 1400 SLICE=1,7
+          DO 1300 BP=1,18
+            DO 1200 D1=1,8
+              DO 1100 D2=1,8
+                EFFPRODUCT(D2,D1,BP,SLICE) =
+     2            EFFICIENCY(D2,BPAIR(2,BP),SLICE) *
+     3            EFFICIENCY(D1,BPAIR(1,BP),SLICE)
+                BIN = INT(EFFPRODUCT(D2,D1,BP,SLICE)*4.0) + 1
+                IF (BIN.GT.9) BIN=9
+                HIST(BIN,SLICE) = HIST(BIN,SLICE) + 1
+1100          CONTINUE
+1200        CONTINUE
+1300      CONTINUE
+1400    CONTINUE
+C
+C  Write detector efficiency products to output file (for use with SLICESEP)
+C  (nbytes= 8 detectors * 8 detectors * 18 bankpairs *
+C           7 slices * 4 bytes per real no.)
+C
+        CALL SYSIO(PB,IOWRITE,OUTFILE,EFFPRODUCT,32256,0)
+C
+C  Write distribution of normalization factors to user
+C
+        WRITE(USEROUT,8600)
+        WRITE(USEROUT,8610) (SLICE,SLICE=1,7)
+        WRITE(USEROUT,8620)
+        DO 1500 BIN=1,9
+          WRITE(USEROUT,8630) BINNAME(BIN),(HIST(BIN,SLICE),SLICE=1,7)
+1500    CONTINUE
+8600    FORMAT(1X,'Distribution of Normalization Factors')
+8610    FORMAT(1X,'Range     Slice: ',I2,6I5)
+8620    FORMAT(1X,'---------       ---  ---  ---  ---  ---  ---  ---')
+8630    FORMAT(1X,A11,3X,7I5)
+C
+c commented out when porting to HP, because of commenting out above if
+c statement
+C      END IF
+C
+      STOP
+      END
+
+@

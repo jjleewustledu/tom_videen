@@ -1,0 +1,1049 @@
+head	3.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+3.3
+date	2004.02.12.22.08.52;	author tom;	state Exp;
+branches;
+next	3.2;
+
+3.2
+date	2004.01.02.21.23.12;	author tom;	state Exp;
+branches;
+next	2.12;
+
+2.12
+date	2001.06.01.15.28.47;	author tom;	state Exp;
+branches;
+next	2.11;
+
+2.11
+date	2001.05.31.19.33.21;	author tom;	state Exp;
+branches;
+next	2.10;
+
+2.10
+date	99.12.13.17.04.17;	author tom;	state Exp;
+branches;
+next	2.9;
+
+2.9
+date	99.06.30.16.57.15;	author tom;	state Exp;
+branches;
+next	2.8;
+
+2.8
+date	96.11.21.17.47.12;	author tom;	state Exp;
+branches;
+next	2.7;
+
+2.7
+date	96.11.05.18.48.00;	author tom;	state Exp;
+branches;
+next	2.6;
+
+2.6
+date	96.09.30.22.40.30;	author tom;	state Exp;
+branches;
+next	2.5;
+
+2.5
+date	96.09.17.17.28.49;	author tom;	state Exp;
+branches;
+next	2.4;
+
+2.4
+date	96.09.03.19.22.15;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	96.06.21.16.54.27;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	96.06.21.15.34.10;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.06.13.21.58.26;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.04.24.23.07.41;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.03.12.23.00.34;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+3.3
+log
+@Feb 2004
+@
+text
+@/* $Log: processOxygen.c,v $
+ * Revision 3.2  2004/01/02  21:23:12  tom
+ * splint cleaning
+ *
+ * Revision 2.12  2001/06/01  15:28:47  tom
+ * use f,v for cbf,cbv
+ *
+ * Revision 2.11  2001/05/31  19:33:21  tom
+ * add steady-state model
+ *
+ * Revision 2.10  1999/12/13  17:04:17  tom
+ * tov revision
+ *
+ * Revision 2.9  1999/06/30  16:57:15  tom
+ * add PROC_ODIV
+ *
+ * Revision 2.8  1996/11/21  17:47:12  tom
+ * oef cannot be greater than 1.1
+ * cmro2 cannot be greater than 100.
+ *
+ * Revision 2.7  1996/11/05  18:48:00  tom
+ * remove .001 from sx scaler
+ *
+ * Revision 2.6  1996/09/30  22:40:30  tom
+ * set range on CMRO2 to <= 100
+ *
+ * Revision 2.5  1996/09/17  17:28:49  tom
+ * allocate hdr externally
+ *
+ * Revision 2.4  1996/09/03  19:22:15  tom
+ * move readhdr to processPET.c
+ *
+ * Revision 2.3  1996/06/21  16:54:27  tom
+ * set OEF limits at -100 and 1100
+ *
+ * Revision 2.1  1996/06/13  21:58:26  tom
+ * eliminate some erroneous scalers left over from spideram
+ * add scalefactor of 1000
+ *
+ * Revision 2.0  1996/04/24  23:07:41  tom
+ * new library release
+ *
+ * Revision 1.1  1996/03/12  23:00:34  tom
+ * Initial revision
+ *
+ */
+/*	========================================================================
+ *	Module:			processOxygen.c
+ *	Date:			Sep 1993
+ *	Author:			Tom Videen
+ *	Description:	process an image for CBF, CBV, OEF, CMRO2 or counts and scale the result
+ *
+ *	Input:
+ *		oxygenimage -   oxygen (oo) PET input image
+ *		flowimage   -   flow (ho) PET input image
+ *		volimage    -   vol (co) PET input image
+ *		dim	      	-   dimensions of PET image
+ *		scaler      -   normalization factor
+ *		process     -   type of processing
+ *		oxygenname  -   oxygen image file name
+ *		flowname    -   flow image file name
+ *		volname     -   vol image file name
+ *		recfp       -   rec file pointer
+ *		hdr         -   pointer to HEADER_DATA structure
+ *
+ *	Output:
+ *		pet         -   processed, scaled PET image
+ *		hdr			-	HEADER_DATA structure filled in
+ *		writes hdr files used to file recfp
+ *
+ *	Returns:
+ *		OK or ERROR
+ *
+ *	Algorithm:
+ *	1)  If (process != PROC_CMRO2 AND process != PROC_OEF AND process != PROC_ODIV) then return ERROR.
+ *	2)  Read hdr and process the flow image.
+ *	3)  Read hdr and process the volume image.
+ *	4)  Read hdr file associated with oxygen image.
+ *	5)  If (hdr->ntype != 1) then return ERROR.
+ *	6)  If (process = PROC_OEF) then process as oxygen extraction:
+ *	7)  If (process = PROC_CBF")  and (hdr->ntype = 2 or 4) then process as blood flow:
+ *	8)	All values are scaled up by 1000.
+ *	9)	OEF cannot be > 1.1; CMRO2 cannot be > 100.0
+ *
+ *	Reference for Mintun bolus method and Equations in:
+ *		Videen et al (1987) JCBFM 7:513-516.
+ *	Reference for steady-state method and Equations in:
+ *		Peter Herscovitch notes, Feb 1984
+ *
+ *	History:
+ *		05-Jan-93	Set scaler to 1 for processing cbf and cbv images (TOV)
+ *		14-Jan-94	OEF must be between 0 and 1.1 (0 - 1100) (TOV)
+ *		Apr-96		TOV add module to read hdrfiles.
+ *		May 2001	TOV add steady-state model for ntype=7
+ *	========================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 3.2 2004/01/02 21:23:12 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <imgutil.h>
+
+/*	-----------------------
+ *	Function processOxygen
+ *	-----------------------
+ */
+int             processOxygen (oxygenimage, flowimage, volimage, dim, scaler, process,
+			                       oxygenname, flowname, volname, recfp, hdr)
+	float        ***oxygenimage;	 /* oxygen (oo) PET input image */
+	float        ***flowimage;		 /* flow (ho) PET input image */
+	float        ***volimage;		 /* vol (co) PET input image */
+	long            dim[3];			 /* dimensions of PET-array */
+	float           scaler;			 /* normalization factor */
+	int             process;		 /* type of processing */
+	char           *oxygenname;		 /* oxygen image file name */
+	char           *flowname;		 /* flow image file name */
+	char           *volname;		 /* vol image file name */
+	FILE           *recfp;			 /* rec file pointer */
+	HEADER_DATA    *hdr;			 /* hdr structure */
+{
+	long            i, j, k;
+	float           sx;				 /* combined scaler */
+	float           slvratio = 0.85; /* ratio of small vessel/large vessel hematocrit */
+	float           volfactr = 0.835;/* (postcap vol + 0.5*cap vol)/total blood vol */
+	float           brainden = 1.05; /* density of brain (g/ml) */
+	float           pc = 1.0;		 /* partition coef for water (ml blood/ml brain) */
+	float           kd;				 /* decay constant  */
+	float           watercont;		 /* O15 water content */
+	float           cbf, cbv;		 /* computed flow and volume */
+	float           f, v;			 /* flow in ml/ml/sec and volume in ml/ml */
+	float           oo;				 /* oxygen image array element */
+	float           c1, c2, c3;		 /* constants */
+	float           a0, a1, a2, a3, a4, a5;	 /* temp values in computation */
+	int             localproc;		 /* type of processing */
+
+/*	Check process type	*/
+
+	if (process != PROC_OEF && process != PROC_CMRO2 && process != PROC_ODIV)
+		return (ERROR);
+
+/*	Process flow image	*/
+
+	localproc = PROC_CBF;
+	sx = 1;
+	if (processPET (flowimage, dim, sx, localproc, flowname, recfp, hdr) != OK) {
+		fprintf (stderr, "Error processing %s\n", flowname);
+		return (ERROR);
+	}
+/*	Process volume image */
+
+	localproc = PROC_CBV;
+	sx = 1;
+	if (processPET (volimage, dim, sx, localproc, volname, recfp, hdr) != OK) {
+		fprintf (stderr, "Error processing %s\n", volname);
+		return (ERROR);
+	}
+	if (readhdr (oxygenname, hdr, recfp) == ERROR)
+		return (ERROR);
+
+/*	Mintun bolus oxygen method	*/
+
+	if (hdr->ntype == 1) {
+		c1 = slvratio * hdr->o2cnts1 / 100.0;
+		c2 = volfactr * c1;
+		c3 = hdr->pettcnv1 / brainden;
+		sx = scaler;
+
+		if (process == PROC_OEF) {
+			for (k = 1; k <= dim[2]; ++k) {
+				for (j = 1; j <= dim[1]; ++j) {
+					for (i = 1; i <= dim[0]; ++i) {
+						oo = oxygenimage[k][j][i];
+						if (oo == 0.)
+							oxygenimage[k][j][i] = 0;
+						else {
+							cbf = flowimage[k][j][i];
+							cbv = volimage[k][j][i];
+							a1 = c3 * oo;
+							a2 = cbf * (hdr->awater1 * cbf + hdr->bwater1);
+							a3 = c1 * cbv;
+							a4 = cbf * (hdr->aoxygen1 * cbf + hdr->boxygen1);
+							a5 = c2 * cbv;
+							if (a4 == a5)
+								oxygenimage[k][j][i] = 0;
+							else
+								oxygenimage[k][j][i] = sx * (a1 - a2 - a3) / (a4 - a5);
+							if (oxygenimage[k][j][i] > 1.1)
+								oxygenimage[k][j][i] = 1.1;
+							else if (oxygenimage[k][j][i] < -1)
+								oxygenimage[k][j][i] = -1;
+						}
+					}
+				}
+			}
+			return (OK);
+
+		} else if (process == PROC_CMRO2) {
+			sx = scaler;
+			for (k = 1; k <= dim[2]; ++k) {
+				for (j = 1; j <= dim[1]; ++j) {
+					for (i = 1; i <= dim[0]; ++i) {
+						oo = oxygenimage[k][j][i];
+						if (oo == 0.)
+							oxygenimage[k][j][i] = 0;
+						else {
+							cbf = flowimage[k][j][i];
+							cbv = volimage[k][j][i];
+							a1 = c3 * oo;
+							a2 = cbf * (hdr->awater1 * cbf + hdr->bwater1);
+							a3 = c1 * cbv;
+							a4 = cbf * (hdr->aoxygen1 * cbf + hdr->boxygen1);
+							a5 = c2 * cbv;
+							if (a4 == a5)
+								oxygenimage[k][j][i] = 0;
+							else
+								oxygenimage[k][j][i] = sx * cbf * hdr->oxycont1 * (a1 - a2 - a3) / (a4 - a5);
+							if (oxygenimage[k][j][i] > 100.)
+								oxygenimage[k][j][i] = 100.;
+							else if (oxygenimage[k][j][i] < -100.)
+								oxygenimage[k][j][i] = -100.;
+						}
+					}
+				}
+			}
+			return (OK);
+
+		} else if (process == PROC_ODIV) {	/* Oxygen Divisor (for noise analysis) */
+			for (k = 1; k <= dim[2]; ++k) {
+				for (j = 1; j <= dim[1]; ++j) {
+					for (i = 1; i <= dim[0]; ++i) {
+						cbf = flowimage[k][j][i];
+						cbv = volimage[k][j][i];
+						a4 = cbf * (hdr->aoxygen1 * cbf + hdr->boxygen1);
+						a5 = c2 * cbv;
+						oxygenimage[k][j][i] = a4 - a5;
+					}
+				}
+			}
+			return (OK);
+		}
+
+/*	Steady-State method	*/
+
+	} else if (hdr->ntype == 7) {
+		kd = hdr->tau;
+		watercont = hdr->oxycont1 * hdr->aoxygen1;
+		c1 = hdr->pettcnv1 / hdr->scantime;
+		c2 = slvratio * hdr->oxycont1;
+		c3 = slvratio * volfactr * hdr->oxycont1;
+		sx = scaler;
+
+		if (process == PROC_OEF) {
+			for (k = 1; k <= dim[2]; ++k) {
+				for (j = 1; j <= dim[1]; ++j) {
+					for (i = 1; i <= dim[0]; ++i) {
+						oo = oxygenimage[k][j][i];
+						if (oo == 0.)
+							oxygenimage[k][j][i] = 0;
+						else {
+							f = flowimage[k][j][i] * brainden / (60*100);
+							v = volimage[k][j][i] * brainden / 100;
+							a0 = f / (kd + f / pc);
+							a1 = oo * c1;
+							a2 = a0 * watercont;
+							a3 = v * c2;
+							a4 = a0 * hdr->oxycont1;
+							a5 = v * c3;
+							if (a4 == a5)
+								oxygenimage[k][j][i] = 0;
+							else
+								oxygenimage[k][j][i] = sx * (a1 - a2 - a3) / (a4 - a5);
+							if (oxygenimage[k][j][i] > 1.1)
+								oxygenimage[k][j][i] = 1.1;
+							else if (oxygenimage[k][j][i] < -1)
+								oxygenimage[k][j][i] = -1;
+						}
+					}
+				}
+			}
+			return (OK);
+
+		} else if (process == PROC_CMRO2) {
+			for (k = 1; k <= dim[2]; ++k) {
+				for (j = 1; j <= dim[1]; ++j) {
+					for (i = 1; i <= dim[0]; ++i) {
+						oo = oxygenimage[k][j][i];
+						if (oo == 0.)
+							oxygenimage[k][j][i] = 0;
+						else {
+							cbf = flowimage[k][j][i];
+							f = flowimage[k][j][i] * brainden / (60*100);
+							v = volimage[k][j][i] * brainden / 100;
+							a0 = f / (kd + f / pc);
+							a1 = oo * c1;
+							a2 = a0 * watercont;
+							a3 = v * c2;
+							a4 = a0 * hdr->oxycont1;
+							a5 = v * c3;
+							if (a4 == a5)
+								oxygenimage[k][j][i] = 0;
+							else
+								oxygenimage[k][j][i] = sx * cbf * hdr->oxycont1 * (a1 - a2 - a3) / (a4 - a5);
+							if (oxygenimage[k][j][i] > 100.)
+								oxygenimage[k][j][i] = 100.;
+							else if (oxygenimage[k][j][i] < -100.)
+								oxygenimage[k][j][i] = -100.;
+						}
+					}
+				}
+			}
+			return (OK);
+
+		} else if (process == PROC_ODIV) {	/* Oxygen Divisor (for noise analysis) */
+			for (k = 1; k <= dim[2]; ++k) {
+				for (j = 1; j <= dim[1]; ++j) {
+					for (i = 1; i <= dim[0]; ++i) {
+						f = flowimage[k][j][i] * brainden / (60*100);
+						v = volimage[k][j][i] * brainden / 100;
+						a0 = f / (kd + f / pc);
+						a4 = a0 * hdr->oxycont1;
+						a5 = v * c3;
+						oxygenimage[k][j][i] = a4 - a5;
+					}
+				}
+			}
+			return (OK);
+		}
+	} 
+	return (ERROR);
+}
+@
+
+
+3.2
+log
+@splint cleaning
+@
+text
+@d2 3
+d99 1
+a99 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 2.12 2001/06/01 15:28:47 tom Exp tom $";
+d292 1
+@
+
+
+2.12
+log
+@use f,v for cbf,cbv
+@
+text
+@d2 3
+d46 1
+a46 1
+ *	Date:			22-Sep-93
+d94 1
+d96 1
+a96 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 2.11 2001/05/31 19:33:21 tom Exp tom $";
+@
+
+
+2.11
+log
+@add steady-state model
+@
+text
+@d2 3
+d92 1
+a92 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 2.10 1999/12/13 17:04:17 tom Exp tom $";
+d125 1
+d255 3
+a257 3
+							cbf = flowimage[k][j][i];
+							cbv = volimage[k][j][i];
+							a0 = cbf / (kd + cbf / pc);
+d260 1
+a260 1
+							a3 = cbv * c2;
+d262 1
+a262 1
+							a5 = cbv * c3;
+d285 3
+a287 3
+							cbf = flowimage[k][j][i];
+							cbv = volimage[k][j][i];
+							a0 = cbf / (kd + cbf / pc);
+d290 1
+a290 1
+							a3 = cbv * c2;
+d292 1
+a292 1
+							a5 = cbv * c3;
+d311 3
+a313 3
+						cbf = flowimage[k][j][i];
+						cbv = volimage[k][j][i];
+						a0 = cbf / (kd + cbf / pc);
+d315 1
+a315 1
+						a5 = cbv * c3;
+@
+
+
+2.10
+log
+@tov revision
+@
+text
+@d2 3
+d76 1
+a76 1
+ *	Reference and Equations in:
+d78 2
+d85 1
+d89 1
+a89 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 2.9 1999/06/30 16:57:15 tom Exp tom $";
+d115 2
+a116 2
+	float           slvratio = 0.85; /* ratio of cerebral small vessel/large vessel hematocrit */
+	float           volfactr = 0.835;/* (postcapillary vol + 0.5*capillary vol)/total blood vol */
+d118 7
+a124 5
+	float           x1, x2, x3;		 /* image array elements from image arrays */
+	float           c1;				 /* slvratio * integral of blood O2 counts/100.0 */
+	float           c2;				 /* volfactr * c1 */
+	float           c3;				 /* pettconv(n) / brainden */
+	float           a1, a2, a3, a4, a5;	 /* temporary components in computation */
+d127 1
+a127 3
+/*
+ *	Check process
+ */
+d132 1
+a132 3
+/*
+ *	Process flow image
+ */
+d140 1
+a140 3
+/*
+ *	Process volume image
+ */
+a147 4
+/*
+ *  Read HDR file for oxygen image
+ */
+
+a149 2
+	if (hdr->ntype != 1)
+		return (ERROR);
+d151 1
+a151 3
+/*
+ *	Constants for oxygen processing
+ */
+d153 5
+a157 3
+	c1 = slvratio * hdr->o2cnts1 / 100.0;
+	c2 = volfactr * c1;
+	c3 = hdr->pettcnv1 / brainden;
+d159 6
+a164 20
+/*
+ *	Oxygen Extraction
+ */
+	if (process == PROC_OEF) {
+		sx = scaler;
+		for (k = 1; k <= dim[2]; ++k) {
+			for (j = 1; j <= dim[1]; ++j) {
+				for (i = 1; i <= dim[0]; ++i) {
+					x1 = oxygenimage[k][j][i];
+					if (x1 == 0.)
+						oxygenimage[k][j][i] = 0;
+					else {
+						x2 = flowimage[k][j][i];
+						x3 = volimage[k][j][i];
+						a1 = c3 * x1;
+						a2 = x2 * (hdr->awater1 * x2 + hdr->bwater1);
+						a3 = c1 * x3;
+						a4 = x2 * (hdr->aoxygen1 * x2 + hdr->boxygen1);
+						a5 = c2 * x3;
+						if (a4 == a5)
+d166 17
+a182 6
+						else
+							oxygenimage[k][j][i] = sx * (a1 - a2 - a3) / (a4 - a5);
+						if (oxygenimage[k][j][i] > 1.1)
+							oxygenimage[k][j][i] = 1.1;
+						else if (oxygenimage[k][j][i] < -1)
+							oxygenimage[k][j][i] = -1;
+d186 45
+a231 2
+		return (OK);
+	}
+d233 1
+a233 3
+/*
+ *	Rate of Oxygen Utilization (CMRO2)
+ */
+d235 6
+a240 1
+	if (process == PROC_CMRO2) {
+d242 7
+a248 15
+		for (k = 1; k <= dim[2]; ++k) {
+			for (j = 1; j <= dim[1]; ++j) {
+				for (i = 1; i <= dim[0]; ++i) {
+					x1 = oxygenimage[k][j][i];
+					if (x1 == 0.)
+						oxygenimage[k][j][i] = 0;
+					else {
+						x2 = flowimage[k][j][i];
+						x3 = volimage[k][j][i];
+						a1 = c3 * x1;
+						a2 = x2 * (hdr->awater1 * x2 + hdr->bwater1);
+						a3 = c1 * x3;
+						a4 = x2 * (hdr->aoxygen1 * x2 + hdr->boxygen1);
+						a5 = c2 * x3;
+						if (a4 == a5)
+d250 18
+a267 6
+						else
+							oxygenimage[k][j][i] = sx * x2 * hdr->oxycont1 * (a1 - a2 - a3) / (a4 - a5);
+						if (oxygenimage[k][j][i] > 100.)
+							oxygenimage[k][j][i] = 100.;
+						else if (oxygenimage[k][j][i] < -100.)
+							oxygenimage[k][j][i] = -100.;
+d271 1
+a271 3
+		}
+		return (OK);
+	}
+d273 26
+a298 12
+/*
+ *	Oxygen Divisor (for noise analysis)
+ */
+	if (process == PROC_ODIV) {
+		for (k = 1; k <= dim[2]; ++k) {
+			for (j = 1; j <= dim[1]; ++j) {
+				for (i = 1; i <= dim[0]; ++i) {
+					x2 = flowimage[k][j][i];
+					x3 = volimage[k][j][i];
+					a4 = x2 * (hdr->aoxygen1 * x2 + hdr->boxygen1);
+					a5 = c2 * x3;
+					oxygenimage[k][j][i] = a4 - a5;
+d301 16
+d318 1
+a318 3
+		return (OK);
+	}
+
+@
+
+
+2.9
+log
+@add PROC_ODIV
+@
+text
+@d2 3
+d83 1
+a83 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 2.8 1996/11/21 17:47:12 tom Exp tom $";
+a86 3
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+a87 1
+#include <image.h>
+d131 2
+a132 1
+	if (processPET (flowimage, dim, 1.0, localproc, flowname, recfp, hdr) != OK) {
+d141 2
+a142 1
+	if (processPET (volimage, dim, 1.0, localproc, volname, recfp, hdr) != OK) {
+@
+
+
+2.8
+log
+@oef cannot be greater than 1.1
+cmro2 cannot be greater than 100.
+@
+text
+@d2 4
+d60 1
+a60 1
+ *	1)  If (process != PROC_CMRO2 AND process != PROC_OEF) then return ERROR.
+d80 1
+a80 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 2.7 1996/11/05 18:48:00 tom Exp tom $";
+d124 1
+a124 1
+	if (process != PROC_OEF && process != PROC_CMRO2)
+d195 1
+d230 20
+a249 1
+	return (OK);
+@
+
+
+2.7
+log
+@remove .001 from sx scaler
+@
+text
+@d2 3
+d76 1
+a76 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 2.6 1996/09/30 22:40:30 tom Exp tom $";
+d181 4
+a184 4
+						if (oxygenimage[k][j][i] > 1100.)
+							oxygenimage[k][j][i] = 1100.;
+						else if (oxygenimage[k][j][i] < -100.)
+							oxygenimage[k][j][i] = -100.;
+d215 4
+a218 4
+						if (oxygenimage[k][j][i] > 100000.)
+							oxygenimage[k][j][i] = 100000.;
+						else if (oxygenimage[k][j][i] < -100000.)
+							oxygenimage[k][j][i] = -100000.;
+@
+
+
+2.6
+log
+@set range on CMRO2 to <= 100
+@
+text
+@d2 3
+d73 1
+a73 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 2.5 1996/09/17 17:28:49 tom Exp tom $";
+d159 1
+a159 1
+		sx = scaler / .001;
+d193 1
+a193 1
+		sx = scaler / .001;
+@
+
+
+2.5
+log
+@allocate hdr externally
+@
+text
+@d2 3
+d58 1
+d65 1
+a65 1
+ *		14-Jan-94	OEF must be between 0 and 1 (0 - 1000) (TOV)
+d70 1
+a70 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/processOxygen.c,v 2.4 1996/09/03 19:22:15 tom Exp tom $";
+d209 4
+@
+
+
+2.4
+log
+@move readhdr to processPET.c
+@
+text
+@d2 3
+d36 1
+d51 1
+a51 1
+ *	5)  If (hdr.ntype != 1) then return ERROR.
+d53 1
+a53 1
+ *	7)  If (process = PROC_CBF")  and (hdr.ntype = 2 or 4) then process as blood flow:
+d66 1
+a66 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/libimgutil/RCS/processOxygen.c,v 2.3 1996/06/21 16:54:27 tom Exp $";
+d92 1
+a92 1
+	HEADER_DATA     hdr;			 /* hdr structure */
+d118 1
+a118 1
+	if (processPET (flowimage, dim, 1.0, localproc, flowname, recfp, &hdr) != OK) {
+d127 1
+a127 1
+	if (processPET (volimage, dim, 1.0, localproc, volname, recfp, &hdr) != OK) {
+d135 1
+a135 1
+	if (readhdr (oxygenname, &hdr, recfp) == ERROR)
+d137 1
+a137 1
+	if (hdr.ntype != 1)
+d144 1
+a144 1
+	c1 = slvratio * hdr.o2cnts1 / 100.0;
+d146 1
+a146 1
+	c3 = hdr.pettcnv1 / brainden;
+d163 1
+a163 1
+						a2 = x2 * (hdr.awater1 * x2 + hdr.bwater1);
+d165 1
+a165 1
+						a4 = x2 * (hdr.aoxygen1 * x2 + hdr.boxygen1);
+d197 1
+a197 1
+						a2 = x2 * (hdr.awater1 * x2 + hdr.bwater1);
+d199 1
+a199 1
+						a4 = x2 * (hdr.aoxygen1 * x2 + hdr.boxygen1);
+d204 1
+a204 1
+							oxygenimage[k][j][i] = sx * x2 * hdr.oxycont1 * (a1 - a2 - a3) / (a4 - a5);
+@
+
+
+2.3
+log
+@set OEF limits at -100 and 1100
+@
+text
+@d2 3
+d36 2
+a37 1
+ *		writes hdr files used to rec file
+a60 1
+
+d62 1
+a62 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/libimgutil/RCS/processOxygen.c,v 2.1 1996/06/13 21:58:26 tom Exp $";
+d77 1
+a77 1
+			                       oxygenname, flowname, volname, recfp)
+d88 1
+a89 1
+	HEADER_DATA     hdr;			 /* hdr structure */
+d91 1
+a91 1
+	float           sx;			 	 /* combined scaler */
+d114 1
+a114 3
+	if (readhdr (flowname, &hdr, recfp) == ERROR)
+		return (ERROR);
+	if (processPET (flowimage, dim, 1.0, localproc, &hdr) > 0) {
+d123 1
+a123 3
+	if (readhdr (volname, &hdr, recfp) == ERROR)
+		return (ERROR);
+	if (processPET (volimage, dim, 1.0, localproc, &hdr) > 0) {
+d148 1
+a148 1
+		sx = scaler/.001;
+d182 1
+a182 1
+		sx = scaler/.001;
+@
+
+
+2.2
+log
+@permit non-physiological values for OEF
+@
+text
+@d59 1
+a59 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/libimgutil/RCS/processOxygen.c,v 2.1 1996/06/13 21:58:26 tom Exp tom $";
+d168 4
+a171 7
+
+/*	Permit non-physiological values:
+ *						if (oxygenimage[k][j][i] > 1000.)
+ *							oxygenimage[k][j][i] = 1000.;
+ *						else if (oxygenimage[k][j][i] < 0.)
+ *							oxygenimage[k][j][i] = 0.;
+ */
+@
+
+
+2.1
+log
+@eliminate some erroneous scalers left over from spideram
+add scalefactor of 1000
+@
+text
+@d2 4
+d59 1
+a59 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/libimgutil/RCS/processOxygen.c,v 2.0 1996/04/24 23:07:41 tom Exp tom $";
+d168 7
+a174 4
+						if (oxygenimage[k][j][i] > 1000.)
+							oxygenimage[k][j][i] = 1000.;
+						else if (oxygenimage[k][j][i] < 0.)
+							oxygenimage[k][j][i] = 0.;
+@
+
+
+2.0
+log
+@new library release
+@
+text
+@d2 3
+d42 1
+d55 1
+a55 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/libimgutil/RCS/processOxygen.c,v 1.1 1996/03/12 23:00:34 tom Exp tom $";
+a136 1
+	sx = scaler;
+d145 1
+d153 2
+a154 2
+						x2 = flowimage[k][j][i] * .02;
+						x3 = volimage[k][j][i] * .01;
+d179 1
+d187 2
+a188 2
+						x2 = flowimage[k][j][i] * .02;
+						x3 = volimage[k][j][i] * .01;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$
+a22 1
+ *		hdr         -   hdr structure
+d32 4
+a35 4
+ *	1)  If (process != PROC_CMOR2 AND process != PROC_OEF) then return ERROR.
+ *	2)  Process the flow image.
+ *	3)  Process the volume image.
+ *	4)  Read the hdr file associated with oxygen image.
+a37 1
+ *		(scaled by 1000 to maintain dynamic range with integer pixels)
+a38 1
+ *		(scaled by 1000 to maintain dynamic range with integer pixels)
+d46 1
+d49 1
+d51 1
+a51 1
+static char     rcsid[] = "$Header$";
+d55 1
+a57 1
+#include <myvalues.h>
+d59 1
+a59 1
+#include <imagio.h>
+d66 1
+a66 1
+			                       oxygenname, flowname, volname, recfp, hdr)
+a76 2
+	HEADER_DATA    *hdr;			 /* hdr structure */
+
+d78 1
+d80 1
+a80 2
+	float           x;			 	/* temp for pet */
+	float           sx;			 	/* combined scaler */
+d83 5
+a87 5
+	float           brainden = 1.05; /* ensity of brain (g/ml) */
+	float           x1, x2, x3;		/* image array elements from image arrays */
+	float           c1;			 	/* slvratio * integral of blood O2 counts/100.0 */
+	float           c2;			 	/* volfactr * c1 */
+	float           c3;			 	/* pettconv(n) / brainden */
+d89 1
+a89 4
+	char           *c;
+	int             localproc;		/* type of processing */
+	char           *hdrname;		/* hdr filename */
+	char           *local_hdrname;	/* local hdr filename */
+d103 3
+a105 1
+	if (processPET (flowimage, dim, 1.0, localproc, flowname, recfp, hdr) > 0) {
+d114 3
+a116 1
+	if (processPET (volimage, dim, 1.0, localproc, volname, recfp, hdr) > 0) {
+d121 1
+a121 1
+ *  Read HDR file
+d124 1
+a124 25
+	hdrname = (char *) calloc (MAXPATH, sizeof (char));
+	local_hdrname = (char *) calloc (MAXPATH, sizeof (char));
+
+	strcpy (hdrname, oxygenname);
+	c = strrchr (hdrname, '.');
+	if (c == NULL)
+		c = strrchr (hdrname, '\0');
+	strcpy (c, ".hdr");
+
+	c = strrchr (hdrname, '/');
+	if (c == NULL)
+		strcpy (local_hdrname, hdrname);
+	else
+		strcpy (local_hdrname, c + 1);
+
+	if (gethdr (local_hdrname, hdr) == 0) {
+		printf ("HDR = %s\n", local_hdrname);
+		fprintf (recfp, "%s\n", local_hdrname);
+	} else if (gethdr (hdrname, hdr) == 0) {
+		printf ("HDR = %s\n", hdrname);
+		fprintf (recfp, "%s\n", hdrname);
+	} else {
+		printf ("Error:  HDR not found\n as %s\n or %s\n", local_hdrname, hdrname);
+		free (hdrname);
+		free (local_hdrname);
+d126 1
+a126 5
+	}
+	free (hdrname);
+	free (local_hdrname);
+
+	if (hdr->ntype != 1)
+d130 1
+a130 1
+ *	Constants for oxygen processing  (scaled by 1000 to maintain dynamic range with integer pixels)
+d133 2
+a134 2
+	sx = scaler * 1000;
+	c1 = slvratio * hdr->o2cnts1 / 100.0;
+d136 1
+a136 1
+	c3 = hdr->pettcnv1 / brainden;
+d152 1
+a152 1
+						a2 = x2 * (hdr->awater1 * x2 + hdr->bwater1);
+d154 1
+a154 1
+						a4 = x2 * (hdr->aoxygen1 * x2 + hdr->boxygen1);
+d185 1
+a185 1
+						a2 = x2 * (hdr->awater1 * x2 + hdr->bwater1);
+d187 1
+a187 1
+						a4 = x2 * (hdr->aoxygen1 * x2 + hdr->boxygen1);
+d192 1
+a192 1
+							oxygenimage[k][j][i] = sx * x2 * hdr->oxycont1 * (a1 - a2 - a3) / (a4 - a5);
+d199 1
+@

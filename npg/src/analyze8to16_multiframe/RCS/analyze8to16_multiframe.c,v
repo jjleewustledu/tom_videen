@@ -1,0 +1,171 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2009.01.06.17.21.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log: analyze8to16_multiframe.c,v $
+ * Revision 1.1  2008/10/22  19:39:53  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			analyze8to16_multiframe.c
+ *	Date:			Jan 2009
+ *	Author:			Tom Videen
+ *	Description:	Convert 8-bit multi-frame ANALYZE image to 16-bit single-frame images
+ *	===============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <image.h>
+#include <nrutil.h>
+#include <ANALYZE.h>				 /* dsr */
+
+/*	----------------------------
+ *	Function:			analyze8to16_multiframe
+ *	----------------------------
+ */
+int             main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;
+	FILE           *fd_hdr;
+	FILE           *fd_in;
+	FILE           *fd_out;
+	char           *fname;
+	char           *inhdr, *inimg;
+	char           *outhdr, *outimg;
+	char           *fnum;
+	long            dim1, dim2, dim3;
+	int             num, m;
+	int             i, j, k;
+	short          *srow;
+	unsigned char  *crow;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 5) {
+		fprintf (stdout, "Usage: analyze8to16_multiframe inimg inhdr fname numframes\n");
+		return (ERROR);
+	}
+	inimg = argv[1];
+	inhdr = argv[2];
+	fname = argv[3];
+	num = atoi(argv[4]);
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (inhdr, "r")) == NULL) {
+		fprintf (stderr, "ERROR [analyze8to16_multiframe]: opening: %s\n", inhdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [analyze8to16_multiframe]: reading: %s\n", inhdr);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [analyze8to16_multiframe]: reading: %s\n", inhdr);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+	if ((fd_in = fopen (inimg, "r")) == NULL) {
+		fprintf (stderr, "ERROR [analyze8to16_multiframe]: opening: %s\n", inimg);
+		return (ERROR);
+	}
+	if (NULL == (crow = (unsigned char *) calloc (dim1, sizeof (unsigned char)))) {
+		fprintf (stderr, "ERROR [analyze8to16_multiframe]: calloc crow\n");
+		return (ERROR);
+	}
+	if (NULL == (srow = (short *) calloc (dim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [analyze8to16_multiframe]: calloc srow\n");
+		return (ERROR);
+	}
+
+/*
+ *	Read, convert, and write 7 images row by row
+ */
+
+	outhdr = (char *) malloc (100 * sizeof (char));
+	outimg = (char *) malloc (100 * sizeof (char));
+	fnum = (char *) malloc (2 * sizeof (char));
+
+	for (m = 1; m <= num; m++) {
+		sprintf (fnum,"%1d",m);
+		(void) strcpy (outhdr, fname);
+		(void) strcat (outhdr, fnum);
+		(void) strcat (outhdr, ".hdr");
+		(void) strcpy (outimg, fname);
+		(void) strcat (outimg, fnum);
+		(void) strcat (outimg, ".img");
+		fprintf (stdout,"Writing %s  %s\n",outhdr, outimg);
+		if ((fd_out = fopen (outimg, "w")) == NULL) {
+			fprintf (stderr, "ERROR [analyze8to16_multiframe]: opening: %s\n", outimg);
+			return (ERROR);
+		}
+		for (i = 0; i < dim3; i++) {
+			for (j = 0; j < dim2; j++) {
+				if ((fread (crow, sizeof (unsigned char), dim1, fd_in)) != dim1) {
+					fprintf (stderr, "ERROR [analyze8to16_multiframe]: reading: %s\n", inimg);
+					return (ERROR);
+				}
+				for (k = 0; k < dim1; k++)
+					srow[k] = crow[k];
+				if ((fwrite (srow, sizeof (short), dim1, fd_out)) != dim1) {
+					fprintf (stderr, "ERROR [analyze8to16_multiframe]: writing: %s\n", outimg);
+					return (ERROR);
+				}
+			}
+		}
+		(void) fclose (fd_out);
+
+		if ((fd_hdr = fopen (outhdr, "w")) == NULL) {
+			fprintf (stderr, "ERROR [analyze8to16_multiframe]: opening: %s\n", outhdr);
+			return (ERROR);
+		}
+		hdr.dime.datatype = 4;
+		hdr.dime.bitpix = 16;
+		if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+			fprintf (stderr, "ERROR [analyze8to16_multiframe]: writing: %s\n", outhdr);
+			return (ERROR);
+		}
+	}
+
+	(void) fclose (fd_hdr);
+	(void) fclose (fd_in);
+	free (crow);
+	free (srow);
+	fprintf (stdout, "Converted: %s to %d images\n", inimg, num);
+	return (OK);
+}
+@

@@ -1,0 +1,246 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2004.02.13.21.26.10;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.12.30.16.25.14;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@/*	$Log: combinepln_ana.c,v $
+ * Revision 1.1  1999/12/30  16:25:14  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			combinepln_ana.c
+ *	Date:			Feb 1999
+ *	Author:			Tom Videen
+ *	Description:	Combine Analyze single plane images into a single frame
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/combinepln_ana/RCS/combinepln_ana.c,v 1.1 1999/12/30 16:25:14 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			combinepln_ana
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;	 /* input file */
+	char           *root;			 /* output root */
+	char           *img2, *hdr2;	 /* output file */
+	char           *num;			 /* number */
+	long            dim1, dim2, dim3; /* dimensions of image */
+	long            first, last;
+	long            psize, npln, i;
+	short          *img, *plane;	 /* image */
+
+	if (argc != 6) {
+		printf ("Usage: combinepln_ana root img1 hdr1 last first\n");
+		return (ERROR);
+	}
+	root = argv[1];
+	hdr2 = argv[2];
+	img2 = argv[3];
+	last = atoi(argv[4]);
+	first = atoi(argv[5]);
+	if (first < last) {
+		printf ("ERROR [combinepln_ana]: first > last\n");
+		return (ERROR);
+	}
+	npln = first - last + 1;
+	hdr1 = (char *) calloc (100, sizeof (char));
+	img1 = (char *) calloc (100, sizeof (char));
+	num  = (char *) calloc (10, sizeof (char));
+	if (hdr1 == NULL) return (ERROR);
+	if (img1 == NULL) return (ERROR);
+	if (num == NULL) return (ERROR);
+
+/*	Read first image plane */
+
+	(void) strcpy (hdr1, root);
+	(void) sprintf (num,"%-i", (int) first);
+	(void) strcat (hdr1, num);
+	(void) strcpy (img1, hdr1);
+	(void) strcat (hdr1, ".hdr");
+	(void) strcat (img1, ".img");
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+	if (dim3 != 1) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Not single plane image: %s\n", hdr1);
+		return (ERROR);
+	}
+	psize = dim1*dim2;
+	img = (short*) calloc (psize*npln, sizeof (short));
+	plane = img;
+	if (img == NULL) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	fprintf (stdout,"Reading %s\n", img1);
+	if ((fread (plane, sizeof(short), psize, fd_img)) != psize) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Reading: %s\n", img1);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+
+/*	Read rest of single-plane images */
+
+	first--;
+	for (i = first; i >= last; i--) {
+		plane += psize;
+		(void) strcpy (img1, root);
+		(void) sprintf (num,"%-i", (int) i);
+		(void) strcat (img1, num);
+		(void) strcat (img1, ".img");
+		if ((fd_img = fopen (img1, "r")) == 0) {
+			fprintf (stderr, "ERROR [combinepln_ana]: Unable to open %s\n", img1);
+			return (ERROR);
+		}
+		fprintf (stdout,"Reading %s\n", img1);
+		if ((fread (plane, sizeof(short), psize, fd_img)) != psize) {
+			fprintf (stderr, "ERROR [combinepln_ana]: Reading: %s\n", img1);
+			return (ERROR);
+		}
+		(void) fclose (fd_img);
+	}
+
+/* Write image */
+
+	hdr.dime.dim[3] = npln;
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Unable to open %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	if ((fd_img = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Unable to open %s\n", img2);
+		return (ERROR);
+	}
+	fprintf (stdout,"Writing %s\n", img2);
+	if ((fwrite (img, sizeof (short), psize*npln, fd_img)) != psize*npln) {
+		fprintf (stderr, "ERROR [combinepln_ana]: Error writing to: %s\n", img2);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	free (img);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d7 1
+a7 1
+ *	Date:			Feb-99
+d12 1
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/combinepln_ana/RCS/combinepln_ana.c,v 1.1 1999/02/18 20:14:43 tom Exp tom $";
+d61 3
+d67 6
+a72 6
+	strcpy (hdr1, root);
+	sprintf (num,"%-i", (int) first);
+	strcat (hdr1, num);
+	strcpy (img1, hdr1);
+	strcat (hdr1, ".hdr");
+	strcat (img1, ".img");
+d100 1
+a100 1
+	fclose (fd_hdr);
+a107 1
+
+d121 1
+a121 1
+	fclose (fd_img);
+d128 4
+a131 4
+		strcpy (img1, root);
+		sprintf (num,"%-i", (int) i);
+		strcat (img1, num);
+		strcat (img1, ".img");
+d141 1
+a141 1
+		fclose (fd_img);
+d155 1
+a155 1
+	fclose (fd_hdr);
+d165 1
+a165 1
+	fclose (fd_img);
+@

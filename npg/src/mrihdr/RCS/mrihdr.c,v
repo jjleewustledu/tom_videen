@@ -1,0 +1,536 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.17.14.39.09;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2002.03.12.17.41.53;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.12.17.18.02.41;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.12.17.18.01.45;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.01.16.15.28.56;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.01.09.17.57.43;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.12.23.20.25.38;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*$Id: mrihdr.c,v 1.7 2002/03/12 17:41:53 tom Exp tom $*/
+/*$Log: mrihdr.c,v $
+ * Revision 1.7  2002/03/12  17:41:53  tom
+ * add TR, Study time, Image distance
+ *
+ * Revision 1.6  1999/12/17  18:02:41  tom
+ * sync version
+ *
+ * Revision 1.4  1999/12/17  18:01:45  tom
+ * lint cleaning
+ *
+ * Revision 1.3  1997/01/16  15:28:56  tom
+ * add TR, TE
+ *
+ * Revision 1.2  1995/01/09  17:57:43  tom
+ * add pixel size col
+ *
+ * Revision 1.1  1994/12/23  20:25:38  tom
+ * Initial revision
+ **/
+/*  ===============================================================================
+ *  Module:         mrihdr.c
+ *  Date:           Dec 1994
+ *  Author:         Tom Videen
+ *  Description:    Read info from header of a Siemens MRI image header.
+ *	History:
+ *		09-Jan-95 TOV Add pixel size col to output.
+ *  ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mrihdr/RCS/mrihdr.c,v 1.7 2002/03/12 17:41:53 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <lib3_file_transform.h>		 /* Numaris 3 User's Library */
+
+#define U_LONG unsigned long
+#define U_SHORT unsigned short
+#define BytesPerPixelShort 2
+#define BytesPerPixelLong 4
+#define U3_isStatusError(s,e) (((s)^(e)) == 0)
+#define MAXSTR 256
+#define PERMS  0666
+#define TRANSVERSE '\000'
+#define CORONAL    '\001'
+#define SAGITTAL   '\002'
+
+/*  ----------------------------
+ *  Function:   mrihdr
+ *  ----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	unsigned long   U3GetHeader ();
+	unsigned long   U3GetHeaderType ();
+	unsigned long   U3GetDataType ();
+	unsigned long   U3Open ();
+	unsigned long   U3Close ();
+	unsigned long   U3Open ();
+
+	FILE           *FileInp_p;		 /* input file pointer */
+	char           *filename;		 /* input file name */
+	long            Status;			 /* shows an actual status */
+	U3_header_type_t HeadType;
+	U3_data_type_t  DataType;
+	U3_size_type_t  DataSize;
+	header_t       *HeadBuffer;		 /* header buffer */
+
+	char            view[6][10];
+	char            num[12];
+	char            study_date[12];
+	char            study_time[10];
+	char            institution[MAXSTR];
+	char            model[MAXSTR];
+	char            subject_id[MAXSTR];
+	char            ParameterFileName[MAXSTR];
+	char            SequenceFileName[MAXSTR];
+	char            SequenceDescription[MAXSTR];
+
+	int             bitsperpix;
+	int             orientation;
+	float			tr, te, ti;
+
+	strcpy (view[1], "View_FEET");
+	strcpy (view[2], "View_HEAD");
+	strcpy (view[3], "View_AtoP");
+	strcpy (view[4], "View_LtoR");
+	strcpy (view[5], "View_PtoA");
+	strcpy (view[6], "View_RtoL");
+
+/*
+ *  Get command line arguments and initialize filenames:
+ *  ---------------------------------------------------
+ */
+
+	if (argc != 2) {
+		fprintf (stderr,"Usage: mrihdr <filename>\n");
+		return (1);
+	}
+	filename = argv[1];
+
+/* open file and check for success */
+
+	Status = U3Open (&FileInp_p, filename, "r");
+	if (Status == 0) {
+		fprintf (stdout, "%s ", filename);
+	} else if (U3_isStatusError (Status, U3_NO_PERMISSION)) {
+		fprintf (stderr,"\nERROR: mrihdr : inadequate permission on data file %s\n", filename);
+		return (1);
+	} else if (U3_isStatusError (Status, U3_INVLD_FILE_PATH)) {
+		fprintf (stderr,"\nERROR: mrihdr : invalid file path for %s\n", filename);
+		return (1);
+	} else if (U3_isStatusError (Status, U3_UNKNOWN_HEADER)) {
+		fprintf (stderr,"\nERROR: mrihdr : file %s is not a valid image file\n", filename);
+		return (1);
+	} else
+		return (1);
+
+/* determine header type */
+
+	if ((U3GetHeaderType (FileInp_p, &HeadType)) != 0) {
+		fprintf (stderr,"\nERROR: mrihdr : unknown header type.\n");
+		return (1);
+	}
+	switch (HeadType) {
+	case U3_internal_head_type:
+		fprintf (stdout," (Numaris 3 format");
+		break;
+
+	case U3_nema_head_type:
+		fprintf (stdout," (ACR-NEMA format");
+		break;
+
+	case U3_numaris1_head_type:
+		fprintf (stdout," (Numaris 1 format");
+		break;
+
+	case U3_numaris2_head_type:
+		fprintf (stdout," (Numaris 2 format");
+		break;
+
+	default:
+		fprintf (stderr,"\nThe data file format is unknown.\n");
+		return (1);
+	}
+
+/* check data type and data size */
+
+	if ((U3GetDataType (FileInp_p, &DataType, &DataSize)) != 0) {
+		fprintf (stderr,"\nERROR: mrihdr : unknown data type.\n");
+		return (1);
+	}
+/* make sure it is an Image file */
+
+	if (DataType == U3_image_data_type) {
+		fprintf (stdout,"--image file)\n");
+	} else {
+		fprintf (stderr,"\nERROR: mrihdr : Data file is not an image file.\n");
+		return (1);
+	}
+
+
+/* allocate memory space for the header buffer */
+
+	if ((HeadBuffer = (header_t *) malloc (sizeof (header_t))) == 0) {
+		fprintf (stderr,"\nERROR : mrihdr : unable to allocate memory.\n");
+		return (1);
+	}
+/* get the header buffer */
+
+	if ((U3GetHeader (FileInp_p, HeadBuffer)) != 0) {
+		free (HeadBuffer);
+		fprintf (stderr,"\nERROR: mrihdr : unable to get the header.\n");
+		return (1);
+	}
+/*
+ *	Get image header information and orientation
+ */
+	strcpy (institution, HeadBuffer->G08.Ide.InstitutionID);
+	strcpy (model, HeadBuffer->G08.Ide.ManufacturerModel);
+	strcpy (subject_id, HeadBuffer->G10.Pat.PatientId);
+
+	sprintf (num, "%d", (int) HeadBuffer->G08.Ide.StudyDate.Year);
+	strcpy (study_date, num);
+	strcat (study_date, ":");
+	sprintf (num, "%d", (int) HeadBuffer->G08.Ide.StudyDate.Month);
+	strcat (study_date, num);
+	strcat (study_date, ":");
+	sprintf (num, "%d", (int) HeadBuffer->G08.Ide.StudyDate.Day);
+	strcat (study_date, num);
+
+	sprintf (num, "%2d", (int) HeadBuffer->G08.Ide.StudyTime.Hour);
+	strcpy (study_time, num);
+	strcat (study_time, ":");
+	sprintf (num, "%2d", (int) HeadBuffer->G08.Ide.StudyTime.Minute);
+	strcat (study_time, num);
+	strcat (study_time, ":");
+	sprintf (num, "%2d", (int) HeadBuffer->G08.Ide.StudyTime.Second);
+	strcat (study_time, num);
+
+	strcpy (ParameterFileName, HeadBuffer->G19.Acq4.CM.ParameterFileName);
+	strcpy (SequenceFileName, HeadBuffer->G19.Acq4.CM.SequenceFileName);
+	strcpy (SequenceDescription, HeadBuffer->G19.Acq4.CM.SequenceDescription);
+	bitsperpix = HeadBuffer->G28.Pre.BitsAllocated;
+	orientation = HeadBuffer->G21.Rel1.CM.ViewDirection;
+	if (orientation < 1 && orientation > 6) {
+		fprintf (stderr,"\nERROR: mrihdr: Incompatible View Direction.\n");
+		return (1);
+	}
+	tr = HeadBuffer->G18.Acq.RepetitionTime;
+	te = HeadBuffer->G18.Acq.EchoTime;
+	ti = HeadBuffer->G18.Acq.InversionTime;
+/*
+ * Write info
+ */
+
+	fprintf (stdout, "Orientation      := %s\n", view[orientation]);
+	fprintf (stdout, "System           := %s\n", model);
+	fprintf (stdout, "Institution      := %s\n", institution);
+	fprintf (stdout, "Subject ID       := %s\n", subject_id);
+	fprintf (stdout, "Study date       := %s\n", study_date);
+	fprintf (stdout, "Study time       := %s\n", study_time);
+	fprintf (stdout, "Number format    := signed integer\n");
+	fprintf (stdout, "Bytes/pixel      := %d\n", bitsperpix / 8);
+	fprintf (stdout, "Dimensions       := 3\n");
+	fprintf (stdout, "Rows             := %d\n", HeadBuffer->G28.Pre.Rows);
+	fprintf (stdout, "Columns          := %d\n", HeadBuffer->G28.Pre.Columns);
+	fprintf (stdout, "Pixel size row   := %f\n", HeadBuffer->G28.Pre.PixelSize.Row);
+	fprintf (stdout, "Pixel size col   := %f\n", HeadBuffer->G28.Pre.PixelSize.Col);
+	fprintf (stdout, "Pixel thickness  := %f\n", HeadBuffer->G18.Acq.SliceThickness);
+	fprintf (stdout, "Image distance   := %.2f\n", HeadBuffer->G21.Rel1.CM.ImageDistance);
+	fprintf (stdout, "Parameter file   := %s\n", ParameterFileName);
+	fprintf (stdout, "Sequence file    := %s\n", SequenceFileName);
+	fprintf (stdout, "Sequence         := %s\n", SequenceDescription);
+	fprintf (stdout, "TR               := %.1f\n", tr);
+	fprintf (stdout, "TE               := %.1f\n", te);
+	if (ti > 0)
+		fprintf (stdout, "TI               := %.1f\n", ti);
+
+	free (HeadBuffer);
+	Status = U3Close (FileInp_p);
+	return (Status);
+}
+@
+
+
+1.7
+log
+@add TR, Study time, Image distance
+@
+text
+@d1 1
+a1 1
+/*$Id: mrihdr.c,v 1.6 1999/12/17 18:02:41 tom Exp tom $*/
+d3 3
+d23 1
+a23 1
+ *  Date:           23-Dec-94
+d30 1
+d32 1
+a32 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mrihdr/RCS/mrihdr.c,v 1.6 1999/12/17 18:02:41 tom Exp tom $";
+@
+
+
+1.6
+log
+@sync version
+@
+text
+@d1 1
+a1 1
+/*$Id: mrihdr.c,v 1.4 1999/12/17 18:01:45 tom Exp tom $*/
+d3 3
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mrihdr/RCS/mrihdr.c,v 1.4 1999/12/17 18:01:45 tom Exp tom $";
+d73 1
+a79 1
+	char            order[4];
+d83 1
+a83 1
+	float			tr, te;
+d183 1
+d192 10
+a205 3
+	strncpy (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.X, 1);
+	strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Y, 1);
+	strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Z, 1);
+d213 1
+d218 1
+a218 1
+	fprintf (stdout, "Orientation      := %s  (%s)\n", view[orientation], order);
+d223 1
+d232 1
+d236 4
+a239 2
+	fprintf (stdout, "TR               := %f\n", tr);
+	fprintf (stdout, "TE               := %f\n", te);
+@
+
+
+1.4
+log
+@lint cleaning
+@
+text
+@d1 1
+a1 1
+/*$Id: mrihdr.c,v 1.3 1997/01/16 15:28:56 tom Exp tom $*/
+d3 3
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mrihdr/RCS/mrihdr.c,v 1.3 1997/01/16 15:28:56 tom Exp tom $";
+@
+
+
+1.3
+log
+@add TR, TE
+@
+text
+@d1 1
+a1 1
+/*$Id: mrihdr.c,v 1.2 1995/01/09 17:57:43 tom Exp tom $*/
+d3 3
+d21 3
+d26 1
+a27 1
+#include <fcntl.h>
+a40 2
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mrihdr/RCS/mrihdr.c,v 1.2 1995/01/09 17:57:43 tom Exp tom $";
+
+d49 6
+a76 5
+	int             slc;
+	int             i, j, k, n;
+
+	short           xdim, ydim, zdim;	 /* image dimensions */
+	float           xpix, ypix, zpix;	 /* pixel sizes (mm) */
+d92 2
+a93 2
+		printf ("Usage: mrihdr <filename>\n");
+		exit (1);
+d101 1
+a101 1
+		printf ("%s ", filename);
+d103 2
+a104 2
+		printf ("\nERROR: mrihdr : inadequate permission on data file %s\n", filename);
+		exit (1);
+d106 2
+a107 2
+		printf ("\nERROR: mrihdr : invalid file path for %s\n", filename);
+		exit (1);
+d109 2
+a110 2
+		printf ("\nERROR: mrihdr : file %s is not a valid image file\n", filename);
+		exit (1);
+d112 1
+a112 1
+		exit (1);
+d116 3
+a118 3
+	if ((Status = U3GetHeaderType (FileInp_p, &HeadType)) != 0) {
+		printf ("\nERROR: mrihdr : unknown header type.\n");
+		exit (1);
+d122 1
+a122 1
+		printf (" (Numaris 3 format");
+d126 1
+a126 1
+		printf (" (ACR-NEMA format");
+d130 1
+a130 1
+		printf (" (Numaris 1 format");
+d134 1
+a134 1
+		printf (" (Numaris 2 format");
+d138 2
+a139 2
+		printf ("\nThe data file format is unknown.\n");
+		exit (1);
+d144 3
+a146 3
+	if ((Status = U3GetDataType (FileInp_p, &DataType, &DataSize)) != 0) {
+		printf ("\nERROR: mrihdr : unknown data type.\n");
+		exit (1);
+d151 1
+a151 1
+		printf ("--image file)\n");
+d153 2
+a154 2
+		printf ("\nERROR: mrihdr : Data file is not an image file.\n");
+		exit (1);
+d161 2
+a162 2
+		printf ("\nERROR : mrihdr : unable to allocate memory.\n");
+		exit (1);
+d166 1
+a166 1
+	if ((Status = U3GetHeader (FileInp_p, HeadBuffer)) != 0) {
+d168 2
+a169 2
+		printf ("\nERROR: mrihdr : unable to get the header.\n");
+		exit (1);
+d177 1
+a177 1
+	sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Year);
+d180 1
+a180 1
+	sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Month);
+d183 1
+a183 1
+	sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Day);
+d194 2
+a195 2
+		printf ("\nERROR: mrihdr: Incompatible View Direction.\n");
+		exit (1);
+d224 1
+a224 1
+	exit (0);
+@
+
+
+1.2
+log
+@add pixel size col
+@
+text
+@d1 1
+a1 1
+/*$Id: mrihdr.c,v 1.1 1994/12/23 20:25:38 tom Exp tom $*/
+d3 3
+d35 1
+a35 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/mrihdr/RCS/mrihdr.c,v 1.1 1994/12/23 20:25:38 tom Exp tom $";
+d72 1
+a186 1
+
+d192 2
+d198 18
+a215 16
+	fprintf (stdout, "Orientation     := %s  (%s)\n", view[orientation], order);
+	fprintf (stdout, "System          := %s\n", model);
+	fprintf (stdout, "Institution     := %s\n", institution);
+	fprintf (stdout, "Subject ID      := %s\n", subject_id);
+	fprintf (stdout, "Study date      := %s\n", study_date);
+	fprintf (stdout, "Number format   := signed integer\n");
+	fprintf (stdout, "Bytes/pixel     := %d\n", bitsperpix / 8);
+	fprintf (stdout, "Dimensions      := 3\n");
+	fprintf (stdout, "Rows            := %d\n", HeadBuffer->G28.Pre.Rows);
+	fprintf (stdout, "Columns         := %d\n", HeadBuffer->G28.Pre.Columns);
+	fprintf (stdout, "Pixel size row  := %f\n", HeadBuffer->G28.Pre.PixelSize.Row);
+	fprintf (stdout, "Pixel size col  := %f\n", HeadBuffer->G28.Pre.PixelSize.Col);
+	fprintf (stdout, "Pixel thickness := %f\n", HeadBuffer->G18.Acq.SliceThickness);
+	fprintf (stdout, "Parameter file  := %s\n", ParameterFileName);
+	fprintf (stdout, "Sequence file   := %s\n", SequenceFileName);
+	fprintf (stdout, "Sequence        := %s\n", SequenceDescription);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d11 2
+d32 1
+a32 1
+static char     rcsid[] = "$Header$";
+d203 2
+a204 1
+	fprintf (stdout, "Pixel size      := %f\n", HeadBuffer->G28.Pre.PixelSize.Row);
+@

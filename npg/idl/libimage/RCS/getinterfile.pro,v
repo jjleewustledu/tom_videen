@@ -1,0 +1,496 @@
+head	1.15;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.15
+date	2004.04.12.18.56.41;	author tom;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	2001.12.20.20.10.37;	author tom;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	2001.12.20.15.40.49;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	2001.12.20.15.18.49;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	2000.09.22.15.39.29;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	2000.07.18.18.35.06;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2000.06.27.16.18.15;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2000.06.27.15.55.35;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2000.06.20.21.43.44;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2000.02.11.21.56.51;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.09.20.16.48.39;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.08.31.15.15.37;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.08.27.20.55.12;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.08.27.17.22.45;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.01.30.18.46.09;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.15
+log
+@read scale_factor
+@
+text
+@FUNCTION GETINTERFILE, img, msg
+   COMMON IMAGE_UTILS
+   
+   fname = img.fname
+   IF (strlen(fname) EQ 0) THEN BEGIN
+      msg =  'No file entered'
+      RETURN, -1
+   ENDIF 
+   i = rstrpos(fname,'.')
+   IF (i GT 0) THEN BEGIN
+      hname = strmid(fname,0,i)+'    '
+      strput, hname,'.ifh', i
+   ENDIF ELSE hname = fname + '.ifh'
+   openr,lun, hname, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot OPEN '+hname
+      RETURN, -1
+   ENDIF
+   str = ''
+   readf, lun, str
+   IF ((strpos(str,'INTERFILE') NE 0) AND (strpos(str,'!INTERFILE') NE 0)) THEN BEGIN
+      msg = 'Cannot read as Interfile: '+fname
+      close, lun
+      free_lun, lun
+      RETURN, -1
+   ENDIF
+   img.itype = INTERFILE
+   img.dim[0] = 1
+   img.dim[1] = 1
+   img.dim[2] = 1
+   img.dim[3] = 1
+   img.scale =  1.0
+   revx = 0
+   revy = 0
+   revz = 0
+   k = rstrpos(fname,'/')
+   IF (k GT 0) THEN path = strmid(fname,0,k+1) ELSE path = ''
+
+   WHILE (NOT eof(lun)) DO BEGIN
+      readf,lun,str
+      p = 0
+      WHILE (P GE 0) DO BEGIN
+         p = strpos(str,'!')
+         IF (P GE 0) THEN strput, str, ' ', p
+      ENDWHILE
+      k = strpos(str,':=')
+      key = strtrim(strmid(str,0,k),2)
+      value = strtrim(strmid(str,k+2,256),2)
+      CASE key OF
+         'name of data file': BEGIN
+            k = rstrpos(value,'/')
+            IF (k LT 0) THEN fname = path+value $
+            ELSE fname = value
+         END
+         'number format': BEGIN
+            CASE value OF
+               'byte': img.ntype = type(0B)
+               'signed integer': img.ntype = type(0)
+               'long integer': img.ntype = type(0L)
+               'float': img.ntype = type(0.0)
+               'double': img.ntype = type(0.0D)
+               ELSE: img.ntype = type(0)
+            ENDCASE
+         END
+         'number of bytes per pixel': BEGIN
+            nbytes = value
+            CASE value OF
+               '1': img.ntype = type(0B)
+               '2': img.ntype = type(0)
+               '4': 
+               '8': 
+               ELSE: BEGIN
+                  msg = 'Unrecognized number format '+fname
+                  close, lun
+                  free_lun, lun
+                  RETURN, -1
+               ENDELSE 
+            ENDCASE
+         END
+         'matrix size [1]': img.dim[0] = fix(value)
+         'matrix size [2]': img.dim[1] = fix(value)
+         'matrix size [3]': img.dim[2] = fix(value)
+         'matrix size [4]': img.dim[3] = fix(value)
+         'scaling factor (mm/pixel) [1]': img.pdim[0] = float(value)
+         'scaling factor (mm/pixel) [2]': img.pdim[1] = float(value)
+         'scaling factor (mm/pixel) [3]': img.pdim[2] = float(value)
+         'matrix initial element [1]': IF (strpos(value,'right') EQ 0) THEN revx = 1
+         'matrix initial element [2]': IF (strpos(value,'posterior') EQ 0) THEN revy = 1
+         'matrix initial element [3]': IF (strpos(value,'inferior') EQ 0) THEN revz = 1
+         'atlas origin [1]': img.org[0] = float(value)
+         'atlas origin [2]': img.org[1] = float(value)
+         'atlas origin [3]': img.org[2] = float(value)
+         'scale_factor': img.scale = float(value)
+         ELSE:
+      ENDCASE
+   ENDWHILE
+   close,lun
+   
+   dim = lonarr(4)
+   FOR k=0,3 DO dim[k] = img.dim[k]
+
+   fp = img.fp
+   lp = img.lp
+   ff = img.ff
+   lf = img.lf
+   IF (lp GT dim[2]) THEN lp = dim[2]
+   IF (fp GT lp OR fp LT 1) THEN BEGIN
+      msg = 'Cannot read plane '+string(fp)+' from ' + fname
+      RETURN, -1
+   ENDIF 
+   dim2 = long(lp-fp+1)
+   IF (revz) THEN fpln = dim[2]-lp ELSE fpln = fp-1
+   slice = long(fpln)*dim[0]*dim[1]*fix(nbytes)
+   IF (lf GT dim[3]) THEN lf = dim[3]
+   IF (ff GT img.lf) THEN BEGIN
+      msg = 'Cannot read frame '+string(ff)+' from ' + fname
+      RETURN, -1
+   ENDIF 
+   dim3 = long(lf-ff+1)
+   img.dim[2] = dim2
+   img.dim[3] = dim3
+   
+   CASE img.ntype OF
+      1: data = bytarr(dim[0],dim[1],dim2,dim3)
+      2: data = intarr(dim[0],dim[1],dim2,dim3)
+      3: data = lonarr(dim[0],dim[1],dim2,dim3)
+      4: data = fltarr(dim[0],dim[1],dim2,dim3)
+      5: data = dblarr(dim[0],dim[1],dim2,dim3)
+      ELSE: BEGIN
+         img.fname = ''
+         msg = 'ILLEGAL data type for ' + fname
+         RETURN, -1
+      ENDELSE
+   ENDCASE
+
+   IF (img.data NE ptr_new()) THEN ptr_free, img.data
+   openr,lun,fname
+   FOR k=ff, lf DO BEGIN 
+      offset = long(k-1)*dim[0]*dim[1]*dim[2]*fix(nbytes) + slice
+      CASE img.ntype OF
+         1: temp = assoc(lun, bytarr(dim[0],dim[1],dim2), offset)
+         2: temp = assoc(lun, intarr(dim[0],dim[1],dim2), offset)
+         3: temp = assoc(lun, lonarr(dim[0],dim[1],dim2), offset)
+         4: temp = assoc(lun, fltarr(dim[0],dim[1],dim2), offset)
+         5: temp = assoc(lun, dblarr(dim[0],dim[1],dim2), offset)
+      ENDCASE
+      data[*,*,*,k-ff] = temp[0]
+      nn = where(finite(data) EQ 0, count)
+      IF (count GT 0) THEN data[nn] = 0
+   ENDFOR 
+   IF (revz AND (lp NE fp)) THEN data = reverse(data,3)
+   IF (revy) THEN data = reverse(data,2)
+   IF (revx) THEN data = reverse(data,1)
+   IF (img.scale NE 1.0) THEN data = img.scale * data
+   dptr = ptr_new(data)
+   close,lun
+   free_lun,lun
+   
+   img.fp = fp
+   img.lp = lp
+   img.ff = ff
+   img.lf = lf
+
+   IF (revx EQ 0 AND revy EQ 0 AND revz EQ 0) THEN img.order = 0 $
+   ELSE IF (revx EQ 1 AND revy EQ 1 AND revz EQ 1) THEN img.order = 1 $
+   ELSE IF (revx EQ 1 AND revy EQ 0 AND revz EQ 0) THEN img.order = 2 $
+   ELSE img.order = -1
+   
+   img.gcal = 1.0
+   img.ical = 1.0
+   FOR k=0,8 DO img.mcal[k] = 0.0
+   img.start = 0
+   img.len = 0
+   img.min = min(data)
+   img.max = max(data)
+   img.data = dptr
+   RETURN, 0
+END
+@
+
+
+1.14
+log
+@*** empty log message ***
+@
+text
+@d32 1
+d93 1
+d154 1
+a168 1
+   img.scale =  1.0
+@
+
+
+1.13
+log
+@*** empty log message ***
+@
+text
+@d146 2
+a147 4
+      IF (img.ntype EQ 5) THEN BEGIN
+         nn = where(finite(data) EQ 0, count)
+         IF (count GT 0) THEN data[nn] = 0.0D
+      ENDIF
+@
+
+
+1.12
+log
+@read type double setting all NaN to 0
+@
+text
+@d147 2
+a148 2
+         nn = where(finite(data) EQ 0)
+         data[nn] = 0.0D
+@
+
+
+1.11
+log
+@ff,lf reset
+@
+text
+@d60 1
+d69 2
+a70 1
+               '4':
+d126 1
+d143 1
+d146 4
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d152 2
+a153 2
+   ;img.ff = ff
+   ;img.lf = lf
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d157 2
+a158 1
+   ELSE img.order = 2
+@
+
+
+1.8
+log
+@fix name bug
+@
+text
+@a153 1
+print,ff,lf
+@
+
+
+1.7
+log
+@fix bugs for multiframe images
+@
+text
+@d9 5
+a13 3
+   hname = fname
+   k = rstrpos(fname,'.img')
+   IF (k GT 0) THEN strput, hname,'.ifh', k
+d111 1
+a111 1
+   IF (ff GT lf) THEN BEGIN
+d152 3
+a154 2
+   img.ff = ff
+   img.lf = lf
+@
+
+
+1.6
+log
+@get origin
+@
+text
+@d98 2
+d107 1
+a107 1
+   slice = long(fpln)*dim[0]*dim[1]*nbytes
+d113 1
+a113 1
+   dim3 = long(ff-lf+1)
+d131 2
+a132 2
+   FOR k=ff-1, lf-1 DO BEGIN 
+      offset = long(k)*dim[0]*dim[1]*dim[2] + slice
+d134 4
+a137 4
+         1: temp = assoc(lun, bytarr(dim[0],dim[1],dim2),offset)
+         2: temp = assoc(lun, intarr(dim[0],dim[1],dim2),offset)
+         3: temp = assoc(lun, lonarr(dim[0],dim[1],dim2),offset)
+         4: temp = assoc(lun, fltarr(dim[0],dim[1],dim2),offset)
+d139 1
+a139 1
+      data[*,*,*,k] = temp[0]
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d85 3
+a154 3
+   img.org[0] = 0
+   img.org[1] = 0
+   img.org[2] = 0
+@
+
+
+1.4
+log
+@append path to fname extracted from ifh key
+@
+text
+@a11 2
+
+print,hname
+d92 1
+d96 1
+a96 1
+   IF (fp GT lp) THEN BEGIN
+a110 2
+   ff = img.ff
+   lf = img.lf
+a124 1
+print,fname
+a136 1
+   ;;IF (revz AND (lp GT fp)) THEN data = reverse(data,3)
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d13 1
+d16 1
+a16 1
+      msg = 'Cannot OPEN '+fname
+d35 2
+d49 5
+a53 1
+         'name of data file': fname = value
+d128 1
+@
+
+
+1.2
+log
+@treat ! as white space in keys
+@
+text
+@d132 2
+a133 1
+   IF (revz AND (lp GT fp)) THEN data = reverse(data,3)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d9 1
+d11 1
+a11 2
+   hname = fname
+   strput, hname,'.ifh', k
+d15 1
+a15 1
+      msg = 'Cannot open '+fname
+d20 1
+a20 1
+   IF (strpos(str,'INTERFILE') NE 0) THEN BEGIN
+d37 5
+d46 1
+d95 1
+a95 1
+   IF (revz) THEN fpln = dim[2]-lp
+d144 4
+a147 1
+   img.order = 1
+@

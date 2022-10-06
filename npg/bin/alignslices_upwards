@@ -1,0 +1,135 @@
+#!/bin/csh
+# Program:	alignslices_upwards
+# Author:	Tom Videen
+# Date:		Jun 2005
+# Function:	Align slices in an Analyze image.
+# 	Separates 3D image into single-slice images;
+#	Uses alignlinear to align these in 2D;
+#	Copies slices as is above FIRST and below LAST slices;
+#	LAST slice is reference for all slices FIRST to LAST;
+#	Align adjacent images and compute a combined_air file for the
+#	new slice using all air files from the reference slice;
+#	Air files are used to reslice single-slice images,
+#	and these are merged into a single 3D image.
+#	All single-slice images are removed but air files and a log remain.
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv != 7) then
+	echo "Usage:  alignslices_upwards in out thresh first last blur costfn"
+	echo " e.g.,  alignslices_upwards p5000ct0 p5000ct 1000 9 39 6 2"
+	exit 1
+endif
+
+set IN    = $1
+set OUT   = $2
+set THR   = $3
+set FIRST = $4
+set LAST  = $5
+set BLUR  = $6
+set COST  = $7
+set NAM = ${OUT}_
+set LOGFILE = ${OUT}_align_slices.log
+
+unalias mv
+unalias rm
+
+if (! -e $IN.img) then
+	echo "ERROR [alignslices_upwards]: $IN.img does not exist.
+	exit 1
+endif
+if (! -e $IN.hdr) then
+	echo "ERROR [alignslices_upwards]: $IN.hdr does not exist.
+	exit 1
+endif
+
+if ($COST == 1) then
+	set PART = "-p1 1024 -p2 1024 -x 1"
+else if ($COST == 2) then
+	set PART = "-p1 1 -p2 1 -x 2"
+else
+	echo "ERROR [alignslices_upwards]: select cost function 1 or 2"
+	echo "   1 = standard deviation of ratio image"
+	echo "   2 = least squares"
+	exit 1
+endif
+	
+set THRESH = "-t1 $THR -t2 $THR"
+set BLUR2D = "-b1 $BLUR $BLUR 0 -b2 $BLUR $BLUR 0"
+
+set SLICES = `scanheader $IN | grep z_dim | cut -f2 -d=`
+if ($SLICES < $LAST) then
+	echo "ERROR [alignslices_upwards]: last slice is greater than $SLICES"
+	exit 1
+endif
+echo $IN  $SLICES slices, ref = $LAST >! $LOGFILE
+${NPG}/bin/separate_slices $IN $NAM
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set PRM = "-m 23 $THRESH $PART $BLUR2D"
+set REF = $NAM$LAST
+${NPG}/bin/setanamin $REF 0
+alignlinear $REF $REF $REF.air $PRM
+cp $REF.hdr r$REF.hdr
+cp $REF.img r$REF.img
+
+# Copy files below LAST
+# ---------------------------------------------------------
+set i = $SLICES
+while ($i > $LAST)
+	mv $NAM$i.hdr r$NAM$i.hdr
+	mv $NAM$i.img r$NAM$i.img
+	cp $REF.air $NAM$i.air
+	@ i--
+end
+
+# Align all adjacent pairs (and remove single-slice images)
+# ---------------------------------------------------------
+set i = $LAST
+set TOTAIR = $REF.air
+while ($i > $FIRST)
+	echo "$i $FIRST --------------------------------"
+	set k = `echo "$i - 1; quit" | bc`
+	set PREV = $NAM$i
+	set NEXT = $NAM$k
+	set NEWAIR = ${NEXT}vs${i}.air
+	${NPG}/bin/setanamin $PREV 0
+	${NPG}/bin/setanamin $NEXT 0
+	alignlinear $PREV $NEXT $NEWAIR $PRM
+	combine_air $NEXT.air y $TOTAIR $NEWAIR
+	${NPG}/bin/airdif $NEXT.air $REF.air | head -3 >> $LOGFILE
+	${NPG}/bin/airdif $NEXT.air $REF.air | head -3 
+	${NPG}/bin/imgreslice $NEXT $NEXT
+	rm $NEWAIR
+	rm $PREV.img
+	rm $PREV.hdr
+	set TOTAIR = $NEXT.air
+	@ i--
+end
+rm $NAM$LAST.img
+rm $NAM$LAST.hdr
+@ i--
+
+# Reslice any remaining files
+# ---------------------------------------------------------
+while ($i > 0)
+	set NEXT = $NAM$i
+	cp $TOTAIR $NEXT.air
+	${NPG}/bin/imgreslice $NEXT $NEXT
+	rm $NEXT.hdr
+	rm $NEXT.img
+	@ i--
+end
+
+# Merge realigned single-slice images, then remove them
+# -----------------------------------------------------
+${NPG}/bin/merge_slices r$NAM 1 $SLICES $OUT
+set i = 1
+while ($i <= $SLICES)
+	rm r${NAM}$i.img
+	rm r${NAM}$i.hdr
+	@ i++
+end
+echo "Created $OUT.img"
+

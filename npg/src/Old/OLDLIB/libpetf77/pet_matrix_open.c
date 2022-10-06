@@ -1,0 +1,188 @@
+/*$Id: pet_matrix_open.c,v 1.3 1995/10/31 14:54:36 tom Exp $*/
+/*$Log: pet_matrix_open.c,v $
+ * Revision 1.3  1995/10/31  14:54:36  tom
+ * remove petutil parent directory from include statements
+ *
+ * Revision 1.2  1995/10/13  16:43:06  ty7777
+ * Same as the last version.
+ *
+ * Revision 1.1  1995/10/10  15:43:47  ty7777
+ * Initial revision
+ **/
+
+#include	<stdlib.h>
+#include	<fcntl.h>
+#include	<unistd.h>
+#include	<string.h>
+#include	<interfile.h>
+
+static char rcsid [] = "$Header: /home/npggw/tom/src/libpetf77/RCS/pet_matrix_open.c,v 1.3 1995/10/31 14:54:36 tom Exp $";
+
+#define ERROR   -1
+#define OK 0
+#define TRUE 1
+#define FALSE 0
+
+typedef enum {
+	MAT_OK,
+	MAT_MALLOC_ERR,
+	MAT_MHDREAD_ERR,
+		MAT_ACSDIR_ERR,
+		MAT_ACS_FILE_NOT_FOUND,
+		MAT_NFS_FILE_OPEN_ERR,
+		MAT_INTERFILE_OPEN_ERR,
+		MAT_NFS_CREATE_ERR,
+		MAT_FILE_TYPE_NOT_MATCH,
+		MAT_READ_FROM_NILFPTR,
+		MAT_NOMHD_FILE_OBJECT,
+		MAT_NIL_SHPTR,
+		MAT_NIL_DATA_PTR,
+		MAT_MATRIX_NOT_FOUND,
+		MAT_UNKNOWN_FILE_TYPE,
+		MAT_READ_ACS_SUBHD_ERR,
+		MAT_READ_ACS_DATA_ERR,
+		MAT_ACS_DATA_SIZE_MISMATCH,
+		MAT_NFS_FILE_NOT_FOUND,
+		MAT_ACS_READ_SUBHD_ERR,
+		MAT_NODIRPTR_FILE_OBJECT,
+		MAT_READ_ACS_DIRBLK_ERR,
+		MAT_ACS_CREATE_ERR,
+		MAT_BAD_ATTRIBUTE,
+		MAT_BAD_FILE_ACCESS_MODE,
+		MAT_END_ERRORS
+	}
+MatrixErrorCode;
+
+static char* mat_errors[] =
+	{
+		"MAT_NO_ERROR",
+		"MAT_MALLOC_ERR",
+		"MAT_MHDREAD_ERR",
+		"MAT_ACSDIR_ERR",
+		"MAT_ACS_FILE_NOT_FOUND",
+		"MAT_NFS_FILE_OPEN_ERR",
+		"MAT_NFS_CREATE_ERR",
+		"MAT_FILE_TYPE_NOT_MATCH",
+		"MAT_READ_FROM_NILFPTR",
+		"MAT_NOMHD_FILE_OBJECT",
+		"MAT_NIL_SHPTR",
+		"MAT_NIL_DATA_PTR",
+		"MAT_MATRIX_NOT_FOUND",
+		"MAT_UNKNOWN_FILE_TYPE",
+		"MAT_READ_ACS_SUBHD_ERR",
+		"MAT_READ_ACS_DATA_ERR",
+		"MAT_ACS_DATA_SIZE_MISMATCH",
+		"MAT_NFS_FILE_NOT_FOUND",
+		"MAT_ACS_READ_SUBHD_ERR",
+		"MAT_NODIRPTR_FILE_OBJECT",
+		"MAT_READ_ACS_DIRBLK_ERR",
+		"MAT_ACS_CREATE_ERR",
+		"MAT_BAD_ATTRIBUTE",
+		"MAT_BAD_FILE_ACCESS_MODE",
+		"MAT_END_ERRORS"
+	};
+
+MatrixErrorCode mat_errno ;
+
+MatrixFile *pet_matrix_open (fd, fname, fmode, mtype)
+	int	fd;
+	char	*fname ;
+	int	fmode, mtype ;
+{
+	MatrixFile	*mptr ;
+	Main_header	*mhead ;
+	int		status;
+	char		*omode;
+
+	omode	= "r+";	/* assume READ_WRITE access mode */
+	if (fmode == MAT_READ_ONLY) omode = "r";
+	mat_errno = OK ;
+
+	/* 
+	 * Allocate space for MatrixFile data structure 
+	 */
+	mptr = (MatrixFile *) calloc (1, sizeof (MatrixFile)) ;
+	if (mptr == NULL)
+	{
+		 mat_errno = MAT_MALLOC_ERR ;
+		 return (NULL) ;
+	}
+
+	/* 
+	 * Allocate space for main header data structure and initialize 
+	 */
+	mptr->mhptr = (Main_header *) calloc (1, sizeof (Main_header)) ;
+	if (mptr->mhptr == NULL)
+	{
+		 mat_errno = MAT_MALLOC_ERR ;
+		 free (mptr);
+		 return (NULL) ;
+	}
+	mptr->acs = is_acs (fname) ;
+	mptr->fname = strdup (fname);
+
+	/* 
+	 * Read the main header from the file 
+	 */
+	if (mptr->acs)
+	{
+		if ((status = rts_rmhd (fname, mptr->mhptr)) == ERROR)
+		{
+			mat_errno = MAT_ACS_FILE_NOT_FOUND ;
+			free (mptr->mhptr);
+			free (mptr);
+			return (NULL);
+		}
+	}
+	else	/* nfs matrix file */
+	{
+		if (is_interfile (fname)) 
+		{
+			if (interfile_open (mptr) == ERROR) 
+			{
+				mat_errno = MAT_INTERFILE_OPEN_ERR;
+				matrix_close (mptr);
+				return (NULL);
+			}
+		} 
+		else 
+		{
+			if ((mptr->fptr = fdopen (fd, omode)) == NULL)
+			{
+		  		mat_errno = MAT_NFS_FILE_OPEN_ERR ;
+		  		matrix_close (mptr);
+		  		return (NULL);
+			} 
+			else 
+			{
+				fseek (mptr->fptr, 0L, SEEK_SET);
+				mat_read_main_header (mptr->fptr, mptr->mhptr) ;
+			}
+		}
+	}
+
+	/*
+	 * If the matrix type doesn't match the requested type, that's
+	 * an error. Specify matrix type NoData to open any type.
+	 */
+	if (mtype != NoData && mtype != mptr->mhptr->file_type)
+	{
+		mat_errno = MAT_FILE_TYPE_NOT_MATCH ;
+		matrix_close (mptr);
+		return (NULL);
+	}
+
+
+	/* 
+	 * read and store the matrix file directory.
+	 */
+	mptr->dirlist = mat_read_directory (mptr);
+
+	if (mat_errno == OK) 
+		return (mptr);
+	else
+	{
+		matrix_close (mptr);
+		return (NULL);
+	}
+}

@@ -1,0 +1,567 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.02.17.18.43.30;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	94.06.10.15.16.50;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.06.10.15.00.32;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.11.11.16.46.32;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@C     $Id: d2smooth.f,v 1.8 2002/12/02 21:26:52 tom Exp tom $
+C     $Log: d2smooth.f,v $
+c Revision 1.8  2002/12/02  21:26:52  tom
+c format changes plus fixes for g77
+c
+c     Revision 1.7  1999/02/17  18:43:30  tom
+c     add 8x6 and 3x2 displays for PC uinsg 1024x768 screen resolution
+c     
+c     Revision 1.6  1994/06/10  15:16:50  ty7777
+c     Fixed the rcsheader string.
+c     
+c     Revision 1.5  1994/06/10  15:00:32  ty7777
+c     Use the global PCFLAG.
+c     
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   D2SMOOTH.FTN
+C     Author:       Tom O. Videen
+C     Date:         01-Jun-87
+C     Intent:
+C     .  This routine displays an image on the Ramtek Display Monitor.
+C     .  The image is magnified LMAG x ZFACTOR times.
+C     .  The image is interpolated to the maximum extent allowed by the
+C     .  Ramtek resolution (linear interpolation).
+C     .  The image must be scaled for appropriate color scale before
+C     .  this routine is called.
+C     
+C     .  The subroutine D2SCALER must have been called previous to
+C     .  D2SMOOTH.  D2SCALER scales the image and stores the result
+C     .  in the common array IARRAY.
+C     History:
+C     .  Modified by Tom Yang 26-Sep-91 to port to UNIX and X Windows.
+C     
+C     Common Blocks from SPIDERAM.INC:
+C     .  **IMAGEDAT - image arrays                   (write)
+C     .  **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .  **DISPLAY  - display parameters             (read only)
+C     
+C     Passed Variables:
+C     .  SPLIT:  true--> display split image;
+C     
+C     Local Variables:
+C     .  XST,YST = location to write to on the Ramtek;
+C     .  ELEMENTS = number of elements in each row and column
+C     .     of the image array to send to the Ramtek for display;
+C     .     If the image is not zoomed,
+C     .         ELEMENTS =  SIZE/ZFACTOR
+C     .  XDIM,YDIM = x- and y-dimensions of array sent to RAMIMG;
+C     .  YEND = last y-coordinate of the displayed portion of the image;
+C     .  SCAN,TYPE = variables sent to RAMIMG to determine the
+C     .     order in which to fill the region on the Ramtek screen
+C     .     with the array of values (see Ramtek manual);
+C     .  LASTLINE = last line of IMAGE to write to Ramtek (100 or 128);
+C     
+C     Uses:
+C     .  RAMIMG    - write an image to the Ramtek;
+C     .  D2GENLIN  - generate a single line of the image;
+C     .  D2INTER   - get an intermediate line by interpolation;
+C     
+C     Called by:  D2DISPLA, D2ZOOM
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Header: /home/npggw/tom/src/spideram/RCS/d2smooth.f,v 1.8 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE D2SMOOTH(SPLIT)
+
+      INTEGER*4  XST,YST,XDIM,YDIM,SCAN,TYPE,I,K,L
+      INTEGER*4  ELEMENTS,YEND,LASTLINE,LEFT,RIGHT,BOTH
+      INTEGER*4  LMAG
+      LOGICAL*1  SPLIT
+
+      INCLUDE 'spideram.inc'
+
+      DATA SCAN,TYPE,YDIM  /0,0,1/
+      DATA LEFT,RIGHT,BOTH /1,2,0/
+
+      XST = XORG
+      YST = YORG
+
+C     Set up the parameters used to display the image in the
+C     appropriate location on the Ramtek Display Monitor.
+C     The number of elements in each row and column sent to the
+C     display depends on ZFACTOR.
+
+      ELEMENTS = SIZE/ZFACTOR
+      IF (MAG.LE.7) THEN
+         LMAG = MAG
+      ELSE IF (MAG.EQ.8) THEN
+         LMAG = 1
+      ELSE IF (MAG.EQ.9) THEN
+         LMAG = 2
+      ENDIF
+
+      XDIM = LMAG*SIZE
+      LASTLINE = SIZE
+      YEND = YST + (LMAG*ZFACTOR*ELEMENTS) -1
+      YFIRST = YST
+
+      I = YLOW
+      IF (SPLIT) THEN
+         CALL D2GENLIN(1,I,LEFT)
+         CALL D2GENLIN(1,I,RIGHT)
+      ELSE
+         CALL D2GENLIN(1,I,BOTH)
+      END IF
+
+C     If LMAG>=3, then send LINE(n,1) to the Ramtek.
+C     (want actual pixel value in or adjacent to the center of the
+C     array of pixels which represent it on the Ramtek)
+
+      IF (LMAG .GE. 3) THEN
+         CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+         YST = YST + 1
+      END IF
+
+C     Create intermediate lines and send them to the Ramtek.
+C     LINE(n,1) is always the top line of a group;
+C     LINE(n,2) is an intermediate line;
+C     LINE(n,3) is always the bottom line of a group;
+C     Note: in the case where L>128, D2GENLIN return the values
+C     for 128 (this will occur for all unzoomed images with
+C     LMAG>=3);
+
+      DO 500 L=YLOW+1,YLOW+ELEMENTS
+         IF (SPLIT) THEN
+            CALL D2GENLIN(3,L,LEFT)
+            CALL D2GENLIN(3,L,RIGHT)
+         ELSE
+            CALL D2GENLIN(3,L,BOTH)
+         END IF
+         CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+         YST = YST+1
+         IF (YST.GT.YEND) GO TO 1000
+         IF (LMAG*ZFACTOR.GT.1) THEN
+            DO 200 I=1,LMAG*ZFACTOR-1
+               CALL D2INTER(I,LMAG*ZFACTOR,XDIM)
+               CALL RAMIMG (LINE (1, 2), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+               YST = YST+1
+               IF (YST.GT.YEND) GO TO 1000
+ 200        CONTINUE
+         END IF
+         DO 300 I=1,XDIM
+            LINE(I,1) = LINE(I,3)
+ 300     CONTINUE
+ 500  CONTINUE
+
+C     If LMAG*LASTLINE lines have not been written to the screen,
+C     then write blank lines to complete the image array.
+
+ 1000 IF ((YST-YFIRST).LT.LMAG*LASTLINE) THEN
+         DO 1100 I=1,XDIM
+            LINE(I,1) = 0
+ 1100    CONTINUE
+ 1200    DO 1300 K = 1, LMAG*ZFACTOR
+            CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+            YST = YST + 1
+ 1300    CONTINUE
+         IF ((YST-YFIRST) .LT. LMAG*LASTLINE) GO TO 1200
+      END IF
+
+      RETURN
+      END
+@
+
+
+1.8
+log
+@format changes plus fixes for g77
+@
+text
+@d1 1
+a1 1
+C     $Id: d2smooth.f,v 1.7 1999/02/17 18:43:30 tom Exp tom $
+d3 3
+d64 1
+a64 1
+C     rcsheader = "$Header: /home/npggw/tom/src/spideram/RCS/d2smooth.f,v 1.7 1999/02/17 18:43:30 tom Exp tom $"
+@
+
+
+1.7
+log
+@add 8x6 and 3x2 displays for PC uinsg 1024x768 screen resolution
+@
+text
+@d1 12
+a12 9
+C$Id: d2smooth.f,v 1.6 1994/06/10 15:16:50 ty7777 Exp tom $
+C$Log: d2smooth.f,v $
+c Revision 1.6  1994/06/10  15:16:50  ty7777
+c Fixed the rcsheader string.
+c
+c Revision 1.5  1994/06/10  15:00:32  ty7777
+c Use the global PCFLAG.
+c
+C
+d14 46
+a59 50
+C
+C  Subroutine:   D2SMOOTH.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         01-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified by Tom Yang 26-Sep-91 to port to UNIX and X Windows.
+C
+C  Intent:
+C     This routine displays an image on the Ramtek Display Monitor.
+C     The image is magnified LMAG x ZFACTOR times.
+C     The image is interpolated to the maximum extent allowed by the
+C     Ramtek resolution (linear interpolation).
+C     The image must be scaled for appropriate color scale before
+C     this routine is called.
+C
+C     The subroutine D2SCALER must have been called previous to
+C     D2SMOOTH.  D2SCALER scales the image and stores the result
+C     in the common array IARRAY.
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (write)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (read only)
+C
+C  Passed Variables:
+C     SPLIT:  true--> display split image;
+C
+C  Local Variables:
+C     XST,YST = location to write to on the Ramtek;
+C     ELEMENTS = number of elements in each row and column
+C        of the image array to send to the Ramtek for display;
+C        If the image is not zoomed,
+C            ELEMENTS =  SIZE/ZFACTOR
+C     XDIM,YDIM = x- and y-dimensions of array sent to RAMIMG;
+C     YEND = last y-coordinate of the displayed portion of the image;
+C     SCAN,TYPE = variables sent to RAMIMG to determine the
+C        order in which to fill the region on the Ramtek screen
+C        with the array of values (see Ramtek manual);
+C     LASTLINE = last line of IMAGE to write to Ramtek (100 or 128);
+C
+C   Uses:
+C     RAMIMG    - write an image to the Ramtek;
+C     D2GENLIN  - generate a single line of the image;
+C     D2INTER   - get an intermediate line by interpolation;
+C
+C  Called by:  D2DISPLA, D2ZOOM
+C
+d61 1
+a68 1
+      character*256 rcsheader
+a74 2
+      rcsheader = "$Header: /home/npggw/tom/src/spideram/RCS/d2smooth.f,v 1.6 1994/06/10 15:16:50 ty7777 Exp tom $"
+
+d78 1
+a78 1
+C  Set up the parameters used to display the image in the
+d80 1
+a80 1
+C  The number of elements in each row and column sent to the
+d85 1
+a85 1
+        LMAG = MAG
+d87 1
+a87 1
+        LMAG = 1
+d89 1
+a89 1
+        LMAG = 2
+d99 2
+a100 2
+        CALL D2GENLIN(1,I,LEFT)
+        CALL D2GENLIN(1,I,RIGHT)
+d102 1
+a102 1
+        CALL D2GENLIN(1,I,BOTH)
+d105 3
+a107 3
+C  If LMAG>=3, then send LINE(n,1) to the Ramtek.
+C  (want actual pixel value in or adjacent to the center of the
+C   array of pixels which represent it on the Ramtek)
+d110 2
+a111 2
+        CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+        YST = YST + 1
+d114 1
+a114 1
+C  Create intermediate lines and send them to the Ramtek.
+d118 1
+a118 1
+C  Note: in the case where L>128, D2GENLIN return the values
+d123 21
+a143 21
+        IF (SPLIT) THEN
+          CALL D2GENLIN(3,L,LEFT)
+          CALL D2GENLIN(3,L,RIGHT)
+        ELSE
+          CALL D2GENLIN(3,L,BOTH)
+        END IF
+        CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+        YST = YST+1
+        IF (YST.GT.YEND) GO TO 1000
+        IF (LMAG*ZFACTOR.GT.1) THEN
+          DO 200 I=1,LMAG*ZFACTOR-1
+            CALL D2INTER(I,LMAG*ZFACTOR,XDIM)
+            CALL RAMIMG (LINE (1, 2), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+            YST = YST+1
+            IF (YST.GT.YEND) GO TO 1000
+200       CONTINUE
+        END IF
+        DO 300 I=1,XDIM
+          LINE(I,1) = LINE(I,3)
+300     CONTINUE
+500   CONTINUE
+d145 2
+a146 2
+C  If LMAG*LASTLINE lines have not been written to the screen,
+C  then write blank lines to complete the image array.
+d148 9
+a156 9
+1000  IF ((YST-YFIRST).LT.LMAG*LASTLINE) THEN
+        DO 1100 I=1,XDIM
+          LINE(I,1) = 0
+1100    CONTINUE
+1200    DO 1300 K = 1, LMAG*ZFACTOR
+          CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+          YST = YST + 1
+1300    CONTINUE
+        IF ((YST-YFIRST) .LT. LMAG*LASTLINE) GO TO 1200
+@
+
+
+1.6
+log
+@Fixed the rcsheader string.
+@
+text
+@d1 1
+a1 1
+C$Id: d2smooth.f,v 1.5 1994/06/10 15:00:32 ty7777 Exp ty7777 $
+d3 3
+d23 1
+a23 1
+C     The image is magnified MAG x ZFACTOR times.
+d62 1
+a62 1
+C
+d64 4
+a67 3
+C
+      INTEGER*4  XST,YST,XDIM,YDIM,SCAN,TYPE,I,K,L,
+     &           ELEMENTS,YEND,LASTLINE,LEFT,RIGHT,BOTH
+d70 1
+a70 1
+C
+d75 3
+a77 3
+C
+      rcsheader = "$Header: /home/petsun4/ty7777/src/spideram/RCS/d2smooth.f,v 1.5 1994/06/10 15:00:32 ty7777 Exp ty7777 $"
+C
+d80 1
+a80 1
+C
+d85 1
+a85 1
+C
+d87 9
+a95 1
+      XDIM = MAG*SIZE
+d97 1
+a97 1
+      YEND = YST + (MAG*ZFACTOR*ELEMENTS) -1
+d99 1
+a99 1
+C
+d107 2
+a108 2
+C
+C  If MAG>=3, then send LINE(n,1) to the Ramtek.
+d111 2
+a112 2
+C
+      IF (MAG .GE. 3) THEN
+d116 1
+a116 1
+C
+d123 2
+a124 2
+C     MAG>=3);
+C
+d135 3
+a137 3
+        IF (MAG*ZFACTOR.GT.1) THEN
+          DO 200 I=1,MAG*ZFACTOR-1
+            CALL D2INTER(I,MAG*ZFACTOR,XDIM)
+d147 2
+a148 2
+C
+C  If MAG*LASTLINE lines have not been written to the screen,
+d150 2
+a151 2
+C
+1000  IF ((YST-YFIRST).LT.MAG*LASTLINE) THEN
+d155 1
+a155 1
+1200    DO 1300 K = 1, MAG * ZFACTOR
+d159 1
+a159 1
+        IF ((YST-YFIRST).LT.MAG*LASTLINE) GO TO 1200
+d161 1
+a161 1
+C
+@
+
+
+1.5
+log
+@Use the global PCFLAG.
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d16 1
+a16 1
+C     Modified by TOV 26-Sep-91 for XSPIDERAM.
+a67 1
+      rcsheader = "$Header$";
+d71 2
+@
+
+
+1.4
+log
+@Added ABSSCALE to RAMIMG.
+@
+text
+@d1 5
+a5 2
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+d65 1
+a65 1
+      rcsheader = "$Id: d2smooth.f,v 1.3 1993/10/04 21:55:32 tom Exp ty7777 $"
+d97 1
+a97 1
+        CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, RMD, ABSSCALE)
+d116 1
+a116 1
+        CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, RMD, ABSSCALE)
+d122 1
+a122 1
+            CALL RAMIMG (LINE (1, 2), XDIM, YDIM, XST, YST, SCAN, TYPE, RMD, ABSSCALE)
+d139 3
+a141 3
+1200    DO 1300 K=1,MAG*ZFACTOR
+          CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, RMD, ABSSCALE)
+          YST = YST+1
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d62 1
+a62 1
+      rcsheader = "$Id$"
+d93 3
+a95 3
+      IF (MAG.GE.3) THEN
+        CALL RAMIMG(LINE(1,1),XDIM,YDIM,XST,YST,SCAN,TYPE,RMD)
+        YST = YST+1
+d113 1
+a113 1
+        CALL RAMIMG(LINE(1,1),XDIM,YDIM,XST,YST,SCAN,TYPE,RMD)
+d119 1
+a119 1
+            CALL RAMIMG(LINE(1,2),XDIM,YDIM,XST,YST,SCAN,TYPE,RMD)
+d137 1
+a137 1
+          CALL RAMIMG(LINE(1,1),XDIM,YDIM,XST,YST,SCAN,TYPE,RMD)
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d59 1
+d62 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

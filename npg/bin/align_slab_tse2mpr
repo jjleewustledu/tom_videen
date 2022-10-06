@@ -1,0 +1,75 @@
+#!/bin/csh
+#	Module:	align_slab_tse2mpr
+#	Author:	Tom Videen
+#	Date:	Dec 2002
+#	Use:	Coregister & reslice TSE slab to MPRAGE image
+#
+#	Input:	2 images plus initialization file (see Manualreslice_TSE)
+#		p6000_tse.img
+#		p6000_mprage2.img
+#		air_init
+#
+#	Creates: AIR file, resliced TSE, and log of alignment processing
+#		p6000_tse_to_mprage2.air
+#		rp6000_tse.img
+#		align_slab_tse2mpr.log
+
+set THRESHOLD  = 150
+set PARTITIONS = 16384
+set INIT = air_init
+
+if ($#argv != 2) then
+    echo "Usage: align_slab_tse2mpr tse mpr"
+    echo " e.g., align_slab_tse2mpr p6000_tse p6000_mprage2"
+    exit 1
+endif
+
+set TSE = $1
+set MPR = $2
+set AIR = ${TSE}_to_${MPR}
+set LOGFILE = align_slab_tse2mpr.log
+
+if (! -e $INIT) then
+	echo "ERROR [align_slab_tse2mpr]: $INIT does not exist."
+	echo "   Create it with manualreslice:"
+	echo "   Get, Edit, and Copy&Paste the commands in Manualreslice_TSE."
+	echo "      cp /usr/local/npg/air/Manualreslice_TSE ."
+	echo "   Then rerun align_slab_tse2mpr."
+	exit 1
+endif
+
+set EFILES = "$TSE.img $TSE.hdr $MPR.img $MPR.hdr $INIT"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_slab_tse2mpr]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit 1
+set t1 = `t`
+
+setanamin $TSE 0
+setanamin $MPR 0
+echo "Aligning $TSE to $MPR ..."
+set PRM = "-m 6 -p1 $PARTITIONS -p2 0 -t1 $THRESHOLD -f $INIT -x 1 -v" 
+alignlinear $MPR $TSE $AIR.air $PRM >! log
+tail -6 log >! $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file"
+	echo $ERROR >> $LOGFILE
+	exit 1
+endif
+
+imgreslice $TSE $AIR
+scanair $AIR.air | tail -6 | head -3
+set t2 = `t`
+echo "[align_slab_tse2mpr] Complete at" `date` "   Elapsed time: " `echo "$t2 - $t1" | bc` " sec"
+echo "----------------------------------"
+echo "Check coregistration using vidi:"
+echo "   Image 1 = $MPR.img"
+echo "   Image 2 = r$TSE.img"
+

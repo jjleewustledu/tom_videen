@@ -1,0 +1,367 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2004.02.16.16.30.11;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Feb 2004
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Log$ */
+/*	===============================================================================
+ *	Module:			ifsumframes.c
+ *	Date:			Jan 2004
+ *	Author:			Tom Videen
+ *	Description:	Sum frames of Interfile image
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ifsumframes/RCS/ifsumframes.c,v 1.9 2002/03/06 21:55:18 tom Exp $";
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <image.h>
+
+#define MAXSTR 256
+
+/*	----------------------------
+ *	Function:	ifsumframes
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	FILE           *ifh;			 /* Interfile ifh file */
+	FILE           *ifi;			 /* Interfile img file */
+
+	char           *ifhname;		 /* input Interfile header filename */
+	char           *ifiname;		 /* input Interfile image filename */
+	char           *ofhname;		 /* output Interfile header filename */
+	char           *ofiname;		 /* output Interfile image filename */
+
+	char            str[MAXSTR];
+	char            version[MAXSTR];
+	char            imagename[MAXSTR];
+	char            program_date[12];
+	char           *ptr;
+	char           *orient1;
+	char           *orient2;
+	char           *orient3;
+
+	short          *simg;
+	short          *ssum;
+
+	float          *fimg;
+	float          *fsum;
+
+	float           pixsize[3];
+	int             ndim = 0;
+	int             ntype = 0;
+	int             nbytes = 0;
+	int             stat;
+	long            firstfrm, lastfrm;
+
+	long            dim[4];
+	long            array_size;
+	long            data_size;
+	long            k, frm;
+
+	if (argc != 7) {
+		(void) printf ("Usage: ifsumframes ifhname ifiname ofhname ofiname first last\n");
+		return (ERROR);
+	}
+	ifhname = argv[1];
+	ifiname = argv[2];
+	ofhname = argv[3];
+	ofiname = argv[4];
+	firstfrm = atol (argv[5]);
+	lastfrm = atoi (argv[6]);
+	if (lastfrm < firstfrm) {
+		fprintf (stderr, "Last frame (%ld) must be >= first frame (%ld)\n", lastfrm, firstfrm);
+		return (1);
+	}
+	orient1 = (char *) calloc (20, sizeof (char));
+	orient2 = (char *) calloc (20, sizeof (char));
+	orient3 = (char *) calloc (20, sizeof (char));
+	if (orient1 == NULL) return (1);
+	if (orient2 == NULL) return (1);
+	if (orient3 == NULL) return (1);
+
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	(void) strcpy (version, "    ");
+	if (ptr != NULL)
+		(void) strncpy (version, ptr, 4);
+	if (ptr != NULL) {
+		ptr = strstr (ptr, " ");
+		ptr++;
+	}
+	(void) strcpy (program_date, "           ");
+	if (ptr != NULL)
+		(void) strncpy (program_date, ptr, 10);
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+
+/*
+ * Read Interfile header
+ */
+
+	if ((ifh = fopen (ifhname, "r")) == 0) {
+		(void) printf ("Unable to open Interfile header %s\n", ifhname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), ifh) == NULL) {
+		(void) printf ("ERROR [ifsumframes]: reading %s\n", ifhname);
+		return (ERROR);
+	}
+	if (strstr (str, "INTERFILE") == NULL) {
+		(void) printf ("ERROR [ifsumframes]: %s is not an Interfile header\n", ifhname);
+		return (ERROR);
+	}
+	while (fgets (str, sizeof (str), ifh) != NULL) {
+		ptr = strstr (str, ":=");
+		if (ptr != NULL) {
+			ptr += 2;
+			if (strstr (str, "name of data file") != NULL) {
+				(void) sscanf (ptr, "%s", imagename);
+				continue;
+			}
+			if (strstr (str, "number format") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				if (strstr (ptr, "signed integer") != NULL)
+					ntype = 4;
+				else if (strstr (ptr, "float") != NULL)
+					ntype = 16;
+				else {
+					(void) printf ("ERROR [ifsumframes]: image is not signed integer or float\n");
+					return (ERROR);
+				}
+				continue;
+			}
+			if (strstr (str, "number of bytes per pixel") != NULL) {
+				(void) sscanf (ptr, "%d", &nbytes);
+				continue;
+			}
+			if (strstr (str, "number of dimensions") != NULL) {
+				(void) sscanf (ptr, "%d", &ndim);
+				if (ndim != 3) {
+					(void) printf ("ERROR [ifsumframes]: incorrect number of dimensions %d\n", ndim);
+					return (ERROR);
+				}
+				continue;
+			}
+			if (strstr (str, "matrix size [1]") != NULL) {
+				(void) sscanf (ptr, "%ld", &dim[0]);
+				continue;
+			}
+			if (strstr (str, "matrix size [2]") != NULL) {
+				(void) sscanf (ptr, "%ld", &dim[1]);
+				continue;
+			}
+			if (strstr (str, "matrix size [3]") != NULL) {
+				(void) sscanf (ptr, "%ld", &dim[2]);
+				continue;
+			}
+			if (strstr (str, "matrix size [4]") != NULL) {
+				(void) sscanf (ptr, "%ld", &dim[3]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [1]") != NULL) {
+				(void) sscanf (ptr, "%f", &pixsize[0]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [2]") != NULL) {
+				(void) sscanf (ptr, "%f", &pixsize[1]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [3]") != NULL) {
+				(void) sscanf (ptr, "%f", &pixsize[2]);
+				continue;
+			}
+			if (strstr (str, "matrix initial element [1]") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				(void) strcpy (orient1, ptr);
+				continue;
+			}
+			if (strstr (str, "matrix initial element [2]") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				(void) strcpy (orient2, ptr);
+				continue;
+			}
+			if (strstr (str, "matrix initial element [3]") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				(void) strcpy (orient3, ptr);
+				continue;
+			}
+		}
+	}
+	(void) fclose (ifh);
+
+	if (dim[3] < lastfrm) {
+		(void) printf ("ERROR [ifsumframes]: too few frames %ld\n", dim[3]);
+		return (ERROR);
+	}
+/*
+ *	Read image data and compute min and max
+ */
+
+	array_size = dim[0] * dim[1] * dim[2];
+	(void) printf ("type %d  size %ld\n", ntype, array_size);
+	if (ntype == 4) {
+		data_size = array_size * sizeof (short);
+		simg = (short *) calloc (array_size, sizeof (short));
+		if (simg == NULL) {
+			(void) fprintf (stderr, "ERROR [ifsumframes]: calloc simg\n");
+			return (ERROR);
+		}
+		ssum = (short *) calloc (array_size, sizeof (short));
+		if (ssum == NULL) {
+			(void) fprintf (stderr, "ERROR [ifsumframes]: calloc ssum\n");
+			return (ERROR);
+		}
+	} else {
+		data_size = array_size * sizeof (float);
+		fimg = (float *) calloc (array_size, sizeof (float));
+		if (fimg == NULL) {
+			(void) fprintf (stderr, "ERROR [ifsumframes]: calloc fimg\n");
+			return (ERROR);
+		}
+		fsum = (float *) calloc (array_size, sizeof (float));
+		if (fsum == NULL) {
+			(void) fprintf (stderr, "ERROR [ifsumframes]: calloc fsum\n");
+			return (ERROR);
+		}
+	}
+
+	if ((ifi = fopen (ifiname, "r")) == 0) {
+		(void) printf ("ERROR [ifsumframes]: Unable to open Interfile image %s\n", ifiname);
+		return (ERROR);
+	}
+	stat = fseek (ifi, (firstfrm-1) * data_size, SEEK_SET);
+	if (stat != 0) {
+		(void) fprintf (stderr, "ERROR [ifsumframes]: fseek status %d for frame %ld of %s\n",
+			stat, firstfrm, ifiname);
+		return (ERROR);
+	}
+	for (frm = firstfrm; frm <= lastfrm; frm++) {
+		if (ntype == 4) {
+			stat = fread (simg, sizeof (short), array_size, ifi);
+			if (stat != array_size) {
+				(void) fprintf (stderr, "ERROR [ifsumframes]: reading frame %ld of %s status %d\n",
+					 frm, ifiname, stat);
+				return (ERROR);
+			}
+			for (k = 0; k < array_size; k++)
+				ssum[k] = ssum[k] + simg[k];
+		} else {
+			stat = fread (fimg, sizeof (float), array_size, ifi);
+			if (stat != array_size) {
+				(void) fprintf (stderr, "ERROR [ifsumframes]: reading frame %ld of %s status %d\n",
+					 frm, ifiname, stat);
+				return (ERROR);
+			}
+			for (k = 0; k < array_size; k++)
+				fsum[k] = fsum[k] + fimg[k];
+		}
+	}
+	(void) fclose (ifi);
+
+/*
+ *	Write image
+ */
+
+	if ((ifh = fopen (ofhname, "w")) == 0) {
+		fprintf (stderr, "ERROR [ifsumframes]: Unable to create Interfile Format header %s\n", ofhname);
+		return (ERROR);
+	}
+	if ((ifi = fopen (ofiname, "w")) == 0) {
+		fprintf (stderr, "ERROR [ifsumframes]: Unable to create Interfile image %s\n", ofiname);
+		return (ERROR);
+	}
+	if (ntype == 4) {
+		if (fwrite (ssum, sizeof (short), array_size, ifi) != array_size) {
+			fprintf (stderr, "ERROR [ifsumframes]: writing %s\n", ofiname);
+			return (ERROR);
+		}
+		free (simg);
+		free (ssum);
+	} else {
+		if (fwrite (fsum, sizeof (float), array_size, ifi) != array_size) {
+			fprintf (stderr, "ERROR [ifsumframes]: writing %s\n", ofiname);
+			return (ERROR);
+		}
+		free (fimg);
+		free (fsum);
+	}
+	(void) fclose (ifi);
+
+/*
+ * Create Interfile Format header file
+ */
+
+	fprintf (ifh, "INTERFILE :=\n");
+	fprintf (ifh, "version of keys    := 3.3\n");
+	fprintf (ifh, "date of keys       := 1992:01:01\n");
+	fprintf (ifh, "conversion program := ifsumframes\n");
+	fprintf (ifh, "program version    := %s\n", version);
+	fprintf (ifh, "program date       := %s\n", program_date);
+	fprintf (ifh, ";\n");
+	fprintf (ifh, "GENERAL DATA :=\n");
+	fprintf (ifh, "original institution := Washington University\n");
+	fprintf (ifh, "data starting block  := 0\n");
+	fprintf (ifh, "name of data file    := %s\n", ofiname);
+	fprintf (ifh, ";\n");
+	fprintf (ifh, "GENERAL IMAGE DATA :=\n");
+	fprintf (ifh, "type of data := tomographic\n");
+	fprintf (ifh, "total number of images := %d\n", (int) dim[2]);
+	(void) strcpy (str, "    ");
+	fprintf (ifh, "imagedata byte order   := bigendian\n");
+	fprintf (ifh, ";\n");
+	fprintf (ifh, "PET STUDY :=\n");
+	fprintf (ifh, "process status := reconstructed\n");
+	fprintf (ifh, "number of dimensions := 3\n");
+	fprintf (ifh, "number of slices := %d\n", (int) dim[2]);
+	fprintf (ifh, "matrix size [1] := %d\n", (int) dim[0]);
+	fprintf (ifh, "matrix size [2] := %d\n", (int) dim[1]);
+	fprintf (ifh, "matrix size [3] := %d\n", (int) dim[2]);
+	if (ntype == 4)
+		fprintf (ifh, "number format   := signed integer\n");
+	else
+		fprintf (ifh, "number format   := float\n");
+	fprintf (ifh, "number of bytes per pixel  := %d\n", nbytes);
+	fprintf (ifh, "scaling factor (mm/pixel) [1]  := %f\n", pixsize[0]);
+	fprintf (ifh, "scaling factor (mm/pixel) [2]  := %f\n", pixsize[1]);
+	fprintf (ifh, "scaling factor (mm/pixel) [3]  := %f\n", pixsize[2]);
+	fprintf (ifh, "matrix initial element [1] := left\n");
+	fprintf (ifh, "matrix initial element [2] := anterior\n");
+	fprintf (ifh, "matrix initial element [3] := inferior\n");
+
+	fprintf (ifh, "END OF INTERFILE :=\n");
+	(void) fclose (ifh);
+	fprintf (stdout, "Converted: %s to %s\n", ifiname, ofiname);
+	return (OK);
+}
+@

@@ -1,0 +1,461 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.20.16.55.02;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.06.16.18.48.16;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/* $Log: ima2bshort.c,v $
+ * Revision 1.1  2000/06/16  18:48:16  tom
+ * Initial revision
+ * */
+/*  ===============================================================================
+ *  Module:         ima2bshort.c
+ *  Date:           Jun 2000
+ *  Author:         Tom Videen
+ *  Description:    Transform Siemens MRI images into bshort format.
+ *  ===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ima2bshort/RCS/ima2bshort.c,v 1.1 2000/06/16 18:48:16 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <lib3_file_transform.h>		 /* Numaris 3 User's Library */
+
+#define U_LONG unsigned long
+#define U_SHORT unsigned short
+#define BytesPerPixelShort 2
+#define BytesPerPixelLong 4
+#define U3_isStatusError(s,e) (((s)^(e)) == 0)
+#define MAXSTR 256
+
+/*  ----------------------------
+ *  Function:   ima2bshort
+ *  ----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	FILE           *FileInp_p;		 /* input file pointer */
+	char            InFile[60];		 /* input file name */
+	long            Status;			 /* shows an actual status */
+	U3_header_type_t HeadType;
+	U3_data_type_t  DataType;
+	U3_size_type_t  DataSize;
+	header_t       *HeadBuffer;		 /* header buffer */
+	U_SHORT        *DataBuffer;		 /* pixel data buffer */
+	long unsigned   NumPixels_ul, NumRows_ul, NumColumns_ul, StartOffset_ul;
+
+	FILE           *fd_img;			 /* output image  */
+	FILE           *fd_hdr;			 /* output header */
+	FILE           *fd_if;			 /* file for Interfile Format header */
+	char           *inroot;
+	char           *outroot;
+	char           *order;
+	char           *ptr;
+	char            outhdr[MAXSTR];
+	char            outimg[MAXSTR];
+	char            ifhdr[MAXSTR];
+	char            view[6][10];
+	char            num[12];
+	char            version[5];
+	char            program_date[12];
+	char            study_date[12];
+	char            institution[MAXSTR];
+	char            model[MAXSTR];
+	char            subject_id[MAXSTR];
+	char            ParameterFileName[MAXSTR];
+	char            SequenceFileName[MAXSTR];
+	char            SequenceDescription[MAXSTR];
+
+	short        ***img;
+	short           datum;
+	int             bitsperpix;
+	int             orientation;
+	int             firstfrm, lastfrm, firstslc;
+	int             i, j, k, n;
+	int             pln, frm, slc;
+	int             npln, nfrm;
+	int             xdim, ydim, zdim;
+	float           xpix, ypix, zpix;	 /* pixel sizes (mm) */
+
+	strcpy (view[1], "View_FEET");
+	strcpy (view[2], "View_HEAD");
+	strcpy (view[3], "View_AtoP");
+	strcpy (view[4], "View_LtoR");
+	strcpy (view[5], "View_PtoA");
+	strcpy (view[6], "View_RtoL");
+
+	strncpy (version, ptr, 4);
+	strncpy (program_date, ptr, 10);
+	ptr = strstr (rcsid, "v ");
+	if (ptr != NULL) {
+		ptr += 2;
+		ptr = strstr (ptr, " ");
+		if (ptr != NULL) {
+			ptr++;
+			ptr = strchr (program_date, '/');
+			if (ptr != NULL)
+				*ptr = ':';
+			ptr = strchr (program_date, '/');
+			if (ptr != NULL)
+				*ptr = ':';
+		}
+	}
+	order = (char *) calloc (4, sizeof (char));
+	if (order == NULL) return (1);
+
+/*
+ *  Get command line arguments and initialize filenames:
+ *  ---------------------------------------------------
+ */
+
+	if (argc != 7) {
+		fprintf (stderr, "Usage: ima2bshort inroot firstfrm lastfrm nplanes firstslc outroot\n");
+		return (1);
+	}
+	inroot = argv[1];
+	firstfrm = atoi (argv[2]);
+	lastfrm = atoi (argv[3]);
+	nfrm = lastfrm - firstfrm + 1;
+	npln = atoi (argv[4]);
+	firstslc = atoi (argv[5]);
+	outroot = argv[6];
+
+/*	Loop for all input images */
+
+	for (pln = 0; pln < npln; pln++) {
+		slc = firstslc + pln;
+		for (frm = firstfrm; frm <= lastfrm; frm++) {
+			strcpy (InFile, inroot);
+			strcat (InFile, "-");
+			sprintf (num, "%d", frm);
+			strcat (InFile, num);
+			strcat (InFile, "-");
+			sprintf (num, "%d", slc);
+			strcat (InFile, num);
+			strcat (InFile, ".ima");
+
+/* open file and check for success */
+
+			Status = U3Open (&FileInp_p, InFile, "r");
+			if (Status == 0) {
+				if (slc == firstslc) 
+					fprintf (stdout, "Reading %s\n", InFile);
+			} else if (U3_isStatusError (Status, U3_NO_PERMISSION)) {
+				fprintf (stderr, "ERROR [ima2bshort]: no read permission for %s\n", InFile);
+				return (1);
+			} else if (U3_isStatusError (Status, U3_INVLD_FILE_PATH)) {
+				fprintf (stderr, "ERROR [ima2bshort]: invalid path for %s\n", InFile);
+				return (1);
+			} else if (U3_isStatusError (Status, U3_UNKNOWN_HEADER)) {
+				fprintf (stderr, "ERROR [ima2bshort]: not a valid image file %s\n", InFile);
+				return (1);
+			} else
+				return (1);
+
+/* determine header type */
+
+			if ((Status = U3GetHeaderType (FileInp_p, &HeadType)) != 0) {
+				fprintf (stderr, "ERROR [ima2bshort]: unrecognized header type\n");
+				return (1);
+			}
+			switch (HeadType) {
+			case U3_internal_head_type:
+				if (slc == firstslc) 
+					fprintf (stdout, "  Numaris 3");
+				break;
+
+			case U3_nema_head_type:
+				if (slc == firstslc) 
+					fprintf (stdout, "  ACR-NEMA");
+				break;
+
+			case U3_numaris1_head_type:
+				if (slc == firstslc) 
+					fprintf (stdout, "  Numaris 1");
+				break;
+
+			case U3_numaris2_head_type:
+				if (slc == firstslc) 
+					fprintf (stdout, "  Numaris 2");
+				break;
+
+			default:
+				fprintf (stderr, "\nERROR [ima2bshort]: unrecognized file format\n");
+				return (1);
+			}
+
+/* check data type and data size */
+
+			if ((Status = U3GetDataType (FileInp_p, &DataType, &DataSize)) != 0) {
+				fprintf (stderr, "\nERROR [ima2bshort]: unrecognized data type\n");
+				return (1);
+			}
+/* make sure it is an Image file */
+
+			if (DataType == U3_image_data_type) {
+				if (slc == firstslc) 
+					fprintf (stdout, " image  ");
+			} else {
+				fprintf (stderr, "\nERROR [ima2bshort]: this is not an image file\n");
+				return (1);
+			}
+
+/* allocate memory space for the header buffer */
+
+			if ((HeadBuffer = (header_t *) malloc (sizeof (header_t))) == 0) {
+				fprintf (stderr, "ERROR [ima2bshort]: memory allocation failed\n");
+				return (1);
+			}
+/* get the header buffer */
+
+			if ((Status = U3GetHeader (FileInp_p, HeadBuffer)) != 0) {
+				fprintf (stderr, "ERROR [ima2bshort]: unable to read header\n");
+				free (HeadBuffer);
+				return (1);
+			}
+/* allocate memory space for the  data buffer */
+
+			/* calculate the number of bytes per pixel */
+			NumRows_ul = HeadBuffer->G28.Pre.Rows;
+			NumColumns_ul = HeadBuffer->G28.Pre.Columns;
+			NumPixels_ul = NumRows_ul * NumColumns_ul;
+
+			/* set the offset to start reading the data */
+			StartOffset_ul = 0;
+
+			/* allocate memory space according to the data size */
+			switch (DataSize) {
+			case U3_set_m_short:
+				if ((DataBuffer = (U_SHORT *) malloc (NumPixels_ul * BytesPerPixelShort)) == 0) {
+					fprintf (stderr, "ERROR [ima2bshort]: memory allocation failed\n");
+					return (1);
+				}
+				break;
+
+			case U3_set_m_long:
+				fprintf (stderr, "ERROR [ima2bshort]: unable to read long integer format\n");
+				return (1);
+
+			default:
+				fprintf (stderr, "ERROR [ima2bshort]: incompatible data type\n");
+				return (1);
+			}
+
+/* read the pixel data into the buffer */
+
+			if ((Status = U3ReadPixData (FileInp_p, StartOffset_ul,
+						     NumPixels_ul, &DataSize, DataBuffer)) != 0) {
+				fprintf (stderr, "ERROR [ima2bshort]: unable to read image data\n");
+				free (HeadBuffer);
+				free (DataBuffer);
+				return (1);
+			}
+/*
+ *	Get image header information and orientation
+ */
+			if (slc == firstslc) {
+				strcpy (institution, HeadBuffer->G08.Ide.InstitutionID);
+				strcpy (model, HeadBuffer->G08.Ide.ManufacturerModel);
+				strcpy (subject_id, HeadBuffer->G10.Pat.PatientId);
+				sprintf (num, "%d", (int) HeadBuffer->G08.Ide.StudyDate.Year);
+				strcpy (study_date, num);
+				strcat (study_date, ":");
+				sprintf (num, "%d", (int) HeadBuffer->G08.Ide.StudyDate.Month);
+				strcat (study_date, num);
+				strcat (study_date, ":");
+				sprintf (num, "%d", (int) HeadBuffer->G08.Ide.StudyDate.Day);
+				strcat (study_date, num);
+				strcpy (ParameterFileName, HeadBuffer->G19.Acq4.CM.ParameterFileName);
+				strcpy (SequenceFileName, HeadBuffer->G19.Acq4.CM.SequenceFileName);
+				strcpy (SequenceDescription, HeadBuffer->G19.Acq4.CM.SequenceDescription);
+				bitsperpix = HeadBuffer->G28.Pre.BitsAllocated;
+				strncpy (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.X, 1);
+				strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Y, 1);
+				strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Z, 1);
+
+				orientation = HeadBuffer->G21.Rel1.CM.ViewDirection;
+				if (orientation != 2) {
+					fprintf (stderr, "ERROR [ima2bshort]: Incompatible View Direction\n");
+					return (1);
+				}
+				fprintf (stdout, "%s  (%s)\n", view[orientation], order);
+				/* View_HEAD */
+				xdim = HeadBuffer->G28.Pre.Columns;
+				ydim = HeadBuffer->G28.Pre.Rows;
+				zdim = nfrm;
+				xpix = HeadBuffer->G28.Pre.PixelSize.Row;
+				ypix = HeadBuffer->G28.Pre.PixelSize.Row;
+				zpix = HeadBuffer->G18.Acq.SliceThickness;
+
+				fprintf (stdout, "  x = %d (%f mm)  y = %d (%f mm)  z = %d (%f mm)\n",
+					 xdim, xpix, ydim, ypix, zdim, zpix);
+				fprintf (stdout, "Creating...\n");
+
+				if (NULL == (img = (short ***) malloc ((short) (zdim * sizeof (short **))))) {
+					fprintf (stderr, "ERROR [ima2bshort]: memory allocation failed\n");
+					return (1);
+				}
+				for (i = 0; i < zdim; i++) {
+					if (NULL == (img[i] = (short **) malloc ((short) (ydim * sizeof (short *))))) {
+						fprintf (stderr, "ERROR [ima2bshort]: memory allocation failed\n");
+						return (1);
+					}
+					for (j = 0; j < ydim; j++) {
+						if (NULL == (img[i][j] = (short *) malloc ((short) (xdim * sizeof (short))))) {
+							fprintf (stderr, "ERROR [ima2bshort]: memory allocation failed\n");
+							return (1);
+						}
+					}
+				}
+			}
+			n = 0;
+            k = frm - firstfrm;
+			for (j = 0; j < ydim; j++) {
+				for (i = 0; i < xdim; i++) {
+					datum = DataBuffer[n];
+					img[k][j][i] = datum;
+					n++;
+				}
+			}
+			free (HeadBuffer);
+			free (DataBuffer);
+			Status = U3Close (FileInp_p);
+			slc += npln;
+		}
+
+/* Write image & hdr */
+
+		strcpy (outimg, outroot);
+		strcat (outimg, "_sl");
+		sprintf (num, "%02d", npln-pln-1);
+		strcat (outimg, num);
+		strcpy (outhdr, outimg);
+		strcpy (ifhdr, outimg);
+		strcat (outimg, ".bshort");
+		strcat (outhdr, ".hdr");
+		strcat (ifhdr, ".ifh");
+		if ((fd_img = fopen (outimg, "w")) == 0) {
+			fprintf (stderr, "ERROR [ima2bshort]: creating %s\n", outimg);
+			return (1);
+		}
+		if ((fd_hdr = fopen (outhdr, "w")) == 0) {
+			fprintf (stderr, "ERROR [ima2bshort]: creating %s\n", outhdr);
+			return (1);
+		}
+		if ((fd_if = fopen (ifhdr, "w")) == 0) {
+			fprintf (stderr, "ERROR [ima2bshort]: creating %s\n", ifhdr);
+			return (1);
+		}
+		for (k = 0; k < zdim; k++) {
+			for (j = 0; j < ydim; j++) {
+				if ((fwrite (img[k][j], sizeof (short), xdim, fd_img)) != xdim) {
+					fprintf (stderr, "ERROR [ima2bshort]: writing to: %s\n", outimg);
+					return (1);
+				}
+			}
+		}
+		fprintf (fd_hdr, "256 256 80 0");
+		(void) fclose (fd_img);
+		(void) fclose (fd_hdr);
+
+/* Create Interfile Format header file	*/
+
+		fprintf (fd_if, "INTERFILE :=\n");
+		fprintf (fd_if, "version of keys    := 3.3\n");
+		fprintf (fd_if, "image modality := mri\n");
+		fprintf (fd_if, "originating system := %s\n", model);
+		fprintf (fd_if, "conversion program := ima2bshort\n");
+		fprintf (fd_if, "program version    := %s\n", version);
+		fprintf (fd_if, "program date   := %s\n", program_date);
+		fprintf (fd_if, "original institution   := %s\n", institution);
+		fprintf (fd_if, "name of data file  := %s\n", outimg);
+		fprintf (fd_if, "subject ID := %s\n", subject_id);
+		fprintf (fd_if, "study date := %s\n", study_date);
+		fprintf (fd_if, "number format  := signed integer\n");
+		fprintf (fd_if, "number of bytes per pixel  := %d\n", bitsperpix / 8);
+		fprintf (fd_if, "number of dimensions   := 3\n");
+		fprintf (fd_if, "matrix size [1]    := %d\n", xdim);
+		fprintf (fd_if, "matrix size [2]    := %d\n", ydim);
+		fprintf (fd_if, "matrix size [3]    := %d\n", zdim);
+		fprintf (fd_if, "scaling factor (mm/pixel) [1]  := %f\n", xpix);
+		fprintf (fd_if, "scaling factor (mm/pixel) [2]  := %f\n", ypix);
+		fprintf (fd_if, "scaling factor (mm/pixel) [3]  := %f\n", zpix);
+		fprintf (fd_if, "matrix initial element [1] := right\n");
+		fprintf (fd_if, "matrix initial element [2] := posterior\n");
+		fprintf (fd_if, "matrix initial element [3] := inferior\n");
+		fprintf (fd_if, "mri parameter file name    := %s\n", ParameterFileName);
+		fprintf (fd_if, "mri sequence file name := %s\n", SequenceFileName);
+		fprintf (fd_if, "mri sequence description   := %s\n", SequenceDescription);
+		(void) fclose (fd_if);
+		fprintf (stdout, "  %s\n", outimg);
+	}
+	for (i = 0; i < zdim; i++) {
+		for (j = 0; j < ydim; j++) 
+			free (img[i][j]);
+		free (img[i]);
+	}
+	free (img);
+	return (0);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d12 2
+a25 2
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ima2bshort/RCS/ima2bshort.c,v 1.6 1999/03/19 15:31:57 tom Exp $";
+
+a84 2
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+a85 2
+	ptr = strstr (ptr, " ");
+	ptr++;
+d87 14
+a100 5
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+
+d102 1
+d356 2
+a357 2
+		fclose (fd_img);
+		fclose (fd_hdr);
+d387 1
+a387 1
+		fclose (fd_if);
+@

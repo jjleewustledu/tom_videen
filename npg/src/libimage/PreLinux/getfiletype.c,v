@@ -1,0 +1,387 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	2002.12.17.21.55.15;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2002.04.05.16.40.36;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2000.07.18.15.40.31;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2000.02.18.21.38.39;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.12.13.17.45.50;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.09.18.13.38.08;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.08.27.21.09.10;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.10.16.15.49.01;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.09.26.21.48.27;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.19.19.33.20;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@fix pointer/cast errors found with gcc
+@
+text
+@/*  $Id: getfiletype.c,v 1.9 2002/04/05 16:40:36 tom Exp tom $
+    $Log: getfiletype.c,v $
+    Revision 1.9  2002/04/05 16:40:36  tom
+    check "Advance" for Wake Forest Univ converted 6.5 file
+
+ * Revision 1.8  2000/07/18  15:40:31  tom
+ * add Interfile compatibility
+ *
+ * Revision 1.7  2000/02/18  21:38:39  tom
+ * extend range of data_type to check
+ *
+ * Revision 1.6  1999/12/13  17:45:50  tom
+ * tov revision
+ *
+ * Revision 1.5  1998/09/18  13:38:08  tom
+ * add system 962
+ *
+ * Revision 1.4  1998/08/27  21:09:10  tom
+ * permit system == 1 and sw_version == 65 for MATRIX_REV6
+ *
+ * Revision 1.3  1996/10/16  15:49:01  tom
+ * system = 6
+ *
+ * Revision 1.2  1996/09/26  21:48:27  tom
+ * permit system == 0
+ *
+ * Revision 1.1  1996/04/19  19:33:20  tom
+ * Initial revision
+ *
+ */
+/* =============================================================================
+ *  Function:       getfiletype
+ *  Date:           Mar-96
+ *  Author:         Tom Videen
+ *  Description:    Return type of file (types defined in imagio.h)
+ *		1 = MATRIX_REV6
+ *		2 = MATRIX_REV7
+ *		3 = INTERFILE
+ *		4 = PETT6
+ * =============================================================================
+ */
+#ifndef lint
+static char     rcsid[] = "$Header: /home/tom/src/libimage/RCS/getfiletype.c,v 1.9 2002/04/05 16:40:36 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <image.h>
+
+#define TESTLEN 28
+
+int             getfiletype (file)
+	ImageFile      *file;
+{
+	union conv {
+		short           s[TESTLEN];
+		char            c[2 * TESTLEN];
+	}               test;
+
+	FILE           *fp;
+	char           *filename;
+	int             filetype;
+	short           system, data_type, sw_version;
+	char            hdrfil[MAXFNAME], *ptr;
+
+	filename = file->name;
+	if ((fp = fopen (filename, "r")) == NULL) {
+		(void) fprintf (stderr, "ERROR [getfiletype]: Could not open %s\n", filename);
+		return (ERROR);
+	}
+	if (fread (test.s, sizeof (short), TESTLEN, fp) != TESTLEN) {
+		(void) fprintf (stderr, "ERROR [getfiletype]: Could not read %s\n", filename);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+	test.c[TESTLEN - 1] = '\0';
+
+	data_type = (((test.s[25] & 0xff) << 8) | ((test.s[25] & 0xff00) >> 8));
+	if (data_type > 1 && data_type < 8) {
+		system = (((test.s[26] & 0xff) << 8) | ((test.s[26] & 0xff00) >> 8));
+		sw_version = (((test.s[24] & 0xff) << 8) | ((test.s[24] & 0xff00) >> 8));
+	} else {
+		system = test.s[26];
+		sw_version = test.s[24];
+	}
+
+	if (strncmp (test.c, "INTERFILE", 9) == 0) /* Interfile header */
+		filetype = INTERFILE;
+	else if (strncmp (test.c, "MATRIX7", 7) == 0) /* Matrix file version 7. */
+		filetype = MATRIX_REV7;
+	else if (((system == 921) || (system == 951) || (system == 953) || (system == 961) ||
+		      (system == 962) || (system == 6) || (system == 1) || (system == 0)) &&
+		 ((sw_version == 64) || (sw_version == 65) || (sw_version == 6)))
+		filetype = MATRIX_REV6;
+	else if (strncmp (&(test.c[28]), "Advance", 7) == 0)	/* Wake Forest file */
+		filetype = MATRIX_REV6;
+	else if (strncmp (test.c, "**", 2) == 0)
+		filetype = PETT6;
+	else {
+		(void) strcpy (hdrfil, filename);
+		ptr = strrchr (hdrfil, '.');
+		if (ptr != NULL)
+			ptr = NULL;
+		(void) strcat (hdrfil, ".ifh");
+		if ((fp = fopen (hdrfil, "r")) == NULL)
+			filetype = ERROR;
+		else {
+			if (fread (test.s, sizeof (short), TESTLEN, fp) != TESTLEN) {
+				filetype = ERROR;
+				(void) fclose (fp);
+			} else {
+				if (strncmp (test.c, "INTERFILE", 9) == 0)	/* Interfile file. */
+					filetype = INTERFILE;
+				else
+					filetype = ERROR;
+			}
+		}
+	}
+	return (filetype);
+}
+@
+
+
+1.9
+log
+@check "Advance" for Wake Forest Univ converted 6.5 file
+@
+text
+@d1 1
+a1 1
+/*  $Id: getfiletype.c,v 1.8 2000/07/18 15:40:31 tom Exp tom $
+d3 3
+d43 1
+a43 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/getfiletype.c,v 1.8 2000/07/18 15:40:31 tom Exp tom $";
+d71 1
+a71 1
+		return (NULL);
+d75 1
+a75 1
+		return (NULL);
+d78 1
+a78 1
+	test.c[TESTLEN - 1] = NULL;
+d105 1
+a105 1
+			*ptr = NULL;
+d108 1
+a108 1
+			filetype = NULL;
+d111 1
+a111 1
+				filetype = NULL;
+d117 1
+a117 1
+					filetype = NULL;
+@
+
+
+1.8
+log
+@add Interfile compatibility
+@
+text
+@d1 1
+a1 1
+/*  $Id: getfiletype.c,v 1.7 2000/02/18 21:38:39 tom Exp tom $
+d3 3
+d40 1
+a40 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/getfiletype.c,v 1.7 2000/02/18 21:38:39 tom Exp tom $";
+d94 2
+@
+
+
+1.7
+log
+@extend range of data_type to check
+@
+text
+@d1 1
+a1 1
+/*  $Id: getfiletype.c,v 1.6 1999/12/13 17:45:50 tom Exp tom $
+d3 3
+d37 1
+a37 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/getfiletype.c,v 1.6 1999/12/13 17:45:50 tom Exp tom $";
+d83 3
+a85 1
+	if (strncmp (test.c, "MATRIX7", 7) == 0) /* Matrix file version 7. */
+@
+
+
+1.6
+log
+@tov revision
+@
+text
+@d1 1
+a1 1
+/*  $Id: getfiletype.c,v 1.5 1998/09/18 13:38:08 tom Exp tom $
+d3 3
+d34 1
+a34 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/getfiletype.c,v 1.5 1998/09/18 13:38:08 tom Exp tom $";
+d72 1
+a72 1
+	if (data_type == VAX_I2) {
+@
+
+
+1.5
+log
+@add system 962
+@
+text
+@d1 1
+a1 1
+/*  $Id: getfiletype.c,v 1.4 1998/08/27 21:09:10 tom Exp tom $
+d3 3
+d31 1
+a31 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/getfiletype.c,v 1.4 1998/08/27 21:09:10 tom Exp tom $";
+a38 1
+#include <libimage.h>
+d58 1
+a58 1
+		fprintf (stderr, "ERROR [getfiletype]: Could not open %s\n", filename);
+d62 1
+a62 1
+		fprintf (stderr, "ERROR [getfiletype]: Could not read %s\n", filename);
+d65 1
+a65 1
+	fclose (fp);
+d86 1
+a86 1
+		strcpy (hdrfil, filename);
+d90 1
+a90 1
+		strcat (hdrfil, ".ifh");
+d96 1
+a96 1
+				fclose (fp);
+@
+
+
+1.4
+log
+@permit system == 1 and sw_version == 65 for MATRIX_REV6
+@
+text
+@d1 1
+a1 1
+/*  $Id: getfiletype.c,v 1.3 1996/10/16 15:49:01 tom Exp tom $
+d3 3
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/getfiletype.c,v 1.3 1996/10/16 15:49:01 tom Exp tom $";
+d77 2
+a78 2
+	else if (((system == 921) || (system == 951) || (system == 953) ||
+		      (system == 961) || (system == 6) || (system == 1) || (system == 0)) &&
+@
+
+
+1.3
+log
+@system = 6
+@
+text
+@d1 1
+a1 1
+/*  $Id: getfiletype.c,v 1.2 1996/09/26 21:48:27 tom Exp tom $
+d3 3
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/getfiletype.c,v 1.2 1996/09/26 21:48:27 tom Exp tom $";
+d75 2
+a76 2
+		      (system == 961) || (system == 6) || (system == 0)) &&
+		 ((sw_version == 64) || (sw_version == 6)))
+@
+
+
+1.2
+log
+@permit system == 0
+@
+text
+@d1 1
+a1 1
+/*  $Id: getfiletype.c,v 1.1 1996/04/19 19:33:20 tom Exp tom $
+d3 3
+d22 1
+a22 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/getfiletype.c,v 1.1 1996/04/19 19:33:20 tom Exp tom $";
+d72 1
+a72 1
+		      (system == 961) || (system == 0)) &&
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*  $Id$
+    $Log$
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/libimg/RCS/cti.c,v 1.15 1996/03/12 22:43:02 tom Exp $";
+d68 2
+a69 1
+	else if (((system == 921) || (system == 951) || (system == 953) || (system == 961)) &&
+@

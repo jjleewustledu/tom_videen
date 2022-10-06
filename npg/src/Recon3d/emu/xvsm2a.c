@@ -1,0 +1,36 @@
+/*$Id: xvsm2a.c,v 1.2 1995/01/30 22:00:27 ty7777 Exp $*/
+/*$Log: xvsm2a.c,v $
+ * Revision 1.2  1995/01/30  22:00:27  ty7777
+ * Added program version.
+ **/
+
+#include "qcemulib.h"
+
+static char rcsid [] = "$Header: /export/home/npggw/tom/src/recon3d/RCS/xvsm2a.c,v 1.2 1995/01/30 22:00:27 ty7777 Exp $";
+
+#ifdef  EMUVERSION
+void  emu_xvsm2a_ (y,a,u,b,v,c,ny)
+#else
+void  xvsm2a_ (y,a,u,b,v,c,ny)
+#endif /* EMUVERSION */
+
+float   y[], u[], v[], *a, *b, *c;
+long    *ny;
+{
+ register long   i;
+ register float *yy;
+ register float *uu;
+ register float *vv;
+ register float aa = *a;
+ register float bb = *b;
+ register float cc = *c;
+ register long n = *ny;
+
+ for (i=0, yy=y - 1, uu=u - 1, vv=v - 1; i<n; i++)
+      {
+      *++yy = (aa * *++uu) + (bb * *++vv) + cc;
+      }
+}
+
+/*********************************************************************/
+

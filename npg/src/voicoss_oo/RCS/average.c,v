@@ -1,0 +1,216 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2008.03.18.21.07.59;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log: average.c,v $
+ * Revision 1.1  2006/12/21  19:48:07  tom
+ * Initial revision
+ *
+ * Revision 2.2  2006/02/16  20:34:59  tom
+ * eliminate zero check while computing regional means
+ *
+ * Revision 2.1  2004/03/04  18:40:30  tom
+ * always write both L/R and R/L ratios
+ *
+ * Revision 2.0  2004/02/20  16:20:40  tom
+ * Feb 2004
+ *
+ * Revision 1.1  2000/08/31  15:23:07  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			average.c
+ *	Date:			Aug 2000
+ *	Author:			Tom Videen
+ *	Description:	Compute mean VOI values.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss_ho/RCS/average.c,v 1.1 2006/12/21 19:48:07 tom Exp $";
+#endif
+
+#include <math.h>
+#include <imgutil.h>
+#include <voistat.h>
+#include <nrutil.h>
+
+void            average (voidata, img, pdim, adim, mean, nvoxels, prm)
+	VOIDATA         voidata;		 /* VOI data */
+	float        ***img;			 /* image on which to compute VOIs */
+	int            *pdim;			 /* image dimension in pixels */
+	float          *adim;			 /* voxel dimension in mm */
+	float          *mean;			 /* returned */
+	int            *nvoxels;		 /* returned */
+	PARAMETER_DATA  prm;
+{
+	double          sum;
+	double          value;
+	float           dx, dy, dz;
+	float           dist1, dist2;
+	float           rx, ry, rz;
+	float           xc, yc, zc;
+	int             x, y, z;
+	int             xmin, xmax;
+	int             ymin, ymax;
+	int             zmin, zmax;
+
+/*
+ * Define a volume that contains the 3D voi.
+ */
+	xc = voidata.center.x;
+	yc = voidata.center.y;
+	zc = voidata.center.z;
+	dx = voidata.dimension.x / adim[0];	 /* pixels */
+	dy = voidata.dimension.y / adim[1];
+	dz = voidata.dimension.z / adim[2];
+	rx = dx / 2.0;				 /* pixels */
+	ry = dy / 2.0;
+	rz = dz / 2.0;
+
+/*
+ * Move the center if necessary to make dimensions unchanged.
+ */
+	x = (int) dx;
+	y = (int) dy;
+	z = (int) dz;
+
+	if (dx > 0 && xc - ((int) (xc)) == 0.0 && dx - x == 0.0 && x % 2 == 0)
+		xc += 0.5;
+	if (dy > 0 && yc - ((int) (yc)) == 0.0 && dy - y == 0.0 && y % 2 == 0)
+		yc += 0.5;
+	if (dz > 0 && zc - ((int) (zc)) > 0.3 && dz - z == 0.0 && z % 2 == 0)
+		zc += 0.5;
+	if (dx >= 0.0 && dx < 1.0)
+		xc = ROUND (xc);
+	if (dy >= 0.0 && dy < 1.0)
+		yc = ROUND (yc);
+	if (dz >= 0.0 && dz < 1.0)
+		zc = ROUND (zc);
+
+	xmin = ROUND (xc - rx);
+	xmax = ROUND (xc + rx);
+	ymin = ROUND (yc - ry);
+	ymax = ROUND (yc + ry);
+	zmin = ROUND (zc - rz);
+	zmax = ROUND (zc + rz);
+
+	*mean = 0.0;
+	*nvoxels = 0;
+	sum = 0.0;
+	if (xmin >= 1 && xmax <= pdim[0]
+	    && ymin >= 1 && ymax <= pdim[1]
+	    && zmin >= 1 && zmax <= pdim[2]) {
+		if (voidata.voi_shape == VOI_CUBE) {
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						if ((fabs (x - xc) <= rx) && (fabs (y - yc) <= ry) && (fabs (z - zc) <= rz)) {
+							if (prm.voi_zero_chk == 1 && img[z][y][x] == 0) {
+								*mean = MEAN_UNDEFINED;
+								*nvoxels = 0;
+								return;
+							} else {
+								value = (double) img[z][y][x];
+								sum += value;
+								(*nvoxels)++;
+							}
+						}
+					}
+				}
+			}
+
+		} else if (voidata.voi_shape == VOI_OLD_SPHERE) {
+			dist1 = rx * rx;
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						dist2 = (x - xc) * (x - xc) + (y - yc) * (y - yc) + (z - zc) * (z - zc);
+						if (dist2 <= dist1) {
+							if (prm.voi_zero_chk == 1 && img[z][y][x] == 0) {
+								*mean = MEAN_UNDEFINED;
+								*nvoxels = 0;
+								return;
+							} else {
+								value = (double) img[z][y][x];
+								sum += value;
+								(*nvoxels)++;
+							}
+						}
+					}
+				}
+			}
+
+		} else if (voidata.voi_shape == VOI_NEW_SPHERE) {
+			dist1 = DSQR (0.5 * voidata.dimension.x);	/* mm */
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						dx = DSQR ((x - xc) * adim[0]);
+						dy = DSQR ((y - yc) * adim[0]);
+						dz = DSQR ((z - zc) * adim[0]);
+						dist2 = dx + dy + dz;
+						if (dist2 <= dist1) {
+							if (img[z][y][x] == 0) 
+								fprintf (stderr,"WARNING: img[%d %d %d] = %f\n",x,y,z,img[z][y][x]);
+							if (prm.voi_zero_chk == 1 && img[z][y][x] == 0) {
+								*mean = MEAN_UNDEFINED;
+								*nvoxels = 0;
+								return;
+							} else {
+								value = (double) img[z][y][x];
+								sum += value;
+								(*nvoxels)++;
+							}
+						}
+					}
+				}
+			}
+
+		} else if (voidata.voi_shape == VOI_CYLINDER) {
+			dist1 = rx * rx;
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						dist2 = (x - xc) * (x - xc) + (y - yc) * (y - yc);
+						if (dist2 <= dist1 && (fabs (z - zc) <= rz)) {
+							if (prm.voi_zero_chk == 1 && img[z][y][x] == 0) {
+								*mean = MEAN_UNDEFINED;
+								*nvoxels = 0;
+								return;
+							} else {
+								value = (double) img[z][y][x];
+								sum += value;
+								(*nvoxels)++;
+							}
+						}
+					}
+				}
+			}
+		}
+		if (*nvoxels > 0)
+			*mean = sum / *nvoxels;
+		else
+			*mean = MEAN_UNDEFINED;
+	} else
+		*mean = MEAN_UNDEFINED;
+}
+@

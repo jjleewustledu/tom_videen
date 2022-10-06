@@ -1,0 +1,105 @@
+#!/bin/csh
+#	Name:	downsize_tse2
+#	Date:	Mar 2010
+#	Author:	Tom Videen
+#	Intent:	Resample large (1024 x 1024 x Z) MR images from Cincinnati
+
+if ($#argv != 1) then
+    echo "Usage:  downsize_tse2 filename"
+    echo " e.g.:  downsize_tse2 db123_tse2"
+    exit 1
+endif
+
+set IN  = $1:r
+set IMG = $IN.img
+set HDR = $IN.hdr
+set AIR = ${IN}_downsize
+checkfiles $IMG $HDR
+if (-e $AIR.air) then
+	echo "Replacing $AIR.air"
+	/usr/bin/rm $AIR.air
+endif
+
+# Get input file dimensions
+# -----------------------
+set XDIM = `scanheader $HDR | grep x_dim | cut -f2 -d=`
+set YDIM = `scanheader $HDR | grep y_dim | cut -f2 -d=`
+set ZDIM = `scanheader $HDR | grep z_dim | cut -f2 -d=`
+if ($XDIM != 1024 || $ZDIM != 1024) then
+	echo "ERROR [downsize_tse2] X and Z dimensions should be 1024"
+	exit 1
+endif
+
+set XPIX = `scanheader $HDR | grep x_size | cut -f2 -d=`
+set a = `echo $XPIX | cut -f1 -de`
+set chk = `echo $XPIX | grep "+"`
+if ($chk == "") then
+   set b = `echo $XPIX | cut -f2 -de`
+else
+   set b = `echo $XPIX | cut -f2 -d+`
+endif
+echo $a $b
+set XPIX = `echo "4 * $a * 10^$b" | bc -l | cut -c1-8`
+
+set YPIX = `scanheader $HDR | grep y_size | cut -f2 -d=`
+set a = `echo $YPIX | cut -f1 -de`
+set chk = `echo $YPIX | grep "+"`
+if ($chk == "") then
+   set b = `echo $YPIX | cut -f2 -de`
+else
+   set b = `echo $YPIX | cut -f2 -d+`
+endif
+echo $a $b
+set YPIX = `echo "$a * 10^$b" | bc -l | cut -c1-8`
+
+set ZPIX = `scanheader $HDR | grep z_size | cut -f2 -d=`
+set a = `echo $ZPIX | cut -f1 -de`
+set chk = `echo $ZPIX | grep "+"`
+if ($chk == "") then
+   set b = `echo $ZPIX | cut -f2 -de`
+else
+   set b = `echo $ZPIX | cut -f2 -d+`
+endif
+echo $a $b
+set ZPIX = `echo "4 * $a * 10^$b" | bc -l | cut -c1-8`
+
+echo Orig image size: $XDIM $YDIM $ZDIM
+echo New image size: 256 $YDIM 256
+echo New pixel size: $XPIX $YPIX $ZPIX
+
+# Resample to 4 time x,z pixel sizes
+# ----------------------------------
+echo 0 >! downsize.tmp
+echo 0 >> downsize.tmp
+echo 0 >> downsize.tmp
+echo 0 >> downsize.tmp
+echo 0 >> downsize.tmp
+echo 0 >> downsize.tmp
+echo 1 >> downsize.tmp
+echo 1 >> downsize.tmp
+echo 1 >> downsize.tmp
+echo n >> downsize.tmp
+echo $IMG >> downsize.tmp
+echo m >> downsize.tmp
+echo $XPIX >> downsize.tmp
+echo $YPIX >> downsize.tmp
+echo $ZPIX >> downsize.tmp
+echo 256 >> downsize.tmp
+echo $YDIM >> downsize.tmp
+echo 256 >> downsize.tmp
+echo y >> downsize.tmp
+echo $AIR.air >> downsize.tmp
+echo y >> downsize.tmp
+
+manualreslice < downsize.tmp
+imgreslice $IN $AIR
+
+if (! -e Original) mkdir Original
+mv $IMG Original
+mv $HDR Original
+mv $AIR.air Original
+
+mv r$HDR $HDR
+mv r$IMG $IMG
+/usr/bin/rm downsize.tmp
+

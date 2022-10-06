@@ -1,0 +1,194 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.16.14.48.00;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.26.21.08.36;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.01.21.21.42.52;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/* $Log: fdgcalc.c,v $
+ * Revision 1.2  2002/11/26  21:08:36  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/01/21  21:42:52  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			fdgcalc.c
+ *	Date:			Jan 1999
+ *	Author:			Tom Videen
+ *	Description:	Compute CMRfdg.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fdgcalc/RCS/fdgcalc.c,v 1.2 2002/11/26 21:08:36 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <math.h>
+#include <imgutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	double          dconex ();
+	int             getdta ();
+
+	char           *dtafile;
+	int             np = 0;			 /* number of plasma data points */
+	float           time[1000];		 /* sec: from dta file */
+	float           plasma[1000];	 /* decay-corrected well counts/sec: from dta file */
+	double          counts;			 /* ECAT counts/sec */
+	double          f0, f1, f2;
+	double          ri1, ri2;		 /* convolutions */
+	double          k1, k2, k3, k4;	 /* rate constants (1/min) */
+	double          lc;				 /* lumped constant */
+	double          alpha1, alpha2;	 /* macro parameters clearance rates */
+	double          gluc;			 /* glucose concentration (micromoles/ml) */
+	double          t0, t1;			 /* range of integration (sec) */
+	double          t2, framelen;	 /* (sec) */
+	double          pie;
+	double          corcnts;
+	double          cmrfdg;
+	double          tau = 0.00010529; /* (1/sec) */
+
+	if (argc != 11) {
+		printf ("Usage: fdgcalc cnts dta k1 k2 k3 k4 gc time framelen pie\n");
+		return (ERROR);
+	}
+	counts = (double) atof (argv[1]);
+	dtafile = argv[2];
+	k1 = (double) atof (argv[3]);
+	k2 = (double) atof (argv[4]);
+	k3 = (double) atof (argv[5]);
+	k4 = (double) atof (argv[6]);
+	gluc = (double) atof (argv[7]);
+	t1 = (double) atof (argv[8]);
+	framelen = (double) atof (argv[9]);
+	pie = (double) atof (argv[10]);
+	lc = 1.;
+	t0 = 0.;
+
+	if (getdta (dtafile, &np, &time, &plasma) != 0) {
+		fprintf (stderr, "ERROR [fdgcalc]: Reading %s\n", dtafile);
+		return (ERROR);
+	}
+
+	k1 /= 60;				 /* 1/min -> 1/sec */
+	k2 /= 60;
+	k3 /= 60;
+	k4 /= 60;
+
+/*	average frame time for decay correction and for integration of blood curve */
+
+	t2 = t1 - (log (0.5 * (1.0 + exp (-tau * framelen)))) / tau;
+
+/*	Using Huang's formula: Am J Physiol 238:E69-E82, 1980 (eqn 8, p. E71) */
+
+	f0 = sqrt (pow ((k2 + k3 + k4), 2.0) - 4 * k2 * k4);
+	alpha1 = (k2 + k3 + k4 - f0) / 2;
+	alpha2 = (k2 + k3 + k4 + f0) / 2;
+
+	ri1 = dconex (&time, &plasma, np, t0, t2, alpha1);
+	ri2 = dconex (&time, &plasma, np, t0, t2, alpha2);
+	if (ri1 < 0. || ri2 < 0.) {
+		fprintf (stderr, "ERROR [fdgcalc]: negative value for blood curve convolution\n");
+		return (ERROR);
+	}
+
+/*	Convert counts to counts/sec, convert pie to cnts/ml/sec, decay correct */
+
+	corcnts = (counts / framelen) * 60 * pie * exp (t2 * tau);
+	f1 = (k1 / (alpha2 - alpha1)) * ((k4 - alpha1) * ri1 + (alpha2 - k4) * ri2);
+	f2 = gluc / (lc * (k2 + k3) * (ri1 - ri2) / (alpha2 - alpha1));
+	cmrfdg = f2 * (corcnts - f1);
+
+/*	Convert from uMol/sec/ml -> uMol/min/100g */
+
+	cmrfdg = cmrfdg * 60 / 0.0105;
+
+/*	Input and computed values */
+
+	printf ("framelength   =%8.2f sec\n", framelen);
+	printf ("pie = %f\n", pie);
+	printf ("tau = %f 1/sec\n", tau);
+	printf ("k1  = %f ml/g/min\n", k1 * 60);
+	printf ("k2  = %f 1/min\n", k2 * 60);
+	printf ("k3  = %f 1/min\n", k3 * 60);
+	printf ("k4  = %f 1/min\n", k4 * 60);
+	printf ("LC  = %4.2f\n", lc);
+	printf ("plasma FDG =%7.2f microMoles/ml\n", gluc);
+	printf ("frame start time =%8.2f sec\n", t1);
+	printf ("average frm time =%8.2f sec\n", t2);
+	printf ("ECAT counts =%9.1f cnts/pixel/frame\n", counts);
+	printf ("well counts =%9.1f cnts/ml/sec\n", corcnts);
+	printf ("CMRfdg =%8.3f uMol/min/100g\n", cmrfdg);
+	return (0);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jan-99
+d15 1
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fdgcalc/RCS/fdgcalc.c,v 1.1 1999/01/21 21:42:52 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fdgcalc/RCS/fdgcalc.c,v 1.1 1998/04/29 14:48:10 tom Exp $";
+a16 1
+#include <string.h>
+d28 1
+a28 1
+	int             np;				 /* number of plasma data points */
+a40 1
+	double          cor_factor;
+d78 1
+a78 1
+	f0 = sqrt (pow ((k2 + k3 + k4), 2) - 4 * k2 * k4);
+@

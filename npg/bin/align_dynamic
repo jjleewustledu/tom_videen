@@ -1,0 +1,174 @@
+#!/bin/csh
+# Program:	align_dynamic
+# Author:	Tom Videen
+# Date:		Sep 2008
+# Usage:	Align all frames in a dynamic image.
+# 	Requires:
+# 		1) dynamic image separated into single-frame images (Analyze format)
+# 		2) a reference image (masked, filtered image defining brain)
+# 		3) a rescaling AIR file and its inverse 
+#	Creates:
+#		1) combined air files aligning each image to the first
+# 		2) a null AIR file (for computing net movement)
+#		3) log file showing net movement between each scan and first (using pixels in reference image)
+#		4) log file showing final fit of cost function
+#	Removes temporary files:
+#		1) resampled images
+#		2) pair-wise air files
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv != 7) then
+	echo "Usage:  align_dynamic root ext brainmask frms thresh blur resample_air"
+	echo " e.g.,  align_dynamic p3000fd '' p3000fd_mask.img 3to44 40 5 scale_953"
+	echo "   or,  align_dynamic p5000fd _g4 p5000fd_mask.v 3to45 40 0 scale_961a"
+	exit 1
+endif
+
+set ROOT   = $1
+set EXT    = $2
+set BRAIN  = $3
+set FIRST  = `echo $4 | nawk '{FS="to";print $1}'`
+set LAST   = `echo $4 | nawk '{FS="to";print $2}'`
+set THRESH = $5
+set BLUR   = $6
+set A_AIR  = $7.air
+
+set BLUR3D = "$BLUR $BLUR $BLUR"
+set B_AIR  = i$A_AIR
+set ANAM   = a${ROOT}
+set XNAM   = x${ROOT}
+set SECOND = `echo "$FIRST + 1; quit" | bc`
+set TMP    = ${ROOT}temp.img
+set TLOG   = ${ROOT}.temp
+set MASK   = alignmsk
+set XMASK  = xalignmsk
+set ALOG   = ${ROOT}_alignmsk_b${BLUR}_t${THRESH}_p1_x3.log
+set CLOG   = ${ROOT}_alignmsk_b${BLUR}_t${THRESH}_p1_x3.fit
+echo `date` >! $ALOG
+echo `date` >! $CLOG
+echo $BRAIN >> $CLOG
+set t1 = `${NPG}/bin/t`
+unalias rm
+unalias cp
+
+# Check existence of AIR files
+# ----------------------------
+if (! -e $A_AIR) then
+	if (! -e ${NPG}/air/$A_AIR) then
+		echo "ERROR [align_dynamic]: Missing resampling AIR file: $A_AIR"
+		exit 1
+	else
+		cp ${NPG}/air/$A_AIR $A_AIR
+	endif
+endif
+if (! -e $B_AIR) then
+	if (! -e ${NPG}/air/$B_AIR) then
+		echo "ERROR [align_dynamic]: Missing inverted AIR file: $B_AIR"
+		exit 1
+	else
+		cp ${NPG}/air/$B_AIR $B_AIR
+	endif
+endif
+ 
+# Check existence of all single-frame files used for alignment
+# ------------------------------------------------------------
+set i = $FIRST
+while ($i <= $LAST)
+	set AIMG = $ANAM$i
+	if (! -e $AIMG.img) then
+		echo "ERROR [align_dynamic]: Missing image $AIMG.img"
+		echo "      Use single_frames to create single-frame images for alignment."
+		exit 1
+	endif
+	@ i++
+end
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+img2analyze $BRAIN $MASK
+set i = $FIRST
+set IMG  = $ROOT$i$EXT
+set AIMG = $ANAM$i
+set NULLAIR  = ${ROOT}_null.air
+${NPG}/bin/setanamin $AIMG 0
+echo "-- alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 $THRESH -p1 1 -p2 0 -e1 $MASK"
+alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 $THRESH -p1 1 -p2 0 -e1 $MASK
+
+# Adjust pixel size in standard air files (if necessary)
+# ------------------------------------------------------
+set NVOX = `scanheader $AIMG | grep x_size | cut -f2 -d= | cut -f1 -de`
+set SVOX = `scanair $A_AIR | grep voxel | head -1 | cut -f3 -d' ' | cut -f1 -de`
+set AVOX = `scanair $A_AIR | grep voxel | tail -1 | cut -f3 -d' ' | cut -f1 -de`
+set BVOX = `scanair $B_AIR | grep voxel | head -1 | cut -f3 -d' ' | cut -f1 -de`
+if ($NVOX != $AVOX) then
+	set DELTA = `echo "1000 * $NVOX / $AVOX" | bc`
+	if ($DELTA <= 1001 && $DELTA >= 999) then
+		${NPG}/bin/newairpix $A_AIR:r $SVOX $NVOX 
+		${NPG}/bin/newairpix $B_AIR:r $NVOX $SVOX
+	else
+		echo "ERROR [align_dynamic]: Different pixel sizes in $AIMG and $A_AIR"
+		echo "   $NVOX != $AVOX"
+		echo "   Use or create different air files for $A_AIR and $B_AIR"
+		exit 1
+	endif
+endif
+
+# Resample Mask 
+# -------------
+	${NPG}/bin/setanamin $MASK -1
+	reslice $A_AIR $XMASK -a $MASK -n 1 -k -o
+
+# Align all adjacent pairs 
+# ------------------------
+set i = $FIRST
+while ($i < $LAST)
+	set j = `echo "$i + 1" | bc`
+	set IMG  = $ROOT$i$EXT
+	set JMG  = $ROOT$j$EXT
+	set AIMG = $ANAM$i
+	set AJMG = $ANAM$j
+	set XIMG = $XNAM$i
+	if (! -e $XIMG.img) then
+		${NPG}/bin/setanamin $AIMG -1
+		reslice $A_AIR $XIMG -a $AIMG -n 1 -k -o
+	endif
+	set XJMG = $XNAM$j
+	if (! -e $XJMG.img) then
+		${NPG}/bin/setanamin $AJMG -1
+		reslice $A_AIR $XJMG -a $AJMG -n 1 -k -o
+	endif
+	set AIR  = ${ROOT}_${i}vs${j}.air
+	set NETAIR = ${ROOT}_${FIRST}vs${j}.air
+	${NPG}/bin/setanamin $XIMG 0 
+	${NPG}/bin/setanamin $XJMG 0
+
+	set PRM = "-m 6 -t1 $THRESH -p1 1 -t2 $THRESH -p2 1 -e1 $XMASK -e2 $XMASK -b1 $BLUR3D -b2 $BLUR3D -x 3 -v"
+	echo "-- alignlinear $XIMG $XJMG $AIR $PRM"
+	alignlinear $XIMG $XJMG $AIR $PRM >! $TLOG
+	tail -1 $TLOG >> $CLOG
+	rm $TLOG
+	if ($i > $FIRST) then
+		echo -- combine_air $NETAIR y $AIR1 $B_AIR $AIR $A_AIR
+		combine_air $NETAIR y $AIR1 $B_AIR $AIR $A_AIR
+	else
+		echo -- combine_air $NETAIR y $B_AIR $AIR $A_AIR
+		combine_air $NETAIR y $B_AIR $AIR $A_AIR
+	endif
+	if ($i > $SECOND) then
+		rm $AIR2
+	endif
+	set AIR2 = $AIR
+	set AIR1 = $NETAIR
+	${NPG}/bin/airdif $NETAIR $NULLAIR $BRAIN | grep Mean >> $ALOG
+	rm $XIMG.img
+	rm $XIMG.hdr
+	@ i++
+end
+rm $XJMG.img
+rm $XJMG.hdr
+rm $AIR2
+if (-e $TMP) rm $TMP
+set t2 = `${NPG}/bin/t`
+echo "[align_dynamic] Complete at" `date` "   Elapsed time: " `echo "$t2 - $t1" | bc` " sec"
+

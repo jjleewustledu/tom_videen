@@ -1,0 +1,1131 @@
+head	1.9;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.9
+date	2004.02.13.21.39.09;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2003.11.28.17.07.58;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2002.11.27.19.56.42;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.11.26.20.44.00;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.08.06.20.26.28;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.03.10.22.33.06;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.12.17.17.34.56;	author jane;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.12.16.16.59.31;	author jane;	state Exp;
+branches;
+next	;
+
+
+desc
+@cttilt
+@
+
+
+1.9
+log
+@Feb 2004
+@
+text
+@/*$Id: cttilt.c,v 1.7 2003/11/28 17:07:58 tom Exp tom $*/
+/*$Log: cttilt.c,v $
+ * Revision 1.7  2003/11/28  17:07:58  tom
+ * read slice thickness as real
+ *
+ * Revision 1.6  2002/11/27  19:56:42  tom
+ * *** empty log message ***
+ *
+ * Revision 1.5  2002/11/26  20:44:00  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  1999/08/06  20:26:28  tom
+ * get nrow and ncol from file header
+ *
+ * Revision 1.3  1999/03/10  22:33:06  tom
+ * clean up messages and code
+ *
+ * Revision 1.2  1996/12/17  17:34:56  jane
+ * modified usage example: p5064 --> p5064n
+ *
+ * Revision 1.1  1996/12/16  16:59:31  jane
+ * Initial revision
+ */
+/*  ===============================================================================
+ *  File:           cttilt.c
+ *  Date:           13-Dec-96
+ *  Author:         Jane Dunford-Shore
+ *  Description:    Reorient CT image that is already in Analyze format to correct
+ *                  for gantry tilt.
+ *  ===============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <ANALYZE.h>
+#include <errhand.h>
+#include <sspct.h>
+
+#define MAXSTR    256				 /* maximum filename length */
+
+/* ------------------------------------------------------------------------
+ * Function:    get_usage
+ * Synopsis:    char *get_usage()
+ * Description: Define command-line syntax string for this application
+ * Purpose:     Make command-line syntax for application easy to locate and
+ *              change within source code
+ * Arguments:   None
+ * Modifies:    No external variables modified
+ * Returns:     Pointer to command syntax string
+ * Note:        Max. length of command syntax string is determined by constant
+ *              MAXLEN_CMDSYN, currently (5/8/96) defined as 1000 in errhand.h
+ * Example:
+ *              Example 1: err_handler(CMD_SYNTAX, get_usage());
+ *              Example 2: strcpy(string, get_usage());
+ * ------------------------------------------------------------------------
+ */
+
+static char    *get_usage ()
+{
+	static char     cmd_syntax[MAXLEN_CMDSYN];
+	(void) strcpy (cmd_syntax, "   Usage: cttilt inprefix outprefix gantrytilt\n");
+	(void) strcat (cmd_syntax, " Example: cttilt p5064n p5064r -25\n");
+	(void) strcat (cmd_syntax, "    Note: Gantry tilt is in degrees.\n");
+	(void) strcat (cmd_syntax, "See also: ct2analyze, ctheader\n");
+	return cmd_syntax;
+}
+
+/* ------------------------------------------------------------------------
+ * Function:    main
+ * Synopsis:    int main (int argc, char *argv[])
+ * Description: Reorient CT in Analyze format to correct for gantry tilt.
+ * ------------------------------------------------------------------------
+ */
+
+int             main (int argc, char *argv[])
+{
+
+	/* Command line options/parameters and associated variables */
+
+	char            inprefix[MAXSTR]; /* first portion of input filenames */
+	char            outprefix[MAXSTR];/* first portion of output filenames */
+	int             gt_deg;			 /* gantry tilt in degrees */
+	int             num_slices;		 /* number of slices specified */
+	int             slice;			 /* slice of interest */
+
+	/* Input file and related structures */
+
+	char            inimg[MAXSTR];	 /* filename for Analyze image file */
+	char            inhdr[MAXSTR];	 /* filename for Analyze header file */
+	short         **pp_databuf1;	 /* orig. pixel data (already byte-swapped) */
+	short          *p_databuf2;		 /* interpolated pixel data */
+	FILE           *fp_inimg;		 /* input Analyze image (.img) */
+	FILE           *fp_inhdr;		 /* input Analyze header (.hdr) */
+
+	/* Output files and related structures */
+
+	DSR            *pstr_anal;		 /* Analyze header structure; defined in ANALYZE.h */
+	char            outimg[MAXSTR];	 /* filename for Analyze image file */
+	char            outhdr[MAXSTR];	 /* filename for Analyze header file */
+	FILE           *fp_outimg;		 /* output Analyze image (.img) */
+	FILE           *fp_outhdr;		 /* output Analyze header (.hdr) */
+
+	/* Pixel positions and values */
+
+	int             column;			 /* position of pixel on x axis (which column) */
+	int             row;			 /* position of pixel on y axis (which row) */
+	int             ncol, nrow;		 /* number of row and columns (ROWS, COLUMNS) */
+	long            length;			 /* data size of a plane (LEN_DATA) */
+
+	/* Correcting for gantry tilt (reorienting image) */
+
+	double          pixelsize;		 /* x and y dimensions of voxels */
+	double          row_interval;	 /* row interval by which slices are offset */
+	double          srow_offset;	 /* row offset (whole number plus fraction) */
+	double          swrow_offset;	 /* whole number part of row offset */
+	double          sfrow_offset;	 /* fractional part of row offset */
+	int             tpix_offset;	 /* target pixel offset (in pixels from beg. of data file) */
+	int             spix1_offset;	 /* offset of first source row in pixels */
+	int             tpix_no;		 /* target pixel number */
+	int             spix1_no;		 /* first source pixel number */
+	int             spix2_no;		 /* second source pixel number */
+	double          spix1_contrib;	 /* contribution of first source pixel to weighted avg */
+	double          spix2_contrib;	 /* contribution of second source pixel to weighted avg */
+	BOOL            bdexceed;		 /* image boundary exceeded; end loop (TRUE or FALSE) */
+	double          gt_rad;			 /* gantry tilt in radians */
+	double          tabincr;		 /* table increment */
+	int             spixdif;		 /* pixel number dif. betw. source pixels 1 and 2 */
+
+	/*
+	 * --------------------------- End of Declarations ---------------------------
+	 */
+
+/* Initialize error handler */
+
+	err_handler_init (PROGNAME, argv[0]);
+	err_handler_init (CMD_SYNTAX, get_usage ());
+
+/*  Get command-line parameters */
+
+	if (argc < 4)
+		err_handler (CMD_SYNTAX_ERR, "");
+	(void) strcpy (inprefix, argv[1]);
+	(void) strcpy (outprefix, argv[2]);
+	gt_deg = atoi (argv[3]);
+
+/* Open input header and data file */
+
+	(void) sprintf (inimg, "%s.img", inprefix);
+	(void) sprintf (inhdr, "%s.hdr", inprefix);
+	if ((fp_inhdr = fopen (inhdr, "r")) == NULL)
+		err_handler (FILE_OPEN_ERR, inhdr);
+	if ((fp_inimg = fopen (inimg, "r")) == NULL)
+		err_handler (FILE_OPEN_ERR, inimg);
+
+/* Initialize output header and data file pointers */
+
+	(void) sprintf (outimg, "%s.img", outprefix);
+	(void) sprintf (outhdr, "%s.hdr", outprefix);
+	if ((fp_outhdr = fopen (outhdr, "w")) == NULL)
+		err_handler (FILE_OPEN_ERR, outhdr);
+	if ((fp_outimg = fopen (outimg, "w")) == NULL)
+		err_handler (FILE_OPEN_ERR, outimg);
+
+/* Get header info (DSR defined in ANALYZE.h) */
+
+	if ((pstr_anal = (DSR *) malloc (sizeof (DSR))) == NULL)
+		err_handler (MEM_ALLOC_ERR, "");
+	if (fread (pstr_anal, sizeof (DSR), 1, fp_inhdr) != 1)
+		err_handler (FILE_READ_ERR, "");
+	if (fp_inhdr != NULL)
+		(void) fclose (fp_inhdr);
+
+/* Calculate true slice separation */
+
+	gt_rad = ((double) gt_deg / (double) 180.0) * M_PI;	/* gantry tilt in radians */
+	tabincr = pstr_anal->dime.pixdim[3];
+	pstr_anal->dime.pixdim[3] = fabs (tabincr * cos (gt_rad));
+
+/* Allocate space for pixel data buffers */
+
+	ncol = pstr_anal->dime.dim[1];
+	nrow = pstr_anal->dime.dim[2];
+	num_slices = pstr_anal->dime.dim[3];
+	length = ncol * nrow * sizeof (short);
+
+	if ((pp_databuf1 = (short **) malloc (num_slices * sizeof (short *))) == NULL)
+		err_handler (MEM_ALLOC_ERR, "");
+	for (slice = 0; slice < num_slices; slice++)
+		if ((pp_databuf1[slice] = (short *) malloc (length)) == NULL)
+			err_handler (MEM_ALLOC_ERR, "");
+	if ((p_databuf2 = (short *) malloc (length)) == NULL)
+		err_handler (MEM_ALLOC_ERR, "");
+
+/*  Read pixel data from input file. */
+
+	(void) fprintf (stdout, "Reading %s\n", inimg);
+	for (slice = 0; slice < num_slices; slice++) {
+		(void) fseek (fp_inimg, slice * length, SEEK_SET);
+		if (fread (pp_databuf1[slice], length, 1, fp_inimg) != 1)
+			err_handler (FILE_READ_ERR, "");
+	}
+	if (fp_inimg != NULL)
+		(void) fclose (fp_inimg);
+
+/* Create Analyze header file (.hdr) */
+
+	if ((fwrite (pstr_anal, sizeof (DSR), 1, fp_outhdr)) != 1)
+		err_handler (FILE_WRITE_ERR, outhdr);
+	if (fp_outhdr != NULL)
+		(void) fclose (fp_outhdr);
+
+/*
+ * Correct for gantry tilt. Create new Analyze data file (.img).
+ * Calculate interval, in rows (floating point), by which pixels are shifted.
+ * Actual shift for each slice (mult. of interval) is calculated in slice loop below.
+ */
+
+	gt_deg = -gt_deg;
+	gt_rad = ((double) gt_deg / (double) 180.0) * M_PI;	/* gantry tilt in radians */
+	pixelsize = pstr_anal->dime.pixdim[1];	 /* pixel size (x and y)   */
+	row_interval = -((double) tabincr * sin (gt_rad) / pixelsize);
+
+	for (slice = 0; slice < num_slices; slice++) {
+
+		/*
+		 * Calculate pixel shift for this slice in rows (whole and fractional) and in
+		 * whole-row pixels.
+		 */
+
+		srow_offset = row_interval * slice;	/* row offset (whole no. plus fraction) */
+		if (srow_offset > 0)
+			swrow_offset = floor (srow_offset);	/* whole no. part of row offset */
+		else
+			swrow_offset = ceil (srow_offset);
+		sfrow_offset = srow_offset - swrow_offset;	/* fractional part of row offset */
+		spix1_offset = swrow_offset * ncol;	/* offset of first source row in pixels */
+
+		spixdif = ((gt_deg < 0) ? +ncol : -ncol);
+
+		/* Initialize pixel array to all zeros so that unfilled rows will be zeros. */
+
+		(void) memset (p_databuf2, 0, length);
+
+		/*
+		 * Shift pixel values in this slice by appropriate number of rows by setting each
+		 * "target" pixel to weighted avg. of two source pixel values - e.g., if row offset
+		 * for this slice is 2.7 rows, source pixels are in corresponding columns 2 and 3
+		 * rows away from target pixel (+2 and +3 if gantry tilt is neg.; -2 and -3
+		 * otherwise).
+		 */
+
+		row = ((gt_deg < 0) ? 0 : (nrow - 1));	/* loop forward through rows if gt is neg. */
+		bdexceed = FALSE;
+		while (row >= 0 && row <= (nrow - 1) && bdexceed == FALSE) {
+			tpix_offset = row * ncol;
+			for (column = 0; column < ncol; column++) {
+				tpix_no = tpix_offset + column;
+				spix1_no = tpix_no + spix1_offset;
+				spix2_no = spix1_no + spixdif;
+
+				/* set target pixel to weighted avg. of source pixels */
+
+				spix1_contrib = (double) pp_databuf1[slice][spix1_no] * ((double) 1.0 - fabs (sfrow_offset));
+				spix2_contrib = (double) pp_databuf1[slice][spix2_no] * (fabs (sfrow_offset));
+				p_databuf2[tpix_no] = (short) (spix1_contrib + spix2_contrib);
+			}
+			(gt_deg < 0) ? row++ : row--;
+
+			/* stop if contributing pixel is outside image boundary */
+
+			if (((double) row + srow_offset) < 0 || ((double) row + srow_offset) > nrow - 1)
+				bdexceed = TRUE;
+		}
+
+		/* Write data to output file */
+
+		if ((fwrite (p_databuf2, length, 1, fp_outimg)) != 1)
+			err_handler (FILE_WRITE_ERR, outimg);
+
+	}	 /* end for (slice = 0; slice < num_slices; * slice++) */
+
+/* Clean up and exit */
+
+	(void) fprintf (stdout, "Created %s\n", outimg);
+	for (slice = 0; slice < num_slices; slice++) {
+		if (pp_databuf1[slice] != NULL)
+			pp_databuf1[slice] = NULL;
+	}
+	if (p_databuf2 != NULL)
+		free (p_databuf2);
+	if (fp_outimg != NULL)
+		(void) fclose (fp_outimg);
+	return (0);
+}
+@
+
+
+1.7
+log
+@read slice thickness as real
+@
+text
+@d1 1
+a1 1
+/*$Id: cttilt.c,v 1.6 2002/11/27 19:56:42 tom Exp tom $*/
+d3 3
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*$Id: cttilt.c,v 1.5 2002/11/26 20:44:00 tom Exp tom $*/
+d3 3
+d60 4
+a63 4
+	strcpy (cmd_syntax, "   Usage: cttilt inprefix outprefix gantrytilt\n");
+	strcat (cmd_syntax, " Example: cttilt p5064n p5064r -25\n");
+	strcat (cmd_syntax, "    Note: Gantry tilt is in degrees.\n");
+	strcat (cmd_syntax, "See also: ct2analyze, ctheader\n");
+d74 1
+a74 1
+int            main (int argc, char *argv[])
+d79 5
+a83 7
+	char            inprefix[MAXSTR];	 /* first portion of input filenames */
+	char            outprefix[MAXSTR];	 /* first portion of output filenames */
+	int             gt_deg;				 /* gantry tilt in degrees */
+	int             first = 0;			 /* first file number (slice) specified */
+	int             last = 0;			 /* last file number (slice) specified */
+	int             num_slices;			 /* number of slices specified */
+	int             slice;				 /* slice of interest */
+d87 6
+a92 6
+	char            inimg[MAXSTR];		 /* filename for Analyze image file */
+	char            inhdr[MAXSTR];		 /* filename for Analyze header file */
+	short         **pp_databuf1 = NULL;	 /* orig. pixel data (already byte-swapped) */
+	short          *p_databuf2 = NULL;	 /* interpolated pixel data */
+	FILE           *fp_inimg = NULL;	 /* input Analyze image (.img) */
+	FILE           *fp_inhdr = NULL;	 /* input Analyze header (.hdr) */
+d96 5
+a100 6
+	DSR            *pstr_anal;			 /* Analyze header structure; defined in ANALYZE.h */
+	SSPCT_HDR      *pstr_sspct = NULL;	 /* SSPLUS header structure; defined in sspct.h */
+	char            outimg[MAXSTR];		 /* filename for Analyze image file */
+	char            outhdr[MAXSTR];		 /* filename for Analyze header file */
+	FILE           *fp_outimg = NULL;	 /* output Analyze image (.img) */
+	FILE           *fp_outhdr = NULL;	 /* output Analyze header (.hdr) */
+a103 4
+	short           pixelval;		 /* value of pixel of interest */
+	int             pixelno;		 /* original position of pixel in pixel array */
+	int             lastpixno;		 /* array index of last pixel in array */
+	int             newpixno;		 /* new position of pixel in array (image reoriented */
+d106 2
+a107 2
+	int				ncol, nrow;		 /* number of row and columns (ROWS, COLUMNS) */
+	long			length;			 /* data size of a plane (LEN_DATA) */
+d125 1
+a125 1
+	int             tabincr;		 /* table increment */
+a126 2
+	double          spix1_fract;	 /* fractional contribution of source pixel 1 */
+	double          spix2_fract;	 /* fractional contribution of source pixel 2 */
+d128 3
+a130 3
+	/* ---------------------------
+     * 		End of Declarations 
+     * --------------------------- */
+d141 2
+a142 2
+	strcpy (inprefix, argv[1]);
+	strcpy (outprefix, argv[2]);
+d147 3
+a149 3
+	sprintf (inimg, "%s.img", inprefix);
+	sprintf (inhdr, "%s.hdr", inprefix);
+	if ((fp_inhdr = fopen (inhdr, "r")) == NULL) 
+d151 1
+a151 1
+	if ((fp_inimg = fopen (inimg, "r")) == NULL) 
+d156 3
+a158 3
+	sprintf (outimg, "%s.img", outprefix);
+	sprintf (outhdr, "%s.hdr", outprefix);
+	if ((fp_outhdr = fopen (outhdr, "w")) == NULL) 
+d160 1
+a160 1
+	if ((fp_outimg = fopen (outimg, "w")) == NULL) 
+d165 1
+a165 1
+	if ((pstr_anal = (DSR *) malloc (sizeof (DSR))) == NULL) 
+d167 1
+a167 1
+	if (fread (pstr_anal, sizeof (DSR), 1, fp_inhdr) != 1) 
+d169 2
+a170 4
+	if (fp_inhdr != NULL) {
+		fclose (fp_inhdr);
+		fp_inhdr = NULL;
+	}
+d183 1
+a183 1
+	length = ncol * nrow * sizeof(short);
+d185 1
+a185 1
+	if ((pp_databuf1 = (short **) malloc (num_slices * sizeof (short *))) == NULL) 
+d187 2
+a188 2
+	for (slice = 0; slice < num_slices; slice++) 
+		if ((pp_databuf1[slice] = (short *) malloc (length)) == NULL) 
+d190 1
+a190 1
+	if ((p_databuf2 = (short *) malloc (length)) == NULL) 
+d195 1
+a195 1
+	fprintf (stdout, "Reading %s\n", inimg);
+d197 2
+a198 2
+		fseek (fp_inimg, slice * length, SEEK_SET);
+		if (fread (pp_databuf1[slice], length, 1, fp_inimg) != 1) 
+d201 2
+a202 4
+	if (fp_inimg != NULL) {
+		fclose (fp_inimg);
+		fp_inimg = NULL;
+	}
+d206 1
+a206 1
+	if ((fwrite (pstr_anal, sizeof (DSR), 1, fp_outhdr)) != 1) 
+d208 2
+a209 4
+	if (fp_outhdr != NULL) {
+		fclose (fp_outhdr);
+		fp_outhdr = NULL;
+	}
+d224 7
+a230 5
+		/* Calculate pixel shift for this slice in rows (whole and fractional) 
+		 * and in whole-row pixels. */
+		 
+		srow_offset = row_interval * slice;		/* row offset (whole no. plus fraction) */
+		if (srow_offset > 0) 
+d232 1
+a232 1
+		else 
+a237 2
+		spix2_fract = fabs (sfrow_offset);
+		spix1_fract = (double) 1.0 - spix2_fract;
+d239 1
+a239 1
+	/* Initialize pixel array to all zeros so that unfilled rows will be zeros. */
+d241 1
+a241 1
+		memset (p_databuf2, 0, length);
+d243 7
+a249 5
+	/* Shift pixel values in this slice by appropriate number of rows by setting each
+	 * "target" pixel to weighted avg. of two source pixel values - e.g., if row offset
+	 * for this slice is 2.7 rows, source pixels are in corresponding columns 2 and 3
+	 * rows away from target pixel (+2 and +3 if gantry tilt is neg.; -2 and -3
+	 * otherwise). */
+d260 1
+a260 1
+	/* set target pixel to weighted avg. of source pixels */
+d268 1
+a268 1
+	/* stop if contributing pixel is outside image boundary */
+d270 1
+a270 1
+			if (((double) row + srow_offset) < 0 || ((double) row + srow_offset) > nrow - 1) 
+d274 1
+a274 1
+	/* Write data to output file */
+d276 1
+a276 1
+		if ((fwrite (p_databuf2, length, 1, fp_outimg)) != 1) 
+d279 1
+a279 1
+	}	 /* end for (slice = 0; slice < num_slices; slice++) */
+d283 1
+a283 1
+	fprintf (stdout, "Created %s\n", outimg);
+d285 1
+a285 2
+		if (pp_databuf1[slice] != NULL) {
+			free (pp_databuf1[slice]);
+a286 1
+		}
+d291 2
+a292 2
+		fclose (fp_outimg);
+	exit (0);
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*$Id: cttilt.c,v 1.4 1999/08/06 20:26:28 tom Exp tom $*/
+d3 3
+d66 1
+a66 1
+ * Synopsis:    void main (int argc, char *argv[])
+d71 1
+a71 1
+void            main (int argc, char *argv[])
+@
+
+
+1.4
+log
+@get nrow and ncol from file header
+@
+text
+@d1 1
+a1 1
+/*$Id: cttilt.c,v 1.3 1999/03/10 22:33:06 tom Exp tom $*/
+d3 3
+a26 1
+#include <errno.h>
+a30 1
+#include <stringfns.h>
+@
+
+
+1.3
+log
+@clean up messages and code
+@
+text
+@d1 1
+a1 1
+/*$Id: cttilt.c,v 1.2 1996/12/17 17:34:56 jane Exp tom $*/
+d3 3
+d106 2
+d134 1
+a134 3
+/*
+ * Initialize error handler
+ */
+d139 1
+a139 3
+/*
+ *  Get command-line parameters
+ */
+d147 1
+a147 3
+/*
+ * Open input header and data file
+ */
+a150 1
+
+d156 1
+a156 3
+/*
+ * Initialize output header and data file pointers
+ */
+d165 1
+a165 3
+/*
+ * Get header info.
+ */
+a166 2
+	/* Allocate space for Analyze header structure defined in ANALYZE.h */
+
+a168 3
+
+	/* Read header into DSR data structure (defined in ANALYZE.h) */
+
+d176 1
+a176 1
+	/* Calculate true slice separation */
+d182 4
+a185 3
+/*
+ * Allocate space for pixel data buffers
+ */
+d187 1
+d191 2
+a192 3
+	
+	for (slice = 0; slice < num_slices; slice++) {
+		if ((pp_databuf1[slice] = (short *) malloc (LEN_DATA)) == NULL) {
+d194 1
+a194 4
+		}
+	}
+
+	if ((p_databuf2 = (short *) malloc (LEN_DATA)) == NULL) 
+d197 1
+a197 3
+/*
+ *  Read pixel data from input file.
+ */
+d201 2
+a202 2
+		fseek (fp_inimg, slice * LEN_DATA, SEEK_SET);
+		if (fread (pp_databuf1[slice], LEN_DATA, 1, fp_inimg) != 1) {
+a203 1
+		}
+d210 1
+a210 3
+/*
+ * Create Analyze header file (.hdr)
+ */
+d241 1
+a241 1
+		spix1_offset = swrow_offset * COLUMNS;	/* offset of first source row in pixels */
+d243 1
+a243 1
+		spixdif = ((gt_deg < 0) ? +COLUMNS : -COLUMNS);
+d247 1
+a247 1
+		/* Initialize pixel array to all zeros so that unfilled rows will be zeros. */
+d249 1
+a249 1
+		memset (p_databuf2, 0, LEN_DATA);
+d251 5
+a255 5
+		/* Shift pixel values in this slice by appropriate number of rows by setting each
+		 * "target" pixel to weighted avg. of two source pixel values - e.g., if row offset
+		 * for this slice is 2.7 rows, source pixels are in corresponding columns 2 and 3
+		 * rows away from target pixel (+2 and +3 if gantry tilt is neg.; -2 and -3
+		 * otherwise). */
+d257 1
+a257 1
+		row = ((gt_deg < 0) ? 0 : (ROWS - 1));	/* loop forward through rows if gt is neg. */
+d259 3
+a261 3
+		while (row >= 0 && row <= (ROWS - 1) && bdexceed == FALSE) {
+			tpix_offset = row * COLUMNS;
+			for (column = 0; column < COLUMNS; column++) {
+d266 2
+a267 1
+				/* set target pixel to weighted avg. of source pixels */
+d274 3
+a276 2
+			/* stop if contributing pixel is outside image boundary */
+			if (((double) row + srow_offset) < 0 || ((double) row + srow_offset) > ROWS - 1) 
+d280 3
+a282 2
+		/* Write data to output file */
+		if ((fwrite (p_databuf2, LEN_DATA, 1, fp_outimg)) != 1) 
+d285 1
+a285 2
+	} /* end for (slice = 0; slice < num_slices; slice++) */
+	fprintf (stdout, "Created %s\n", outimg);
+d287 1
+a287 3
+/*
+ * Clean up and exit
+ */
+d289 1
+@
+
+
+1.2
+log
+@modified usage example: p5064 --> p5064n
+@
+text
+@d1 1
+a1 1
+/*$Id: cttilt.c,v 1.1 1996/12/16 16:59:31 jane Exp jane $*/
+d3 3
+d8 1
+a8 1
+ **/
+d13 2
+a14 2
+ *  Description:    Reorient CT image that is already in Analyze format to correct 
+ *                  for gantry tilt. 
+d23 4
+d28 1
+a28 4
+#include "ANALYZE.h"
+#include "errhand.h"
+#include "sspct.h"
+#include "stringfns.h"
+d30 1
+a30 3
+#define MAXSTR    256		     /* maximum filename length */
+
+/* ---------------------
+d44 1
+a44 1
+ * ---------------------
+a45 2
+ 
+static char *get_usage() { 
+d47 8
+a54 8
+    static char cmd_syntax[MAXLEN_CMDSYN];
+
+    strcpy(cmd_syntax, "   Usage: cttilt inprefix outprefix gantrytilt\n");
+    strcat(cmd_syntax, " Example: cttilt p5064n p5064r -25\n");
+    strcat(cmd_syntax, "    Note: Gantry tilt is in degrees.\n");
+    strcat(cmd_syntax, "See also: ct2analyze, ctheader\n");
+
+    return cmd_syntax;
+d57 1
+a57 2
+
+/* ---------------------
+d61 1
+a61 1
+ * ---------------------
+a62 2
+ 
+void main (int argc, char *argv[]) {
+d64 2
+a65 3
+ /*-----------------------*
+  * Start of Declarations *
+  *-----------------------*/
+d67 1
+a67 1
+ /* Command line options/parameters and associated variables */
+d69 7
+a75 3
+    char       inprefix[MAXSTR];     /* first portion of input filenames */
+    char       outprefix[MAXSTR];    /* first portion of output filenames */
+    int        gt_deg;		     /* gantry tilt in degrees */ 
+d77 1
+a77 4
+    int        first = 0;	     /* first file number (slice) specified */
+    int        last  = 0;	     /* last file number (slice) specified */
+    int        num_slices;	     /* number of slices specified */
+    int        slice;		     /* slice of interest */
+d79 6
+a84 1
+ /* Input file and related structures */
+d86 1
+a86 2
+    char       inimg[MAXSTR];	     /* filename for Analyze image file */
+    char       inhdr[MAXSTR];	     /* filename for Analyze header file */
+d88 6
+a93 2
+    short      **pp_databuf1 = NULL; /* orig. pixel data (already byte-swapped) */
+    short      *p_databuf2   = NULL; /* interpolated pixel data */
+d95 1
+a95 2
+    FILE       *fp_inimg = NULL;     /* input Analyze image (.img) */
+    FILE       *fp_inhdr = NULL;     /* input Analyze header (.hdr) */
+d97 6
+a102 1
+ /* Output files and related structures */
+d104 1
+a104 2
+    DSR        *pstr_anal;	     /* Analyze header structure; defined in ANALYZE.h */
+    SSPCT_HDR  *pstr_sspct = NULL;   /* SSPLUS header structure; defined in sspct.h */
+d106 18
+a123 2
+    char       outimg[MAXSTR];	     /* filename for Analyze image file */
+    char       outhdr[MAXSTR];	     /* filename for Analyze header file */
+d125 3
+a127 2
+    FILE       *fp_outimg = NULL;    /* output Analyze image (.img) */
+    FILE       *fp_outhdr = NULL;    /* output Analyze header (.hdr) */
+a128 38
+ /* Pixel positions and values */
+
+    short      pixelval;     /* value of pixel of interest */
+    int        pixelno;      /* original position of pixel in pixel array */
+    int        lastpixno;    /* array index of last pixel in array */
+    int        newpixno;     /* new position of pixel in array (image reoriented) */
+    int        column;       /* position of pixel on x axis (which column) */       
+    int        row;          /* position of pixel on y axis (which row) */
+
+ /* Correcting for gantry tilt (reorienting image) */
+
+    double     pixelsize;    /* x and y dimensions of voxels */
+    double     row_interval; /* row interval by which slices are offset */
+    double     srow_offset;  /* row offset (whole number plus fraction) */
+    double     swrow_offset; /* whole number part of row offset */
+    double     sfrow_offset; /* fractional part of row offset */
+
+    int        tpix_offset;  /* target pixel offset (in pixels from beg. of data file) */
+    int        spix1_offset; /* offset of first source row in pixels */
+    int        tpix_no;      /* target pixel number */
+    int        spix1_no;     /* first source pixel number */
+    int        spix2_no;     /* second source pixel number */
+    double     spix1_contrib;  /* contribution of first source pixel to weighted ave. */
+    double     spix2_contrib;  /* contribution of second source pixel to weighted ave. */
+
+    BOOL       bdexceed;     /* image boundary exceeded; end loop (TRUE or FALSE) */
+
+    double     gt_rad;       /* gantry tilt in radians */
+    int        tabincr;      /* table increment */
+
+    int        spixdif;      /* pixel number dif. betw. source pixels 1 and 2 */
+    double     spix1_fract;  /* fractional contribution of source pixel 1 */
+    double     spix2_fract;  /* fractional contribution of source pixel 2 */
+ 
+ /*---------------------*
+  * End of Declarations *
+  *---------------------*/
+
+d133 2
+a134 2
+    err_handler_init(PROGNAME, argv[0]);
+    err_handler_init(CMD_SYNTAX, get_usage());
+d140 5
+a144 3
+    if (argc < 4) {
+        err_handler(CMD_SYNTAX_ERR, "");
+    }
+a145 9
+    /* Get input file name prefix */
+    strcpy(inprefix, argv[1]);
+
+    /* Get output file name prefix */
+    strcpy(outprefix, argv[2]);
+ 
+    /* Get gantry tilt */
+    gt_deg = atoi(argv[3]);
+
+a148 4
+     
+    /* Create input file names */
+    sprintf(inimg, "%s.img", inprefix);
+    sprintf(inhdr, "%s.hdr", inprefix);
+d150 2
+a151 3
+    if ((fp_inhdr = fopen(inhdr, "r")) == NULL) {
+        err_handler(FILE_OPEN_ERR, inhdr);
+    }
+d153 4
+a156 3
+    if ((fp_inimg = fopen(inimg, "r")) == NULL) {
+        err_handler(FILE_OPEN_ERR, inimg);
+    }
+d162 6
+a167 3
+    /* Create output file names */
+    sprintf(outimg, "%s.img", outprefix);
+    sprintf(outhdr, "%s.hdr", outprefix);
+d169 1
+a169 9
+    if ((fp_outhdr = fopen(outhdr, "w")) == NULL) {
+        err_handler(FILE_OPEN_ERR, outhdr);
+    }
+
+    if ((fp_outimg = fopen(outimg, "w")) == NULL) {
+        err_handler(FILE_OPEN_ERR, outimg);
+    }
+    
+/* 
+d173 1
+a173 4
+    /* Allocate space for Analyze header structure defined in ANALYZE.h */
+    if ((pstr_anal = (DSR *)malloc(sizeof(DSR))) == NULL) {
+        err_handler(MEM_ALLOC_ERR, "");
+    }
+d175 2
+a176 4
+    /* Read header into DSR data structure (defined in ANALYZE.h) */
+    if (fread(pstr_anal, sizeof(DSR), 1, fp_inhdr) != 1) {
+        err_handler(FILE_READ_ERR, "");
+    }   
+d178 1
+a178 10
+    /* Close input header file */
+    if (fp_inhdr != NULL) {
+        fclose(fp_inhdr);
+        fp_inhdr = NULL;
+    }
+ 
+    /* Calculate true slice separation */
+    gt_rad = ((double)gt_deg / (double)180.0) * M_PI;  /* gantry tilt in radians */
+    tabincr = pstr_anal->dime.pixdim[3];
+    pstr_anal->dime.pixdim[3] = fabs(tabincr * cos(gt_rad));
+d180 14
+a193 1
+/* 
+d196 1
+a196 1
+    num_slices = pstr_anal->dime.dim[3];
+d198 8
+a205 3
+    if ((pp_databuf1 = (short **)malloc(num_slices * sizeof(short *))) == NULL) {
+        err_handler(MEM_ALLOC_ERR, "");
+    }
+d207 2
+a208 5
+    for (slice = 0; slice < num_slices; slice++) {
+        if ((pp_databuf1[slice] = (short *)malloc(LEN_DATA)) == NULL) {
+                err_handler(MEM_ALLOC_ERR, "");    
+        }
+    }
+a209 4
+    if ((p_databuf2 = (short *)malloc(LEN_DATA)) == NULL) {
+                err_handler(MEM_ALLOC_ERR, "");    
+    }
+
+d211 1
+a211 1
+ *  Read pixel data from input file. 
+a212 2
+   
+    fprintf(stdout, "Reading pixel data in %s\n", inimg);
+d214 11
+a224 7
+    for (slice = 0; slice < num_slices; slice++) {
+        
+        /* Read pixel data for each slice -- for concatenation later */
+        fseek(fp_inimg, slice * LEN_DATA, SEEK_SET);
+        if (fread(pp_databuf1[slice], LEN_DATA, 1, fp_inimg) != 1) {
+            err_handler(FILE_READ_ERR, "");
+        }
+d226 1
+a226 9
+    }    
+
+    /* Close input file */
+    if (fp_inimg != NULL) {
+        fclose(fp_inimg);
+        fp_inimg = NULL;
+    }
+
+/* 
+d228 1
+a228 1
+ */  
+d230 6
+a235 1
+    fprintf(stdout, "\nCreating header file:\n");
+a236 12
+    if ((fwrite(pstr_anal, sizeof(DSR), 1, fp_outhdr)) != 1) {
+	err_handler(FILE_WRITE_ERR, outhdr);
+    }
+    else {
+        fprintf(stdout, "%s created\n", outhdr);
+    }
+
+    if (fp_outhdr != NULL) {
+        fclose(fp_outhdr);
+        fp_outhdr = NULL;
+    }
+ 
+d239 2
+d243 4
+a246 1
+    fprintf(stdout, "\nCreating image data file:\n");
+d248 1
+a248 7
+    /* Calculate interval, in rows (floating point), by which pixels are shifted.
+     * Actual shift for each slice (mult. of interval) is calculated in slice loop below.
+     */ 
+    gt_deg = -gt_deg;
+    gt_rad = ((double)gt_deg / (double)180.0) * M_PI;   /* gantry tilt in radians */
+    pixelsize =  pstr_anal->dime.pixdim[1];             /* pixel size (x and y)   */
+    row_interval = -((double)tabincr * sin(gt_rad) / pixelsize); 
+d250 10
+a259 14
+    for (slice = 0; slice < num_slices; slice++) {
+ 
+       /* Calculate pixel shift for this slice 
+        * in rows (whole and fractional) and in whole-row pixels. 
+        */
+        srow_offset = row_interval * slice;        /* row offset (whole no. plus fraction) */
+        if (srow_offset > 0) {
+            swrow_offset = floor(srow_offset);             /* whole no. part of row offset */
+        }
+        else {
+            swrow_offset = ceil(srow_offset);
+        }
+        sfrow_offset = srow_offset - swrow_offset;        /* fractional part of row offset */
+        spix1_offset = swrow_offset * COLUMNS;     /* offset of first source row in pixels */
+d261 3
+a263 3
+        spixdif =  ((gt_deg < 0) ? +COLUMNS : -COLUMNS);
+        spix2_fract = fabs(sfrow_offset);
+        spix1_fract = (double)1.0 - spix2_fract;
+d265 1
+a265 2
+       /* Initialize pixel array to all zeros so that unfilled rows will be zeros. */
+        memset(p_databuf2, 0, LEN_DATA);
+d267 1
+a267 20
+       /* Shift pixel values in this slice by appropriate number of rows by setting each 
+        * "target" pixel to weighted ave. of two source pixel values - e.g., if row offset 
+        * for this slice is 2.7 rows, source pixels are in corresponding columns 2 and 3 rows 
+        * away from target pixel (+2 and +3 if gantry tilt is neg.; -2 and -3 otherwise).
+        */
+        row = ( (gt_deg < 0) ? 0 : (ROWS-1) );      /* loop forward through rows if gt is neg. */
+        bdexceed = FALSE;
+        while (row >= 0 && row <= (ROWS-1) && bdexceed == FALSE) {  
+            tpix_offset = row * COLUMNS;
+            for (column = 0; column < COLUMNS; column++) {
+                tpix_no = tpix_offset + column;
+                spix1_no = tpix_no + spix1_offset; 
+                spix2_no = spix1_no + spixdif;
+                   
+                /* set target pixel to weighted ave. of source pixels */
+                spix1_contrib = (double)pp_databuf1[slice][spix1_no] * ((double)1.0 - fabs(sfrow_offset));
+                spix2_contrib = (double)pp_databuf1[slice][spix2_no] * (fabs(sfrow_offset));
+                p_databuf2[tpix_no] = (short)(spix1_contrib + spix2_contrib); 
+            }
+            (gt_deg < 0) ? row++ : row--; 
+d269 5
+a273 5
+            /* stop if contributing pixel is outside image boundary */            
+            if ( ((double)row + srow_offset) < 0 || ((double)row + srow_offset) > ROWS-1 ) {
+                bdexceed = TRUE;
+            }
+        } 
+d275 8
+a282 4
+        /* Write pixel data to output file */
+        if ((fwrite(p_databuf2, LEN_DATA, 1, fp_outimg)) != 1) {
+            err_handler(FILE_WRITE_ERR, outimg);
+        }
+d284 6
+a289 1
+    }   /* end for (slice = 0; slice < num_slices; slice++) */
+d291 4
+a294 5
+    fprintf(stdout, "%s created\n", outimg);
+ 
+/* 
+ * Clean up and exit
+ */
+d296 3
+a298 6
+    for (slice = 0; slice < num_slices; slice++) {
+        if (pp_databuf1[slice] != NULL) {
+            free(pp_databuf1[slice]);
+            pp_databuf1[slice] = NULL;
+        }
+    }
+d300 2
+a301 7
+    if (p_databuf2 != NULL) {
+        free(p_databuf2);
+    }
+ 
+    if (fp_outimg != NULL) {
+        fclose(fp_outimg);
+    }
+d303 3
+a305 2
+    fprintf(stdout, "\ncttilt completed successfully\n");
+    exit(0);
+d307 11
+a318 1
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d50 1
+a50 1
+    strcat(cmd_syntax, " Example: cttilt p5064 p5064r -25\n");
+@

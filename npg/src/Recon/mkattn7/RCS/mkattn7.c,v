@@ -1,0 +1,299 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2001.09.24.18.51.47;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2001.09.24.18.50.28;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.09.29.14.21.59;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@/*	$Log: mkattn7.c,v $
+ * Revision 1.2  2001/09/24  18:50:28  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2000/09/29  14:21:59  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			mkattn7.c
+ *	Date:			Sep-2000
+ *	Author:			Tom Videen
+ *	Description:	Create an attn file from blank and transmission sinos
+ *	Note: ECAT 7 attenuation files are smoothed.
+ * ===============================================================================
+ */
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mkattn7/RCS/mkattn7.c,v 1.2 2001/09/24 18:50:28 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	char           *trnname;		 /* transmission filename */
+	char           *blkname;		 /* blank filename */
+	char           *oldname;		 /* old attenuation filename */
+	char           *attname;		 /* attenuation filename */
+	float        ***trans;			 /* transmission sino */
+	float        ***blank;			 /* blank sino */
+	short          *smatrix;		 /* for input */
+	float          *fmatrix;		 /* for output */
+	DataSetType     dtype;
+	int             fformat;
+	int             numray, numang, numpln;
+	float           blktime, trntime, scaler;
+	float           tmp;
+	long            i, j, k, p;
+
+	if (argc < 5) {
+		fprintf (stderr, "Usage: mkattn7 trans blank old_attn new_attn\n");
+		return (ERROR);
+	}
+	trnname = argv[1];
+	blkname = argv[2];
+	oldname = argv[3];
+	attname = argv[4];
+
+/*	Read Transmission */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (trnname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [mkattn7]: Cannot open %s\n", trnname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [mkattn7]: Cannot read MainHeader from %s\n", trnname);
+		return (ERROR);
+	}
+	if (get_ss (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [mkattn7]: Cannot read subheader from %s\n", trnname);
+		return (ERROR);
+	}
+	dtype = (DataSetType) file->mh->filetype;
+	if (dtype != Short3dSinogram) {
+		fprintf (stderr, "ERROR [mkattn7]: Not a sinogram file %s\n", trnname);
+		return (ERROR);
+	}
+	numray = (long) file->sh->dim1;
+	numang = (long) file->sh->dim2;
+	numpln = (long) file->sh->dim3;
+	trntime = file->sh->duration;
+	if ((trans = f3tensor (0, numpln - 1, 0, numang - 1, 0, numray - 1)) == NULL) {
+		fprintf (stderr, "ERROR [reproj]: Cannot malloc trans\n");
+		return (ERROR);
+	}
+	if ((smatrix = (short *) calloc (numang * numray, sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [reproj]: Cannot calloc smatrix\n");
+		return (ERROR);
+	}
+	for (p = 0; p < numpln; p++) {
+		indx.pln = p + 1;
+		smatrix = rdscan7 (file, indx);
+		if (smatrix == NULL) {
+			fprintf (stderr, "ERROR [reproj]: Cannot read plane %d of %s\n",
+				 (int) p + 1, trnname);
+			return (ERROR);
+		}
+		k = 0;
+		for (i = 0; i < numang; i++) {
+			for (j = 0; j < numray; j++) {
+				trans[p][i][j] = smatrix[k];
+				k++;
+			}
+		}
+	}
+	close_imgfile (file);
+
+/*	Read Blank */
+
+	(void) strcpy (file->name, blkname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [reproj]: Cannot open %s\n", blkname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [reproj]: Cannot get MainHeader from %s\n", blkname);
+		return (ERROR);
+	}
+	if (get_ss (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [reproj]: Cannot read subheader in %s\n", blkname);
+		return (ERROR);
+	}
+	dtype = (DataSetType) file->mh->filetype;
+	if (dtype != Short3dSinogram) {
+		fprintf (stderr, "ERROR [mkattn7]: Not a sinogram file %s\n", blkname);
+		return (ERROR);
+	}
+	blktime = file->sh->duration;
+
+	if ((blank = f3tensor (0, numpln - 1, 0, numang - 1, 0, numray - 1)) == NULL) {
+		fprintf (stderr, "ERROR [reproj]: Cannot malloc blank\n");
+		return (ERROR);
+	}
+	for (p = 0; p < numpln; p++) {
+		indx.pln = p + 1;
+		smatrix = rdscan7 (file, indx);
+		if (smatrix == NULL) {
+			fprintf (stderr, "ERROR [reproj]: Cannot read plane %d of %s\n",
+				 (int) p + 1, blkname);
+			return (ERROR);
+		}
+		k = 0;
+		for (i = 0; i < numang; i++) {
+			for (j = 0; j < numray; j++) {
+				blank[p][i][j] = smatrix[k];
+				k++;
+			}
+		}
+	}
+	close_imgfile (file);
+
+/*	Read Old Attenuation header */
+
+	(void) strcpy (file->name, oldname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [mkattn7]: Opening %s\n", oldname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [mkattn7]: Reading MainHeader from %s\n", oldname);
+		return (ERROR);
+	}
+	fformat = file->mh->file_format;
+	dtype = (DataSetType) file->mh->filetype;
+	if (fformat != MATRIX_REV7) {
+		fprintf (stderr, "ERROR [mkattn7]: Unsupported file format %d\n", fformat);
+		return (ERROR);
+	}
+	if (dtype != AttenCor) {
+		fprintf (stderr, "ERROR [mkattn7]: Not an attenuation file %s\n", oldname);
+		return (ERROR);
+	}
+	if (get_sa (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [mkattn7]: Reading attenuation subheader in %s\n", oldname);
+		return (ERROR);
+	}
+	close_imgfile (file);
+
+/*	Create Output attenuation	*/
+
+	(void) strcpy (file->name, attname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [mkattn7]: Cannot open %s\n", attname);
+		return (ERROR);
+	}
+	if (put_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [mkattn7]: Cannot write MainHeader to %s\n", attname);
+		return (ERROR);
+	}
+	if ((fmatrix = (float *) calloc (numang * numray, sizeof (float))) == NULL) {
+		fprintf (stderr, "ERROR [mkattn7]: Cannot calloc fmatrix\n");
+		return (ERROR);
+	}
+	scaler = trntime / blktime;
+	for (p = 0; p < numpln; p++) {
+		k = 0;
+		indx.pln = p + 1;
+		for (j = 0; j < numang; j++) {
+			for (i = 0; i < numray; i++) {
+				tmp = trans[p][j][i];
+				if (tmp > 0)
+					fmatrix[k] = scaler * blank[p][j][i] / tmp;
+				k++;
+			}
+		}
+		if (p == 0) {
+			if (put_sa7 (file, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [mkattn7]: Cannot write file subheader to %s\n", attname);
+				return (ERROR);
+			}
+		}
+		if (wrattn7 (file, indx, fmatrix) == ERROR) {
+			fprintf (stderr, "ERROR [mkattn7]: Cannot write plane %d of %s\n",
+				 (int) p + 1, attname);
+			return (ERROR);
+		}
+	}
+	free (blank);
+	free (trans);
+	free (smatrix);
+	free (fmatrix);
+	close_imgfile (file);
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mkattn7/RCS/mkattn7.c,v 1.1 2000/09/29 14:21:59 tom Exp tom $";
+d45 1
+a45 1
+	float           tmp, btmp;
+a46 1
+	long            i1, i2, j1, j2;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mkattn7/RCS/mkattn7.c,v 1.4 2000/09/06 19:11:43 tom Exp tom $";
+d42 1
+a42 1
+	float           tmp;
+d44 1
+@

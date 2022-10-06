@@ -1,0 +1,172 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2002.12.16.21.03.10;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/bin/csh
+#Copyright 1991-1996, Washington University.
+#All rights reserved. Unauthorized reproduction prohibited.
+
+# Normalization script for plane efficiencies acquired with sealed Ge cylinder.
+
+echo Copyright 1991-1996, Washington University.
+echo All rights reserved. Unauthorized reproduction prohibited.
+if($#argv < 2) then
+    echo Usage: makenorm_f3d yymmdd image_dim_factor
+    echo        yymmdd is the date of the 3d plane efficiency scan.
+    echo        It would be 941013 for plane_eff_3d_941013.scn
+    echo        image_dim_factor is the ratio of the image dimension to be
+    echo        used by the scatter correction to 40.  40x40 images are
+    echo        adequate for normalization, but 80x80 images should be used
+    echo        for quantitative, scatter-corrected images.
+    exit
+endif
+
+unalias rm
+
+
+set NORM_DATE = $1
+set IMGDIM_FCTR = $2
+switch ($3)
+    case -debug
+	set DEBUG = true
+    breaksw
+    default: 
+	set DEBUG = false
+    breaksw
+endsw
+#set TABLES = /data/pethp3/img2/tables
+
+set CYL_SCN = plane_eff_3d_$NORM_DATE\.scn
+set SCANNER_TYPE = `cti_getparam $CYL_SCN -scanner_type`
+set NUMANG = `cti_getparam $CYL_SCN -ydim -p 1`
+if($SCANNER_TYPE == 951 && $NUMANG == 128) then
+    set SCANNER_TYPE = 951m
+endif
+
+switch ($SCANNER_TYPE)
+case 953:
+    set GEO_DATE = `which_geo $CYL_SCN`
+    if($GEO_DATE == PreJan96) then
+        set GEO = $TABLES/wu_953b_PreJan96_geo.scn
+    else
+        set GEO = $TABLES/wu_953b_PostJan96_geo.scn
+    endif
+    set BLANK = ./unit_cti953b.scn
+breaksw
+case 951:
+    set GEO =   $TABLES/pitt_951_geo.scn
+    set BLANK = ./unit_cti951.scn
+breaksw
+case 951m:
+    set GEO =   $TABLES/pitt_951m_geo.scn
+    set BLANK = ./unit_cti951m.scn
+breaksw
+case 961:
+    set GEO =   $TABLES/wu_961_geo.scn
+    set BLANK = ./unit_cti961.scn
+breaksw
+default:
+    echo Invalid scanner type, $SCANNER_TYPE specified.
+    exit
+endsw
+
+set CYL_SCN_2D = $CYL_SCN:r\_2d.scn
+set TRAN = $CYL_SCN_2D:r\_tr.scn
+set ITER = 4
+set SCAT = $CYL_SCN:r\_scat.scat
+set SCAT_IFH = $SCAT:r\.ifh
+set EXT_TRAN_DWN = 58.5
+set EXT_TRAN_UP  = 58.5
+set EXT_EMIS_DWN = 48.5
+set EXT_EMIS_UP  = 48.5
+
+#if(! -e $TRAN) then
+    switch($SCANNER_TYPE)
+    case 953:
+        if($DEBUG != true) then
+            echo Extracting 2D sinograms.
+            sino_2d_extract_cti953b $CYL_SCN
+            echo Estimating transmission sinograms.
+            make_eff_tr_cti953b $CYL_SCN_2D
+	endif
+        set IMGDIM = `expr 40 \* $IMGDIM_FCTR`
+    breaksw
+    case 951:
+        echo Extracting 2D sinograms.
+        sino_2d_extract_cti951 $CYL_SCN
+        echo Estimating transmission sinograms.
+        make_eff_tr_cti951 $CYL_SCN_2D
+        set IMGDIM = `expr 48 \* $IMGDIM_FCTR`
+    breaksw
+    case 951m:
+        echo Extracting 2D sinograms.
+        sino_2d_extract_cti951m $CYL_SCN
+        echo Estimating transmission sinograms.
+        make_eff_tr_cti951m $CYL_SCN_2D
+        set IMGDIM = `expr 40 \* $IMGDIM_FCTR`
+    breaksw
+    case 961:
+        echo Extracting 2D sinograms.
+        sino_2d_extract_cti961 $CYL_SCN
+        echo Estimating transmission sinograms.
+        make_eff_tr_cti961 $CYL_SCN_2D
+        set IMGDIM = `expr 40 \* $IMGDIM_FCTR`
+    breaksw
+    default:
+        echo "Scanner type $SCANNER_TYPE not supported."
+    endsw
+    rm $CYL_SCN_2D
+#endif
+
+set NORM = normal3d_$IMGDIM\x$IMGDIM\_$NORM_DATE\.nrm
+
+set ARGS = ($CYL_SCN -blank $BLANK -geo $GEO -scat $SCAT -iter $ITER \
+        -scatdim $IMGDIM_FCTR -nf $NORM)
+echo $ARGS
+
+switch($SCANNER_TYPE)
+case 953:
+    if($DEBUG == true) then
+        x11ups $BIN/3drecon/makenorm_cti953b -a "$ARGS"
+    else
+        nice makenorm_cti953b $ARGS
+    endif
+breaksw
+case 951:
+    nice makenorm_cti951 $ARGS
+#    x11ups $BIN/makenorm_cti951 -a "$ARGS"
+breaksw
+case 951m:
+    nice makenorm_cti951m $ARGS
+#    x11ups $BIN/makenorm_cti951m -a "$ARGS"
+breaksw
+case 961:
+    nice makenorm_cti961 $ARGS
+#    x11ups $BIN/makenorm_cti961 -a "$ARGS"
+breaksw
+default:
+    echo "Scanner type $SCANNER_TYPE not supported."
+endsw
+
+# Clean up
+/bin/rm $TRAN $CYL_SCN_2D scatnorm_tmp.csh
+/bin/rm $SCAT $SCAT_IFH
+@

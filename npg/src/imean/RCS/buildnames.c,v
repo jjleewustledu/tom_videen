@@ -1,0 +1,282 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	94.10.12.20.17.28;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial version
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$
+/*___________________________________________________________________________________
+File Name:	buildnames.c
+
+Function:	PUBLIC int buildnames (PARAMETER_DATA parameter_data,
+			IMAGE_LIST_DATA image_list, int image_mode, int filter_mode,
+			int *num_image_files, char **short_image_files)
+
+Arguments:	parameter_data:		a PARAMETER_DATA structure containing all the
+					parameters in a parameter file.
+		image_list:		data structure containing scan identification,
+					activation scan number, and control scan number.
+					IMAGE_LIST_DATA is defined in
+					/usr/locla/include/petutil/imglist.h.
+		image_mode:		image mode. Either STDIMAGE_MODE or
+					DIFIMAGE_MODE. STDIMAGE_MODE will build image
+					names like p2000ho1_5b7.img. DIFIMAGE_MODE will
+					build image names like p2000a1-3_5b7.dif.
+		filter_mode:		filter mode. RECFILTER_MODE: use recfilter;
+					IMGFILTER_MODE: use imgfilter; MSKFILTER_MODE:
+					use mskfilter.
+		num_image_files:	number of image files, returned.
+		short_image_files:	short PET image files constructed from subject number,
+					tracer, and scan number. The user of this function is
+					responsible for allocating enough momory for this list of
+					strings. The recommended string size is MAXLINE ( = 256)
+					defined in
+					/usr/local/include/petutil/petutil.h.
+					short_image_files are filled after calling this function.
+					To see how the array is arranged, please read the
+					algorithm for details.
+
+		Return Value:	SUCCEED = 0, successful complesion of the function.
+				FAIL = -1, something is wrong.
+
+Description:	Construct a short PET image file.
+
+Algorithm:
+	if (image_mode == STDIMAGE_MODE) then
+		short_image_files [0]:
+		<species><subject_id><tracer><scanset1_id><filter>[.<extension>]
+
+		short_image_files [1]:
+		<species><subject_id><tracer><scanset2_id><filter>[.<extension>]
+	else if (image_mode == DIFIMAGE_MODE)
+		short_image_files [0]:
+		<species><subject_id><tracer><scanset1_id>-<scanset2_id><suffix><filter>[.<extension>]
+	else if (image_mode == PREWELDED_IMAGE_MODE)
+		short_image_files [0]:
+		<species><subject_id><tracer><scanset1_n1><filter>[.<extension>]
+
+		short_image_files [1]:
+		<species><subject_id><tracer><scanset1_n2><filter>[.<extension>]
+
+		short_image_files [2]:
+		<species><subject_id><tracer><scanset2_n1><filter>[.<extension>]
+
+		short_image_files [3]:
+		<species><subject_id><tracer><scanset2_n2><filter>[.<extension>]
+	else if (image_mode == MULTITRACER_IMAGE_MODE)
+		short_image_files [0]:
+		<species><subject_id><tracer><scanset1_n1><filter>[.<extension>]
+
+		short_image_files [1]:
+		<species><subject_id><ftracer><scanset1_n2><filter>[.<extension>]
+
+		short_image_files [2]:
+		<species><subject_id><vtracer><scanset1_n3><filter>[.<extension>]
+
+		short_image_files [3]:
+		<species><subject_id><tracer><scanset2_n1><filter>[.<extension>]
+
+		short_image_files [4]:
+		<species><subject_id><ftracer><scanset2_n2><filter>[.<extension>]
+
+		short_image_files [5]:
+		<species><subject_id><vtracer><scanset2_n3><filter>[.<extension>]
+	else if (image_mode == WELDED_IMAGE_MODE)
+		short_image_files [0]:
+		<species><subject_id><tracer><scanset1_id>w<scanset2_id>[.<extension>]
+	endif
+
+Called by:	The checkimg in checkimg.c.
+
+Creator:	Tom Yang
+History:
+	Modified version of build_shortnames to skip sxr files.
+
+___________________________________________________________________________________*/
+
+#include <values.h>
+#include <petutil/imglist.h>
+
+#define	MINUS	"-"
+#define	WELD	"w"
+
+static char     rcsid[] = "$Header$";
+
+PUBLIC int 
+buildnames (parameter_data, image_list, image_mode, filter_mode, num_image_files,
+	    short_image_files)
+	PARAMETER_DATA  parameter_data;
+	IMAGE_LIST_DATA image_list;
+	int             image_mode;
+	int             filter_mode;
+	int            *num_image_files;
+	char            short_image_files[][MAXLINE];
+{
+	char            cbuffer[MAXLINE];
+	char            extension[MAXNAME];
+	char            fsuffix[MAXNAME];
+	char            string[MAXLINE];
+	char            subject[MAXNAME];
+	float           filter_cutoff;
+	int             filter_order;
+	int             filter_type;
+	int             i;
+	int             scanset_field[6];
+
+	strcpy (cbuffer, parameter_data.species);
+	strcat (cbuffer, image_list.subject_id);
+	strcpy (subject, cbuffer);
+	strcat (cbuffer, parameter_data.tracer);
+
+	if (filter_mode == RECFILTER_MODE) {
+		filter_type = parameter_data.recfilter_type;
+		filter_cutoff = parameter_data.recfilter_cutoff;
+		filter_order = parameter_data.recfilter_order;
+	} else if (filter_mode == IMGFILTER_MODE) {
+		filter_type = parameter_data.imgfilter_type;
+		filter_cutoff = parameter_data.imgfilter_cutoff;
+		filter_order = parameter_data.imgfilter_order;
+	} else if (filter_mode == MSKFILTER_MODE) {
+		filter_type = parameter_data.mskfilter_type;
+		filter_cutoff = parameter_data.mskfilter_cutoff;
+		filter_order = parameter_data.mskfilter_order;
+	}
+	if (filter_type != FILTER_NONE) {
+		filter_suffix (filter_type, filter_cutoff, filter_order, fsuffix);
+	}
+	if (image_mode == STDIMAGE_MODE) {
+		strcpy (short_image_files[0], cbuffer);
+		strcat (short_image_files[0], image_list.scanset1_id);
+		*num_image_files = 1;
+
+		/*
+		 * Processing for scanset2 if it is necessary
+		 */
+		if (strlen (image_list.scanset2_id) > 0) {
+			strcpy (short_image_files[1], cbuffer);
+			strcat (short_image_files[1], image_list.scanset2_id);
+			*num_image_files = 2;
+		}
+	} else if (image_mode == DIFIMAGE_MODE) {
+		if (strlen (image_list.scanset2_id) == 0) {
+			fprintf (stderr, "Make sure your image list file is paired.\n");
+			return FAIL;
+		}
+		strcpy (short_image_files[0], cbuffer);
+		strcat (short_image_files[0], image_list.scanset1_id);
+		strcat (short_image_files[0], MINUS);
+		strcat (short_image_files[0], image_list.scanset2_id);
+		*num_image_files = 1;
+	} else if (image_mode == PREWELDED_IMAGE_MODE) {
+		if (sscanf (image_list.scanset1_id, "%dw%d", scanset_field, scanset_field + 1) != 2) {
+			fprintf (stderr, "Make sure scaset1_id (%s) is of the form n1wn2.\n",
+				 image_list.scanset1_id);
+			return FAIL;
+		}
+		for (i = 0; i <= 1; i++) {
+			strcpy (short_image_files[i], cbuffer);
+			itoa (scanset_field[i], string);
+			strcat (short_image_files[i], string);
+		}
+		*num_image_files = 2;
+
+		if (strlen (image_list.scanset2_id) > 0) {
+			if (sscanf (image_list.scanset2_id, "%dw%d", scanset_field,
+				    scanset_field + 1) != 2) {
+				fprintf (stderr, "Make sure scaset2_id (%s) is of the form n1wn2.\n",
+					 image_list.scanset2_id);
+				return FAIL;
+			}
+			for (i = 2; i <= 3; i++) {
+				strcpy (short_image_files[i], cbuffer);
+				itoa (scanset_field[i - 2], string);
+				strcat (short_image_files[i], string);
+			}
+			*num_image_files = 4;
+		}
+	} else if (image_mode == MULTITRACER_IMAGE_MODE) {
+		if (sscanf (image_list.scanset1_id, "%df%dv%d",
+			    scanset_field, scanset_field + 1, scanset_field + 2) != 3) {
+			fprintf (stderr, "Make sure scaset1_id (%s) is of the form n1fn2vn3.\n",
+				 image_list.scanset1_id);
+			return FAIL;
+		}
+		strcpy (short_image_files[0], cbuffer);
+		strcpy (short_image_files[1], subject);
+		strcat (short_image_files[1], parameter_data.ftracer);
+		strcpy (short_image_files[2], subject);
+		strcat (short_image_files[2], parameter_data.vtracer);
+		for (i = 0; i <= 2; i++) {
+			itoa (scanset_field[i], string);
+			strcat (short_image_files[i], string);
+		}
+		*num_image_files = 3;
+
+		if (strlen (image_list.scanset2_id) > 0) {
+			if (sscanf (image_list.scanset2_id, "%df%dv%d",
+				    scanset_field, scanset_field + 1, scanset_field + 2) != 3) {
+				fprintf (stderr, "Make sure scaset1_id (%s) is of the form n1fn2vn3.\n",
+					 image_list.scanset2_id);
+				return FAIL;
+			}
+			strcpy (short_image_files[3], cbuffer);
+			strcpy (short_image_files[4], subject);
+			strcat (short_image_files[4], parameter_data.ftracer);
+			strcpy (short_image_files[5], subject);
+			strcat (short_image_files[5], parameter_data.vtracer);
+			for (i = 3; i <= 5; i++) {
+				itoa (scanset_field[i - 3], string);
+				strcat (short_image_files[i], string);
+			}
+			*num_image_files = 6;
+		}
+	} else if (image_mode == WELDED_IMAGE_MODE) {
+		if (strlen (image_list.scanset2_id) == 0) {
+			fprintf (stderr, "Make sure your image list file is paired.\n");
+			return FAIL;
+		}
+		strcpy (short_image_files[0], cbuffer);
+		strcat (short_image_files[0], image_list.scanset1_id);
+		strcat (short_image_files[0], WELD);
+		strcat (short_image_files[0], image_list.scanset2_id);
+		*num_image_files = 1;
+	} else {
+		fprintf (stderr, "Unknown image mode: %d\n", image_mode);
+		return FAIL;
+	}
+
+	/*
+	 * Add extension.
+	 */
+	if (strlen (parameter_data.extension) == 0 && image_mode == DIFIMAGE_MODE)
+		strcpy (extension, DIFF_EXT);
+	else
+		strcpy (extension, parameter_data.extension);
+	for (i = 0; i < *num_image_files; i++) {
+		strcat (short_image_files[i], parameter_data.suffix);
+		if (filter_type != FILTER_NONE)
+			strcat (short_image_files[i], fsuffix);
+		strcat (short_image_files[i], extension);
+	}
+
+	return SUCCEED;
+}
+@

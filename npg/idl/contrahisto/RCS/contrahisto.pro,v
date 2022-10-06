@@ -1,0 +1,234 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2005.07.11.14.47.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@; $Id: contrahisto.pro,v 1.3 2001/03/02 14:59:58 tom Exp $
+;
+;+
+; NAME:
+;   CONTRAHISTO
+;
+; PURPOSE:
+;   Plot histogram of difference of ipsi-contra VOI for an image
+;
+; CATEGORY:
+;   Visualization.
+;
+; CALLING SEQUENCE:
+;   contrahisto
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, Jun 2005.
+;-
+
+PRO contrahisto
+
+   @@IMAGE_UTILS.h
+
+   on_error, 2
+   loadct,5
+
+   vname = getenv('VOIFILE')
+   id1 = getenv('VOI')
+   id2 = 'contra_'+id1
+   xmax = float(getenv('XMAX'))
+   ymax = float(getenv('YMAX'))
+   fixed = fix(getenv('XMAX'))
+
+   img = {VIMAGE}
+   img.ff = 1
+   img.lf = 1
+   img.fp = 1
+   img.lp = 255
+   img.proc = 0
+   img.fname = getenv('IMGFILE')
+   msg = ''
+   IF (getframe(img, msg) NE 0) THEN BEGIN
+      print, msg
+      RETURN
+   ENDIF
+
+   voi = ptr_new({VOI})
+   (*voi).id = 'VOI'
+   IF (VOI_READ(voi, vname, msg) NE 0) THEN BEGIN
+      print, msg
+      RETURN
+   ENDIF
+
+   voilist = VOI_LIST(voi)
+   listing = VOI_LISTING(voi,voilist,img.dim[2])
+   IF (listing[0] EQ '') THEN BEGIN
+      print,  'No data.  VOI file is incorrect format or incompatible with current image.'
+      RETURN
+   END
+
+   roi1 = VOI_LOCATE(voi, id1)
+   IF ptr_valid(roi1) THEN BEGIN
+      IF ((*roi1).num GT 0) THEN BEGIN
+         pix1 = VOI_COORDS(voi, id1, img.dim, msg)
+         IF ((size(pix1))[2] GT 1) THEN BEGIN
+            pix1 = pix1[sort(pix1)]
+            pix1 = pix1[uniq(pix1)]
+         ENDIF
+      ENDIF
+   ENDIF
+   nvox = n_elements(pix1)
+   print, id1+'   Pixels = '+string(nvox)
+   IF (nvox LE 0) THEN RETURN
+   ipsi = (*img.data)[pix1]
+
+   roi2 = VOI_LOCATE(voi, id2)
+   IF ptr_valid(roi2) THEN BEGIN
+      IF ((*roi2).num GT 0) THEN BEGIN
+         pix2 = VOI_COORDS(voi, id2, img.dim, msg)
+         IF ((size(pix2))[2] GT 1) THEN BEGIN
+            pix2 = pix2[sort(pix2)]
+            pix2 = pix2[uniq(pix2)]
+         ENDIF
+      ENDIF
+   ENDIF
+   nvox = n_elements(pix2)
+   print, id2+'   Pixels = '+string(nvox)
+   IF (nvox LE 0) THEN RETURN
+   contra = (*img.data)[pix2]
+
+   bmax = xmax
+   IF (bmax EQ 0) THEN bmax = max([ipsi,contra]) > abs(min([ipsi,contra]))
+   binsize = 10 
+   IF (bmax GT 200) THEN binsize = 20
+   IF (bmax GT 500) THEN binsize = 50
+   IF (bmax GT 2000) THEN binsize = 100
+
+   IF (xmax EQ 0) THEN BEGIN
+      xmax = max([ipsi,contra])
+      val = (fix(xmax/binsize) + 1)*binsize
+      xmax = val
+   ENDIF 
+   xrange=[0, xmax]
+
+   IF (fixed GT 0) THEN BEGIN
+      idx = where (ipsi GT xmax, cnt)
+      IF (cnt GT 0) THEN ipsi(idx) = xmax
+      idx = where (contra GT xmax, cnt)
+      IF (cnt GT 0) THEN contra(idx) = xmax
+   ENDIF
+
+   hist1 = histogram(ipsi, MIN=0, MAX=xmax, BINSIZE=binsize)
+   nbins1 = n_elements(hist1)
+   hist2 = histogram(contra, MIN=0, MAX=xmax, BINSIZE=binsize)
+   nbins2 = n_elements(hist2)
+
+   pos = rstrpos(img.fname,'/')
+   title = strmid(img.fname,pos+1)
+   xtitle = 'Difference in Intensity'
+   ytitle = 'Number of Voxels' 
+   y0 = 0.
+
+   IF (ymax EQ 0) THEN ymax = max([hist1,hist2])
+   ymin = -ymax
+   yrange=[ymin, ymax]
+
+   red = [0,255,255,255]
+   green = [0,0,255,255]
+   blue = [0,0,0,255]
+   tvlct,red,green,blue
+   plot, hist1, /nodata, title=title, xtitle=xtitle, ytitle=ytitle, $
+      xrange=xrange, yrange=yrange, xstyle=1, ystyle=1, ytickformat='(I6)',$
+      xtickformat='(I)', charsize=1.4, charthick=2, color=3
+   x0 = 0
+   FOR i=0,nbins1-1 DO BEGIN
+      x1 = x0 + binsize
+      y1 = hist1[i]
+      IF (y1 GT ymax) THEN y1 = ymax
+      x = [x0,x0,x1,x1,x0]
+      y = [y0,y1,y1,y0,y0]
+      polyfill,x,y,color=2
+      IF (i LT nbins1-1 OR y1 GT 0) THEN plots,x,y,color=1
+      x0 = x1
+   ENDFOR 
+   x0 = 0
+   FOR i=0,nbins2-1 DO BEGIN
+      x1 = x0 + binsize
+      y1 = -hist2[i]
+      IF (y1 LT ymin) THEN y1 = ymin
+      x = [x0,x0,x1,x1,x0]
+      y = [y0,y1,y1,y0,y0]
+      polyfill,x,y,color=2
+      IF (i LT nbins2-1 OR y1 GT 0) THEN plots,x,y,color=1
+      x0 = x1
+   ENDFOR 
+   plots,[0,xmax],[0,0],color=1
+   xloc = 9*xmax/10
+   yloc = 4*ymax/5
+   xyouts,xloc, yloc, id1, charsize=1.5, charthick=1.5, color=2, align=1
+   xyouts,xloc, -yloc, id2, charsize=1.5, charthick=1.5, color=2, align=1
+   
+   ch = ''
+   read,prompt='P=Print, Return=Quit ',ch
+   IF (ch eq 'P' or ch eq 'p') THEN BEGIN
+      printname = '/tmp/contrahisto.ps'
+      set_plot,'ps'
+      device,filename=printname,xsize=7,ysize=6,xoffset=0.8,yoffset=3,/inches
+      plot, hist1, /nodata, title=title, xtitle=xtitle, ytitle=ytitle, $
+         xrange=xrange, yrange=yrange, xstyle=1, ystyle=1, ytickformat='(I6)', $
+         xtickformat='(I)', charsize=1.4, charthick=2
+      x0 = 0
+      FOR i=0,nbins1-1 DO BEGIN
+         x1 = x0 + binsize
+         y1 = hist1[i]
+         IF (y1 GT ymax) THEN y1 = ymax
+         x = [x0,x0,x1,x1,x0]
+         y = [y0,y1,y1,y0,y0]
+         polyfill,x,y,color=2,/line_fill,orientation=45
+         plots,x,y,color=1
+         IF (i LT nbins1-1 OR y1 GT 0) THEN plots,x,y,color=1
+         x0 = x1
+      ENDFOR 
+      x0 = 0
+      FOR i=0,nbins2-1 DO BEGIN
+         x1 = x0 + binsize
+         y1 = -hist2[i]
+         IF (y1 LT ymin) THEN y1 = ymin
+         x = [x0,x0,x1,x1,x0]
+         y = [y0,y1,y1,y0,y0]
+         polyfill,x,y,color=2,/line_fill,orientation=45
+         IF (i LT nbins2-1 OR y1 GT 0) THEN plots,x,y,color=1
+         x0 = x1
+      ENDFOR 
+      plots,[0,xmax],[0,0],color=1
+      xloc = xmax/10
+      yloc = 4*ymax/5
+      !p.noclip=1
+
+      xloc = 9*xmax/10
+      yloc = 4*ymax/5
+      xyouts,xloc, yloc, id1, charsize=1.5, charthick=1.5, color=2, align=1
+      xyouts,xloc, -yloc, id2, charsize=1.5, charthick=1.5, color=2, align=1
+
+      device,/close
+      ;cmd = 'cat '+printname+' | lpr'
+      ;spawn, cmd
+      ;cmd = '/usr/bin/rm '+printname
+      ;spawn, cmd
+   END
+   RETURN
+END
+@

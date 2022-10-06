@@ -1,0 +1,169 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2002.01.18.21.34.14;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/usr/local/bin/perl
+# Author:	Tom Videen
+# Date:		Jan 2002
+# Purpose:	Rename files from a pair of 3D TSE scans
+# 			Given a dir. with sequential DICOM files, rename them
+#		   00001.dcm - 000xx.dcm, maintaining original sequence.
+#		   Record of file renaming is saved to "dcm_tse_reorder.log".
+# Creates:	dcm_tse_reorder.log
+# Usage:	dcm_tse_reorder <firstfile> <lastfile>
+# -----------------------------------------------
+
+# Get command-line arguments
+if ($#ARGV != 1) {
+	&printusage;
+	exit(0);
+}
+
+$first = $ARGV[0];
+$last = $ARGV[1];
+$tmp = dcm_tse_reorder.tmp;
+
+# Check DICOM format
+# ---------------------------
+if ($first < 10 ) {
+	$prefix = "0000";
+} elsif ($first < 100) {
+	$prefix = "000";
+} elsif ($first < 1000) {
+	$prefix = "00";
+} elsif ($first < 10000) {
+	$prefix = "0";
+}
+$file = $prefix . $first . ".dcm";
+`dcm_dump_element -t 0020 1041 $file $tmp 2> /dev/null`;
+if (!$?) {	  # DICOM Part 10 format
+	$type = "-t";
+} else {
+	`dcm_dump_element 0020 1041 $file $tmp 2> /dev/null`;
+	if (!$?) {
+		$type = '';
+	} else {
+		print STDERR "$file is not DICOM format\n";
+		exit(1);
+	}
+}
+
+# Open log file
+# ---------------------------
+open(LOGFILE, ">dcm_tse_reorder.log");
+print LOGFILE `date`;
+print LOGFILE `pwd`;
+print LOGFILE "\n";
+
+# Get slice location of each file
+# ---------------------------
+foreach $fileno ($first..$last) {
+	if ($fileno < 10 ) {
+		$prefix = "0000";
+	} elsif ($fileno < 100) {
+		$prefix = "000";
+	} elsif ($fileno < 1000) {
+		$prefix = "00";
+	} elsif ($fileno < 10000) {
+		$prefix = "0";
+	} 
+	$file = $prefix . $fileno . ".dcm";
+	`dcm_dump_element $type 0020 1041 $file $tmp`;
+	open(OUTFILE, "$tmp");
+	@@out = <OUTFILE>;
+	$slice_loc{$fileno} = $out[0];
+	$newno{$fileno} = $fileno;
+}
+
+# Sort files by slice location (negative->positive or low->high)
+# ---------------------------
+$switch = 1;
+while ($switch) {
+	$switch = 0;
+	foreach $n ($first+1..$last) {
+		if ($slice_loc{$newno{$n}} < $slice_loc{$newno{$n-1}}) {
+			$switch = 1;
+			$temp = $newno{$n};
+			$newno{$n} = $newno{$n-1};
+			$newno{$n-1} = $temp;
+		}
+	}
+}
+
+# Rename files to tmp...
+# ---------------------------
+foreach $fileno ($first..$last) {
+	if ($fileno < 10 ) {
+		$prefix = "0000";
+	} elsif ($fileno < 100) {
+		$prefix = "000";
+	} elsif ($fileno < 1000) {
+		$prefix = "00";
+	} elsif ($fileno < 10000) {
+		$prefix = "0";
+	} 
+	$oldname = $prefix . $fileno . ".dcm";
+	$tmpname = "tmp" . $fileno . ".dcm";
+	print LOGFILE "mv $oldname $tmpname\n";
+	`mv $oldname $tmpname`;
+}
+
+# Rename tmp files to new names
+# ---------------------------
+foreach $fileno ($first..$last) {
+	$newnum = $newno{$fileno};
+	if ($newnum < 10 ) {
+		$prefix = "0000";
+	} elsif ($newnum < 100) {
+		$prefix = "000";
+	} elsif ($newnum < 1000) {
+		$prefix = "00";
+	} elsif ($newnum < 10000) {
+		$prefix = "0";
+	} 
+	$tmpname = "tmp" . $newnum . ".dcm";
+	$newname = $prefix . $fileno . ".dcm";
+	print LOGFILE "mv $tmpname $newname\n";
+	`mv $tmpname $newname`;
+}
+
+# Remove temporary file and exit
+# ---------------------------
+`rm $tmp`;
+exit(0);
+
+# =====
+# Subroutines
+# ===
+sub printusage {
+	$~ = USAGE;
+	write STDOUT;
+}
+
+# =====
+# Formats
+# =====
+format USAGE =
+   Usage: dcm_tse_reorder <firstfile> <lastfile>
+ Example: dcm_tse_reorder 129 256
+.
+
+@

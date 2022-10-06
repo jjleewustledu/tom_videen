@@ -1,0 +1,459 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	2009.01.12.18.22.08;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2004.02.13.15.52.10;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.12.16.17.36.01;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.12.14.17.20.57;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.10.26.20.59.36;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.05.26.21.09.20;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@update main
+@
+text
+@/*  $Log: airdif1.c,v $
+ * Revision 1.6  2004/02/13  15:52:10  tom
+ * Feb 2004
+ *
+ * Revision 1.4  1999/12/16  17:36:01  tom
+ * new libs
+ *
+ * Revision 1.3  1999/12/14  17:20:57  tom
+ * lint cleaning
+ *
+ * Revision 1.2  1999/10/26  20:59:36  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/05/26  21:09:20  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *  Module:         airdif1.c
+ *  Date:           May-99
+ *  Author:         Tom Videen
+ *	Description:	Write difference between 2 air file matrices.
+ * ===============================================================================
+ */
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airdif1/RCS/airdif1.c,v 1.6 2004/02/13 15:52:10 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <air.h>				 /* struct air */
+
+#define RADTODEG 180./M_PI
+
+/* Function to update distance and indices to a point */
+#define newdist(new,old,indx,i,j,k)	{old=new; indx[1]=k; indx[2]=j; indx[3]=i;}
+
+int             read_air ();
+float           ptdist ();
+float          *rscale;				 /* reslice (PET) image mm/pixel */
+
+int main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	ImageFile      *file;
+	Index           indx;
+	struct air2     air;
+	char           *airfile1, *airfile2;
+	char           *maskfile;
+	float         **mat1, **mat2, **dmat;
+	int             i, j, k;
+	int             frm;			 /* frame number to process */
+
+	float           dist, sumdist;
+	float           maxdist, mindist;
+	float          *dif;
+	float           xsum, ysum, zsum;
+	float          *pt0, *pt1, *pt2, *pt3;
+
+	unsigned long   nx, ny, nz;		 /* dimensions of img */
+	int             sumpts;
+	int             sumx, sumy, sumz;
+	int            *maxid, *minid;		 /* points in mask with max & min dist */
+	int            *sup, *inf, *lft, *rgt, *ant, *post;	/* points in mask */
+	float           supdist, infdist, lftdist, rgtdist, antdist, postdist;
+	float        ***img;
+	double          dx, dz;
+	double          dxmm, dymm, dzmm;
+	float           dxang, dyang, dzang;
+
+/* Initializations */
+
+	if (argc != 4) {
+		(void) fprintf (stderr, "Usage: airdif1 a.air b.air maskvol\n");
+		return (1);
+	}
+	airfile1 = argv[1];
+	airfile2 = argv[2];
+	maskfile = argv[3];
+
+	mat1 = matrix (1, 4, 1, 4);
+	mat2 = matrix (1, 4, 1, 4);
+	dmat = matrix (1, 4, 1, 4);
+
+/* Read AIR matrices (transform pixels-to-pixels)*/
+
+	if (read_air (airfile1, &air, mat1) != 0) {
+		(void) fprintf (stderr, "ERROR [airdif1]: cannot read %s\n", airfile1);
+		return (1);
+	}
+	if (read_air (airfile2, &air, mat2) != 0) {
+		(void) fprintf (stderr, "ERROR [airdif1]: cannot read %s\n", airfile2);
+		return (1);
+	}
+	matrix_sub (mat1, mat2, dmat, 4, 4, 4);
+	dmat[4][4] = 1;
+
+/*	Read the coordinates of all points-in-the-mask */
+
+	frm = 1;
+	indx.frm = frm;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	file = make_imgfile (maskfile);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [airdif1]: Could not open %s\n", maskfile);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [airdif1]: Could not get MainHeader from %s\n", maskfile);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [airdif1]: cannot find %s frame 1 or 2\n", maskfile);
+				return (ERROR);
+			}
+		} else {
+			fprintf (stderr, "ERROR [airdif1]: cannot find %s frame %d\n",
+				 maskfile, frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [airdif1]: Could not read file subheader in %s\n", maskfile);
+		return (ERROR);
+	}
+	if ((img = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+
+/*
+ *	Compute mean distance between points-in-the-mask after
+ *	misaligned by transformation with the difference matrix.
+ *	Determine points of mininim and maximum distances and
+ *	points at ant, post, sup, inf, left, and right extremes of mask image.
+ */
+
+	nx = (unsigned long) file->sh->dim1;
+	ny = (unsigned long) file->sh->dim2;
+	nz = (unsigned long) file->sh->dim3;
+
+	rscale = vector (1, 3);
+	rscale[1] = air.res.xsize;
+	rscale[2] = air.res.ysize;
+	rscale[3] = air.res.zsize;
+
+	maxid = ivector (1, 3);
+	minid = ivector (1, 3);
+	sup = ivector (1, 3);
+	inf = ivector (1, 3);
+	lft = ivector (1, 3);
+	rgt = ivector (1, 3);
+	ant = ivector (1, 3);
+	post = ivector (1, 3);
+	pt0 = vector (1, 4);
+	pt1 = vector (1, 4);
+	pt2 = vector (1, 4);
+	pt3 = vector (1, 4);
+	dif = vector (1, 3);
+	for (i = 1; i < 4; i++)
+		pt0[i] = 0.0;
+	pt0[4] = 1.0;
+	pt1[4] = 1.0;
+
+	/* Our standard format has origin at left, anterior, superior */
+
+	sup[3] = 1000;
+	ant[2] = 1000;
+	lft[1] = 1000;
+	inf[3] = 0;
+	post[2] = 0;
+	rgt[1] = 0;
+	sumpts = 0;
+	sumx = 0;
+	sumy = 0;
+	sumz = 0;
+	sumdist = 0.0;
+	maxdist = 0.0;
+	mindist = 1000.0;
+	supdist = 0.0;
+	infdist = 0.0;
+	lftdist = 0.0;
+	rgtdist = 0.0;
+	antdist = 0.0;
+	postdist = 0.0;
+	xsum = 0.0;
+	ysum = 0.0;
+	zsum = 0.0;
+
+	for (i = 1; i <= nz; i++) {
+		for (j = 1; j <= ny; j++) {
+			for (k = 1; k <= nx; k++) {
+				if (img[i][j][k] > 0) {
+					sumpts++;
+					sumx += k;
+					sumy += j;
+					sumz += i;
+					pt0[1] = (float) k;
+					pt0[2] = (float) j;
+					pt0[3] = (float) i;
+					vector_mult (mat1, pt0, pt1, 4, 4, 1);
+					vector_mult (mat2, pt0, pt2, 4, 4, 1);
+					dist = ptdist (pt1, pt2, dif);
+					sumdist += dist;
+					xsum += dif[1];
+					ysum += dif[2];
+					zsum += dif[3];
+					if (dist > maxdist)
+						newdist (dist, maxdist, maxid, i, j, k);
+					if (dist < mindist)
+						newdist (dist, mindist, minid, i, j, k);
+					if (k > rgt[1])
+						newdist (dist, rgtdist, rgt, i, j, k);
+					if (k < lft[1])
+						newdist (dist, lftdist, lft, i, j, k);
+					if (j > post[2])
+						newdist (dist, postdist, post, i, j, k);
+					if (j < ant[2])
+						newdist (dist, antdist, ant, i, j, k);
+					if (i > inf[3])
+						newdist (dist, infdist, inf, i, j, k);
+					if (i < sup[3])
+						newdist (dist, supdist, sup, i, j, k);
+				}
+			}
+		}
+	}
+
+/*
+ *	Calculate total error in each parameter.
+ *		pt1 is center-of-volume of mask
+ */
+
+	pt0[1] = (float) sumx / (float) sumpts;
+	pt0[2] = (float) sumy / (float) sumpts;
+	pt0[3] = (float) sumz / (float) sumpts;
+	pt0[4] = 1.0;
+	vector_mult (mat1, pt0, pt1, 4, 4, 1);
+	vector_mult (mat2, pt0, pt2, 4, 4, 1);
+	dist = ptdist (pt1, pt2, dif);
+	dxmm = (pt2[1] - pt1[1]) * rscale[1];
+	dymm = (pt2[2] - pt1[2]) * rscale[2];
+	dzmm = (pt2[3] - pt1[3]) * rscale[3];
+
+/*	Angle estimated by comparing location of a point 20 mm away */
+
+	vector_mult (dmat, pt0, pt1, 4, 4, 1);
+	pt2[1] = pt0[1];
+	pt2[2] = pt0[2] + 20.;
+	pt2[3] = pt0[3];
+	pt2[4] = 1.;
+	vector_mult (dmat, pt2, pt3, 4, 4, 1);
+	dz = (pt3[3] - pt1[3]) * rscale[3];
+	if (dz != 0)
+		dxang = RADTODEG * atan (dz / 20.);
+	else
+		dxang = 0.;
+
+	pt2[1] = pt0[1] + 20.;
+	pt2[2] = pt0[2];
+	pt2[3] = pt0[3];
+	vector_mult (dmat, pt2, pt3, 4, 4, 1);
+	dz = (pt3[3] - pt1[3]) * rscale[3];
+	if (dz != 0.)
+		dyang = RADTODEG * atan (dz / 20.);
+	else
+		dyang = 0.;
+
+	pt2[1] = pt0[1] + 20.;
+	pt2[2] = pt0[2];
+	pt2[3] = pt0[3];
+	vector_mult (dmat, pt2, pt3, 4, 4, 1);
+	dx = (pt3[1] - pt1[1]) * rscale[3];
+	if (dx != 0.)
+		dzang = RADTODEG * atan (dx / 20.);
+	else
+		dzang = 0.;
+
+	(void) fprintf (stdout, "%s %5.1f %5.1f %5.1f %5.1f %5.1f %5.1f %5.1f \n",
+			airfile1, dist, dxmm, dymm, dzmm, dxang, dyang, dzang);
+
+	free_vector (pt0, 1, 4);
+	free_vector (pt1, 1, 4);
+	free_vector (pt2, 1, 4);
+	free_vector (pt3, 1, 4);
+	free_vector (rscale, 1, 3);
+	free_ivector (maxid, 1, 3);
+	free_ivector (minid, 1, 3);
+	free_ivector (sup, 1, 3);
+	free_ivector (inf, 1, 3);
+	free_ivector (lft, 1, 3);
+	free_ivector (rgt, 1, 3);
+	free_ivector (ant, 1, 3);
+	free_ivector (post, 1, 3);
+	free_f3tensor (img, 1, nz, 1, ny, 1, nx);
+	free_imgfile (file);
+	free_matrix (mat1, 1, 4, 1, 4);
+	free_matrix (mat2, 1, 4, 1, 4);
+	free_matrix (dmat, 1, 4, 1, 4);
+	return (0);
+}
+@
+
+
+1.6
+log
+@Feb 2004
+@
+text
+@d2 3
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airdif1/RCS/airdif1.c,v 1.4 1999/12/16 17:36:01 tom Exp tom $";
+d47 1
+a47 1
+main (argc, argv)
+@
+
+
+1.4
+log
+@new libs
+@
+text
+@d2 3
+d22 1
+a22 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airdif1/RCS/airdif1.c,v 1.3 1999/12/14 17:20:57 tom Exp tom $";
+@
+
+
+1.3
+log
+@lint cleaning
+@
+text
+@d2 3
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airdif1/RCS/airdif1.c,v 1.2 1999/10/26 20:59:36 tom Exp tom $";
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airdif1/RCS/airdif1.c,v 1.1 1999/05/26 21:09:20 tom Exp tom $";
+a20 1
+#include <string.h>
+a24 1
+#include <nr.h>
+d27 1
+a27 1
+#include "air.h"				 /* struct air */
+d64 1
+a64 1
+	double          dx, dy, dz;
+d72 1
+a72 1
+		exit (1);
+d86 1
+a86 1
+		exit (1);
+d90 1
+a90 1
+		exit (1);
+d301 1
+a301 1
+	exit (0);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*  $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airdif/RCS/airdif.c,v 1.5 1999/03/16 17:12:45 tom Exp tom $";
+a32 1
+char            Usage[] = "Usage: airdif1 a.air b.air maskvol n\n";
+a44 1
+	char           *string;
+d69 2
+a70 2
+	if (argc != 5) {
+		(void) fprintf (stderr, Usage);
+a75 1
+	string = argv[4];
+d280 1
+a280 1
+			string, dist, dx, dy, dz, dxang, dyang, dzang);
+@

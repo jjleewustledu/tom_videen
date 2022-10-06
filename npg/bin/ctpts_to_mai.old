@@ -1,0 +1,110 @@
+#!/bin/csh
+#	Module:	ctpts_to_mai
+#	Author:	Tom Videen
+#	Date:	May 2006
+#	Use:	Convert contact point in original CT image to final MaiAtlas 
+#			std = MaiAtlas 
+#			res = CT image 
+
+if ($#argv != 9) then
+	echo "Usage:  ctpts_to_mai air output x0 y0 z0 x1 y1 z1 spacing"
+	echo " e.g.,  ctpts_to_mai db158_MaiAtlas_ct db158_left_contacts 211 281 49 206 276 46 2"
+	exit 1
+endif
+
+set AIR = $1.air
+set LOC = $2.loc
+set ATL = $2.atl
+set xp0 = $3
+set yp0 = $4
+set zp0 = $5
+set xp1 = $6
+set yp1 = $7
+set zp1 = $8
+set dist = $9
+
+if (! -e $AIR) then
+	echo "ERROR [ctpts_to_mai]: missing $AIR"
+	exit 1
+endif
+
+echo ctpts_to_mai $1 $2 $3 $4 $5 $6 $7 $8 >! $LOC
+echo ctpts_to_mai $1 $2 $3 $4 $5 $6 $7 $8 >! $ATL
+
+# CT image in which contact locations are defined
+set axdim = `dumpair $AIR | grep "res xdim" | cut -f2 -d:`
+set aydim = `dumpair $AIR | grep "res ydim" | cut -f2 -d:`
+set azdim = `dumpair $AIR | grep "res zdim" | cut -f2 -d:`
+set axsize = `dumpair $AIR | grep "res xsize" | cut -f2 -d:`
+set aysize = `dumpair $AIR | grep "res ysize" | cut -f2 -d:`
+set azsize = `dumpair $AIR | grep "res zsize" | cut -f2 -d:`
+
+# MaiAtlas image
+set mxdim = `dumpair $AIR | grep "std xdim" | cut -f2 -d:`
+set mydim = `dumpair $AIR | grep "std ydim" | cut -f2 -d:`
+set mzdim = `dumpair $AIR | grep "std zdim" | cut -f2 -d:`
+set mxsize = `dumpair $AIR | grep "std xsize" | cut -f2 -d:`
+set mysize = `dumpair $AIR | grep "std ysize" | cut -f2 -d:`
+set mzsize = `dumpair $AIR | grep "std zsize" | cut -f2 -d:`
+
+# MaiAtlas atlas origin
+set mx0 = 483
+set my0 = 17
+set mz0 = 586
+
+# convert coordinates to Analyze order in mm
+set x0 = `echo "($axdim - $xp0) * $axsize" | bc -l | cut -c1-6`
+set y0 = `echo "($aydim - $yp0) * $aysize" | bc -l | cut -c1-6`
+set z0 = `echo "($azdim - $zp0) * $azsize" | bc -l | cut -c1-6`
+set xc = `echo "($axdim - $xp1) * $axsize" | bc -l | cut -c1-6`
+set yc = `echo "($aydim - $yp1) * $aysize" | bc -l | cut -c1-6`
+set zc = `echo "($azdim - $zp1) * $azsize" | bc -l | cut -c1-6`
+set dx = `echo "$xc - $x0" | bc -l`
+set dy = `echo "$yc - $y0" | bc -l`
+set dz = `echo "$zc - $z0" | bc -l`
+set dist = `echo "sqrt(($dx * $dx) + ($dy * $dy))" | bc -l | cut -c1-6`
+set ang = `echo "a($dist/$dz)" | bc -l | cut -c1-6`
+set deg = `echo "180 * $ang / 3.14159" | bc -l | cut -c1-6`
+set inc = `echo "$dist * c($ang)" | bc -l | cut -c1-6`
+set xs = `echo "$dx / $dz" | bc -l | cut -c1-6`
+set ys = `echo "$dy / $dz" | bc -l | cut -c1-6`
+
+set x1 = `echo "$x0 + $inc * $xs" | bc -l | cut -c1-6`
+set y1 = `echo "$y0 + $inc * $ys" | bc -l | cut -c1-6`
+set z1 = `echo "$z0 + $inc" | bc -l | cut -c1-6`
+set x2 = `echo "$x0 + 2 * $inc * $xs" | bc -l | cut -c1-6`
+set y2 = `echo "$y0 + 2 * $inc * $ys" | bc -l | cut -c1-6`
+set z2 = `echo "$z0 + 2 * $inc" | bc -l | cut -c1-6`
+set x3 = `echo "$x0 + 3 * $inc * $xs" | bc -l | cut -c1-6`
+set y3 = `echo "$y0 + 3 * $inc * $ys" | bc -l | cut -c1-6`
+set z3 = `echo "$z0 + 3 * $inc" | bc -l | cut -c1-6`
+
+echo $x0 $y0 $z0 >! ptmp
+echo $x1 $y1 $z1 >> ptmp
+echo $x2 $y2 $z2 >> ptmp
+echo $x3 $y3 $z3 >> ptmp
+
+# reslice from CT to MaiAtlas
+reslice_ucf $AIR ptmp rtmp y
+
+# convert final locations from Analyze order
+set n = 0
+while ($n <= 3)
+	set m = `echo $n + 1 | bc`
+	set xi = `head -$m rtmp | tail -1 | cut -f1 -d' '`
+	set yi = `head -$m rtmp | tail -1 | cut -f2 -d' '`
+	set zi = `head -$m rtmp | tail -1 | cut -f3 -d' '`
+	set rx = `echo "$mxdim - ($xi / $mxsize)" | bc -l | cut -c1-6`
+	set ry = `echo "$mydim - ($yi / $mysize)" | bc -l | cut -c1-5`
+	set rz = `echo "$mzdim - ($zi / $mzsize)" | bc -l | cut -c1-6`
+	echo $n $rx $ry $rz >> $LOC
+	set xa = `echo "($mx0 - $rx) * $mxsize" | bc -l | cut -c1-8`
+	set ya = `echo "($my0 - $ry) * $mysize" | bc -l | cut -c1-8`
+	set za = `echo "($mz0 - $rz) * $mzsize" | bc -l | cut -c1-8`
+	echo $n $xa $ya $za >> $ATL
+	@ n++
+end
+
+unalias rm
+rm ptmp rtmp
+

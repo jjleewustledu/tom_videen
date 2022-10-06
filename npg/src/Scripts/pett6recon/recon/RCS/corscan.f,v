@@ -1,0 +1,250 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.13.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      CORSCAN.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         27-Jun-88
+C  Written For:  PETT VI Image Reconstruction
+C
+C  History/Revisions:
+C     Original ARYAL.FTN written for PETT VI 4/16/81 by Mark Mintun.
+C     Modified to insert data type 500 in header  8 Apr 81  GRH.
+C     Modified to handle low resolution transmission with
+C        high resolution emission   Gary R. Hoffman  7 Dec 81.
+C     Fixed to avoid zero divide errors: 10 Jul 84 Gary R. Hoffman.
+C     Modified and restructured 04-Mar-88 by TOV:
+C        Incorporates specific rounding.
+C        All randoms correction is moved to SLICESEP.
+C     Modified 03-Jun-88 by TOV to read input file of REALs.
+C        Data type changed to 520 in header.
+C     Modified 27-Jun-88 by TOV to read new RINGFCTR table of ring-correction
+C        factors (now reals).
+C     Modified 08-Mar-89 by TOV to write NORMMEAN to output file header.
+C
+C  Intent:
+C     Program to correct emission (or transmission) data by:
+C      1) divide by corrected transmission data;
+C      2) multiply by NORM average (overall efficiency for all slices);
+C      3) multiply by ring correction factor;
+C
+C     The program writes the following values to the file header:
+C       (23) total counts per slice;
+C       (38) file type changed to 520;
+C       (50) mean counts per bin for NORM (NORMMEAN);
+C       (70) scan time for NORM;
+C
+C     Assumes:
+C       Number of slices = 7
+C       Number of profiles = 72
+C       Number of points/profile = 108
+C
+C  Logical Units:
+C     0 = Binned raw data (input file) (SORTS);
+C     1 = Corrected profiles (output file) (ASORTS);
+C     2 = Attenuation profiles (TSORTS);
+C     3 = Ring Correction factors (RING);
+C     4 = Normalization profile header (NORMHEAD);
+C     5 = User output (USEROUT);
+C
+C  Uses Subroutines:
+C     SYSIO
+C
+C  Instructions for Compiling/Linking:  LINK7 CORSCAN
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM CORSCAN
+C
+      INTEGER*2  HEADER(128)   ! normal or transmission file header
+      INTEGER*2  EMHEADER(128) ! emissions file header
+      INTEGER*4  PB(6)    ! parameter block used in SYSIO
+      INTEGER*4  NBYTES   ! number of bytes per slice
+      INTEGER*4  IOREAD   ! SYSIO read sequential binary wait
+      INTEGER*4  IOWRITE  ! SYSIO write sequential binary wait
+      INTEGER*4  USEROUT  ! log unit for output to user
+      INTEGER*4  SORTS    ! log unit for input file (binned raw data)
+      INTEGER*4  ASORTS   ! log unit for output file
+      INTEGER*4  TSORTS   ! log unit for transmission data file (input)
+      INTEGER*4  RING     ! log unit for ring factor data (input)
+      INTEGER*4  NORMHEAD ! log unit for normal header file (input)
+      INTEGER*4  EMISSRES ! emission scan resolution
+      INTEGER*4  TRANSRES ! transmission scan resolution
+      INTEGER*4  SLICE    ! slice number
+      INTEGER*4  NSUM     ! sum of counts for a slice (integer of SUM)
+      INTEGER*4  I,J,K    ! local integers
+      INTEGER*2  JUNK(64)
+C
+      REAL*4     EMIS(7776)    ! emissions data (profiles points for 1 slice)
+      REAL*4     TRANS(7776)   ! transmission data (profiles points for 1 slice)
+C     INTEGER*4  ITRANS(7776)   ! transmission data (profiles points for 1 slice)
+      REAL*4     RINGFAC(108)  ! ring-correction factors
+      REAL*4     SUM      ! sum of counts for a slice
+      REAL*4     NORMMEAN ! mean of normal data
+      REAL*4     NORMTIME ! scan time of normal
+      REAL*4     TRANTIME ! scan time of transmission
+      REAL*4     FACT     ! local factor in computational loop
+      REAL*4     EM       ! local value for EMIS(I)
+      REAL*4     TX       ! local value for TRANS(I)
+C
+      CHARACTER*1 BELL         ! used to ring terminal bell
+      CHARACTER*20 SORTSNAME,ASORTSNAME,TSORTSNAME,NORMNAME  ! file names input as command line args
+      CHARACTER*80 RINGNAME
+C
+      EQUIVALENCE (EMHEADER(23),NSUM)
+C
+      DATA IOREAD,IOWRITE /88,56/
+      DATA SORTS,ASORTS,TSORTS,RING,NORMHEAD,USEROUT /0,1,2,3,4,6/
+      DATA NBYTES /31104/    ! 72*108*4
+C
+      WRITE(USEROUT,*) '*** CORSCAN  Sep-97  {correct emission profiles}'
+      CALL GETARG (1, SORTSNAME)
+      CALL GETARG (2, ASORTSNAME)
+      CALL GETARG (3, TSORTSNAME)
+      CALL GETARG (4, RINGNAME)
+      CALL GETARG (5, NORMNAME)
+
+      BELL = CHAR(7)
+      PB(6) = 0              ! prevent I/O glitches
+      TRANTIME = 0.0         ! prevent compiler warning
+C
+C  EMIS = emission data array (data to be corrected)
+C  TRANS = transmission data array (corrected for randoms)
+C
+C  Read normalization header and obtain norm time and
+C  norm average for each slice.
+C
+C  Added the following open statement when porting to HP 4-29-91 KMG
+      OPEN(NORMHEAD,FILE=NORMNAME)
+      CALL SYSIO(PB,IOREAD,NORMHEAD,HEADER,256,0)
+      CLOSE(NORMHEAD)
+C      WRITE(USEROUT,*) "HEADER 38 ",HEADER(38)
+      IF (HEADER(38).NE.320) THEN
+        WRITE(USEROUT,*) '*******************************************'
+        WRITE(USEROUT,*) '*  NORM Average file is of wrong type.'
+        WRITE(USEROUT,*) '*  It must be a file processed by NORMAVE.'
+        WRITE(USEROUT,*) '*******************************************'
+        STOP
+      END IF
+      NORMTIME = FLOAT(HEADER(8))
+      NORMMEAN = FLOAT(HEADER(50))
+C
+C  Process 7 image slices
+C
+C  Added the following open statements when porting to HP 4-29-91 KMG
+      OPEN(SORTS,FILE=SORTSNAME)
+      OPEN(TSORTS,FILE=TSORTSNAME)
+      OPEN(RING,FILE=RINGNAME)
+      OPEN(ASORTS,FILE=ASORTSNAME)
+      
+      DO 1000 SLICE=1,7
+C
+C  Read emissions data and obtain random counts from header
+C
+        CALL SYSIO(PB,IOREAD,SORTS,EMHEADER,256,0)
+        IF (SLICE.EQ.1 .AND. EMHEADER(38).NE.120) THEN
+          WRITE(USEROUT,*) '*******************************************'
+          WRITE(USEROUT,*) '*  Emission file is of wrong type.'
+          WRITE(USEROUT,*) '*  It must be a file processed by BINPROF.'
+          WRITE(USEROUT,*) '*******************************************'
+          STOP
+        END IF
+        CALL SYSIO(PB,IOREAD,SORTS,EMIS,NBYTES,0)
+        CALL SYSIO(PB,IOREAD,SORTS,JUNK,128,0)
+C
+C  Read transmissions data and obtain scan time from header
+C
+        CALL SYSIO(PB,IOREAD,TSORTS,HEADER,256,0)
+        IF (SLICE.EQ.1 .AND. HEADER(38).NE.120) THEN
+          WRITE(USEROUT,*) '*******************************************'
+          WRITE(USEROUT,*) '*  Transmission file is of wrong type.'
+          WRITE(USEROUT,*) '*  It must be a file processed by BINPROF.'
+          WRITE(USEROUT,*) '*******************************************'
+          STOP
+        END IF
+C        CALL SYSIO(PB,IOREAD,TSORTS,ITRANS,NBYTES,0)
+        CALL SYSIO(PB,IOREAD,TSORTS,TRANS,NBYTES,0)
+        CALL SYSIO(PB,IOREAD,TSORTS,JUNK,128,0)
+C        DO 1020 IARRAY=1,7776
+C           TRANS(IARRAY) = FLOAT(ITRANS(IARRAY))
+C           write(6,*)'TRANS [',IARRAY,'] = ',TRANS(IARRAY)
+C1020    CONTINUE
+         
+C
+C  For first slice:
+C    Get transmissions time.
+C    Read ring-correction table:
+C      If emission & xmission same res, use first 2 records of RING file
+C         (108 reals or 432 bytes)
+C      If emission & xmission different res, use records 3-4 of RING file
+C
+        IF (SLICE.EQ.1) THEN
+          TRANTIME = FLOAT(HEADER(8))
+          EMISSRES = EMHEADER(16)
+          TRANSRES = HEADER(16)
+          CALL SYSIO(PB,IOREAD,RING,RINGFAC,432,0)
+          IF (EMISSRES.NE.TRANSRES) THEN
+            WRITE(USEROUT,*) '--- Emission and transmission scans ',
+     2        'have different resolutions',BELL
+            CALL SYSIO(PB,IOREAD,RING,RINGFAC,432,0)
+          END IF
+        END IF
+C
+C  Correct emissions data for efficiency and attenuation
+C
+        FACT = NORMMEAN*TRANTIME/NORMTIME
+        SUM = 0
+        I = 0
+        DO 300 K=1,72               ! 72 profiles per slice
+          DO 200 J=1,108            ! 108 bins per profile
+            I = I+1
+            EM  = EMIS(I)
+            SUM = SUM + EM
+            TX  = TRANS(I)
+            IF (TX.LE.0) TX = 1.0   ! prevent zero divide error
+            EMIS(I) = EM*RINGFAC(J)*FACT/TX
+200       CONTINUE
+300     CONTINUE
+C
+        NSUM = JNINT(SUM)
+        WRITE(USEROUT,8000) SLICE,NSUM
+8000    FORMAT(1X,'Slice #',I1,'  Total Counts = ',I10)
+C
+C  Change file type to 520. Insert NORM mean & time in header.
+C  Total counts is inserted in header with EQUIVALENCE statement.
+C  Write to output file.
+C
+        EMHEADER(38) = 520
+        EMHEADER(50) = ININT(NORMMEAN)
+        EMHEADER(70) = ININT(NORMTIME)
+        CALL SYSIO(PB,IOWRITE,ASORTS,EMHEADER,256,0)
+        CALL SYSIO(PB,IOWRITE,ASORTS,EMIS,NBYTES,0)
+1000  CONTINUE
+C
+      CLOSE(ASORTS)
+      CLOSE(TSORTS)
+      CLOSE(RING)
+      STOP
+      END
+@

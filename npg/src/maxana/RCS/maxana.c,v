@@ -1,0 +1,324 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2004.02.16.21.31.25;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2002.10.09.17.35.08;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@/* $Log: maxana.c,v $
+ * Revision 1.1  2002/10/09  17:35:08  tom
+ * Initial revision
+ * */
+/* =============================================================================
+ *  Module:         maxana.c
+ *  Date:           Oct 2002
+ *  Author:         Tom Videen
+ *  Description:    Create an image containing maximum value from all input images
+ * =============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maxana/RCS/maxana.c,v 1.1 2002/10/09 17:35:08 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ANALYZE.h>				 /* dsr */
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+
+{
+	struct dsr      hdr1, hdr2;		 /* ANALYZE headers */
+	FILE           *fd;				 /* for I/O */
+	char          **file;			 /* list of files to merge */
+	char           *fhdr;			 /* Analyze header filename  */
+	char           *fname;			 /* Analyze image filename */
+	char           *outfile;		 /* output filename */
+	short          *img1;			 /* data */
+	short          *img2;			 /* data */
+	long            ndim[4];		 /* array dimensions */
+	long            nsize;
+	long            i, j, k;
+	int             nfiles = 0;		 /* number of files in list */
+
+	if (argc < 4) {
+		fprintf (stderr, "Usage: maxana output recfile newfile file1 file2 ...\n");
+		return (1);
+	}
+/*
+ *	Get list of files to combine
+ */
+
+	file = (char **) malloc (argc * sizeof (char *));
+	fname = (char *) malloc (256 * sizeof (char *));
+	fhdr = (char *) malloc (256 * sizeof (char *));
+	if (file == NULL) return (1);
+	if (fname == NULL) return (1);
+	if (fhdr == NULL) return (1);
+	outfile = argv[1];
+	for (i = 2; i < argc; i++) {
+		if (strcmp (argv[i], "-d")) {
+			file[nfiles] = argv[i];
+			++nfiles;
+		}
+	}
+
+/*
+ * Read hdr of first file
+ */
+	(void) strcpy (fname, file[0]);
+	(void) strcat (fname, ".img");
+	(void) strcpy (fhdr, file[0]);
+	(void) strcat (fhdr, ".hdr");
+
+	if ((fd = fopen (fhdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [maxana]: Cannot open: %s\n", fhdr);
+		return (1);
+	}
+	if ((fread (&hdr1, sizeof (struct dsr), 1, fd)) != 1) {
+		fprintf (stderr, "ERROR [maxana]: Reading: %s\n", fhdr);
+		return (1);
+	}
+	if (hdr1.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [maxana]: Reading: %s\n", fhdr);
+		fprintf (stderr, "Dimensions = %d\n", hdr1.dime.dim[0]);
+		return (1);
+	}
+	if (hdr1.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [maxana]: Reading: %s\n", fhdr);
+		fprintf (stderr, "Datatype = %d\n", hdr1.dime.datatype);
+		return (1);
+	}
+	if (hdr1.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [maxana]: Reading: %s\n", fhdr);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr1.dime.bitpix);
+		return (1);
+	}
+	ndim[0] = hdr1.dime.dim[0];
+	ndim[1] = hdr1.dime.dim[1];
+	ndim[2] = hdr1.dime.dim[2];
+	ndim[3] = hdr1.dime.dim[3];
+	nsize = ndim[1] * ndim[2] * ndim[3];
+	(void) fclose (fd);
+
+/*
+ *	Read data from first file
+ */
+
+	if ((fd = fopen (fname, "r")) == 0) {
+		fprintf (stderr, "ERROR [maxana]: opening: %s\n", fname);
+		return (1);
+	}
+	if ((img1 = (short *) calloc (nsize, sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [maxana]: calloc img1\n");
+		return (1);
+	}
+	if ((img2 = (short *) calloc (nsize, sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [maxana]: calloc img2\n");
+		return (1);
+	}
+	fprintf (stdout, "Reading %s\n", fname);
+	if ((fread (img1, nsize * 2, 1, fd)) != 1) {
+		fprintf (stderr, "ERROR [maxana]: reading: %s\n", fname);
+		return (1);
+	}
+	(void) fclose (fd);
+
+/*
+ * Read additional files
+ */
+	for (k = 1; k < nfiles; k++) {
+		(void) strcpy (fname, file[k]);
+		(void) strcat (fname, ".img");
+		(void) strcpy (fhdr, file[k]);
+		(void) strcat (fhdr, ".hdr");
+
+		if ((fd = fopen (fhdr, "r")) == 0) {
+			fprintf (stderr, "ERROR [maxana]: Cannot open: %s\n", fhdr);
+			return (1);
+		}
+		if ((fread (&hdr2, sizeof (struct dsr), 1, fd)) != 1) {
+			fprintf (stderr, "ERROR [maxana]: reading: %s\n", fhdr);
+			return (1);
+		}
+		for (j = 0; j <= 3; j++) {
+			if (hdr2.dime.dim[j] != ndim[j]) {
+				fprintf (stderr, "ERROR [maxana]: reading: %s\n", fhdr);
+				fprintf (stderr, "Different image dimensions\n");
+				return (1);
+			}
+		}
+		if (hdr2.dime.datatype != 4) {
+			fprintf (stderr, "ERROR [maxana]: reading: %s\n", fhdr);
+			fprintf (stderr, "Datatype = %d\n", hdr2.dime.datatype);
+			return (1);
+		}
+		(void) fclose (fd);
+
+		if ((fd = fopen (fname, "r")) == 0) {
+			fprintf (stderr, "ERROR [maxana]: Cannot open: %s\n", fname);
+			return (1);
+		}
+		fprintf (stdout, "Reading %s\n", fname);
+		if ((fread (img2, nsize * 2, 1, fd)) != 1) {
+			fprintf (stderr, "ERROR [maxana]: reading: %s\n", fname);
+			return (1);
+		}
+		(void) fclose (fd);
+
+/*
+ * Set pixels to greatest value
+ */
+		for (i = 1; i <= nsize; i++) {
+			if (img2[i] > img1[i])
+				img1[i] = img2[i];
+		}
+	}
+
+/*
+ * Write the output hdr and image
+ */
+
+	(void) strcpy (fname, outfile);
+	(void) strcat (fname, ".img");
+	(void) strcpy (fhdr, outfile);
+	(void) strcat (fhdr, ".hdr");
+
+	if ((fd = fopen (fhdr, "w")) == 0) {
+		fprintf (stderr, "Unable to create ANALYZE header %s\n", fhdr);
+		return (1);
+	}
+	if ((fwrite (&hdr1, sizeof (struct dsr), 1, fd)) != 1) {
+		fprintf (stderr, "Error writing to: %s\n", fhdr);
+		return (1);
+	}
+	(void) fclose(fd);
+
+	if ((fd = fopen (fname, "w")) == 0) {
+		fprintf (stderr, "Unable to create ANALYZE image %s\n", fname);
+		return (1);
+	}
+	if ((fwrite (img1, nsize * 2, 1, fd)) != 1) {
+		fprintf (stderr, "Error writing to: %s\n", fname);
+		return (1);
+	}
+	(void) fclose(fd);
+	fprintf (stderr, "Maximum pixel values set in %s\n", fname);
+	free (img1);
+	free (img2);
+	free (file);
+	free (fhdr);
+	return (0);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d12 1
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maxana/RCS/maxana.c,v 1.1 1998/10/07 21:02:47 tom Exp $";
+d42 1
+a42 1
+		return (-1);
+d51 3
+d72 1
+a72 1
+		return (-1);
+d76 1
+a76 1
+		return (-1);
+d81 1
+a81 1
+		return (-1);
+d86 1
+a86 1
+		return (-1);
+d91 1
+a91 1
+		return (-1);
+d105 2
+a106 2
+		fprintf (stderr, "ERROR [maxana]: Cannot open: %s\n", fname);
+		return (-1);
+d109 2
+a110 2
+		fprintf (stderr, "ERROR [maxana]: Cannot calloc img1\n");
+		return (-1);
+d113 2
+a114 2
+		fprintf (stderr, "ERROR [maxana]: Cannot calloc img2\n");
+		return (-1);
+d118 2
+a119 2
+		fprintf (stderr, "ERROR [maxana]: Reading: %s\n", fname);
+		return (-1);
+d134 1
+a134 1
+			return (-1);
+d137 2
+a138 2
+			fprintf (stderr, "ERROR [maxana]: Reading: %s\n", fhdr);
+			return (-1);
+d142 1
+a142 1
+				fprintf (stderr, "ERROR [maxana]: Reading: %s\n", fhdr);
+d144 1
+a144 1
+				return (-1);
+d148 1
+a148 1
+			fprintf (stderr, "ERROR [maxana]: Reading: %s\n", fhdr);
+d150 1
+a150 1
+			return (-1);
+d156 1
+a156 1
+			return (-1);
+d160 2
+a161 2
+			fprintf (stderr, "ERROR [maxana]: Reading: %s\n", fname);
+			return (-1);
+d185 1
+a185 1
+		return (-1);
+d189 1
+a189 1
+		return (-1);
+d195 1
+a195 1
+		return (-1);
+d199 1
+a199 1
+		return (-1);
+@

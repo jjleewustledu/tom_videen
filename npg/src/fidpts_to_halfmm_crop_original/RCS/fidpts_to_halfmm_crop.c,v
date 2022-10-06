@@ -1,0 +1,587 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	2007.01.15.16.01.11;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2007.01.09.20.59.01;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2006.09.28.20.25.17;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2006.09.27.18.57.35;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2006.09.27.18.55.33;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2006.02.11.16.06.25;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2006.02.03.20.26.11;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2006.02.01.19.31.26;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@/*	$Log: fidpts_to_halfmm_crop.c,v $
+ * Revision 1.7  2007/01/09  20:59:01  tom
+ * add choice for Z (ox/ot)
+ *
+ * Revision 1.6  2006/09/28  20:25:17  tom
+ * choice of lateral fiducial points
+ *
+ * Revision 1.5  2006/09/27  18:57:35  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  2006/09/27  18:55:33  tom
+ * changed only messages
+ *
+ * Revision 1.3  2006/02/11  16:06:25  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2006/02/03  20:26:11  tom
+ * fix side selection
+ *
+ * Revision 1.1  2006/02/01  19:31:26  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:		fidpts_to_halfmm_crop.c
+ *	Date:		Sep 2006
+ *	Author:		Tom Videen
+ *	Intent:		Create image with fiducial lines on halfmm images
+ *				300x128x64 0.5x0.5x0.5 mm voxels
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop/RCS/fidpts_to_halfmm_crop.c,v 1.7 2007/01/09 20:59:01 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <image.h>
+#include <nrutil.h>
+#include <imgutil.h>
+#include <matrixlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			fidpts_to_halfmm_crop
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	void            plot_xz_vs_y ();
+	void            plot_yz_vs_x ();
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_pts;			 /* file for points */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* file for Analyze image */
+	char           *img1, *hdr1;	 /* output file */
+	char           *pts;			 /* input fiducial points file */
+	char            line[MAXLINE];
+	char            name[4];
+
+	float           fx, fy, fz;		 /* fiducial coords	 */
+	float           tan0, sin0, cos0; /* tilt around y-axis	 */
+	float           tan1;			 /* rotation around z-axis	 */
+	float           tan2;			 /* nod around x-axis	 */
+	float           f;
+
+	int             side;			 /* 0 = bilateral, 1 = left, 2 = right	 */
+	int             x, y, z;		 /* loop indices */
+	int             x0, y0, z0;		 /* AC */
+	int             x1, y1, z1;		 /* PC */
+	int             xlf, xrt;		 /* left and right fiducial x	 */
+	int             xl, yl, zl;		 /* left computed at AC		 */
+	int             xr, yr, zr;		 /* right computed at AC	 */
+	int             xpl, ypl, zpl;	 /* left computed at PC		 */
+	int             xpr, ypr, zpr;	 /* right computed at PC	 */
+	int             xc0, yc0, zc0;	 /* chiasm fiducial	 */
+	int             xc, zc;			 /* chiasm adjusted for left-right tilt	 */
+	int             xca, yca, zca;	 /* chiasm projected to y=ny */
+	int             xcp, ycp, zcp;	 /* chiasm projected to y=1 */
+
+	short        ***simg;			 /* image array */
+	short          *row;			 /* single row for output */
+
+	struct point {
+		char            name[4];
+		int             x;
+		int             y;
+		int             z;
+	};
+	struct point    pt[13];			 /* array of fiducial points	 */
+	int             npt, n;
+
+	int             val = 30000;
+
+	int             nx = 300;		 /* dimensions of halfmm_crop image */
+	int             ny = 128;
+	int             nz = 64;
+
+	int             nxc0 = 257;		 /* origin of halfmm image	*/
+	int             nyc0 = 257;
+	int             nzc0 = 200;
+
+	int             nx0 = 150;		 /* origin of halfmm_crop image	*/
+	int             ny0 = 35;
+	int             nz0 = 17;
+
+	int             lfid;		 /* fiducial point defining left side	*/
+	int             rfid;		 /* fiducial point defining right side 	*/
+	int             zfid;		 /* fiducial point defining z stretch 	*/
+
+	if (argc != 8) {
+		fprintf (stdout, "Usage: fidpts_to_halfmm_crop pts img hdr hemisphere lfid rfid zfid\n");
+		return (ERROR);
+	}
+	pts = argv[1];
+	hdr1 = argv[2];
+	img1 = argv[3];
+	side = atoi (argv[4]);
+	lfid = atoi (argv[5]);
+	rfid = atoi (argv[6]);
+	zfid = atoi (argv[7]);
+
+	simg = s3tensor (1, nz, 1, ny, 1, nx);
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop]: malloc simg\n");
+		return (ERROR);
+	}
+/*	=========================================================
+ *	Read fiducial points
+ *	Note that Analyze image array is reversed and interpolated (x2)
+ */
+	if ((fd_pts = fopen (pts, "r")) == 0) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop]: opening %s\n", pts);
+		return (ERROR);
+	}
+	if (fgets (line, MAXLINE, fd_pts) == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop]: Reading %s\n", pts);
+		return (ERROR);
+	}
+	if (fgets (line, MAXLINE, fd_pts) == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop]: Reading %s\n", pts);
+		return (ERROR);
+	}
+
+/*	Analyze image array is reversed; therefore, fiducials are reversed when read */
+
+	npt = 0;
+	while (fgets (line, MAXLINE, fd_pts) != NULL) {
+		if (sscanf (line, "%3s %f %f %f", name, &fx, &fy, &fz) == 4) {
+			(void) strcpy (pt[npt].name, name);
+			pt[npt].x = (2 * fx);
+			pt[npt].y = (2 * fy);
+			pt[npt].z = (2 * fz);
+			(npt)++;
+		}
+	}
+	(void) fclose (fd_pts);
+	for (n = 0; n < npt; n++) {
+		printf ("%3s %3d %3d %3d\n", pt[n].name, pt[n].x, pt[n].y, pt[n].z);
+		pt[n].x = (nx + 1) - nx0 + (nxc0 - pt[n].x);
+		pt[n].y = (ny + 1) - ny0 + (nyc0 - pt[n].y);
+		pt[n].z = (nz + 1) - nz0 + (nzc0 - pt[n].z);
+	}
+/*	=========================================================
+ *	Plot 4 AP lines and 4 RL lines:
+ *		AC = x0, y0, z0
+ *		PC = x1, y1, z1
+ *		Z  = xc0, yc0, zc0
+ *		Left.x = xlf
+ *		Right.x = xrf
+ *	------------------------------------------------------- */
+
+	x0 = pt[0].x;
+	y0 = pt[0].y;
+	z0 = pt[0].z;
+	x1 = pt[1].x;
+	y1 = pt[1].y;
+	z1 = pt[1].z;
+	if (zfid == 2) {
+		xc0 = pt[2].x;
+		yc0 = pt[2].y;
+		zc0 = pt[2].z;
+	} else {
+		xc0 = (pt[3].x + pt[4].x)/2;
+		yc0 = (pt[3].y + pt[4].y)/2;
+		zc0 = (pt[3].z + pt[4].z)/2;
+	}
+	xlf = pt[lfid].x;
+	xrt = pt[rfid].x;
+
+/*	-------------------------------------------------------------
+ *	Tilt adjustment for left, right, and OX lines:
+ *		angle 0 is tilt on y-axis (positive is up on left)
+ *		angle 1 is rotation on z-axis (positive is CW; nose right)
+ *		angle 2 is nod on x-axis (positive is nose up)
+ *	Angles 0 and 1 should be small
+ *	------------------------------------------------------------- */
+
+	tan0 = (float) (pt[11].z - pt[12].z) / (float) (pt[11].x - pt[12].x);
+	sin0 = sin (atan (tan0));
+	cos0 = cos (atan (tan0));
+	if (y0 != y1) {
+		tan1 = (float) (x1 - x0) / (float) (y0 - y1);
+		tan2 = (float) (z0 - z1) / (float) (y0 - y1);
+	} else {
+		fprintf (stderr, "AC and PC must have different y-coordinates\n");
+		return (ERROR);
+	}
+
+/*	-------------------------------------------------------
+ *	Compute adjusted coordinates for ends of lines:
+ *		ACL:  [x0,y0,z0]  to [xl,yl,zl]
+ *		ACR:  [xr,yr,zr]  to [x0,y0,z0]
+ *		PCL:  [x1,y1,z1]  to [xpl,ypl,zpl]
+ *		PCR:  [xpr,ypr,zpr] to [x0,y0,z0]
+ *		ACPC: [x0,y0,z0]  to [x1,y1,z1]
+ *		LEFT: [xl,yl,zl]  to [xpl,ypl,zpl]
+ *		RIGHT:[xr,yr,zr]  to [xpr,ypr,zpr]
+ *		OX:   [xca,nc,zcb] to [xcb,1,zca]
+ *	------------------------------------------------------- */
+
+	xl = x0 + ROUND((float)(xlf - x0) * cos0);
+	yl = y0 + ROUND((float)(xl - x0) * tan1);
+	zl = z0 + ROUND((float)(xlf - x0) * sin0);
+
+	xr = x0 + ROUND((float)(xrt - x0) * cos0);
+	yr = y0 + ROUND((float)(xr - x0) * tan1);
+	zr = z0 + ROUND((float)(xrt - x0) * sin0);
+
+	xpl = x1 + ROUND((float)(xlf - x0) * cos0);
+	ypl = y1 + ROUND((float)(xl - x0) * tan1);
+	zpl = z1 + ROUND((float)(xlf - x0) * sin0);
+
+	xpr = x1 + ROUND((float)(xrt - x0) * cos0);
+	ypr = y1 + ROUND((float)(xr - x0) * tan1);
+	zpr = z1 + ROUND((float)(xrt - x0) * sin0);
+
+	xc = x0 + ROUND((float)(z0 - zc0) * sin0);
+	xca = xc + ROUND((float)(yc0 - ny) * tan1);
+	xcp = xc + ROUND((float)(yc0 - 1) * tan1);
+
+	yca = ny;
+	ycp = 1;
+
+	zc = z0 + ROUND((float)(zc0 - z0) * cos0);
+	zca = zc + ROUND((float)(ny - yc0) * tan2);
+	zcp = zc + ROUND((float)(1 - yc0) * tan2);
+
+	printf ("\nAC : %3d %3d %3d\n", (nx + 1) - x0, (ny + 1) - y0, (nz + 1) - z0);
+	printf ("PC : %3d %3d %3d\n", (nx + 1) - x1, (ny + 1) - y1, (nz + 1) - z1);
+	printf ("LAC: %3d %3d %3d\n", (nx + 1) - xl, (ny + 1) - yl, (nz + 1) - zl);
+	printf ("RAC: %3d %3d %3d\n", (nx + 1) - xr, (ny + 1) - yr, (nz + 1) - zr);
+	printf ("LPC: %3d %3d %3d\n", (nx + 1) - xpl, (ny + 1) - ypl, (nz + 1) - zpl);
+	printf ("RPC: %3d %3d %3d\n", (nx + 1) - xpr, (ny + 1) - ypr, (nz + 1) - zpr);
+	printf ("OX : %3d %3d %3d\n", (nx + 1) - xc0, (ny + 1) - yc0, (nz + 1) - zc0);
+
+	f = 180/M_PI;
+	printf ("ang: %4.1f %4.1f %4.1f degrees (roll/yaw/pitch)\n",
+		atan(tan0)*f, atan(tan1)*f, atan(tan2)*f);
+
+	plot_xz_vs_y (simg, x0, y0, z0, x1, y1, z1, nx, ny, nz, val);
+	plot_xz_vs_y (simg, xca, yca, zca, xcp, ycp, zcp, nx, ny, nz, val);
+
+	if (side <= 1) {			 /* left hemisphere	 */
+		plot_xz_vs_y (simg, xl, yl, zl, xpl, ypl, zpl, nx, ny, nz, val);
+		plot_yz_vs_x (simg, x0, y0, z0, xl, yl, zl, nx, ny, nz, val);
+		plot_yz_vs_x (simg, x1, y1, z1, xpl, ypl, zpl, nx, ny, nz, val);
+	}
+	if (side != 1) {			 /* right hemisphere or bilateral	 */
+		plot_xz_vs_y (simg, xr, yr, zr, xpr, ypr, zpr, nx, ny, nz, val);
+		plot_yz_vs_x (simg, x0, y0, z0, xr, yr, zr, nx, ny, nz, val);
+		plot_yz_vs_x (simg, x1, y1, z1, xpr, ypr, zpr, nx, ny, nz, val);
+	}
+/*	=========================================================
+ *	Create and write Analyze hdr
+ */
+
+	(void) strncpy (hdr.hk.db_name, img1, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr);
+	hdr.hk.extents = 16384;
+	hdr.hk.regular = 'r';
+	hdr.dime.dim[0] = 4;
+	hdr.dime.dim[1] = nx;
+	hdr.dime.dim[2] = ny;
+	hdr.dime.dim[3] = nz;
+	hdr.dime.dim[4] = 1;
+	hdr.dime.unused8 = 0;
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 4;
+	hdr.dime.bitpix = 16;
+	hdr.dime.pixdim[1] = 0.5;
+	hdr.dime.pixdim[2] = 0.5;
+	hdr.dime.pixdim[3] = 0.5;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = (int) val;
+	hdr.dime.glmin = 0;
+	hdr.hist.orient = 0;
+	if ((fd_hdr = fopen (hdr1, "w")) == 0) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop]: writing %s\n", hdr1);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+
+/*	=========================================================
+ *	Write Image
+ */
+
+	if ((fd_img = fopen (img1, "w")) == 0) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop]: opening %s\n", img1);
+		return (ERROR);
+	}
+	row = (short *) calloc (nx, sizeof (short));
+	if (row == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop]: calloc row\n");
+		return (ERROR);
+	}
+	for (z = 1; z <= nz; z++) {
+		for (y = 1; y <= ny; y++) {
+			for (x = 1; x <= nx; x++)
+				row[x - 1] = simg[z][y][x];
+			if (fwrite (row, sizeof (short), nx, fd_img) != nx) {
+				fprintf (stderr, "ERROR [mai_fiducials]: writing %s\n", img1);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+	free_s3tensor (simg, 1, nz, 1, ny, 1, nx);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.7
+log
+@add choice for Z (ox/ot)
+@
+text
+@d2 3
+d33 1
+a33 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop/RCS/fidpts_to_halfmm_crop.c,v 1.6 2006/09/28 20:25:17 tom Exp tom $";
+d42 1
+d228 3
+a230 3
+	xl = x0 + (xlf - x0) * cos0;
+	yl = y0 + (xl - x0) * tan1;
+	zl = z0 + (xlf - x0) * sin0;
+d232 3
+a234 3
+	xr = x0 + (xrt - x0) * cos0;
+	yr = y0 + (xr - x0) * tan1;
+	zr = z0 + (xrt - x0) * sin0;
+d236 3
+a238 3
+	xpl = x1 + (xlf - x0) * cos0;
+	ypl = y1 + (xl - x0) * tan1;
+	zpl = z1 + (xlf - x0) * sin0;
+d240 3
+a242 3
+	xpr = x1 + (xrt - x0) * cos0;
+	ypr = y1 + (xr - x0) * tan1;
+	zpr = z1 + (xrt - x0) * sin0;
+d244 3
+a246 3
+	xc = x0 + (z0 - zc0) * sin0;
+	xca = xc + (yc0 - ny) * tan1;
+	xcp = xc + (yc0 - 1) * tan1;
+d251 3
+a253 3
+	zc = z0 + (zc0 - z0) * cos0;
+	zca = zc + (ny - yc0) * tan2;
+	zcp = zc + (1 - yc0) * tan2;
+@
+
+
+1.6
+log
+@choice of lateral fiducial points
+@
+text
+@d2 3
+d30 1
+a30 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop/RCS/fidpts_to_halfmm_crop.c,v 1.5 2006/09/27 18:57:35 tom Exp tom $";
+d111 1
+d113 2
+a114 2
+	if (argc != 7) {
+		fprintf (stdout, "Usage: fidpts_to_halfmm_crop pts img hdr hemisphere lfid rfid\n");
+d123 1
+d170 1
+a170 1
+ *		OX.z = xc0, yc0, zc0
+d181 9
+a189 3
+	xc0 = pt[2].x;
+	yc0 = pt[2].y;
+	zc0 = pt[2].z;
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d19 1
+a19 1
+ *	Date:		Feb 2006
+d27 1
+a27 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop/RCS/fidpts_to_halfmm_crop.c,v 1.4 2006/09/27 18:55:33 tom Exp tom $";
+d106 2
+a107 2
+	int             lfid = 3;		 /* fiducial point defining left side	*/
+	int             rfid = 4;		 /* fiducial point defining right side 	*/
+d109 2
+a110 2
+	if (argc != 5) {
+		fprintf (stdout, "Usage: fidpts_to_halfmm_crop pts img hdr hemisphere\n");
+d117 2
+d249 1
+a249 1
+	printf ("ang: %6.3f %6.3f %6.3f degrees (roll/yaw/pitch)\n",
+a250 4
+/*
+	printf ("fac: %6.3f %6.3f %6.3f %6.3f  (sin0/cos0/tan1/tan2)\n",
+		sin0, cos0, tan1, tan2);
+*/
+@
+
+
+1.4
+log
+@changed only messages
+@
+text
+@d2 3
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop/RCS/fidpts_to_halfmm_crop.c,v 1.3 2006/02/11 16:06:25 tom Exp tom $";
+d61 1
+a61 2
+	float           f,f1,f2;
+	int           	d,d1,d2;
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop/RCS/fidpts_to_halfmm_crop.c,v 1.2 2006/02/03 20:26:11 tom Exp tom $";
+d58 2
+d105 1
+a105 1
+		fprintf (stdout, "Usage: fidpts_to_halfmm_crop in.pts out.img out.hdr hemisphere\n");
+d135 1
+a135 1
+/*	Note that Analyze image array is reversed; therefore, fiducials are reverse when read	*/
+d241 8
+@
+
+
+1.2
+log
+@fix side selection
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop/RCS/fidpts_to_halfmm_crop.c,v 1.1 2006/02/01 19:31:26 tom Exp tom $";
+d96 3
+d167 2
+a168 2
+	xlf = pt[3].x;
+	xrt = pt[4].x;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop/RCS/fidpts_to_halfmm_crop.c,v 1.4 2006/01/31 20:29:41 tom Exp $";
+d123 1
+d137 1
+a137 1
+	for (n = 0; n < 13; n++) {
+d233 1
+a233 1
+	if (side < 2) {				 /* bilateral or left hemisphere	 */
+d238 1
+a238 1
+	if (side != 1) {			 /* bilateral or right hemisphere	 */
+@

@@ -1,0 +1,891 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	95.01.30.21.55.18;	author jmo;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.01.27.16.13.56;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.01.20.23.25.05;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.01.20.23.13.26;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.01.20.16.31.32;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@nitial checking in, working version.
+@
+
+
+1.6
+log
+@Fix memory leak.
+@
+text
+@/*$Id: makenorm.c,v 1.5 1995/01/27 16:13:56 ty7777 Exp jmo $*/
+/*$Log: makenorm.c,v $
+ * Revision 1.5  1995/01/27  16:13:56  ty7777
+ * Use GetVersion () in the local directory.
+ *
+ * Revision 1.4  1995/01/20  23:25:05  ty7777
+ * Added petutil.h.
+ *
+ * Revision 1.3  1995/01/20  23:13:26  ty7777
+ * Added program version to the main_header.
+ *
+ * Revision 1.2  1995/01/20  16:31:32  ty7777
+ * Deleted escape sequences.
+ *
+ * Revision 1.1  1995/01/19  22:40:20  ty7777
+ * Initial revision
+ **/
+
+/*--------------------------------------------------------------------
+
+Program: makenorm
+
+Purpose: Calculate detector efficiency normalization factors.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string.h>
+#include <petutil/matrix.h>
+#include <petutil/petutil.h>
+#include "cti_proto.h"
+#include "scatter_953b.h"
+#include "norm.h"
+
+#define TRUE 1
+#define FALSE 0
+#define NUMRINGS 16
+#define NUMANG 192
+#define NCRYSTALS (2*NUMANG)
+#define MAX_CRYSTALS (NUMRINGS*NUMANG*2)
+#define MODEL 953
+#define DETS_PER_BLK 8
+#define NUMITER_MINOR 2
+#define NUMITER_MINOR_FINAL 4
+
+static char rcsid [] = "$Header: /home/usrb/jmo/tmp/RCS/makenorm.c,v 1.5 1995/01/27 16:13:56 ty7777 Exp jmo $";
+
+#define abs(a) (((a)<0)?-(a):(a))
+
+int	lenblk,numray,numang,lensin,writegeo=FALSE;
+
+float	*geocyl,**geoprof,*sinocor,*geomsk,*geo,*atn,*geosino,
+	*atnsub,*atnsubm1,**scatin,*centers;
+
+char	*plneffil,*atn_file,nrmfiltr[MAXNAME],cmd[MAXNAME],*gafile=NULL,
+	wgeofil[MAXNAME],*filnam,nrmfilsc[MAXNAME],*geofile=NULL;
+
+Scan_subheader	*shatn,*shatnm1;
+Norm_subheader 	*shnrm,*shnrmsc;
+struct  ringinfo *rng;
+
+/******************/
+void main(argc,argv)
+/******************/
+
+int	argc;
+char	*argv[];
+
+{
+
+Main_header     *mh;
+Scan_subheader  *sh;
+
+FILE	*fp;
+
+int	i,lcforce,stat,iter=0,i1,i2,ioff,iang,offset,
+	write_enable=FALSE,numiter=1,last_iter=FALSE,numminor_iter,
+	plane=1,frame=1,gate=1,data=0,bed=0,minor_iter,
+	type,type1,noscatcomp=FALSE,scatdim=1;
+
+float	compute_3d_eff_norm(),*norm,*normsc,*scat,
+	max,sum,scatsum,estsum,*scale,*sino,
+	*scat_interp();
+
+Scan_subheader *sh1;
+
+char	ans[MAXNAME],*ptr,tmpfil[MAXNAME],*blank_file=NULL,
+	*scat_file;
+
+void	upsamp();
+
+if(argc < 2) {
+        fprintf(stderr,"Usage: makenorm plane_eff_3d [-blank blank_file -ot norm_true_output -atn atn_file\n");
+	fprintf(stderr,"       -scat scat_file -iter numiter -nogeo/-blank_only/-geocyl -writegeo wgeofile -noscatcomp -scatdim imgdim -f]\n");
+	fprintf(stderr,"       -os norm_scat_output -geo geofile\n");
+	printf("-geocyl implies that geometric normalization should use a cylinder data.\n");
+	printf("-blank_only implies that geometric normalization uses interpolated blank data.\n");
+        printf("-noscatcomp: Do not iteratively recompute scatter distribution.\n");
+	printf("-geo option causes program to read geometric factors from geofile.\n");
+	printf("-scatdim argument specifies the ratio of imgdim/40 to be used in the scatter correction.\n");
+        exit(-1);
+        }
+
+plneffil  = argv[1];
+
+lcforce = FALSE;
+nrmfiltr[0] = NULL;
+nrmfilsc[0] = NULL;
+type = NOGEO;
+for(i=1;i<argc;i++) {
+    if(!strcmp(argv[i],"-f"))
+	lcforce = TRUE;
+    else if(!strcmp(argv[i],"-geocyl"))
+	type = GEOCYL;
+    else if(!strcmp(argv[i],"-blank_only"))
+	type = BLANK_ONLY;
+    else if(!strcmp(argv[i],"-nogeo"))
+	type = NOGEO;
+    else if(!strcmp(argv[i],"-noscatcomp"))
+	noscatcomp = TRUE;
+    else if(!strcmp(argv[i],"-writegeo") && i < argc-1) {
+	strcpy(wgeofil,argv[i+1]);
+	writegeo = TRUE;
+	}
+    else if(!strcmp(argv[i],"-ot") && i < argc-1)
+	strcpy(nrmfiltr,argv[i+1]);
+    else if(!strcmp(argv[i],"-os") && i < argc-1)
+	strcpy(nrmfilsc,argv[i+1]);
+    else if(!strcmp(argv[i],"-iter") && i < argc-1)
+	numiter = atoi(argv[i+1]);
+    else if(!strcmp(argv[i],"-scatdim") && i < argc-1)
+	scatdim = atoi(argv[i+1]);
+    else if(!strcmp(argv[i],"-blank") && i < argc-1) {
+	blank_file = argv[i+1];
+	}
+    else if(!strcmp(argv[i],"-scat") && i < argc-1) {
+	scat_file = argv[i+1];
+	}
+    else if(!strcmp(argv[i],"-atn") && i < argc-1) {
+	atn_file = argv[i+1];
+	}
+    else if(!strcmp(argv[i],"-geo") && i < argc-1) {
+	geofile = argv[i+1];
+	}
+    }
+
+if(geofile != NULL)
+    type = GEORD;
+
+fprintf(stdout,"---------------------------------------------------------\n");
+fprintf(stdout,"Plane efficiency file: %s\n",plneffil);
+fprintf(stdout,"Blank scan: %s\n",blank_file);
+fprintf(stdout,"Cylindrical phantom for geometric factors: %s\n",gafile);
+fprintf(stdout,"Scatter estimates: %s\n",scat_file);
+fprintf(stdout,"Scatter estimated using %dx%d images.\n",scatdim*40,scatdim*40);
+fprintf(stdout,"Attenuation factors: %s\n",atn_file);
+fprintf(stdout,"Geometric factors: %s\n",geofile);
+fprintf(stdout,"Output file for true normalization: %s\n",nrmfiltr);
+fprintf(stdout,"Output file for scatter normalization: %s\n",nrmfilsc);
+fprintf(stdout,"Output file for geometric factors: %s\n",wgeofil);
+fprintf(stdout,"---------------------------------------------------------\n");
+
+if(nrmfiltr[0] == NULL) {
+    strcpy(tmpfil,plneffil);
+    ptr = strrchr(tmpfil,'_');
+    sprintf(nrmfiltr,"normal3d%s",ptr);
+    ptr = strrchr(nrmfiltr,'.');
+    *ptr = 0;
+    strcat(nrmfiltr,".nrm");
+    }
+
+if((mh=getmhdr(plneffil)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",plneffil);
+    exit(ERROR);
+    }
+if((sh1=(Scan_subheader *)getsbhdr(plneffil,1,1,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",plneffil);
+    exit(ERROR);
+    }
+mh->data_type = SUN_I2;
+numray = sh1->dimension_1;
+numang = sh1->dimension_2;
+lensin = numray*numang;
+lenblk = numray*DETS_PER_BLK;
+
+if(type == GEOCYL || GEORD) {
+    /* Malloc memory for scatter estimates. */
+    rng = (struct ringinfo *)malloc(sizeof(struct ringinfo));
+    }
+else
+    numiter = 1;
+
+norm = (float *)malloc(lensin*sizeof(float));
+sinocor = (float *)malloc(lensin*sizeof(float));
+geosino = (float *)malloc(lensin*sizeof(float));
+scale = (float *)malloc((mh->num_planes+1)*sizeof(float));
+centers = (float *)malloc(numang*sizeof(float));
+for(i=0;i<numang;i++) 
+    centers[i] = 0.;
+shnrm = (Norm_subheader *)malloc(sizeof(Norm_subheader));
+shnrm->dimension_1 = numray;
+shnrm->dimension_2 = numang;
+shnrm->data_type = SUN_R4;
+shnrm->fov_source_width = 21.2;
+shnrm->ecat_calib_factor = 1.;
+shnrm->scale_factor = 1.;
+
+shnrmsc = (Norm_subheader *)malloc(sizeof(Norm_subheader));
+shnrmsc->dimension_1 = numray;
+shnrmsc->dimension_2 = numang;
+shnrmsc->data_type = SUN_R4;
+shnrmsc->fov_source_width = 21.2;
+shnrmsc->ecat_calib_factor = 1.;
+shnrmsc->scale_factor = 1.;
+
+atn    = (float *)malloc(lensin*sizeof(float));
+for(i-0;i<lensin;i++) atn[i] = 1.;
+geocyl = (float *)malloc(lensin*sizeof(float));
+if(type != GEORD)
+    geo    = (float *)malloc(lensin*sizeof(float));
+geomsk = (float *)malloc(lensin*sizeof(float));
+if(type == BLANK_ONLY || type == GEOCYL) {
+    geoprof = (float **)malloc(NUMRINGS*sizeof(float *));
+    geoprof[0] = (float *)malloc(NUMRINGS*lensin*sizeof(float));
+    for(i=1;i<NUMRINGS;i++) 
+        geoprof[i] = geoprof[i-1] + lensin;
+	printf("*** blank only and geocyl options not supported. ***\n");
+	exit(-1);
+/*    makeGeoNorm(blank_file,geoprof,NUMRINGS,MODEL);*/
+    }
+
+if((fp = fopen(nrmfiltr,"r")) == NULL | lcforce == TRUE) {
+    /* File does not exist, write to it. */
+    write_enable = TRUE;
+    }
+else {
+    fclose(fp);
+    ans[0] = NULL;
+    do {
+        fprintf(stderr,"Write output to %s? (y/n)\n",nrmfiltr);
+        scanf("%s",ans);
+        if(!strcmp(ans,"y")) 
+    	    write_enable = TRUE;
+	else if(!strcmp(ans,"n"))
+	    exit(OK);
+        } while(strcmp(ans,"y") && strcmp(ans,"n"));
+    }
+
+/* Set up scatter correction script. */
+fp = fopen("scatnorm_tmp.csh","w");
+fprintf(fp,"#!/bin/csh\n\n");
+fprintf(fp,"set EMIS = %s\n\n",plneffil);
+fprintf(fp,"if( ! -e $EMIS:r_2d.scn) then\n");
+fprintf(fp,"    sino_2d_extract $EMIS\n");
+fprintf(fp,"endif\n\n");
+fprintf(fp,"if( ! -e $EMIS:r_2d_tr.scn) then\n");
+fprintf(fp,"    make_eff_tr $EMIS:r_2d.scn\n");
+fprintf(fp,"endif\n\n");
+fprintf(fp,"scat.csh $EMIS $EMIS:r_2d_tr.scn %s $1 $2 -tu 58.5 -td 58.5 -eu 48.5 -ed 48.5 -iter 5 -dim %d\n",blank_file,scatdim);
+fclose(fp);
+
+if(noscatcomp == TRUE)
+    loadscat(scat_file,&scatin,rng);
+
+/* Calculate initial normalization with no geometric factors. */
+shnrm->scale_factor = 1.;
+for(plane=1;plane<=mh->num_planes;plane++) {
+    if(plane%4 == 0) {
+        fprintf(stdout,".");
+        fflush(stdout);
+        }
+
+    /* Get normalization data (scan of cylinder) */
+    if((sino=rdimg(plneffil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",plneffil,plane);
+        exit(ERROR);
+        }
+    if((sh=(Scan_subheader *)	
+			getsbhdr(plneffil,plane,frame,gate,data,bed))==NULL) {
+        fprintf(stderr,"Could not read main header., %s\n",plneffil);
+        exit(ERROR);
+        }
+    for(scale[plane]=0.,i=0;i<lensin;i++) scale[plane] += sino[i];
+    if(type == GEORD) 
+        calc_norm(sino,norm,mh,GEORD,plane,last_iter,sh);
+    else
+        calc_norm(sino,norm,mh,NOGEO,plane,last_iter,sh);
+    mh->data_type = IEEE_R4;
+    memset (mh->physician_name, 0, sizeof (mh->physician_name));
+    if (GetVersion (rcsid, mh->physician_name) == FAIL)
+    {
+      strncpy (mh->physician_name, rcsid + 5, 
+      sizeof (mh->physician_name) - 1);
+    }
+    if((stat=wrimg(nrmfiltr,norm,mh,shnrm,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",nrmfiltr,plane);
+        exit(ERROR);
+        }
+    free(sino);
+    free(sh);
+    }
+for(sum=0.,plane=1;plane<=mh->num_planes;plane++)
+    	sum += scale[plane];
+for(plane=1;plane<=mh->num_planes;plane++) {
+    shnrm->scale_factor = sum/((float)mh->num_planes*scale[plane]);
+    if((putsbhdr(shnrm,nrmfiltr,plane,frame,gate,data,bed)) != NULL) {
+        fprintf(stderr,"Could not put subheader, plane %d, %s\n",plane,nrmfiltr);
+        exit(ERROR);
+        }
+    }
+
+for(iter=0;iter<numiter;iter++) {
+    printf("\nIteration #%d\n",iter);
+    if(iter == numiter-1)
+	last_iter = TRUE;
+
+    if(noscatcomp == FALSE) {
+	printf("Recalculating scatter distribution.\n");
+	if(iter == 0)
+            sprintf(cmd,"csh scatnorm_tmp.csh %s %s\n",nrmfiltr,nrmfiltr);
+	else
+            sprintf(cmd,"csh scatnorm_tmp.csh %s %s\n",nrmfiltr,nrmfilsc);
+        system(cmd);
+	}
+
+    /* Load scatter data. */
+    loadscat(scat_file,&scatin,rng);
+
+    for(plane=1;plane<=mh->num_planes;plane++) {
+
+	if(plane%4 == 0) {
+            fprintf(stdout,".");
+            fflush(stdout);
+	    }
+
+        if((sino=rdimg(plneffil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",plneffil,plane);
+            exit(ERROR);
+            }
+	if((sh=(Scan_subheader *)
+			getsbhdr(plneffil,plane,frame,gate,data,bed))==NULL) {
+	    fprintf(stderr,"Could not read main header., %s\n",plneffil);
+	    exit(ERROR);
+	    }
+
+	fit_ctrs(centers,sino,numray,numang);
+
+	/* Get scatter normalization factors. */
+	if(iter == 0) {
+	    if((normsc=rdimg(nrmfiltr,plane,frame,gate,data,bed)) == NULL) {
+	        fprintf(stderr,"Error reading %s, plane %d\n",nrmfiltr,plane);
+	        exit(ERROR);
+	        }
+	    }
+	else {
+	    if((normsc=rdimg(nrmfilsc,plane,frame,gate,data,bed)) == NULL) {
+	        fprintf(stderr,"Error reading %s, plane %d\n",nrmfilsc,plane);
+	        exit(ERROR);
+	        }
+	    if((shnrmsc=(Norm_subheader *)
+			getsbhdr(nrmfilsc,plane,frame,gate,data,bed))==NULL) {
+	        fprintf(stderr,"Could not read main header., %s\n",nrmfilsc);
+	        exit(ERROR);
+	        }
+	    }
+
+	/* Correct the data. */
+        scat = scat_interp(scatin,rng,plane);
+        for(i=0;i<lensin;i++) {
+            if(normsc[i] > 0)
+                sinocor[i] = sino[i] - shnrmsc->scale_factor*scat[i]/normsc[i];
+            else
+                sinocor[i] = 0.;
+            }
+
+	/* Calculate scatter normalization factor. */
+        calc_norm(sinocor,normsc,mh,NOGEO,plane,last_iter,sh);
+
+	/* Calculate scatter plane efficiency. */
+        offset = (int)((CYL_RADIUS + CYL_PAD)/sh1->sample_distance) + 1;
+	scatsum = 0; estsum = 0.;
+	for(iang=0,ioff=0;iang<numang;iang++,ioff+=numray) {
+	    i1 = (int)(centers[iang] + numray/2 + .5) - offset-WSCAT_STRIP+1;
+	    i2 = (int)(centers[iang] + numray/2 + .5) + offset + numray/2;
+	    if(i1 < MINSCATBIN)
+		i1 = MINSCATBIN;
+	    if(i2 > MAXSCATBIN-WSCAT_STRIP)
+		i2 = MAXSCATBIN - WSCAT_STRIP; /* Don't use unestimated bins.*/
+	    for(i=i1;i<=i1+WSCAT_STRIP;i++) {
+	        scatsum += sino[i+ioff];
+		estsum  += scat[i+ioff]/normsc[i+ioff];
+		}
+	    for(i=i2;i<i2+WSCAT_STRIP;i++) {
+		scatsum += sino[i+ioff];
+		estsum +=  scat[i+ioff]/normsc[i+ioff];
+		}
+	    }
+	shnrmsc->scale_factor = scatsum/estsum;
+        if((stat=wrimg(nrmfilsc,normsc,mh,shnrmsc,plane,
+						frame,gate,data,bed)) != OK) {
+            fprintf(stderr,"Error writing %s, plane %d\n",nrmfilsc,plane);
+            exit(ERROR);
+            }
+
+	/* Calculate image normalization. */
+        calc_norm(sinocor,norm,mh,type,plane,last_iter,sh);
+
+        for(scale[plane]=0.,i=0;i<lensin;i++) 
+	    scale[plane] += norm[i]*sinocor[i];
+
+        if((stat=wrimg(nrmfiltr,norm,mh,shnrm,plane,
+						frame,gate,data,bed)) != OK) {
+            fprintf(stderr,"Error writing %s, plane %d\n",nrmfiltr,plane);
+            exit(ERROR);
+            }
+	free(sino);
+	free(sh);
+	free(normsc);
+	if(iter > 0) free(shnrmsc);
+	free(scat);
+        }
+
+    /* Now calculate trues plane efficiency and store in subheaders. */
+    for(sum=0.,plane=1;plane<=mh->num_planes;plane++)
+    	sum += scale[plane];
+    for(plane=1;plane<=mh->num_planes;plane++) {
+        shnrm->scale_factor = sum/((float)mh->num_planes*scale[plane]);
+        if((putsbhdr(shnrm,nrmfiltr,plane,frame,gate,data,bed)) != NULL) {
+            fprintf(stderr,"Could not put subheader, plane %d, %s\n",
+							plane,nrmfiltr);
+            exit(ERROR);
+            }
+        }
+
+    if(iter == 0) free(shnrmsc);
+    for(i=0;i<rng->nring;i++) free(scatin[i]);
+    free(scatin);
+
+    }
+
+}
+
+
+/*********************************************/
+calc_norm(sino,norm,mh,type,plane,last_iter,sh)
+/*********************************************/
+
+float		*sino,
+		*norm;
+Main_header 	*mh;
+int		type; /* Norm type, NOGEO, BLANK_ONLY, or GEOCYL. */ 
+int		plane;
+int		last_iter;
+Scan_subheader  *sh;
+
+{
+
+int	i,ioff,frame=1,gate=1,data=0,bed=0,rings[2],i1,i2,stat,
+	iang,offset,nsum;
+
+float	blanksum,sum,max,norm_scale,cylsum;
+
+mh->num_frames = 1;
+
+if(type == GEOCYL) {
+    /* Get attenuation array. */
+    if((atnsub=rdimg(atn_file,plane,frame,gate,data,bed)) == NULL) {
+	atnsub = atnsubm1;
+	shatn = shatnm1;
+        }
+    else {
+        if((shatn=(Scan_subheader *)getsbhdr(atn_file,plane,
+					frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Could not read main header., %s\n",atn_file);
+            exit(ERROR);
+            }
+	upsamp(atnsub,atn,shatn,sh,numray,numang);
+	if(plane > 1) {
+	    free(atnsubm1);
+	    free(shatnm1);
+	    }
+	atnsubm1 = atnsub;
+	shatnm1 = shatn;
+	}
+    }
+    
+ringnum(plane,rings);	/* Get rings corresponding to plane. */
+
+/* Calculate geometric factors. */
+if((type == BLANK_ONLY) || (type == GEOCYL)) {
+    for(i=0;i<lensin;i++)
+	geo[i] = .5*(geoprof[rings[0]][i] + geoprof[rings[1]][i]);
+    if(type == GEOCYL ) {
+        make_geocyl(sino,sh,atn,geocyl,centers,rings[1]-rings[0]);
+        for(i=0;i<lensin;i++) {
+	    if(geocyl[i] > 0)
+	    	geomsk[i] = 1.;
+	    else
+	        geomsk[i] = 0.;
+	    }
+
+	/* Now sum over first and last detector at each angle. */
+	for(i=0;i<numray;i++) {
+	    if(geocyl[i] > 0) {
+		i1 = i;
+		break;
+		}
+	    }
+	for(i=numray-1;i>=0;i--) {
+	    if(geocyl[i] > 0) {
+		i2 = i;
+		break;
+		}
+	    }
+	for(i=0,ioff=0,cylsum=0;i<DETS_PER_BLK;i++,ioff+=numray) 
+	    cylsum += geocyl[ioff+i1] + geocyl[ioff+i2];
+	for(i=0,ioff=0,blanksum=0;i<DETS_PER_BLK;i++,ioff+=numray) 
+	    blanksum += geo[ioff+i1] + geo[ioff+i2];
+        for(i=0;i<lensin;i++) 
+            geo[i] = geomsk[i]*blanksum*geocyl[i]/cylsum+(1.-geomsk[i])*geo[i];
+	}
+    for(i=0;i<lensin;i++)
+        geosino[i] = geo[i]*sino[i];
+    }
+else if(type == NOGEO){
+    for(i=0;i<lensin;i++)
+        geosino[i] = sino[i];
+    }
+else if(type == GEORD) {
+    if((geo=rdimg(geofile,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",geofile,plane);
+        exit(ERROR);
+        }
+    for(i=0;i<lensin;i++)
+        geosino[i] = geo[i]*sino[i];
+    }
+else {
+    fprintf(stderr,"Invalid value for type in calc_norm.\n");
+    exit(-1);
+    }
+
+norm_scale = compute_3d_eff_norm(norm,numang,numray,geosino,rings[0],rings[1]);
+
+sum = 0.; nsum = 0;
+if(type != NOGEO) {
+ for(i=0;i<lensin;i++) {
+        norm[i] *= geo[i];
+	if(norm[i] > 0) {
+            sum += norm[i];
+	    ++nsum;
+	    }
+	}
+    }
+else {
+    for(i=0;i<lensin;i++)
+	if(norm[i] > 0) {
+	    sum += norm[i];
+	    ++nsum;
+	    }
+    }
+ 
+norm_scale = (float)nsum/sum;
+for(i=0;i<lensin;i++)
+    norm[i] *= norm_scale;
+
+if(writegeo == TRUE && last_iter == TRUE) {
+    /* Write geometric factors to disk for later use. */
+    shnrm->scale_factor = 1.;
+    if((stat=wrimg(wgeofil,geo,mh,shnrm,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",wgeofil,plane);
+        exit(ERROR);
+        }
+    }
+
+if(type == GEORD) free(geo);
+
+}
+
+
+/************************************************************/
+float compute_eff_norm( fnorm, nv, np, eff, a, b, ndets, mash)
+/************************************************************/
+
+float *fnorm, *eff;
+int nv, np, a, b, ndets, mash;
+
+{
+    int v, p, e, deta, detb, i, aoff, boff;
+    float norm, norm_sum, norm_avg;
+
+    for(i=0;i<nv*np;i++) fnorm[i] = 0.;
+    norm_sum = 0.0;
+    aoff = ndets*a;
+    boff = ndets*b;
+    for (v=0; v<nv*mash; v++)
+        for (p=0; p<np; p++)
+        {
+            e = p-np/2;
+            ve_to_dets( v, e, &deta, &detb, ndets);
+            norm = eff[aoff+deta]*eff[boff+detb];
+            fnorm[p+np*(v/mash)] += norm;
+            norm_sum += norm;
+        }
+    return( sqrt((double)(nv*np/norm_sum)));
+}
+
+/**************************/
+read_eff_data( fname, fdata)
+/**************************/
+
+char *fname;
+float *fdata;
+{
+    int nvals, cnts, nlors;
+    FILE *fptr;
+
+    fptr = fopen( fname, "r");
+    if (!fptr)
+        printf(stderr,"read_eff_data: can't open crystal efficiency file %s\n",fname);
+    for (nvals=0; nvals<MAX_CRYSTALS; nvals++)
+    {
+        if (fscanf( fptr, "%d %d %f", &cnts, &nlors, &fdata[nvals]) != 3)
+            break;
+    }
+    fclose(fptr);
+    return nvals;
+}
+
+/*************************************/
+ve_to_dets( iang,d,deta,detb,ncrystals)
+/*************************************/
+
+int	iang,		/* Angle in sinogram.	*/
+	d,		/* Distance from center in sinogram bins. */
+	*deta,		/* Detector a.		*/
+	*detb,		/* Detector b.		*/
+	ncrystals;	/* Number of elements along a face of detector block.*/
+
+{
+        int h,i;
+
+        h=ncrystals/2;
+        i=abs(d)%2;
+        *deta=(ncrystals+(d-i)/2+iang)%ncrystals;
+        *detb=(h-(d+i)/2+iang)%ncrystals;
+}
+
+
+/**************************************************************/
+float compute_3d_eff_norm(fnorm,numang,numray,sino,ring1,ring2)
+/**************************************************************/
+
+float 	*fnorm, 
+	*sino;
+int 	numang, 
+	numray, 
+	ring1, 
+	ring2;
+
+{
+int iang,deta,detb,i,mash=1,ioff,ray;
+
+float norm, norm_sum, norm_avg,sum1[2*NUMANG],detsum[NCRYSTALS],mean;
+
+for(i=0;i<NCRYSTALS;i++) detsum[i] = 0.;
+for (iang=0,ioff=0;iang<numang*mash; iang++,ioff+=numray) {
+    for (ray=0; ray<numray; ray++) {
+        ve_to_dets( iang, ray-numray/2, &deta, &detb, NCRYSTALS);
+	detsum[deta] += sino[ray+ioff];
+	detsum[detb] += sino[ray+ioff];
+	}
+    }
+mean = 0.;
+for(i=0;i<NCRYSTALS;i++) mean += detsum[i];
+mean /= NCRYSTALS;
+for(i=0;i<NCRYSTALS;i++) 
+    if(detsum[i] > 0.)
+	detsum[i] = mean/detsum[i];
+    else
+	detsum[i] = 1.;
+
+for(i=0;i<numang*numray;i++) fnorm[i] = 0.;
+norm_sum = 0.0;
+for (iang=0; iang<numang*mash; iang++)
+    for (ray=0; ray<numray; ray++) {
+        ve_to_dets( iang, ray-numray/2, &deta, &detb, NCRYSTALS);
+        norm = detsum[deta]*detsum[detb];
+        fnorm[ray+numray*(iang/mash)] += norm;
+        norm_sum += norm;
+    }
+if(norm_sum <= 0) 
+    printf("norm_sum: %f\n",norm_sum);
+return( sqrt((double)(numang*numray/norm_sum)));
+
+}
+
+/********************************************/
+void upsamp(atnsub,atn,shatn,sh,numray,numang)
+/********************************************/
+
+float		*atnsub,
+		*atn;
+Scan_subheader	*shatn;
+Scan_subheader	*sh;
+
+{
+
+int	iang,i,j,joff,k,raysub,angsub,ix,iy,ydel;
+
+float	x,y,dx,dy,xfactor,yfactor,ctr,ctrsub,*atn_tmp;
+
+xfactor = sh->sample_distance/shatn->sample_distance;
+yfactor = (float)shatn->dimension_2/(float)numang;
+ydel = (int)(1./yfactor + .4999);
+ctr = sh->dimension_1/2.;
+ctrsub = shatn->dimension_1/2.;
+raysub = shatn->dimension_1;
+angsub = shatn->dimension_2;
+atn_tmp = (float *)malloc(raysub*angsub*sizeof(float));
+for(i=0;i<raysub*angsub;i++)
+    atn_tmp[i] = 1./(float)exp((double)(-shatn->sample_distance*atnsub[i]));
+
+for(iang=0,joff=0;iang<numang;iang++,joff+=numray) {
+    y = yfactor*(float)iang;
+    iy = (int)y;
+    dy = y - (float)iy;
+    for(j=0;j<numray-1;j++) {
+	x = xfactor*((float)j - ctr) + ctrsub;
+	if(x < 0) x = 0.;
+	if(x > raysub-2) x = raysub-2;
+	ix = (int)x;
+	dx = x - (float)ix;
+	k = ix + iy*raysub;
+	if(iang < numang-ydel) 
+	    atn[j+joff] = (1 - dx)*(1 - dy)*atn_tmp[k] 	      +
+		          (1 - dx)*     dy *atn_tmp[k+raysub]  +
+		               dx *(1 - dy)*atn_tmp[k+1]	      +
+			       dx *     dy *atn_tmp[k+raysub+1];
+	else
+	    atn[j+joff] = (1 - dx)*(1 - dy)*atn_tmp[k] 	       +
+		          (1 - dx)*     dy *atn_tmp[raysub-ix-1]+
+		               dx *(1 - dy)*atn_tmp[k+1]	       +
+			       dx *     dy *atn_tmp[raysub-ix];
+	}
+    }
+free(atn_tmp);
+
+}
+@
+
+
+1.5
+log
+@Use GetVersion () in the local directory.
+@
+text
+@d1 1
+a1 1
+/*$Id: makenorm.c,v 1.4 1995/01/20 23:25:05 ty7777 Exp ty7777 $*/
+d3 3
+d52 1
+a52 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/ollinger/new/RCS/makenorm.c,v 1.4 1995/01/20 23:25:05 ty7777 Exp ty7777 $";
+d306 1
+@
+
+
+1.4
+log
+@Added petutil.h.
+@
+text
+@d1 1
+a1 1
+/*$Id: makenorm.c,v 1.3 1995/01/20 23:13:26 ty7777 Exp ty7777 $*/
+d3 3
+d49 1
+a49 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/ollinger/new/RCS/makenorm.c,v 1.3 1995/01/20 23:13:26 ty7777 Exp ty7777 $";
+d292 1
+@
+
+
+1.3
+log
+@Added program version to the main_header.
+@
+text
+@d1 1
+a1 1
+/*$Id: makenorm.c,v 1.2 1995/01/20 16:31:32 ty7777 Exp ty7777 $*/
+d3 3
+d30 1
+d46 1
+a46 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/ollinger/new/RCS/makenorm.c,v 1.2 1995/01/20 16:31:32 ty7777 Exp ty7777 $";
+@
+
+
+1.2
+log
+@Deleted escape sequences.
+@
+text
+@d1 1
+a1 1
+/*$Id: makenorm.c,v 1.1 1995/01/19 22:40:20 ty7777 Exp ty7777 $*/
+d3 3
+d42 1
+a42 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/ollinger/new/RCS/makenorm.c,v 1.1 1995/01/19 22:40:20 ty7777 Exp ty7777 $";
+d285 5
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d39 1
+a39 1
+static char rcsid [] = "$Header$";
+d246 1
+a246 1
+fprintf(fp,"if( ! -e $EMIS:r\_2d.scn) then\n");
+d249 1
+a249 1
+fprintf(fp,"if( ! -e $EMIS:r\_2d_tr.scn) then\n");
+d252 1
+a252 1
+fprintf(fp,"scat.csh $EMIS $EMIS:r\_2d_tr.scn %s $1 $2 -tu 58.5 -td 58.5 -eu 48.5 -ed 48.5 -iter 5 -dim %d\n",blank_file,scatdim);
+@

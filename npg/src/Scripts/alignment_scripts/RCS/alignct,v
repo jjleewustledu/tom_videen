@@ -1,0 +1,170 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	2003.12.17.15.08.25;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.09.03.13.10.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@#!/bin/csh
+# Program:	alignct
+# Author:	Tom Videen
+# Date:		Feb 1999
+# Usage:	Align all planes of a CT image.
+# Uses:
+#	alignlinear	(AIR package)
+#	reslice	(AIR package)
+#	airdif
+#	setanamin
+#	singlepln
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv != 3) then
+	echo "Usage:  alignct root first last"
+	echo " i.e.,  alignct p5000p 1 50"
+	echo "   or   alignct p5000p 50 1"
+	exit 1
+endif
+
+set ROOT = $1
+set RROOT = r$1
+set FIRST = $2
+set LAST = $3
+set INIT = ${ROOT}_init.
+set MASK = head
+set OPTIONS = '-m 23 -t1 1 -p1 1 -t2 1 -p2 1 -x 2 -b1 5 5 0 -b2 5 5 0'
+
+# Create single-plane files for alignment
+# ------------------------------------------------------------
+set i = $FIRST
+while ($i <= $LAST)
+	set IMG = $ROOT$i
+	if (!(-e $IMG.img)) then
+		echo "ERROR [alignct]: Missing image $IMG.img"
+		echo "      Use singlepln_ana to create single-plane images for alignment."
+		exit 1
+	endif
+	@@ i++
+end
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set i = $FIRST
+set IMG = $ROOT$i
+set JMG = $ROOT$i
+setanamin $IMG 0
+setanamin $JMG 0
+set NULLAIR  = ${ROOT}_null
+set LOG  = ${ROOT}_align.log
+echo `date` >! $LOG
+
+unalias rm
+unalias cp
+if (-e $NULLAIR.air) rm $NULLAIR.air
+${NPG}/bin/alignlinear $IMG $JMG $NULLAIR.air $OPTIONS
+
+# Align all adjacent pairs 
+# ------------------------
+if ($FIRST > $LAST) then
+	set INC = -
+else
+	set INC = +
+endif
+set i = $FIRST
+set IMG = $ROOT$i
+cp ${IMG}.hdr r${IMG}.hdr
+cp ${IMG}.img r${IMG}.img
+while ($i != $LAST)
+	set j = `echo "$i $INC 1; quit" | bc`
+	set IMG = $RROOT$i
+	set JMG = $ROOT$j
+	set AIR = $ROOT${j}_to_$i
+	setanamin $IMG 0
+	setanamin $JMG 0
+	if (! -e $INIT$j) then
+		echo "Enter 3 initialization parameters:"
+		echo "Rotation (radians) positive to rotate CW"
+		set yaw = $<
+		echo "X-shift  (pixels) positive to move $JMG right"
+		set xs = $<
+		echo "Y-shift  (pixels) positive to move $JMG up"
+		set ys = $<
+		set xs = `echo "$xs * 2; quit" | bc -l`
+		set ys = `echo "$ys * 2; quit" | bc -l`
+		echo $yaw >! $INIT$j
+		echo $xs >> $INIT$j
+		echo $ys >> $INIT$j
+	endif
+#	echo "-- alignlinear $IMG $JMG $AIR.air -m 23 -t1 1 -p1 1 -t2 1 -p2 1 -x 2 -f $INIT$j"
+	if (-e $AIR.air) rm $AIR.air
+	${NPG}/bin/alignlinear $IMG $JMG $AIR.air $OPTIONS -f $INIT$j
+	if (-e r$JMG.hdr) rm r$JMG.hdr
+	if (-e r$JMG.img) rm r$JMG.img
+	${NPG}/bin/imgreslice $JMG $AIR
+	${NPG}/bin/airdif_ana2d $NULLAIR $AIR $MASK | tail -1 | tee $LOG
+	@@ i$INC$INC
+end
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 1
+a4 1
+# Date:		Feb-99
+d13 2
+a14 4
+set BINPATH = /usr/local/npg/bin
+set PUBPATH = /usr/bin
+set NPGPATH = /usr/local/npg/air
+ 
+d16 4
+a19 4
+	echo "Usage: alignct root first last"
+	echo " i.e., alignct p5000p 1 50"
+	echo "   or  alignct p5000p 50 1"
+	exit(1)
+d38 1
+a38 1
+		exit(1)
+d54 4
+a57 2
+if (-e $NULLAIR.air) /usr/bin/rm $NULLAIR.air
+${BINPATH}/alignlinear $IMG $JMG $NULLAIR.air $OPTIONS
+d68 2
+a69 2
+/usr/bin/cp ${IMG}.hdr r${IMG}.hdr
+/usr/bin/cp ${IMG}.img r${IMG}.img
+d92 6
+a97 6
+	if (-e $AIR.air) /usr/bin/rm $AIR.air
+	${BINPATH}/alignlinear $IMG $JMG $AIR.air $OPTIONS -f $INIT$j
+	if (-e r$JMG.hdr) /usr/bin/rm r$JMG.hdr
+	if (-e r$JMG.img) /usr/bin/rm r$JMG.img
+	${BINPATH}/imgreslice $JMG $AIR
+	${BINPATH}/airdif_ana2d $NULLAIR $AIR $MASK | tail -1 | tee $LOG
+@

@@ -1,0 +1,272 @@
+#include <Image.h>
+#include <Array.h>
+#include <io.h>
+
+namespace flirt {
+
+    // ----------------------------------------------------------------------------
+
+    Image :: Image(const Image& I)
+        : Array(I) {
+        //printf("Constructor Image(const Image&)\n");
+        h = NULL;
+        h = new double[2];
+
+        h[0] = 0;
+        h[1] = 0;
+        
+        if(I.h != NULL) { 
+            
+            h[0] = I.h[0];
+            h[1] = I.h[1];
+        }
+    };
+
+
+    // --------------------------------------------------------------------
+
+    const double* Image :: getVoxelSize() const {
+        return h;
+    };
+
+
+    // --------------------------------------------------------------------
+    // Image 2D
+    // --------------------------------------------------------------------
+
+    Image2D :: Image2D(int m1, int m2, double h1, double h2)
+        : Array(m1, m2),  Array2D(m1, m2) {
+        //printf("Constructor Image2D(int, int, double, double)\n\n");
+        h = new double[2];
+        h[0] = h1;
+        h[1] = h2;
+    }
+
+
+    // ----------------------------------------------------------------------------
+    // MeVis.MK: Init memory (added from previous version)
+    // ----------------------------------------------------------------------------
+    void Image2D :: init(int m1, int m2, double h1, double h2) {
+        Array2D::init(m1,m2);
+        if (!h) {
+            h = new double[2];
+        }
+        h[0] = h1;
+        h[1] = h2;
+        Image::h = h;
+    }
+
+    // ----------------------------------------------------------------------------
+
+    Image2D :: Image2D(int* _dims, double* _h)
+        : Array2D(_dims[0], _dims[1]) {
+        //printf("Constructor Image2D(int*, double*)\n\n");
+        h = new double[2];
+        h[0] = _h[0];
+        h[1] = _h[1];
+    };
+
+    // --------------------------------------------------------------------
+
+    Image2D :: Image2D(char *name, double h1, double h2) {
+        //printf("Image2D :: Image2D(char*, double, double)\n\n");
+        int m1, m2;
+        readTIFFsize(name, &m1, &m2);
+
+        ndims = 2;
+        dims = new int[2];
+        dims[0] = m1;
+        dims[1] = m2;
+        nelem = m1*m2;
+        data = new double[nelem];
+        A = createTreeStructure2D(m1, m2, data);
+        h = new double[2];
+        h[0] = h1;
+        h[1] = h2;
+        readTIFF(name, A, m1, m2);
+    }
+
+
+
+    // ----------------------------------------------------------------------------
+
+    Image2D :: Image2D(const Image2D& I2)
+        : Array(I2) {
+        //printf("Constructor: Image2D(const Image2D&)\n\n");
+        A = createTreeStructure2D(dims[0], dims[1],data);
+        h = new double[2];
+        h[0] = I2.h[0];
+        h[1] = I2.h[1];
+    };
+
+    // --------------------------------------------------------------------
+
+    void Image2D :: writeToTiff(char *name) const {
+        writeTIFF(name, A, dims[0], dims[1]);
+    };
+
+
+    // --------------------------------------------------------------------
+    // TransformableImage2D
+    // --------------------------------------------------------------------
+
+    // ----------------------------------------------------------------------------
+    // MeVis.MK: Init memory (added from previous version)
+    // ----------------------------------------------------------------------------
+    void TransformableImage2D :: init(int m1, int m2, double h1, double h2) {
+        Image2D::init(m1,m2,h1,h2);
+        transformedImage.init(m1, m2);
+        transformedGradient.init(2, m1, m2);
+    }
+
+    TransformableImage2D :: TransformableImage2D()
+        :Image2D(), transformedImage(), transformedGradient() {
+        //printf("Constructor TransformableImage2D()\n\n");
+    };
+
+
+
+    TransformableImage2D :: TransformableImage2D(int m1, int m2, double h1, double h2)
+        :Array(m1, m2), Image2D(m1, m2, h1, h2), transformedImage(m1, m2), transformedGradient(2,m1,m2) {
+        //printf("Constructor TransformableImage2D(int, int, double, double)\n\n");
+
+    };
+
+    // --------------------------------------------------------------------
+
+    TransformableImage2D :: TransformableImage2D(char *name, double h1, double h2)
+        : Image2D(name, h1, h2), transformedImage(dims[0], dims[1]), transformedGradient(2, dims[0], dims[1]) {
+        //printf("Constructor TransformableImage2D(char*, double, double)\n\n");
+
+    }
+
+    // ----------------------------------------------------------------------------
+
+
+    TransformableImage2D :: TransformableImage2D(const TransformableImage2D& T2)
+        : Array(T2), Image2D(T2), transformedGradient(2, T2.getDimensions()[0], T2.getDimensions()[1]) {
+        //printf("Constructor TransformableImage2D(const TransformalbeImage2D&)\n\n");
+
+    };
+
+    // --------------------------------------------------------------------
+
+    void TransformableImage2D :: transformImage(const Displacement& u) {
+        // test auf u == Displacement
+        Displacement2D& u2D = (Displacement2D&) u;
+        evalDisplacementLinear2D(A,dims[0],dims[1],u2D[0],u2D[1],transformedImage.getArray());
+    };
+
+    // --------------------------------------------------------------------
+
+    void TransformableImage2D :: transformGradient(const Displacement& u) {
+        transformImage(u);
+        computeFDGrad2D(transformedImage.getArray(),dims[0],dims[1],h[0],h[1],NEUMANN,transformedGradient.getArray());
+    };
+
+    // --------------------------------------------------------------------
+
+    void TransformableImage2D :: transform(const Displacement& u) {
+        transformImage(u);
+        computeFDGrad2D(transformedImage.getArray(),dims[0],dims[1],h[0],h[1],NEUMANN,transformedGradient.getArray());
+    };
+
+    // --------------------------------------------------------------------
+
+    const Array& TransformableImage2D :: getTransformedImage() const{
+        return transformedImage;
+    };
+
+    // --------------------------------------------------------------------
+
+    const Array& TransformableImage2D :: getTransformedGradient() const {
+        return transformedGradient;
+
+    };
+
+    // --------------------------------------------------------------------
+
+    void TransformableImage2D :: writeTransformedImageToTiff(char *name) {
+        writeTIFF(name, transformedImage.getArray(), dims[0], dims[1]);
+    };
+
+
+
+// --------------------------------------------------------------------
+// Image 3D
+// --------------------------------------------------------------------
+
+Image3D :: Image3D(int m1, int m2, int m3, double h1, double h2, double h3)
+  : Array(m1, m2, m3),  Array3D(m1, m2, m3) {
+  //printf("Constructor Image3D(int, int, int, double, double, double)\n\n");
+  h = new double[3];
+  h[0] = h1;
+  h[1] = h2;
+  h[2] = h3;
+};
+
+// ----------------------------------------------------------------------------
+
+Image3D :: Image3D(int* _dims, double* _h)
+  : Array3D(_dims[0], _dims[1], _dims[2]) {
+  //printf("Constructor Image3D(int*, double*)\n\n");
+  h = new double[3];
+  h[0] = _h[0];
+  h[1] = _h[1];
+  h[2] = _h[2];
+};
+
+// --------------------------------------------------------------------
+
+Image3D :: Image3D(char *name, double h1, double h2, double h3) {
+  //printf("Image3D :: Image3D(char*, double, double, double)\n\n");
+  int m1=0, m2=0,m3=0;
+
+  // eigentliches Einlesen muss hier implementiert werden!!!
+  // Auslesen der Bildgroessen, damit m1,m2,m3 zugeordnet werden!
+
+  ndims = 3;
+  dims = new int[3];
+  dims[0] = m1;
+  dims[1] = m2;
+  dims[2] = m3;
+  nelem = m1*m2*m3;
+  data = new double[nelem];
+  A = createTreeStructure3D(m1, m2, m3, data);
+  h = new double[3];
+  h[0] = h1;
+  h[1] = h2;
+  h[2] = h3;
+
+  // eigentliches Einlesen muss hier implementiert werden!!!
+
+};
+
+
+
+// ----------------------------------------------------------------------------
+
+Image3D :: Image3D(const Image3D& I2)
+  : Array(I2) {
+  //printf("Constructor: Image2D(const Image2D&)\n\n");
+  A = createTreeStructure3D(dims[0], dims[1], dims[2], data);
+  h = new double[3];
+  h[0] = I2.h[0];
+  h[1] = I2.h[1];
+  h[2] = I2.h[2];
+};
+
+// --------------------------------------------------------------------
+
+void Image3D :: writeToFile(char *name) const {
+    printf("Image3D::wirteToFile(char *name) not implemented\n");
+};
+// --------------------------------------------------------------------
+
+void Image3D :: readFromFile(char *name)  {
+    printf("Image3D::readFromFile(char *name) not implemented\n");
+};
+
+} // namespace
+
+

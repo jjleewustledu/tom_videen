@@ -1,0 +1,191 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2003.02.12.15.43.29;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@FUNCTION VIDI_DISPLAY_SCALE, image, type, i, xsize, ysize, sample, stype
+   COMMON VIDI
+   
+   IF (dsp[i].type EQ 1) THEN BEGIN ; Manual scaling
+      mini = dsp[i].min
+      maxi = dsp[i].max
+   ENDIF ELSE BEGIN             ; Auto scaling
+      IF (dsp[i].range EQ 0) THEN BEGIN
+         mini = 0
+         maxi = max(image)
+      ENDIF ELSE IF (dsp[i].range EQ 1) THEN BEGIN
+         mini = 0
+         maxi = -min(image)
+      ENDIF ELSE BEGIN
+         mini = min(image)
+         maxi = max(image)
+         IF (-mini GT maxi) THEN maxi = -mini
+      ENDELSE
+   ENDELSE
+   dsp[i].amin = mini
+   dsp[i].amax = maxi
+   nc = dsp[i].nc
+   IF (stype EQ 0) THEN BEGIN
+      IF (dsp[i].range EQ 1) THEN $
+         temp1 = bytscl(rebin(-(image), xsize, ysize, SAMPLE=sample), $
+                        MIN=mini, MAX=maxi, TOP=(nc-1)) $
+      ELSE temp1 = bytscl(rebin(image, xsize, ysize, SAMPLE=sample), $
+                          MIN=mini, MAX=maxi, TOP=(nc-1))
+   ENDIF ELSE BEGIN 
+      IF (dsp[i].range EQ 1) THEN $
+         temp1 = bytscl(congrid(-(image), xsize, ysize, /INTERP), $
+                        MIN=mini, MAX=maxi, TOP=(nc-1)) $
+      ELSE temp1 = bytscl(congrid(image, xsize, ysize, /INTERP), $
+                          MIN=mini, MAX=maxi, TOP=(nc-1))
+   ENDELSE
+   RETURN, temp1
+END
+      
+PRO VIDI_DISPLAY, uv, SAMPLE=sample
+   ;; Scale and display image i
+   ;; uv = the info structure for this display
+   ;; sample = use nearest neighbor sampling for rebin
+   COMMON IMAGE_UTILS
+   COMMON VIDI
+   
+   IF (NOT (keyword_set(sample))) THEN SAMPLE=0
+   nodata = 1
+   proc = 0
+
+   FOR i= 0, 1 DO BEGIN
+      IF (dsp[i].set) THEN BEGIN 
+         IF (uv.img[i].data NE ptr_new()) THEN BEGIN
+            nodata = 0
+            slice = uv.img[i].p - uv.img[i].fp
+            frame = uv.img[i].f - uv.img[i].ff
+            CASE orient OF
+               0: BEGIN
+                  x0 = 0
+                  y0 = 1
+                  image = reform((*uv.img[i].data)[*,*,slice,frame])
+               END
+               1: BEGIN
+                  x0 = 0
+                  y0 = 2
+                  image = reform((*uv.img[i].data)[*,slice,*,frame])
+               END
+               2: BEGIN
+                  x0 = 1
+                  y0 = 2
+                  image = reform((*uv.img[i].data)[slice,*,*,frame])
+               END
+            ENDCASE
+            xsize = uv.img[i].dim[x0] * dsp[i].zoom
+            ysize = uv.img[i].dim[y0] * dsp[i].zoom
+            stype = 1
+            IF (uv.img[i].pdim[y0] GT uv.img[i].pdim[x0]) THEN BEGIN 
+               fact = (uv.img[i].pdim[y0])/(uv.img[i].pdim[x0])
+               ysize = fact * uv.img[i].dim[y0] * dsp[i].zoom
+            ENDIF ELSE IF (uv.img[i].pdim[0] GT uv.img[i].pdim[y0]) THEN BEGIN 
+               fact = (uv.img[i].pdim[x0])/(uv.img[i].pdim[y0])
+               xsize = fact * uv.img[i].dim[x0] * dsp[i].zoom
+            ENDIF ELSE stype = 0
+
+            cbf = 0
+            cbv = 0
+            scantime = uv.img[i].len * 1000
+            temp1 = VOI_PROCESS (proc, image, uv.img[i].mtype, uv.img[i].mcal, $
+                                 cbf, uv.cbf[i].mcal, cbv, uv.cbv[i].mcal, scantime)
+            
+            temp1 = VIDI_DISPLAY_SCALE (temp1, uv.img[i].itype, i, xsize, ysize, sample, stype)
+            temp1 = temp1 + dsp[i].bot
+            widget_control, uv.wid.win[i], draw_xsize=xsize, draw_ysize=ysize
+            wset, dsp[i].id
+            tv, temp1
+            widget_control,uv.wid.max[i],set_value=dsp[i].amax
+         ENDIF 
+      ENDIF
+   ENDFOR
+   
+   IF (dsp[2].set) THEN BEGIN
+      IF (uv.img[0].data NE ptr_new() AND uv.img[1].data NE ptr_new()) THEN BEGIN
+         IF ((uv.img[0].dim[0] NE uv.img[1].dim[0]) OR $
+             (uv.img[0].dim[1] NE uv.img[1].dim[1]) OR $
+             (uv.img[0].dim[2] NE uv.img[1].dim[2])) THEN BEGIN
+            widget_control, uv.wid.msg, set_value='Cannot display composite of different sized images'
+         ENDIF ELSE BEGIN 
+            nodata = 0
+            i = 0
+            slice = uv.img[i].p - uv.img[i].fp
+            frame = uv.img[i].f - uv.img[i].ff
+            CASE orient OF
+               0: BEGIN
+                  x0 = 0
+                  y0 = 1
+                  image = reform((*uv.img[i].data)[*,*,slice,frame])
+               END
+               1: BEGIN
+                  x0 = 0
+                  y0 = 2
+                  image = reform((*uv.img[i].data)[*,slice,*,frame])
+               END
+               2: BEGIN
+                  x0 = 1
+                  y0 = 2
+                  image = reform((*uv.img[i].data)[slice,*,*,frame])
+               END
+            ENDCASE
+            xsize = uv.img[i].dim[x0] * dsp[i].zoom
+            ysize = uv.img[i].dim[y0] * dsp[i].zoom
+            stype = 1
+            IF (uv.img[i].pdim[y0] GT uv.img[i].pdim[x0]) THEN BEGIN 
+               fact = (uv.img[i].pdim[y0])/(uv.img[i].pdim[x0])
+               ysize = fact * uv.img[i].dim[y0] * dsp[i].zoom
+            ENDIF ELSE IF (uv.img[i].pdim[0] GT uv.img[i].pdim[y0]) THEN BEGIN 
+               fact = (uv.img[i].pdim[x0])/(uv.img[i].pdim[y0])
+               xsize = fact * uv.img[i].dim[x0] * dsp[i].zoom
+            ENDIF ELSE stype = 0
+            widget_control, uv.wid.win[2], draw_xsize=xsize, draw_ysize=ysize
+            temp1 = VIDI_DISPLAY_SCALE (image, uv.img[i].itype, i, xsize, ysize, sample, stype)
+
+            i = 1
+            CASE orient OF
+               0:  image = reform((*uv.img[i].data)[*,*,slice,frame])
+               1:  image = reform((*uv.img[i].data)[*,slice,*,frame])
+               2:  image = reform((*uv.img[i].data)[slice,*,*,frame])
+            ENDCASE
+            temp2 = VIDI_DISPLAY_SCALE (image, uv.img[i].itype, i, xsize, ysize, sample, stype)
+            
+            IF (dsp[i].range EQ 2) THEN BEGIN
+            	uthresh =  (0.5 + (0.005 * dsp[0].cut)) * dsp[1].nc
+            	lthresh =  (0.5 - (0.005 * dsp[0].cut)) * dsp[1].nc
+            	idx1 = where((temp2 LT uthresh) AND (temp2 GT lthresh), count1)
+            	idx2 = where((temp2 GE uthresh) OR (temp2 LE lthresh), count2)
+			ENDIF ELSE BEGIN
+            	thresh =  0.01 * dsp[0].cut * dsp[1].nc
+            	idx1 = where(temp2 LT thresh, count1)
+            	idx2 = where(temp2 GE thresh, count2)
+			ENDELSE
+            IF (count1 GT 0) THEN temp2[idx1] = 0 			; temp = temp1
+            IF (count2 GT 0) THEN temp1[idx2] = dsp[0].nc	; temp = nc + temp2
+            temp = temp1 + temp2							; combine
+            wset, dsp[2].id
+            tv, temp
+         ENDELSE
+      ENDIF 
+   ENDIF
+   IF (nodata EQ 1) THEN widget_control, uv.wid.msg, set_value='No data'
+END
+@

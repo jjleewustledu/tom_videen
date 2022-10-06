@@ -1,0 +1,199 @@
+head	1.1;
+access;
+symbols;
+locks
+	tom:1.1; strict;
+comment	@# @;
+
+
+1.1
+date	93.12.07.20.44.00;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@from E Pearson 12/07/93
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@;       $Revision:   1.1  $ $Date:   10/15/93 18:41:32  $
+;       Copyright(c) 1993 CTI PET Systems, Inc.
+
+;+
+; NAME:		
+;		WECAT7
+;
+; PURPOSE:	
+;		Writes the main header, subheaders, and data into a file.		
+;
+; CATEGORY:	
+;		CTI Matrix utility		
+;
+; CALLING SEQUENCE:		
+;		result = wecat7 (file,f,p,g,d,b,sh,data,MH=mh,NEW=new, $
+;					ONLY_MH=only_mh,ONLY_SH=only_sh)
+; INPUTS:			
+;
+; KEYWORD PARAMETERS:		
+;
+; OUTPUTS:			
+;
+; HISTORY NOTES:		
+;-
+
+
+function wecat7,file,f,p,g,d,b,sh,data,MH=mh,NEW=new,ONLY_MH=only_mh,ONLY_SH=only_sh
+
+	on_error,2
+	on_ioerror,io_error
+
+	newkey = keyword_set(NEW)
+
+	; check for write of main header only
+	mhkey = keyword_set(MH)
+
+	onlymhkey = keyword_set(ONLY_MH)
+        
+	if(n_params() NE 8) then begin
+	   if (onlymhkey) then begin
+	     ; must specify filename
+	     if (n_params() ne 1) then begin
+	       set_ecat_error,1,"WECAT7",FILE=file
+	       return,!ECAT.ERROR
+	     endif else begin
+  	       if (mhkey) then begin
+	         ; write the main header only. If NEW was specified
+	         ;  create a new file, write the main header and 
+	         ;  initialize the directory block. 
+	         if(newkey) then begin
+	           openw,unit,file,/get_lun
+	           if(wmh7(unit,mh) EQ !ECAT.ERROR) then return,!ECAT.ERROR
+	           if(mknewdirblk7(unit,dir,dirinfo,/NEW) EQ !ECAT.ERROR) then $
+	             return,!ECAT.ERROR
+		   free_lun,unit
+	    	   return, !ECAT.OK
+	         endif else begin
+		   ; open the existing file and write the main header
+	           openu,unit,file,/get_lun
+	           if(wmh7(unit,mh) EQ !ECAT.ERROR) then return,!ECAT.ERROR
+		   free_lun,unit
+		   return, !ECAT.OK
+	         endelse
+	       endif else begin
+	         set_ecat_error,1,"WECAT7",FILE=file
+	         return,!ECAT.ERROR
+	       endelse
+	     endelse
+	   endif else begin
+	     set_ecat_error,1,"WECAT7",FILE=file
+	     return,!ECAT.ERROR
+	   endelse
+	endif
+
+	shonlykey = keyword_set(SH_ONLY)
+;	if((NOT mhkey) AND newkey) then begin
+;	   set_ecat_error,1,"WECAT",FILE=file
+;	   return,!ECAT.ERROR
+;	endif
+	if(newkey AND shonlykey) then begin
+	   set_ecat_error,1,"WECAT7",FILE=file
+	   return,!ECAT.ERROR
+	endif
+
+
+	if(newkey) then begin
+	   openw,unit,file,/get_lun
+	   if(wmh7(unit,mh) EQ !ECAT.ERROR) then return,!ECAT.ERROR
+	   if(mknewdirblk7(unit,dir,dirinfo,/NEW) EQ !ECAT.ERROR) then $
+	      return,!ECAT.ERROR
+	endif else begin
+	   openu,unit,file,/get_lun
+  	   if (mhkey eq 0) then stat = rmh7(unit,mh)
+
+	   if(rdir7(unit,dir,dirinfo) EQ !ECAT.ERROR) then return,!ECAT.ERROR
+	   if(mhkey) then 							$
+	      if(wmh7(unit,mh) EQ !ECAT.ERROR) then return,!ECAT.ERROR
+	endelse
+	
+	if(NOT keyword_set(ONLY_MH)) then begin
+
+	   dvals = [n_elements(f), n_elements(p), n_elements(g),	$
+	            n_elements(d), n_elements(b)]
+	   expand_mat,f,p,g,d,b,dvals
+	   if(dvals(0) EQ !ECAT.ERROR) then return,!ECAT.ERROR
+	   if(newkey) then						$
+	      mats = mkmats(f,p,g,d,b,dir,/NEW)				$
+	   else								$
+	      mats = mkmats(f,p,g,d,b,dir,/NEW)
+	   if(mats(0) EQ !ECAT.ERROR) then begin
+	      set_ecat_error,0,"WECAT",UNIT=unit
+	      return,!ECAT.ERROR
+	   endif
+	   mats = mats(0,*)
+	   if(n_elements(mats) NE n_elements(sh)) then begin
+	      set_ecat_error,9,"WECAT7",UNIT=unit
+	      return,!ECAT.ERROR
+	   endif
+
+	   ndatablks = 0
+	   scales = 0
+	   if(NOT shonlykey) then begin
+	      s = size(data)
+	      if((s(0) LT 2) OR (s(0) GT 3)) then begin
+	         set_ecat_error,10,"WECAT7",UNIT=unit
+	         return,!ECAT.ERROR
+	      endif
+	      if(s(0) EQ 2) then begin
+	         if(n_elements(mats) NE 1) then begin	      
+	            set_ecat_error,11,"WECAT7",UNIT=unit
+	            return,!ECAT.ERROR
+	         endif
+	      endif else begin
+	         if(n_elements(mats) NE s(3)) then begin
+	            set_ecat_error,11,"WECAT7",UNIT=unit
+	            return,!ECAT.ERROR
+	         endif
+	      endelse
+	      if(newkey) then begin
+	         ftype = mh.file_type
+	      endif else begin
+	         m = matval(dir(0,0))
+	         if(m(0) EQ !ECAT.ERROR) then begin
+	            set_ecat_error,12,"WECAT7",UNIT=unit
+	            return,!ECAT.ERROR
+	         endif
+	         ;stat = recat7(file,m(0),m(1),m(2),m(3),m(4),d,/NO_DATA)
+	         stat = recat7(file,m(0),m(1),m(2),m(3),m(4),d,/MAIN)
+	         if(stat EQ !ECAT.ERROR) then begin
+	            set_ecat_error,0,"WECAT7",UNIT=unit
+	            return,!ECAT.ERROR
+	         endif
+		 ; this info is not available when adding matrices one at
+		 ;  a time
+	         ;if(s(1)*s(2) NE d.xdim*d.ydim) then begin
+	         ;   set_ecat_error,13,"WECAT7",UNIT=unit
+	         ;   return,!ECAT.ERROR
+	         ;endif
+	         ftype = d.mh.file_type
+	      endelse
+	      stat = wmats7(unit,ftype,sh,data,mats(0,*),dir,dirinfo,SH_ONLY=shonlykey)
+	      if(stat EQ !ECAT.ERROR) then return,!ECAT.ERROR
+
+	   endif
+	endif
+
+	free_lun,unit
+	return,!ECAT.OK
+
+io_error : set_ecat_error,1,"WECAT7",UNIT=unit
+           return,!ECAT.ERROR
+	
+end
+
+@

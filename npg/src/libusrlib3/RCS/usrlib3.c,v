@@ -1,0 +1,535 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	99.12.17.17.36.58;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.08.17.58.33;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@lint cleaning
+@
+text
+@/*----------------------------------------------------------------------
+ *	File:  "BeyondUtils.c"
+ *  Copyright (c) :	Shantanu Kaushikkar January 1994
+ *	Updated March 94, Nov 95
+ *  4525 Scott Avenue
+ *  St. Louis MO 63110
+ *	This file will not be used without the permission of the author
+ *
+ * Modified by: Fred Kuhns to resemble the userlib3 routines.
+ *-----------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+
+#include "ds_head_constants.h"
+#include "ds_head_basic_types.h"
+#include "ds_date.h"
+#include "ds_head_acr_groups_types.h"
+#include "ds_head_image_text_type.h"
+#include "ds_head_shadow_groups_types.h"
+#include "ds_head_type.h"
+#include "lib3_db_access.h"
+#include "lib3_errno.h"
+#include "lib3_file_transform.h"
+
+/* Verified stuff */
+
+unsigned long   header_type (header_t *);
+unsigned long   U3GetHeader (FILE *, header_t *);
+unsigned long   U3GetHeaderType (FILE *, U3_header_type_t *);
+unsigned long   U3GetDataType (FILE *, U3_data_type_t *, U3_size_type_t *);
+unsigned long   U3PutHeader (FILE *, header_t *);
+unsigned long   U3ReadPixData (FILE *, unsigned long, unsigned long, U3_size_type_t *, void *);
+unsigned long   U3WritePixData (FILE *, unsigned long, unsigned long, U3_size_type_t, void *);
+unsigned long   U3Open (FILE **, char *, char *);
+unsigned long   U3Close (FILE *);
+unsigned long   U3Open (FILE ** fptr, char *fpath, char *mode)
+
+{
+	FILE           *fp;
+	U3_header_type_t htype;
+	if ((fp = fopen (fpath, mode)) == NULL) {
+		if (errno == EACCES)
+			return (U3_NO_PERMISSION);
+		else
+			return (U3_INVLD_FILE_PATH);
+	}
+	if (U3GetHeaderType (fp, &htype) != 0) {
+		(void) fclose (fp);
+		return (U3_UNKNOWN_HEADER);
+	}
+	if (fseek (fp, 0, SEEK_SET) < 0) {
+		(void) fclose (fp);
+		return (U3_INVLD_FILE_PTR);
+	}
+	*fptr = fp;
+	return (0);
+}
+
+unsigned long   U3Close (FILE * fp)
+{
+	if (fclose (fp) == 0)
+		return (0);
+	else
+		return (U3_INVLD_FILE_PTR);
+}
+
+unsigned long   header_type (header_t * hdr)
+{
+	if (!hdr)
+		return ((unsigned long) U3_INVLD_BUFFER_PTR);
+	if (!strcmp (hdr->G09.Ide.HeaderVersion, "VC      "))
+		return (U3_internal_head_type);
+	return ((unsigned long) U3_UNKNOWN_HEADER);
+}
+
+unsigned long   U3GetHeaderType (FILE * fp, U3_header_type_t * htype)
+{
+	header_t        hdr, *hptr;
+	unsigned long   rval;
+
+	hptr = &hdr;
+
+	(void) memset (hptr, 0, sizeof (header_t));
+
+	if (fseek (fp, 0, SEEK_SET) < 0)
+		return (U3_INVLD_FILE_PTR);
+
+	if (fread (hptr, sizeof (header_t), (size_t) 1, fp) == 0)
+		return ((unsigned long) U3_INVLD_FILE_PTR);
+
+	*htype = header_type (hptr);
+
+	if (*htype == U3_internal_head_type)
+		rval = (unsigned long) 0;
+	else
+		rval = (unsigned long) U3_UNKNOWN_HEADER;
+
+	/*
+	 * else if (!strncmp((char *)(hptr + 118), "MR", 2)) *htype = U3_numeris2_head_type;
+	 */
+	return (rval);
+}
+
+unsigned long   U3GetDataType (FILE * fp, U3_data_type_t * dtype, U3_size_type_t * dsize)
+{
+	header_t        *hptr;
+
+	(void) memset (hptr, 0, sizeof (header_t));
+
+	if (fseek (fp, 0, SEEK_SET) < 0)
+		return ((unsigned long) U3_INVLD_FILE_PTR);
+
+	if (fread (hptr, sizeof (header_t), (size_t) 1, fp) == 0)
+		return ((unsigned long) U3_INVLD_FILE_PTR);
+
+	if (strcmp (hptr->G09.Ide.HeaderVersion, "VC      "))
+		/* this is not a Numeris 3 file, ignore! */
+		return ((unsigned long) U3_UNKNOWN_DATA_TYPE);
+
+	switch (hptr->G08.Ide.DataSetSubtype.M) {
+	case Set_m_IMAGE:
+		*dtype = U3_image_data_type;
+		*dsize = U3_set_m_short;
+		break;
+	case Set_m_RAW:
+		*dtype = U3_raw_data_type;
+		*dsize = U3_set_m_float;
+		break;
+	case Set_m_PLOT:
+	case Set_m_SPECT:
+	case Set_m_TEXT:
+	case Set_m_UNDEFINED:
+	default:
+		return ((unsigned long) U3_UNKNOWN_DATA_TYPE);
+		break;
+	}
+	return ((unsigned long) 0);
+}
+
+unsigned long   U3GetHeader (FILE * fp, header_t * hdr)
+{
+	if (hdr == NULL)
+		return ((unsigned long) U3_INVLD_BUFFER_PTR);
+	if (fseek (fp, 0, SEEK_SET) < 0)
+		return (U3_INVLD_FILE_PTR);
+	if (!fread (hdr, sizeof (header_t), (size_t) 1, fp))
+		return ((unsigned long) U3_INVLD_FILE_PTR);
+	if (header_type (hdr) != U3_internal_head_type)
+		return (U3_UNKNOWN_HEADER);
+	return (0);
+}
+
+unsigned long   U3PutHeader (FILE * fp, header_t * hdr)
+{
+	if (!hdr)
+		return (U3_INVLD_BUFFER_PTR);
+	if (fwrite (hdr, sizeof (header_t), (size_t) 1, fp) == 0)
+		return (U3_INVLD_FILE_PTR);
+	return (0);
+}
+
+unsigned long   U3ReadPixData (FILE * fp,
+			                       unsigned long StartOffset,
+			                       unsigned long NumPixels,
+			                       U3_size_type_t * DataSize,
+			                       void *dbuf)
+{
+	header_t        hdr;
+	unsigned long   offset, status, max_pixels, pixel_size;
+
+	if (dbuf == NULL)
+		return (U3_INVLD_BUFFER_PTR);
+
+	if ((status = U3GetHeader (fp, &hdr)) != 0)
+		return (status);
+
+	switch (hdr.G08.Ide.DataSetSubtype.M) {
+	case Set_m_IMAGE:
+		max_pixels = hdr.G28.Pre.Columns * hdr.G28.Pre.Rows;
+		pixel_size = U3_set_m_short;
+		*DataSize = U3_set_m_short;
+		break;
+	case Set_m_RAW:
+		max_pixels = hdr.G19.Acq2.Mr.AcquisitionColumns *
+			hdr.G19.Acq2.Mr.NumberOfFourierLinesCurrent;
+		pixel_size = U3_set_m_float * 2; /* Complex */
+		*DataSize = U3_set_m_float;
+		break;
+	default:
+		return (U3_UNKNOWN_HEADER);
+		break;
+	}
+
+	if (StartOffset >= max_pixels)
+		return (U3_INVLD_OFFSET);
+
+	if ((NumPixels + StartOffset) > max_pixels)
+		return (U3_INVLD_NUM_PIXELS);
+
+	offset = sizeof (header_t) + StartOffset;
+
+	if (fseek (fp, offset, SEEK_SET) < 0)
+		return (U3_INVLD_FILE_PTR);
+
+	if (fread (dbuf, (size_t) pixel_size, (size_t) max_pixels, fp) == 0)
+		return (U3_INVLD_FILE_PTR);
+
+	return (0);
+}
+
+
+unsigned long   U3WritePixData (FILE * fp,
+				                unsigned long StartOffset,
+				                unsigned long NumPixels,
+				                U3_size_type_t DataSize,
+				                void *dbuf)
+{
+	unsigned long   offset;
+
+	if (dbuf == NULL)
+		return (U3_INVLD_BUFFER_PTR);
+
+	offset = sizeof (header_t) + StartOffset;
+
+	if (fseek (fp, offset, SEEK_SET) < 0)
+		return (U3_INVLD_FILE_PTR);
+
+	if (fwrite (dbuf, (size_t) DataSize, (size_t) NumPixels, fp) == 0)
+		return (U3_INVLD_FILE_PTR);
+
+	return (0);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 11
+a11 12
+/*----------------------------------------------------------------------*
+*                                                                       *
+*	File:  "BeyondUtils.c"                                                *
+*   Copyright (c) :	Shantanu Kaushikkar January 1994                    *
+*					Updated March 94, Nov 95                                      *
+*    				4525 Scott Avenue                                           *
+*    				St. Louis MO 63110                                          *
+*	This file will not be used without the permission of the author       *
+*                                                                       *
+* Modified by: Fred Kuhns to resemble the userlib3 routines.            *
+*                                                                       *
+*-----------------------------------------------------------------------*/
+d13 1
+a13 2
+#include <stddef.h>
+#include <ctype.h>
+a17 1
+#include "db_defines.h"
+a22 1
+#include "imainfo.h"
+a25 2
+#include "patinfo.h"
+#include "stuinfo.h"
+d29 11
+a39 11
+unsigned long header_type(header_t *);
+unsigned long U3GetHeader(FILE *, header_t *);
+unsigned long U3GetHeaderType(FILE *, U3_header_type_t *);
+unsigned long U3GetDataType(FILE *, U3_data_type_t *, U3_size_type_t *);
+unsigned long U3PutHeader(FILE *, header_t *);
+unsigned long U3ReadPixData(FILE *, unsigned long, unsigned long, U3_size_type_t *, void *);
+unsigned long U3WritePixData(FILE *, unsigned long, unsigned long, U3_size_type_t, void *);
+unsigned long U3Open(FILE **, char *, char *);
+unsigned long U3Close(FILE *);
+  
+unsigned long U3Open(FILE **fptr, char *fpath, char *mode)
+d41 1
+a41 1
+	FILE *fp;
+d43 1
+a43 1
+	if ((fp = fopen(fpath, mode)) == NULL) {
+d45 1
+a45 1
+				return(U3_NO_PERMISSION);
+d47 1
+a47 1
+				return(U3_INVLD_FILE_PATH);
+d49 3
+a51 3
+	if (U3GetHeaderType(fp, &htype) != 0) {
+		fclose(fp);
+		return(U3_UNKNOWN_HEADER);
+d53 3
+a55 3
+	if (fseek(fp, 0, SEEK_SET) < 0) {
+		fclose(fp);
+		return(U3_INVLD_FILE_PTR);
+d58 1
+a58 1
+	return(0);
+d61 1
+a61 1
+unsigned long U3Close(FILE *fp)
+d63 2
+a64 2
+	if (fclose(fp) == 0)
+		return(0);
+d66 1
+a66 1
+		return(U3_INVLD_FILE_PTR);
+d69 1
+a69 1
+unsigned long header_type(header_t *hdr)
+d72 4
+a75 4
+		return((unsigned long)U3_INVLD_BUFFER_PTR);
+	if(!strcmp(hdr->G09.Ide.HeaderVersion,"VC      ")) 
+		return(U3_internal_head_type);
+	return((unsigned long)U3_UNKNOWN_HEADER);
+d78 1
+a78 1
+unsigned long U3GetHeaderType(FILE *fp, U3_header_type_t *htype)
+d80 2
+a81 3
+	header_t hdr, *hptr;
+	unsigned long rval;
+	int type;
+d85 1
+a85 1
+	memset(hptr, 0, sizeof(header_t));
+d87 2
+a88 2
+	if (fseek(fp, 0, SEEK_SET) < 0)
+		return(U3_INVLD_FILE_PTR);
+d90 2
+a91 2
+	if (fread(hptr, sizeof(header_t), (size_t)1, fp) == 0)
+		return((unsigned long)U3_INVLD_FILE_PTR);
+d93 1
+a93 1
+	*htype = header_type(hptr);
+d95 1
+a95 1
+	if(*htype == U3_internal_head_type)
+d99 1
+d101 1
+a101 2
+	 *else if (!strncmp((char *)(hptr + 118), "MR", 2)) 
+	 *	*htype = U3_numeris2_head_type;
+d103 1
+a103 1
+	return(rval);
+d106 1
+a106 1
+unsigned long U3GetDataType(FILE *fp, U3_data_type_t *dtype, U3_size_type_t *dsize)
+d108 1
+a108 1
+	header_t hdr, *hptr;
+d110 1
+a110 1
+	memset(hptr, 0, sizeof(header_t));
+d112 2
+a113 2
+	if (fseek(fp, 0, SEEK_SET) < 0)
+		return((unsigned long)U3_INVLD_FILE_PTR);
+d115 4
+a118 4
+	if (fread(hptr, sizeof(header_t), (size_t)1, fp) == 0)
+		return((unsigned long)U3_INVLD_FILE_PTR);
+	
+	if(strcmp(hptr->G09.Ide.HeaderVersion,"VC      "))
+d120 2
+a121 2
+		return((unsigned long) U3_UNKNOWN_DATA_TYPE);
+	
+d123 15
+a137 15
+		case Set_m_IMAGE:
+			*dtype = U3_image_data_type;
+			*dsize = U3_set_m_short;
+			break;
+		case Set_m_RAW:
+			*dtype = U3_raw_data_type;
+			*dsize = U3_set_m_float;
+			break;
+		case Set_m_PLOT:
+		case Set_m_SPECT:
+		case Set_m_TEXT:
+		case Set_m_UNDEFINED:
+		default:
+			return((unsigned long) U3_UNKNOWN_DATA_TYPE);
+			break;
+d139 1
+a139 1
+	return((unsigned long) 0);
+d141 2
+a142 2
+	
+unsigned long U3GetHeader(FILE *fp, header_t *hdr)
+d145 8
+a152 8
+		return((unsigned long)U3_INVLD_BUFFER_PTR);
+	if (fseek(fp, 0, SEEK_SET) < 0)
+		return(U3_INVLD_FILE_PTR);
+	if (!fread(hdr, sizeof(header_t), (size_t)1, fp))
+		return((unsigned long)U3_INVLD_FILE_PTR);
+	if (header_type(hdr) != U3_internal_head_type)
+		return(U3_UNKNOWN_HEADER);
+  return(0);
+d155 1
+a155 1
+unsigned long U3PutHeader(FILE *fp, header_t *hdr)
+d158 4
+a161 4
+		return(U3_INVLD_BUFFER_PTR);
+	if (fwrite(hdr, sizeof(header_t), (size_t)1, fp) == 0)
+		return(U3_INVLD_FILE_PTR);
+	return(0);
+d164 5
+a168 5
+unsigned long U3ReadPixData(FILE *fp, 
+                            unsigned long StartOffset, 
+                            unsigned long NumPixels, 
+                            U3_size_type_t *DataSize, 
+                            void *dbuf)
+d170 2
+a171 2
+	header_t hdr;
+	unsigned long offset, status, max_pixels, pixel_size;
+d174 1
+a174 1
+		return(U3_INVLD_BUFFER_PTR);
+d176 2
+a177 2
+	if ((status = U3GetHeader(fp, &hdr)) != 0)
+		return(status);
+d180 14
+a193 14
+		case Set_m_IMAGE:
+			max_pixels = hdr.G28.Pre.Columns * hdr.G28.Pre.Rows;
+			pixel_size = U3_set_m_short;
+			*DataSize = U3_set_m_short;
+			break;
+		case Set_m_RAW:
+			max_pixels = hdr.G19.Acq2.Mr.AcquisitionColumns *
+			             hdr.G19.Acq2.Mr.NumberOfFourierLinesCurrent;
+			pixel_size = U3_set_m_float * 2; /* Complex */
+			*DataSize = U3_set_m_float;
+			break;
+		default:
+			return(U3_UNKNOWN_HEADER);
+			break;
+d197 1
+a197 1
+		return(U3_INVLD_OFFSET);
+d200 1
+a200 1
+		return(U3_INVLD_NUM_PIXELS);
+d202 1
+a202 1
+	offset = sizeof(header_t) + StartOffset;
+d204 2
+a205 5
+	if (fseek(fp, offset, SEEK_SET) < 0)
+		return(U3_INVLD_FILE_PTR);
+	
+	if (fread(dbuf, (size_t)pixel_size, (size_t)max_pixels, fp) == 0)
+		return(U3_INVLD_FILE_PTR);
+d207 4
+a210 1
+	return(0);
+a211 1
+	
+d213 6
+a218 5
+unsigned long U3WritePixData(FILE *fp, 
+                             unsigned long StartOffset, 
+                             unsigned long NumPixels, 
+                             U3_size_type_t DataSize, 
+                             void *dbuf)
+d220 1
+a220 3
+	header_t hdr;
+	unsigned long offset;
+	int x;
+d223 1
+a223 1
+		return(U3_INVLD_BUFFER_PTR);
+d225 1
+a225 1
+	offset = sizeof(header_t) + StartOffset;
+d227 2
+a228 2
+	if (fseek(fp, offset, SEEK_SET) < 0)
+		return(U3_INVLD_FILE_PTR);
+d230 2
+a231 2
+	if (fwrite(dbuf, (size_t)DataSize, (size_t)NumPixels, fp) == 0)
+		return(U3_INVLD_FILE_PTR);
+d233 1
+a233 1
+	return(0);
+@

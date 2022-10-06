@@ -1,0 +1,670 @@
+head	2.31;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.31
+date	2008.09.04.14.59.31;	author tom;	state Exp;
+branches;
+next	2.28;
+
+2.28
+date	2007.03.21.21.17.56;	author tom;	state Exp;
+branches;
+next	2.27;
+
+2.27
+date	2005.08.08.16.27.56;	author tom;	state Exp;
+branches;
+next	2.26;
+
+2.26
+date	2004.11.03.15.31.15;	author tom;	state Exp;
+branches;
+next	2.25;
+
+2.25
+date	2004.11.03.14.20.17;	author tom;	state Exp;
+branches;
+next	2.24;
+
+2.24
+date	2004.11.02.16.37.24;	author tom;	state Exp;
+branches;
+next	2.21;
+
+2.21
+date	2004.07.08.14.41.37;	author tom;	state Exp;
+branches;
+next	2.20;
+
+2.20
+date	2004.02.17.14.13.40;	author tom;	state Exp;
+branches;
+next	2.8;
+
+2.8
+date	2004.02.17.14.11.41;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	2002.12.02.17.08.36;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	2001.06.01.18.48.41;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	93.07.15.20.25.17;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	93.07.12.23.13.24;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	92.10.19.15.56.10;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.10.16.22.32.51;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.05.12.21.32.00;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial Unix version using libpetutil and libpe.
+@
+
+
+2.31
+log
+@no change
+@
+text
+@c $Log: bloodflw.f,v $
+c Revision 2.28  2007/03/21  21:17:56  tom
+c default max flow = 120
+c
+c Revision 2.27  2005/08/08  16:27:56  tom
+c add pie Aug 2005
+c
+c Revision 2.26  2004/11/03  15:31:15  tom
+c prompt with ho1 image
+c
+c Revision 2.25  2004/11/03  14:20:17  tom
+c add getpie_961
+c
+c Revision 2.24  2004/11/02  16:37:24  tom
+c select 961 pies from scandate, software version, acquisition
+c
+c Revision 2.21  2004/07/08  14:41:37  tom
+c modify getpie for 961 versions
+c
+c Revision 2.20  2004/02/17  14:13:40  tom
+c Feb 2004
+c
+c Revision 2.8  2004/02/17  14:11:41  tom
+c Feb 2004
+c
+c Revision 2.3  2002/12/02  17:08:36  tom
+c modifications for gcc
+c
+c Revision 2.2  2001/06/01  18:48:41  tom
+c formatting changes only
+c
+c Revision 2.1  1993/07/15  20:25:17  tom
+c Changed RCSHEADER to ID
+c
+c Revision 2.0  1993/07/12  23:13:24  tom
+c Handles ECAT image format
+c
+c Revision 1.3  1992/10/19  15:56:10  tom
+c modified RCSHEADER length
+c
+c Revision 1.2  1992/10/16  22:32:51  tom
+c added RCSHEADER
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   BLOODFLW.FTN
+C  Author:       Tom O. Videen
+C  Date:          02-Jun-87
+C  History:
+C     Modified 07-Dec-88 by TOV:
+C      1) Counts written to user (with flows) is now PETT counts (i.e., the
+C          pie slope (PETTCONV) is now included);
+C      2) User may now select maximum flow used to fit flow.
+C     Fixed for UNIX 15-Jan-92 TOV
+C       FORMAT E14 changed to E14.7
+C  Intent:
+C     Decay is treated explicitly in this model.
+C     Compute estimated blood flow for 9 points (10,20,...,120 ml/(min*100 g))
+C     and fit a quadratic equation these points (passing through 0,0).
+C     The variables AFLOW and BFLOW are the coeficients of the equation:
+C
+C                CBF = AFLOW*PETT*PETT + BFLOW*PETT
+C
+C     where CBF is in units of ml of blood/(min*100g of brain)
+C         and PETT is PET Counts/(pixel * scan period)
+C
+C     Note: the actual fit is done with:
+C          CBF = AFLOW*P*P + BFLOW*P   where P = PETT * PETTCONV
+C     and then the parameters AFLOW and BFLOW are adjusted by:
+C          AFLOW = AFLOW*PETTCONV*PETTCONV
+C          BFLOW = BFLOW*PETTCONV
+C     to eliminate PETTCONV from the from the computed counts.
+C
+C  The blood flow algorithm is based on a one-compartmental model:
+C     Herscovitch, Markham & Raichle (1983)
+C         J. Nuclear Medicine, 24:782.
+C     Raichle, Martin, Herscovitch, Mintun & Markham (1983)
+C         J. Nuclear Medicine, 24:790.
+C     Herscovitch (submitted - 1987)
+C     Videen, Perlmutter, Herscovitch & Raichle (JCBFM - 1987)
+C
+C  Common Block Variables:
+C     AFLOW,BFLOW = see equation above;
+C     NUMPNTS = no. of points;
+C     TIME = sec
+C     ACTIVITY = non-decay-corrected activity (well counts/ml/sec)
+C     NOP = number of values in OTIME and OOACTIV;
+C     OTIME = interpolated blood curve times 
+C     OOACTIV = interpolated blood curve (with decay)
+C     CONV = convolution integral of OOACTIV * EXP(-A*OTIME)
+C     LAMBDA = partition coefficient (ml/ml);
+C     TAU = decay constant of isotope (1/sec)
+C     SCANST = initial time
+C     SCANEND = final time
+C     SCANLEN = length of scan
+C     BRAINDEN = density of brain (g/ml)
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+      SUBROUTINE BLOODFLW
+
+      INCLUDE 'metproc.inc'
+
+      REAL          COUNTS		! PETT tissue counts estimated from true blood flow
+      REAL          FLOW		! cbf ml/100g/min
+      REAL          FLOWSEC		! cbf ml/ml/sec
+      REAL          CONVAL(NVAL)
+      REAL          INTEGRAL
+      REAL          K
+      REAL          SUMX2,SUMX3,SUMX4,SUMX2Y	! sums used in regression fit
+      REAL          SUMXY,ACTIV1,ACTIV2,DTIME
+      INTEGER*4     MAXFLOW,MINFLOW,INC,I,J
+      CHARACTER*80  Q
+      CHARACTER*256 RCSHEADER
+
+      RCSHEADER = "$Id: bloodflw.f,v 2.28 2007/03/21 21:17:56 tom Exp tom $"
+
+      SUMX2 = 0.
+      SUMX3 = 0.
+      SUMX4 = 0.
+      SUMX2Y= 0.
+      SUMXY = 0.
+
+      MINFLOW = 10
+      MAXFLOW = 120
+      INC = 10
+      WRITE(USEROUT,*)
+      Q = 'Maximum flow to use for curve fit (ml/100g/min)'
+      CALL GETINT(Q,MAXFLOW,10,400)
+      IF (MAXFLOW.LE.50) THEN
+         MINFLOW = 5
+         INC = 5
+      END IF
+
+C  Interpolate ACTIVITY curve
+C  (double no. of points to reduce TDIFF in CONVOLVE)
+
+      NOP = 2*NUMPNTS
+      OTIME(1)  = 0.5*TIME(1)
+      OOACTIV(1) = 0.5*ACTIVITY(1)
+      TIME(NUMPNTS+1) = 0.
+      ACTIVITY(NUMPNTS+1) = 0.
+      J = 2
+      DO 100 I=1,NUMPNTS
+         OTIME(J)  = TIME(I)
+         OOACTIV(J) = ACTIVITY(I)
+         J = J+1
+         DTIME = 0.5*(TIME(I+1)-TIME(I))
+         OTIME(J) = TIME(I) + DTIME
+         ACTIV1 = ACTIVITY(I)*EXP(-DTIME*TAU)
+         ACTIV2 = ACTIVITY(I+1)*EXP(DTIME*TAU)
+         OOACTIV(J) = 0.5*(ACTIV1+ACTIV2)
+         J = J+1
+100   CONTINUE
+
+C  FLOW is multiplied by BRAINDEN/6000 to convert ml/100g/min to ml/ml/sec
+C  LAMBDA in ml/ml;
+C  BRAINDEN in g/ml;
+C  OTIME in sec; OOACTIV in counts/sec/ml;
+C  COUNTS is divided by 1000 to prevent an overflow error;
+C    this is compensated for by dividing AFLOW 1000*1000 and BFLOW by 1000;
+
+      DO 200 I=MINFLOW,MAXFLOW,INC
+         FLOW = FLOAT(I)
+         FLOWSEC = FLOW*BRAINDEN/6000.
+         K = FLOWSEC/LAMBDA + TAU
+         CALL CONVOLVE(OTIME, OOACTIV, NOP, K, CONVAL)
+         CALL INTEGRAT(OTIME, CONVAL, SCANST, SCANEND, INTEGRAL)
+         COUNTS = FLOWSEC*INTEGRAL
+         COUNTS = COUNTS/1000.
+         SUMX4 = SUMX4 + COUNTS**4
+         SUMX3 = SUMX3 + COUNTS**3
+         SUMX2 = SUMX2 + COUNTS**2
+         SUMXY = SUMXY + COUNTS*FLOW
+         SUMX2Y = SUMX2Y + COUNTS*COUNTS*FLOW
+         WRITE(USEROUT,8100) FLOW, COUNTS*1000.0/PETTCONV(1)
+200   CONTINUE
+8100  FORMAT(1X,'FLOW = ',F4.0,' ml/(min*100g)  PETT COUNTS =',F15.3)
+
+C  Compute the coefficients of the best fitting 2nd order polynomial
+
+      BFLOW(1) = (SUMX3*SUMX2Y-SUMXY*SUMX4)/(SUMX3*SUMX3-SUMX2*SUMX4)
+      AFLOW(1) = (SUMX2Y-BFLOW(1)*SUMX3)/SUMX4
+      AFLOW(1) = AFLOW(1)/(1000.*1000.)
+      BFLOW(1) = BFLOW(1)/1000.
+
+C  Include PETT Conversion Factor to Well Counts;
+C  PETTCONV = PIESLOPE*60   (well counts*pixel*min)/(PETT*ml*sec)
+
+      AFLOW(1) = AFLOW(1)*PETTCONV(1)*PETTCONV(1)
+      BFLOW(1) = BFLOW(1)*PETTCONV(1)
+
+C  Write values to user
+
+      WRITE(USEROUT,8200) 'AFLOW ',AFLOW(1)
+      WRITE(USEROUT,8200) 'BFLOW ',BFLOW(1)
+C     WRITE(USEROUT,8300) 'SUMX4 ',SUMX4
+C     WRITE(USEROUT,8300) 'SUMX3 ',SUMX3
+C     WRITE(USEROUT,8300) 'SUMX2 ',SUMX2
+C     WRITE(USEROUT,8300) 'SUMX2Y',SUMX2Y
+C     WRITE(USEROUT,8300) 'SUMXY ',SUMXY
+      WRITE(USEROUT,*) 'Decay Constant = ',TAU
+      WRITE(USEROUT,8400) 'Halflife = ',ALOG(2.0)/TAU
+8200  FORMAT(' ',A6,' =',E14.7)
+8300  FORMAT(' ',A6,' = ',F20.0)
+8400  FORMAT(' ',A11,F12.2)
+
+      RETURN
+      END
+@
+
+
+2.28
+log
+@default max flow = 120
+@
+text
+@d2 3
+d116 1
+a116 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.27 2005/08/08 16:27:56 tom Exp tom $"
+@
+
+
+2.27
+log
+@add pie Aug 2005
+@
+text
+@d2 3
+d55 1
+a55 1
+C     Compute estimated blood flow for 9 points (10,20,...,90 ml/(min*100 g))
+d113 1
+a113 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.26 2004/11/03 15:31:15 tom Exp tom $"
+d122 1
+a122 1
+      MAXFLOW = 90
+@
+
+
+2.26
+log
+@prompt with ho1 image
+@
+text
+@d2 3
+d110 1
+a110 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.25 2004/11/03 14:20:17 tom Exp tom $"
+@
+
+
+2.25
+log
+@add getpie_961
+@
+text
+@d2 3
+d107 1
+a107 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.24 2004/11/02 16:37:24 tom Exp tom $"
+@
+
+
+2.24
+log
+@select 961 pies from scandate, software version, acquisition
+@
+text
+@d2 3
+d104 1
+a104 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.21 2004/07/08 14:41:37 tom Exp tom $"
+@
+
+
+2.21
+log
+@modify getpie for 961 versions
+@
+text
+@d2 3
+d101 1
+a101 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.20 2004/02/17 14:13:40 tom Exp tom $"
+@
+
+
+2.20
+log
+@Feb 2004
+@
+text
+@d2 3
+d98 1
+a98 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.8 2004/02/17 14:11:41 tom Exp tom $"
+@
+
+
+2.8
+log
+@Feb 2004
+@
+text
+@d2 3
+d95 1
+a95 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.3 2002/12/02 17:08:36 tom Exp tom $"
+@
+
+
+2.3
+log
+@modifications for gcc
+@
+text
+@d2 3
+d92 1
+a92 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.2 2001/06/01 18:48:41 tom Exp tom $"
+@
+
+
+2.2
+log
+@formatting changes only
+@
+text
+@d2 3
+d21 1
+a21 2
+C  Date:         02-Jun-87
+C  Written For:  METPROC
+d25 1
+a25 1
+C         pie slope (PETTCONV) is now included);
+a28 1
+C
+d35 1
+a35 1
+C               CBF = AFLOW*PETT*PETT + BFLOW*PETT
+d38 1
+a38 1
+C        and PETT is PET Counts/(pixel * scan period)
+d41 1
+a41 1
+C         CBF = AFLOW*P*P + BFLOW*P   where P = PETT * PETTCONV
+d43 2
+a44 2
+C         AFLOW = AFLOW*PETTCONV*PETTCONV
+C         BFLOW = BFLOW*PETTCONV
+d49 1
+a49 1
+C        J. Nuclear Medicine, 24:782.
+d51 1
+a51 1
+C        J. Nuclear Medicine, 24:790.
+d58 6
+a63 7
+C     TIME = time (sec)
+C     ACTIVITY = non-decay-corrected activity (well counts)/(ml*sec)
+C     INUM = number of values in ITIME and IACTIV;
+C     ITIME = interpolated blood curve times (twice as many times);
+C     IACTIV = interpolated blood curve activities (twice as many);
+C        non-decay-corrected;
+C     CONV = convolution integral of IACTIV * EXP(-A*ITIME)
+a70 15
+C  Variables:
+C     FLOW = blood flow in ml/(min*100g);
+C     FLOWSEC = blood flow in ml/(sec*g);
+C     COUNTS = PETT tissue counts estimated from true blood flow;
+C     INTEGRAL = integral of instantaneous count rate over time
+C        of scan;
+C     SUMX2,SUMX3,SUMX4,SUMX2Y,SUMXY = sums used in regression fit;
+C
+C  Uses Subroutines:
+C     CONVOLVE
+C     INTEGRAT
+C     GETINT
+C
+C  Called by:  METPROC
+C
+d72 1
+a72 1
+C
+d77 10
+a86 4
+      REAL*4       COUNTS,INTEGRAL,SUMX2,SUMX3,SUMX4,SUMX2Y,
+     &             SUMXY,ACTIV1,ACTIV2,DTIME
+      INTEGER*4    MAXFLOW,MINFLOW,INC,I,J
+      CHARACTER*80 Q
+d89 2
+a90 1
+      RCSHEADER = "$Id: bloodflw.f,v 2.1 1993/07/15 20:25:17 tom Exp tom $"
+d104 2
+a105 2
+        MINFLOW = 5
+        INC = 5
+d111 3
+a113 2
+      ITIME(1)  = 0.5*TIME(1)
+      IACTIV(1) = 0.5*ACTIVITY(1)
+d118 9
+a126 11
+        ITIME(J)  = TIME(I)
+        IACTIV(J) = ACTIVITY(I)
+        J = J+1
+        DTIME = 0.5*(TIME(I+1)-TIME(I))
+        ITIME(J) = TIME(I) + DTIME
+        ACTIV1 = ACTIVITY(I)*EXP(-DTIME*TAU)
+        ACTIV2 = ACTIVITY(I+1)*EXP(DTIME*TAU)
+        IACTIV(J) = 0.5*(ACTIV1+ACTIV2)
+C       ITIME(J) =  0.5*(TIME(I)+TIME(I+1))
+C       IACTIV(J) = 0.5*(ACTIVITY(I)+ACTIVITY(I+1))
+        J = J+1
+a127 1
+      INUM = 2*NUMPNTS
+d129 4
+a132 7
+C  FLOW is divided by 6000 to convert from ml/(min*100 g)
+C    to FLOWSEC in ml/(sec*g) and then multiplied by BRAINDEN
+C    to convert to ml/(sec*ml)
+C  LAMBDA is in ml/ml;
+C  BRAINDEN is in g/ml;
+C  ITIME is in sec and IACTIV is in counts/(sec*ml));
+C  Thus, CONVOLVE works on units of seconds and ml;
+d137 13
+a149 12
+        FLOW = FLOAT(I)
+        FLOWSEC = BRAINDEN*FLOW/6000.
+        CALL CONVOLVE((FLOWSEC/LAMBDA)+TAU)
+        CALL INTEGRAT(ITIME,CONV,SCANST,SCANEND,INTEGRAL)
+        COUNTS = FLOWSEC*INTEGRAL
+        COUNTS = COUNTS/1000.
+        SUMX4 = SUMX4 + COUNTS**4
+        SUMX3 = SUMX3 + COUNTS**3
+        SUMX2 = SUMX2 + COUNTS**2
+        SUMXY = SUMXY + COUNTS*FLOW
+        SUMX2Y = SUMX2Y + COUNTS*COUNTS*FLOW
+        WRITE(USEROUT,8100) FLOW, COUNTS*1000.0/PETTCONV(1)
+d170 5
+a174 5
+      WRITE(USEROUT,8300) 'SUMX4 ',SUMX4
+      WRITE(USEROUT,8300) 'SUMX3 ',SUMX3
+      WRITE(USEROUT,8300) 'SUMX2 ',SUMX2
+      WRITE(USEROUT,8300) 'SUMX2Y',SUMX2Y
+      WRITE(USEROUT,8300) 'SUMXY ',SUMXY
+@
+
+
+2.1
+log
+@Changed RCSHEADER to ID
+@
+text
+@d2 3
+a16 1
+C
+a19 1
+C
+d25 2
+a27 4
+C	 History
+C			Fixed for UNIX 15-Jan-92 TOV
+C				FORMAT E14 changed to E14.7
+C
+a81 2
+C
+C  TERMINAL.LIB
+d89 1
+a89 1
+C
+d91 1
+a91 1
+C
+d96 3
+a98 3
+			CHARACTER*256 RCSHEADER
+C
+			RCSHEADER = "$Id$"
+d104 1
+a104 1
+C
+d115 1
+a115 1
+C
+d118 1
+a118 1
+C
+d138 1
+a138 1
+C
+d148 1
+a148 1
+C
+d164 1
+a164 1
+C
+d166 1
+a166 1
+C
+d171 1
+a171 1
+C
+d174 1
+a174 1
+C
+d177 1
+a177 1
+C
+d179 1
+a179 1
+C
+d192 1
+a192 1
+C
+@
+
+
+2.0
+log
+@Handles ECAT image format
+@
+text
+@d2 3
+d101 1
+a101 1
+			RCSHEADER = "$Header: /home/petsun2/tom/src/metproc/src/RCS/bloodflw.f,v 1.3 1992/10/19 15:56:10 tom Exp tom $"
+@
+
+
+1.3
+log
+@modified RCSHEADER length
+@
+text
+@d2 3
+d98 1
+a98 1
+			RCSHEADER = "$Header$"
+@
+
+
+1.2
+log
+@added RCSHEADER
+@
+text
+@d1 4
+a4 1
+c $Log$
+d93 1
+a93 1
+			CHARACTER*100 RCSHEADER
+d95 1
+a95 1
+			RCSHEADER = "$Header"
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+d90 1
+d92 1
+@

@@ -1,0 +1,147 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2011.04.04.14.39.57;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* $Log$ */
+/*	===============================================================================
+ *	Module:			imgcrop.c
+ *	Date:			Nov 2006
+ *	Author:			Tom Videen
+ *	Description:
+ *		Flip ECAT image to restore factory default orientation.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgcrop/RCS/imgcrop.c,v 1.3 2010/10/20 13:56:40 tom Exp $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+
+int main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file1;
+	Index           indx;
+
+	char           *scan1, *scan2;
+	int             pdim[3];
+	int             ndim[3];
+	int             i, j, k;
+	float        ***img1, ***img2;
+    long            x1, x2, y1, y2, z1, z2;
+
+    if (argc != 9) {
+        fprintf (stderr, "Usage: ana3dcrop img1 img2 x1 x2 y1 y2 z1 z2\n");
+        return (ERROR);
+    }
+    scan1 = argv[1];
+    scan2 = argv[2];
+    x1 = atoi (argv[3]);
+    x2 = atoi (argv[4]);
+    y1 = atoi (argv[5]);
+    y2 = atoi (argv[6]);
+    z1 = atoi (argv[7]);
+    z2 = atoi (argv[8]);
+
+	ndim[0] = x2 - x1 + 1;
+	ndim[1] = y2 - y1 + 1;
+	ndim[2] = z2 - z1 + 1;
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file1 = make_imgfile (scan1);
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [imgcrop]: opening %s\n", scan1);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [imgcrop]: reading MainHeader %s\n", scan1);
+		return (ERROR);
+	}
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [imgcrop]: reading %s frame %d\n", scan1, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [imgcrop]: reading subheader %s\n", scan1);
+		return (ERROR);
+	}
+	pdim[0] = file1->sh->dim1;
+	pdim[1] = file1->sh->dim2;
+	pdim[2] = file1->sh->dim3;
+
+	if ((img1 = rdtensor (file1, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [imgcrop]: reading %s\n", scan1);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+
+    if ((img2 = f3tensor (1, ndim[2], 1, ndim[1], 1, ndim[0])) == NULL) {
+        fprintf (stderr, "ERROR [imgcrop]: malloc img2\n");
+        return (ERROR);
+    }
+
+	for (i = 1; i <= ndim[2]; i++)
+		for (j = 1; j <= ndim[1]; j++)
+			for (k = 1; k <= ndim[0]; k++)
+				img2[i][j][k] = img1[i+z1-1][j+y1-1][k+x1-1];
+
+	file1->name = scan2;
+	(void) strcpy (file1->mode, "w");
+	indx.frm = 1;
+	fprintf (stdout, "Writing %s\n", scan2);
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [imgcrop]: opening %s\n", scan1);
+		return (ERROR);
+	}
+	file1->mh->nframe = indx.frm;
+	file1->mh->nplane = ndim[2];
+	file1->sh->dim1 = ndim[0];
+	file1->sh->dim2 = ndim[1];
+	file1->sh->dim3 = ndim[2];
+
+	if (put_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [imgcrop] writing %s\n", scan1);
+		return (ERROR);
+	}
+	if (writetensor (file1, &indx, img2) == ERROR) {
+		fprintf (stderr, "ERROR [imgcrop] writing %s\n", scan1);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+	free_f3tensor (img1, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (img2, 1, ndim[2], 1, ndim[1], 1, ndim[0]);
+	return (0);
+}
+@

@@ -1,0 +1,512 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	94.04.01.20.35.26;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.03.30.19.14.56;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.03.29.21.38.24;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.03.24.15.50.34;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.03.23.20.40.44;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@First checking in.
+@
+
+
+1.5
+log
+@Tissue activity works now.
+@
+text
+@/*$Id: ProcessImage.c,v 1.4 1994/03/30 19:14:56 ty7777 Exp ty7777 $*/
+/*$Log: ProcessImage.c,v $
+ * Revision 1.4  1994/03/30  19:14:56  ty7777
+ * Get
+ * Getting the path for the complete header correctly.
+ *
+ * Revision 1.3  1994/03/29  21:38:24  ty7777
+ * Working version, final checking in.
+ *
+ * Revision 1.2  1994/03/24  15:50:34  ty7777
+ * Before linked to voimean.
+ *
+ * Revision 1.1  1994/03/23  20:40:44  ty7777
+ * Initial revision
+ **/
+
+/*___________________________________________________________________________
+  File:		ProcessImage.c
+
+  Function:	PUBLIC int ProcessImage (float *image3d, long dimension, 
+		int processing, float halflife, char imgfile, Matval matval)
+
+  Arguments:	image3d,	a real array containing the image data, changed 
+				upon return.
+		dimension,	dimension of image.
+		processing,	processing code.
+		halflife,	halflife of isotope, used by decayed tissue
+				activity processing.
+		imgfile,	image file name.
+		matval,		specify the frame number to work with, only used
+				for processing tissue activity for ECAT images.
+
+  Return:	SUCCEED: successful; FAIL: error.
+
+  Description:	This function processes an image for CBF, CBV, and TISACT.
+
+  Called by:	ProcessOxygen.c	
+
+  Calling:	None.	
+
+  History:	Created by Tom Yang on 03/18/94. 
+___________________________________________________________________________*/
+
+#include <petutil/imglist.h>
+#include <petutil/matrix.h>
+#include <values.h>
+#include <math.h>
+#include "voimean.h"
+
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/voimean/RCS/ProcessImage.c,v 1.4 1994/03/30 19:14:56 ty7777 Exp ty7777 $";
+
+PUBLIC int ProcessImage (image3d, dimension, processing, halflife, imgfile, matval)
+	float		*image3d;
+	long		dimension;
+	int		processing;
+	float		halflife;
+	char		*imgfile;
+	struct Matval	matval;
+{
+	MatrixData	*matrix_read ();
+
+	BOOLEAN		return_value;
+	HEADER_DATA	header_data;
+	Image_subheader	*image_subheader;
+	MatrixData	*matrixx_data;
+	MatrixFile	*fptr;
+	char		complete_hdrfile [MAXPATH];
+	char		short_hdrfile [MAXLINE];
+	float		decay_constant;
+	float		frame_duration;
+	float		frame_start_time;
+	float		pixel_height;
+	float		pixel_width;
+	float		plane_separation;
+	float		scan_start_time;
+	float		sx;
+	float		value;
+	int		matnum;
+	int		scanner;
+	long		i;
+	short		height;
+	short		num_slices;
+	short		width;
+
+	if (processing == PROCESSING_NONE)
+		return SUCCEED;
+
+	gethdrfile (imgfile, short_hdrfile, complete_hdrfile);
+
+	if (gethdr (short_hdrfile, &header_data) != SUCCEED)
+	{
+		if (gethdr (complete_hdrfile, &header_data) != SUCCEED)
+		{
+			fprintf (stderr, "Error: header file can not be found as %s or %s\n", 
+				short_hdrfile, complete_hdrfile);
+
+			return (FAIL);
+		}
+	}
+
+	return_value	= SUCCEED;
+
+	switch (processing)
+	{
+		case	PROCESSING_CBF:
+			if (header_data.ntype == 2 || header_data.ntype == 4) 
+			{
+				for (i = 0; i < dimension; i++) 
+				{
+					value		= image3d [i];
+					image3d [i]	= value * (header_data.aflow1 * value 
+							+ header_data.bflow1);
+				}
+			}
+			else
+				return_value	= FAIL;
+
+			break;
+		case	PROCESSING_CBV:
+			if (header_data.ntype == 3) 
+			{
+				for (i = 0; i < dimension; i++) 
+				{
+					image3d [i]	*= header_data.bvfactor1;
+				}
+			}
+			else
+				return_value	= FAIL;
+			break;
+
+		case	PROCESSING_TISACT:
+			if (header_data.ntype == 5) 
+			{
+				if (getimagedim (imgfile, matval, &scanner, &width, 
+				&height, &num_slices, &pixel_width, &pixel_height, 
+				&plane_separation) == FAIL) 
+				{
+					fprintf (stderr, "Error: getimagedim () from image %s.\n",
+					imgfile);
+
+					return FAIL;
+				}
+
+				if (scanner == PETT6_SCANNER)
+				{
+					if (halflife >= NONDECAY_HALFLIFE)
+						sx	= header_data.pettcnv1;
+					else
+						sx	= header_data.decay_factor1;
+				}
+				else if (scanner == ECAT_SCANNER)
+				{
+					/*
+					 * Get the starting time and duration of scan.
+					 */
+					fptr	= OpenEcat (imgfile, &num_slices, &width, &height, 
+						&pixel_width, &plane_separation, matval);
+
+					if (fptr == (MatrixFile *) NULL) 
+					{
+						fprintf (stderr, 
+					"Error (ProcessImage.c): ecat image %s cannot be openned.\n",
+					imgfile);
+
+						return FAIL;
+					}
+
+					if (fptr->mhptr->data_type != IMAGE_DATA)
+					{
+						fprintf (stderr, 
+			"Error (ProcessImage.c): ecat image %s does not contain image data.\n",
+						imgfile);
+
+						matrix_close (fptr);
+						return FAIL;
+					}
+
+					matnum	= mat_numcod (matval.frame, matval.plane, 
+						matval.gate, matval.data, matval.bed);
+
+					matrixx_data	= matrix_read (fptr, matnum);
+					if (matrixx_data == NULL)
+					{
+						fprintf (stderr, 
+						"matrixx_read () error in ProcessImage.c.\n");
+
+						matrix_close (fptr);
+
+						return FAIL;
+					}
+
+       					image_subheader		= (Image_subheader *) matrixx_data->shptr;
+					frame_duration		= image_subheader->frame_duration 
+								/ ((float) MILISECONDS_PER_SECOND);
+					frame_start_time	= image_subheader->frame_start_time 
+								/ ((float) MILISECONDS_PER_SECOND);
+
+					free_matrix_data (matrixx_data);
+
+					/*
+					 * Obtain the scan start time.
+					 */
+					matnum	= mat_numcod (1, matval.plane, 
+						matval.gate, matval.data, matval.bed);
+
+					matrixx_data	= matrix_read (fptr, matnum);
+					if (matrixx_data == NULL)
+					{
+						fprintf (stderr, 
+						"matrixx_read () error in ProcessImage.c.\n");
+
+						matrix_close (fptr);
+
+						return FAIL;
+					}
+
+       					image_subheader	= (Image_subheader *) matrixx_data->shptr;
+					scan_start_time	= image_subheader->frame_start_time 
+							/ ((float) MILISECONDS_PER_SECOND);
+
+					free_matrix_data (matrixx_data);
+
+					matrix_close (fptr);
+
+					/*
+					 * Compute the scaling factor.
+					 */
+					if (halflife >= NONDECAY_HALFLIFE)
+					{
+						sx	= header_data.pieslope * 60
+							/ frame_duration;
+					}
+					else
+					{
+						decay_constant	= log (2) / halflife; 
+						sx	= header_data.pieslope * 60
+							* decay_constant 
+							* exp (decay_constant * (frame_start_time
+							- scan_start_time))
+							/ (1 - exp (-decay_constant * frame_duration));
+					}
+				}
+
+				for (i = 0; i < dimension; i++) 
+				{
+					image3d [i]	*= sx;
+				}
+			}
+			else
+				return_value	= FAIL;
+
+			break;
+
+		case	PROCESSING_NONE:
+
+		default:
+			break;
+	}
+
+	if (return_value == FAIL)
+	{
+		fprintf (stderr,
+		"Error: processing %d and data type %d in header file %s does not match.\n",
+		processing, header_data.ntype, short_hdrfile);
+	}
+
+	return return_value;
+}
+
+PUBLIC int gethdrfile (imgfile, short_hdrfile, complete_hdrfile)
+	char	*imgfile;
+	char	*short_hdrfile;
+	char	*complete_hdrfile;
+{
+	char	*cbuffer;
+	char	*extension;
+	char	short_imgfile [MAXLINE];
+
+	extension	= strrchr (imgfile, '/');
+
+	strncpy (complete_hdrfile, "\0", MAXLINE);
+	if (extension != NULL)
+	{
+		cbuffer	= extension + 1; 
+		strncpy (complete_hdrfile, imgfile, strlen (imgfile)  - strlen (extension) + 1);
+	}
+	else
+	{
+		cbuffer	= imgfile;
+	}
+	strcpy (short_imgfile,	cbuffer); 
+
+	strncpy (short_hdrfile, "\0", MAXLINE);
+	extension	= strrchr (short_imgfile, '.');
+	if (extension != NULL)
+	{
+		strncpy (short_hdrfile, short_imgfile, strlen (short_imgfile)  - strlen (extension));
+	}
+	else
+		strcpy (short_hdrfile, short_imgfile);
+
+	strcat (short_hdrfile, HDR_EXT);
+	strcat (complete_hdrfile, short_hdrfile);
+
+	return SUCCEED;
+}
+@
+
+
+1.4
+log
+@Get
+Getting the path for the complete header correctly.
+@
+text
+@d1 1
+a1 1
+/*$Id: ProcessImage.c,v 1.3 1994/03/29 21:38:24 ty7777 Exp ty7777 $*/
+d3 4
+d50 1
+a50 2
+#define	TISACT_SCALER		10.0
+#define	FLOAT_ERROR_RANGE	0.0100
+a51 2
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/voimean/RCS/ProcessImage.c,v 1.3 1994/03/29 21:38:24 ty7777 Exp ty7777 $";
+
+a74 1
+	float		scaler;
+a133 3
+				scaler	= TISACT_SCALER;
+				sx	= 1.0 / scaler;
+
+d146 2
+a147 3
+					if (halflife >= MAXFLOAT 
+					- FLOAT_ERROR_RANGE) 
+						sx	*= header_data.pettcnv1;
+d149 1
+a149 1
+						sx	*= header_data.decay_factor1;
+d228 14
+a241 6
+					decay_constant	= log (2) / halflife; 
+					sx	*= header_data.pieslope * 60
+						* decay_constant 
+						* exp (decay_constant * (frame_start_time
+						- scan_start_time))
+						/ (1 - exp (-decay_constant * frame_duration));
+@
+
+
+1.3
+log
+@Working version, final checking in.
+@
+text
+@d1 1
+a1 1
+/*$Id: ProcessImage.c,v 1.2 1994/03/24 15:50:34 ty7777 Exp ty7777 $*/
+d3 3
+d49 1
+a49 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/voimean/RCS/ProcessImage.c,v 1.2 1994/03/24 15:50:34 ty7777 Exp ty7777 $";
+d277 1
+a285 1
+		strcpy (complete_hdrfile, "");
+d289 1
+a289 1
+	strncpy (short_hdrfile, "\n", MAXLINE);
+@
+
+
+1.2
+log
+@Before linked to voimean.
+@
+text
+@d1 1
+a1 1
+/*$Id: ProcessImage.c,v 1.1 1994/03/23 20:40:44 ty7777 Exp ty7777 $*/
+d3 3
+d13 1
+a13 1
+  Function:	int ProcessImage (float *image3d, long dimension, 
+d46 1
+a46 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/voimean/RCS/ProcessImage.c,v 1.1 1994/03/23 20:40:44 ty7777 Exp ty7777 $";
+d48 1
+a48 1
+int ProcessImage (image3d, dimension, processing, halflife, imgfile, matval)
+d82 3
+d91 1
+a91 1
+			fprintf (stderr, "Error:  header file not found as %s or %s\n", 
+a104 6
+			/*
+			 * Cerebral Blood Flow  (scaled by 50 to maintain dynamic range 
+			 * with integer pixels)
+			 */
+				scaler	= CBF_SCALER;
+				sx	= 1.0 / scaler;
+d108 1
+a108 2
+					image3d [i]	= sx * value 
+							* (header_data.aflow1 * value 
+a118 6
+			/*
+			 * Cerebral Blood Volume  (scaled by 100 to maintain dynamic range 
+			 * with integer pixels)
+			 */
+				scaler	= CBV_SCALER;
+				sx	= (1.0 / scaler) * header_data.bvfactor1;
+d121 1
+a121 1
+					image3d [i]	*= sx;
+d286 1
+d289 1
+d291 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d11 1
+a11 1
+		PARAMETER_DATA parameter_data, char imgfile, Matval matval)
+d16 3
+a18 1
+		parameter_data,	parameter data structure.
+d21 1
+a21 1
+				for the ECAT images.
+a39 2
+#define	CBF_SCALER		0.02
+#define	CBV_SCALER		0.01
+d43 1
+a43 1
+static char rcsid [] = "$Header$";
+d45 1
+a45 3
+PRIVATE int gethdrfile ();
+
+int ProcessImage (image3d, dimension, parameter_data, imgfile, matval)
+d48 2
+a49 1
+	PARAMETER_DATA	parameter_data;
+d94 1
+a94 1
+	switch (parameter_data.processing)
+d153 1
+a153 1
+					if (parameter_data.halflife >= MAXFLOAT 
+d236 1
+a236 1
+					decay_constant	= log (2) / parameter_data.halflife; 
+d264 1
+a264 1
+		parameter_data.processing, header_data.ntype, short_hdrfile);
+d270 1
+a270 1
+PRIVATE int gethdrfile (imgfile, short_hdrfile, complete_hdrfile)
+@

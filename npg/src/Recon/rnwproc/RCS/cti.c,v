@@ -1,0 +1,1027 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	2002.11.27.17.29.45;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.07.28.15.29.09;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.07.21.17.36.05;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.03.03.20.01.40;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.02.03.16.33.28;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.02.02.18.05.33;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial RCS version
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@/*---------------------------------------------------------------------
+	Routines: Wrapper routines for CTI image I/O programs.
+		getsbhdr
+		getmhdr
+		rdimg
+		wrimg
+  ---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <matrix.h>
+
+#define MAX_FILES 10
+#define MAXNAME 120
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/rnwproc/RCS/cti.c,v 1.5 1998/07/28 15:29:09 tom Exp tom $";
+
+MatrixFile     *fp_list[MAX_FILES] =
+{NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+char            file_list[MAX_FILES][MAXNAME];
+char            mode_list[MAX_FILES][4];	 /* Access modes of opened files. */
+
+MatrixFile     *matrix_open ();
+MatrixFile     *matrix_create ();
+MatrixFile     *getfp ();
+MatrixFile     *create_fp ();
+MatrixData     *matrix_read ();
+struct MatDir  *matrix_find ();
+
+int             ctipl2cub ();
+int            *ringnum ();
+
+/**********************************************/
+void           *getsbhdr (filnam, plane, frame, gate, data, bed)
+/**********************************************/
+
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+{
+	int             matnum;
+	char           *mode = "r";
+	Scan_subheader *scansh;
+	Image_subheader *imgsh;
+	struct MatDir  *matdir;
+	MatrixFile     *mfp;
+
+	matnum = mat_numcod (frame, plane, gate, data, bed);
+
+	if ((mfp = getfp (filnam, mode)) == NULL) {
+		fprintf (stderr, "Could not get file pointer in \"getsbhdr\".\n");
+		return (NULL);
+	}
+	if ((matdir = matrix_find (matnum, mfp)) == NULL) {
+		fprintf (stderr, "Could not find matrix directory in \"getsbhdr\".\n");
+		return (NULL);
+	}
+	if ((matnum = mat_numcod (frame, plane, gate, data, bed)) == NULL) {
+		fprintf (stderr, "Could not get matrix number in \"getsbhdr\".\n");
+		return (NULL);
+	}
+	if (strstr (filnam, ".scn")) {
+		/* Read scan subheader. */
+		if (NULL == (scansh = (Scan_subheader *) malloc (sizeof (Scan_subheader)))) {
+			fprintf (stderr, "Could not malloc memory for scansh in \"getsbhdr\".\n");
+			return (NULL);
+		}
+		mat_read_scan_subheader (mfp->fptr, matdir->strtblk, scansh);
+		return (scansh);
+	} else if (strstr (filnam, ".img")) {
+		if (NULL == (imgsh = (Image_subheader *) malloc (sizeof (Image_subheader)))) {
+			fprintf (stderr, "Could not malloc memory for imgsh in \"getsbhdr\".\n");
+			return (NULL);
+		}
+		mat_read_image_subheader (mfp->fptr, matdir->strtblk, imgsh);
+		return (imgsh);
+	} else {
+		fprintf (stderr, "*** %s is a file type not supported by getsbhdr.  ***\n", filnam);
+		return (NULL);
+	}
+}
+
+/*******************/
+void           *getmhdr (filnam)
+/*******************/
+
+	char           *filnam;
+{
+	char           *mode = "r";
+	Main_header    *mhdr;
+	MatrixFile     *mfp;
+
+	if ((mfp = getfp (filnam, mode)) == NULL) {
+		fprintf (stderr, "Could not get file pointer in \"getmhdr\".\n");
+		return (NULL);
+	}
+	if (NULL == (mhdr = (Main_header *) malloc (sizeof (Main_header)))) {
+		fprintf (stderr, "Could not malloc memory for mhdr in \"getmhdr\".\n");
+		return (NULL);
+	}
+	mat_read_main_header (mfp->fptr, mhdr);
+	return (mhdr);
+}
+
+/********************************************/
+float          *rdimg (filnam, plane, frame, gate, data, bed)
+/********************************************/
+
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+{
+	int             matnum, i, xdim, ydim;
+	short          *simg;
+	char           *mode = "r";
+	float          *matrix, scl;
+	Scan_subheader *shscan;
+	Image_subheader *shimg;
+	MatrixFile     *mfp;
+	MatrixData     *mdata;
+
+	if ((mfp = getfp (filnam, mode)) == NULL) {
+		fprintf (stderr, "Could not get file pointer in \"rdimg\".\n");
+		return (NULL);
+	}
+	if ((matnum = mat_numcod (frame, plane, gate, data, bed)) == NULL) {
+		fprintf (stderr, "Could not get matrix number in \"rdimg\".\n");
+		return (NULL);
+	}
+	if (NULL == (mdata = matrix_read (mfp, matnum))) {
+		fprintf (stderr, "Could not read mdata in \"rdimg\".\n");
+		return (NULL);
+	}
+	if (strstr (filnam, ".scn")) {
+		shscan = (Scan_subheader *) mdata->shptr;
+		scl = shscan->scale_factor * shscan->loss_correction_fctr;
+		xdim = shscan->dimension_1;
+		ydim = shscan->dimension_2;
+	} else if (strstr (filnam, ".img")) {
+		shimg = (Image_subheader *) mdata->shptr;
+		if (shimg->quant_scale > 0)
+			scl = shimg->loss_corr_fctr * shimg->quant_scale;
+		else
+			scl = shimg->loss_corr_fctr;
+		xdim = shimg->dimension_1;
+		ydim = shimg->dimension_2;
+	} else {
+		fprintf (stderr, "Invalid file extension, %s, in rdimg.\n", filnam);
+		return (NULL);
+	}
+
+	if (NULL == (matrix = (float *) malloc (xdim * ydim * sizeof (float)))) {
+		fprintf (stderr, "Could not malloc memory for matrix in \"rdimg\".\n");
+		return (NULL);
+	}
+	simg = (short *) mdata->data_ptr;
+	for (i = 0; i < xdim * ydim; i++)
+		matrix[i] = scl * simg[i];
+
+	free_matrix_data (mdata);
+	return (matrix);
+}
+
+/******************************************************/
+int             wrimg (filnam, matrix, mh, sh, plane, frame, gate, data, bed)
+/******************************************************/
+
+	char           *filnam;
+	float          *matrix;
+	Main_header    *mh;
+	char           *sh;
+	int             plane, frame, gate, data, bed;
+{
+	int             matnum, i, xdim, ydim, stat;
+	short          *smatrix;
+	char           *mode = "w";
+	float           scl, max, min;
+	Scan_subheader *shscan;
+	Image_subheader *shimg;
+	MatrixFile     *mfp;
+	MatrixData     *mdata;
+
+	if ((matnum = mat_numcod (frame, plane, gate, data, bed)) == NULL) {
+		fprintf (stderr, "Could not get matrix number in \"wrimg\".\n");
+		return (NULL);
+	}
+	if (NULL == (mdata = (MatrixData *) malloc (sizeof (MatrixData)))) {
+		fprintf (stderr, "Could not malloc memory for data structure in \"wrimg\".\n");
+		return (NULL);
+	}
+	if (strstr (filnam, ".scn")) {
+		shscan = (Scan_subheader *) sh;
+		xdim = shscan->dimension_1;
+		ydim = shscan->dimension_2;
+	} else if (strstr (filnam, ".img")) {
+		shimg = (Image_subheader *) sh;
+		xdim = shimg->dimension_1;
+		ydim = shimg->dimension_2;
+	} else {
+		fprintf (stderr, "Invalid file extension, %s, in wrimg.\n", filnam);
+		return (ERROR);
+	}
+
+	max = -1.e20;
+	min = 1.e20;
+	for (i = 0; i < xdim * ydim; i++) {
+		if (matrix[i] > max)
+			max = matrix[i];
+		if (matrix[i] < min)
+			min = matrix[i];
+	}
+	if (max > -min) {
+		scl = 32767 / max;
+		max = 32767;
+		min = min * 32767;
+	} else {
+		scl = -32767 / min;
+		max = max * scl;
+		min = -32767;
+	}
+
+	if (NULL == (smatrix = (short *) malloc (xdim * ydim * sizeof (short)))) {
+		fprintf (stderr, "Could not malloc memory for matrix in \"wrimg\".\n");
+		return (NULL);
+	}
+	for (i = 0; i < xdim * ydim; i++)
+		smatrix[i] = (short) (scl * matrix[i]);
+
+	if (strstr (filnam, ".scn")) {
+		shscan->scan_min = (short) min;
+		shscan->scan_max = (short) max;
+		shscan->scale_factor = 1. / scl;
+	} else if (strstr (filnam, ".img")) {
+		shimg->image_min = (short) min;
+		shimg->image_max = (short) max;
+		shimg->quant_scale = 1. / scl;
+		shimg->ecat_calibration_fctr = 1.;
+	}
+	if ((mfp = create_fp (filnam, mh)) == NULL) {
+		fprintf (stderr, "Could not create file in \"wrimg\".\n");
+		return (ERROR);
+	}
+	mdata->nblks = xdim * ydim * sizeof (short) / 512;
+	mdata->shptr = (char *) sh;
+	mdata->data_ptr = (char *) smatrix;
+	if ((stat = matrix_write (mfp, matnum, mdata)) == ERROR) {
+		fprintf (stderr, "Could not write mdata in \"wrimg\".\n");
+		return (ERROR);
+	}
+	free (smatrix);
+	free (mdata);
+	return (OK);
+}
+
+/******************************/
+MatrixFile     *create_fp (filnam, mh)
+/******************************/
+
+	char           *filnam;
+	MatrixData     *mh;
+{
+	int             fn;
+	char            cmd[MAXNAME];
+	FILE           *fp;
+
+	if (strstr (filnam, ".scn") && strstr (filnam, ".img")) {
+		fprintf (stderr, "Invalid CTI file name.\n");
+		return (NULL);
+	}
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list[fn]))
+			return (fp_list[fn]);
+	}
+
+/* File not open, assign it available slot. */
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list[fn] == NULL)
+			break;
+	}
+	if (fn == MAX_FILES) {
+		fprintf (stderr, "Maximum number of open files exceeded in getfd\n");
+		return (NULL);
+	}
+	if ((fp = fopen (filnam, "r")) != NULL) {/* File exists. */
+		fclose (fp);
+		sprintf (cmd, "rm %s\n", filnam);
+		system (cmd);
+		fprintf (stderr, "*** Deleted %s ***\n", filnam);
+	}
+	if ((fp_list[fn] = matrix_create (filnam, mh)) == NULL) {
+		fprintf (stderr, "Error creating %s in creatfp.\n", filnam);
+		return (NULL);
+	} else {
+		fprintf (stderr, "Creating %s\n", filnam);
+	}
+	strcpy (file_list[fn], filnam);
+	return (fp_list[fn]);
+}
+
+/****************************/
+MatrixFile     *getfp (filnam, mode)
+/****************************/
+
+	char           *filnam, *mode;
+{
+	int             fn;
+	MatrixFile     *fptest;
+	if (strstr (filnam, ".scn") && strstr (filnam, ".img")) {
+		fprintf (stderr, "Invalid CTI file name.\n");
+		return (NULL);
+	}
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list[fn])) {
+			if (!strcmp (mode, mode_list[fn]))
+				return (fp_list[fn]);
+			else {
+				/* File opened with wrong read/write mode. */
+				mat_close (fp_list[fn]);
+				fp_list[fn] = matrix_open (file_list[fn], mode);
+				strcpy (mode_list[fn], mode);
+				return (fp_list[fn]);
+			}
+		}
+	}
+
+/* File not open, assign it available slot. */
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list[fn] == NULL)
+			break;
+	}
+	if (fn == MAX_FILES) {
+		fprintf (stderr, "Maximum number of open files exceeded in getfd\n");
+		return (NULL);
+	}
+	if (!strcmp (mode, "r+")) {
+		if ((fptest = matrix_open (filnam, "r")) != NULL)	/* File exists. */
+			mat_close (fptest);
+		else
+			mode = "w";
+	}
+	if ((fp_list[fn] = matrix_open (filnam, mode)) != NULL) {
+		strcpy (file_list[fn], filnam);
+		strcpy (mode_list[fn], mode);
+		return (fp_list[fn]);
+	} else
+		return (NULL);
+}
+
+/*************************/
+int             plnnum_f3d (ring1, ring2)
+/*************************/
+
+/* Convert ring1 and ring2 to plane number in 953b.  Assume
+   rings are numbered from 1 to 16. */
+
+	int             ring1, ring2;
+{
+	int             plane;
+
+	ring1 -= 1;
+	ring2 -= 1;
+/*plane = ((ring1 << 3) | (ring2 & 0x07) | ((ring2 & 0x08) << 4) + 1)%256;*/
+	plane = (((ring1 & 0x10) << 5) | ((ring1 & 0x08) << 4) | (ring1 & 0x07) |
+		 ((ring2 & 0x10) << 4) | ((ring2 & 0x0f) << 3)) + 1;
+
+	return (plane);
+}
+
+/*****************/
+int            *ringnum (plane)
+/*****************/
+
+	int             plane;
+{
+	int             ring[2], pln;
+
+	pln = plane - 1;
+	ring[0] = ((pln & 0x80) >> 4) | pln & 0x07;
+	ring[1] = (pln & 0x78) >> 3;
+	return (ring);
+}
+
+/*******************/
+void            matclose (filnam)
+/*******************/
+
+	char           *filnam;
+{
+	int             fn;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list[fn])) {
+			matrix_close (fp_list[fn]);
+			fp_list[fn] = NULL;
+			strcpy (file_list[fn], " ");
+		}
+	}
+}
+@
+
+
+1.5
+log
+@minimize user messages
+@
+text
+@d10 1
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/rnwproc/RCS/cti.c,v 1.4 1998/07/21 17:36:05 tom Exp tom $";
+a46 1
+	MatrixData     *matrix_data;
+d77 1
+a77 1
+	} else
+d79 2
+a80 1
+
+a88 1
+	int             matnum;
+a90 1
+	struct MatDir  *matdir;
+a91 1
+	MatrixData     *matrix_data;
+a115 1
+	Main_header    *mhdr;
+a117 1
+	struct MatDir  *matdir;
+a178 1
+	struct MatDir  *matdir;
+d261 1
+a261 2
+	int             i, fn;
+	MatrixFile     *mfp, *fptest;
+d305 2
+a306 2
+	int             i, fn;
+	MatrixFile     *mfp, *fptest;
+d388 1
+a388 1
+	int             i, fn;
+@
+
+
+1.4
+log
+@Solaris version
+@
+text
+@d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/rnwproc/RCS/cti.c,v 1.3 1994/03/03 20:01:40 tom Exp tom $";
+d298 2
+@
+
+
+1.3
+log
+@replace Id with $Header$
+@
+text
+@d2 6
+a8 8
+Routines: Wrapper routines for CTI image I/O programs.
+	getsbhdr
+	getmhdr
+	rdimg
+	wrimg
+
+---------------------------------------------------------------------*/
+
+d16 1
+a16 1
+static char rcsid [] = "$Header$";
+d18 4
+a21 4
+MatrixFile    *fp_list[MAX_FILES] =
+                {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
+char    file_list[MAX_FILES][MAXNAME];
+char    mode_list[MAX_FILES][4]; /* Access modes of opened files. */
+d23 6
+a28 7
+MatrixFile *matrix_open();
+MatrixFile *matrix_create();
+MatrixFile *getfp();
+MatrixFile *create_fp();
+MatrixData *matrix_read();
+struct MatDir  *matrix_find();
+void mat_read_main_header();
+d30 2
+a31 2
+int ctipl2cub ();
+int *ringnum ();
+d34 1
+a34 1
+void *getsbhdr(filnam,plane,frame,gate,data,bed)
+d37 2
+a38 3
+char	*filnam;
+int	plane,frame,gate,data,bed;
+
+d40 7
+d48 1
+a48 1
+int	matnum;
+d50 29
+a78 1
+char	*mode = "r";
+a79 43
+Scan_subheader *scansh;
+Image_subheader *imgsh;
+struct 	MatDir *matdir;
+
+MatrixFile *mfp;
+
+MatrixData *matrix_data;
+
+matnum = mat_numcod(frame,plane,gate,data,bed);
+
+if((mfp = getfp(filnam,mode)) == NULL) {
+    fprintf(stderr,"Could not get file pointer in \"getsbhdr\".\n");
+    return(NULL);
+    }
+if((matdir = matrix_find(matnum,mfp)) == NULL) {
+    fprintf(stderr,"Could not find matrix directory in \"getsbhdr\".\n");
+    return(NULL);
+    }
+if((matnum = mat_numcod(frame,plane,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not get matrix number in \"getsbhdr\".\n");
+    return(NULL);
+    }
+
+if(strstr(filnam,".scn")) {
+    /* Read scan subheader. */
+    if(NULL==(scansh=(Scan_subheader *)malloc(sizeof(Scan_subheader)))) {
+        fprintf(stderr,"Could not malloc memory for scansh in \"getsbhdr\".\n");
+        return(NULL);
+        }
+    mat_read_scan_subheader(mfp->fptr,matdir->strtblk,scansh);
+    return(scansh);
+    }
+else if(strstr(filnam,".img")) {
+    if(NULL==(imgsh=(Image_subheader *)malloc(sizeof(Image_subheader)))) {
+        fprintf(stderr,"Could not malloc memory for imgsh in \"getsbhdr\".\n");
+        return(NULL);
+        }
+    mat_read_image_subheader(mfp->fptr,matdir->strtblk,imgsh);
+    return(imgsh);
+    }
+else
+    fprintf(stderr,"*** %s is a file type not supported by getsbhdr.  ***\n",filnam);
+
+d83 1
+a83 1
+void *getmhdr(filnam)
+d86 1
+a86 2
+char	*filnam;
+
+d88 6
+d95 10
+a104 24
+int	matnum;
+
+char	*mode = "r";
+
+Main_header *mhdr;
+struct 	MatDir *matdir;
+
+MatrixFile *mfp;
+
+MatrixData *matrix_data;
+
+if((mfp = getfp(filnam,mode)) == NULL) {
+    fprintf(stderr,"Could not get file pointer in \"getmhdr\".\n");
+    return(NULL);
+    }
+
+if(NULL==(mhdr=(Main_header *)malloc(sizeof(Main_header)))) {
+    fprintf(stderr,"Could not malloc memory for mhdr in \"getmhdr\".\n");
+    return(NULL);
+    }
+mat_read_main_header(mfp->fptr,mhdr);
+
+return(mhdr);
+
+d108 1
+a108 1
+float *rdimg(filnam,plane,frame,gate,data,bed)
+d111 2
+a112 3
+char	*filnam;
+int	plane,frame,gate,data,bed;
+
+d114 10
+d125 29
+a153 1
+int	matnum,i,xdim,ydim;
+d155 7
+a161 1
+short	*simg;
+d163 2
+a164 59
+char	*mode = "r";
+
+float	*matrix,
+	scl;
+
+Main_header *mhdr;
+Scan_subheader *shscan;
+Image_subheader *shimg;
+struct 	MatDir *matdir;
+MatrixFile *mfp;
+MatrixData *mdata;
+
+if((mfp = getfp(filnam,mode)) == NULL) {
+    fprintf(stderr,"Could not get file pointer in \"rdimg\".\n");
+    return(NULL);
+    }
+if((matnum = mat_numcod(frame,plane,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not get matrix number in \"rdimg\".\n");
+    return(NULL);
+    }
+
+if(NULL==(mdata=matrix_read(mfp,matnum))) {
+    fprintf(stderr,"Could not read mdata in \"rdimg\".\n");
+    return(NULL);
+    }
+
+if(strstr(filnam,".scn")) {
+    shscan = (Scan_subheader *)mdata->shptr;
+    scl = shscan->scale_factor*shscan->loss_correction_fctr;
+    xdim = shscan->dimension_1;
+    ydim = shscan->dimension_2;
+    }
+else if(strstr(filnam,".img")) {
+    shimg = (Image_subheader *)mdata->shptr;
+    if(shimg->quant_scale > 0)
+	scl = shimg->loss_corr_fctr*shimg->quant_scale;
+    else
+        scl = shimg->loss_corr_fctr;
+    xdim = shimg->dimension_1;
+    ydim = shimg->dimension_2;
+    }
+else {
+    fprintf(stderr,"Invalid file extension, %s, in rdimg.\n",filnam);
+    return(NULL);
+    }
+
+if(NULL==(matrix=(float *)malloc(xdim*ydim*sizeof(float)))) {
+    fprintf(stderr,"Could not malloc memory for matrix in \"rdimg\".\n");
+    return(NULL);
+    }
+
+simg = (short *)mdata->data_ptr;
+for(i=0;i<xdim*ydim;i++)
+    matrix[i] = scl*simg[i];
+
+free_matrix_data(mdata);
+
+return(matrix);
+
+d168 1
+a168 1
+int wrimg(filnam,matrix,mh,sh,plane,frame,gate,data,bed)
+d171 5
+a175 6
+char	*filnam;
+float	*matrix;
+Main_header *mh;
+char	*sh;
+int	plane,frame,gate,data,bed;
+
+d177 9
+d187 20
+a206 1
+int	matnum,i,xdim,ydim,stat;
+d208 17
+a224 1
+short	*smatrix;
+d226 6
+a231 1
+char	*mode = "w";
+d233 24
+a256 89
+float	scl,max,min;
+
+Scan_subheader *shscan;
+Image_subheader *shimg;
+struct 	MatDir *matdir;
+MatrixFile *mfp;
+MatrixData *mdata;
+
+if((matnum = mat_numcod(frame,plane,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not get matrix number in \"wrimg\".\n");
+    return(NULL);
+    }
+
+if(NULL==(mdata=(MatrixData *)malloc(sizeof(MatrixData)))) {
+    fprintf(stderr,"Could not malloc memory for data structure in \"wrimg\".\n");
+    return(NULL);
+    }
+
+if(strstr(filnam,".scn")) {
+    shscan = (Scan_subheader *)sh;
+    xdim = shscan->dimension_1;
+    ydim = shscan->dimension_2;
+    }
+else if(strstr(filnam,".img")) {
+    shimg = (Image_subheader *)sh;
+    xdim = shimg->dimension_1;
+    ydim = shimg->dimension_2;
+    }
+else {
+    fprintf(stderr,"Invalid file extension, %s, in wrimg.\n",filnam);
+    return(ERROR);
+    }
+
+max = -1.e20;
+min = 1.e20;
+for(i=0;i<xdim*ydim;i++) {
+    if(matrix[i] > max)
+	max = matrix[i];
+    if(matrix[i] < min)
+	min = matrix[i];
+    }
+if(max > -min) {
+    scl =  32767/max;
+    max = 32767;
+    min = min*32767;
+    }
+else {
+    scl = -32767/min;
+    max = max*scl;
+    min = -32767;
+    }
+
+if(NULL==(smatrix=(short *)malloc(xdim*ydim*sizeof(short)))) {
+    fprintf(stderr,"Could not malloc memory for matrix in \"wrimg\".\n");
+    return(NULL);
+    }
+for(i=0;i<xdim*ydim;i++)
+    smatrix[i] = (short)(scl*matrix[i]);
+
+if(strstr(filnam,".scn")) {
+    shscan->scan_min = (short)min;
+    shscan->scan_max = (short)max;
+    shscan->scale_factor = 1./scl;
+    }
+else if(strstr(filnam,".img")) {
+    shimg->image_min = (short)min;
+    shimg->image_max = (short)max;
+    shimg->quant_scale = 1./scl;
+    shimg->ecat_calibration_fctr = 1.;
+    }
+
+if((mfp=create_fp(filnam,mh)) == NULL) {
+    fprintf(stderr,"Could not create file in \"wrimg\".\n");
+    return(ERROR);
+    }
+
+mdata->nblks = xdim*ydim*sizeof(short)/512;
+mdata->shptr = (char *)sh;
+mdata->data_ptr = (char *)smatrix;
+if((stat=matrix_write(mfp,matnum,mdata)) == ERROR) {
+    fprintf(stderr,"Could not write mdata in \"wrimg\".\n");
+    return(ERROR);
+    }
+
+free(smatrix);
+free(mdata);
+
+return(OK);
+
+d260 1
+a260 1
+MatrixFile *create_fp(filnam,mh)
+d263 2
+a264 3
+char	*filnam;
+MatrixData *mh;
+
+d266 4
+d271 8
+a278 1
+int	i,fn;
+a279 17
+MatrixFile 	*mfp,
+		*fptest;
+
+char		cmd[MAXNAME];
+
+FILE		*fp;
+
+if(strstr(filnam,".scn") && strstr(filnam,".img")) {
+    fprintf(stderr,"Invalid CTI file name.\n");
+    return(NULL);
+    }
+
+for(fn=0;fn<MAX_FILES;fn++) {
+    if(!strcmp(filnam,file_list[fn]))
+	return(fp_list[fn]);
+    }
+
+d281 20
+a300 24
+for(fn=0;fn<MAX_FILES;fn++) {
+    if(fp_list[fn] == NULL) 
+	break;
+    }
+if(fn == MAX_FILES) {
+    fprintf(stderr,"Maximum number of open files exceeded in getfd\n");
+    return(NULL);
+    }
+
+if((fp=fopen(filnam,"r")) != NULL) { /* File exists. */
+    fclose(fp);
+    sprintf(cmd,"rm %s\n",filnam);
+    system(cmd);
+    fprintf(stderr,"*** Deleted %s ***\n",filnam);
+    }
+
+if((fp_list[fn]=matrix_create(filnam,mh)) == NULL) {
+    fprintf("Error creating %s in creatfp.\n",filnam);
+    return(NULL);
+    }
+
+strcpy(file_list[fn],filnam);
+return(fp_list[fn]);
+
+d304 1
+a304 1
+MatrixFile *getfp(filnam,mode)
+d307 1
+a307 3
+char	*filnam,
+	*mode;
+
+d309 5
+a313 22
+
+int	i,fn;
+
+MatrixFile 	*mfp,
+		*fptest;
+
+if(strstr(filnam,".scn") && strstr(filnam,".img")) {
+    fprintf(stderr,"Invalid CTI file name.\n");
+    return(NULL);
+    }
+
+for(fn=0;fn<MAX_FILES;fn++) {
+    if(!strcmp(filnam,file_list[fn])) {
+	if(!strcmp(mode,mode_list[fn]))
+	    return(fp_list[fn]);
+	else {
+	    /* File opened with wrong read/write mode. */
+	    mat_close(fp_list[fn]);
+	    fp_list[fn] = matrix_open(file_list[fn],mode);
+	    strcpy(mode_list[fn],mode);
+	    return(fp_list[fn]);
+	    }
+d315 13
+a327 1
+    }
+d330 20
+a349 24
+for(fn=0;fn<MAX_FILES;fn++) {
+    if(fp_list[fn] == NULL) 
+	break;
+    }
+if(fn == MAX_FILES) {
+    fprintf(stderr,"Maximum number of open files exceeded in getfd\n");
+    return(NULL);
+    }
+
+if(!strcmp(mode,"r+")) {
+    if((fptest=matrix_open(filnam,"r")) != NULL) /* File exists. */
+        mat_close(fptest);
+    else
+        mode = "w";
+    }
+
+if ((fp_list[fn] = matrix_open(filnam,mode)) != NULL) {
+    strcpy(file_list[fn],filnam);
+    strcpy(mode_list[fn],mode);
+    return(fp_list[fn]);
+    }
+else 
+    return(NULL);
+
+d353 1
+a353 1
+int plnnum_f3d(ring1,ring2)
+d359 1
+a359 3
+int	ring1,
+	ring2;
+
+d361 1
+d363 2
+a364 4
+int	plane;
+
+ring1 -= 1;
+ring2 -= 1;
+d366 2
+a367 2
+plane = (((ring1 & 0x10)<<5) | ((ring1 & 0x08)<<4)  | (ring1 & 0x07) | 
+         ((ring2 & 0x10)<<4) | ((ring2 & 0x0f)<<3)) + 1;
+d369 1
+a369 2
+return(plane);
+
+d373 1
+a373 1
+int *ringnum(plane)
+d376 1
+a376 2
+int	plane;
+
+d378 1
+d380 4
+a383 9
+int	ring[2],pln;
+
+pln = plane-1;
+
+ring[0] = ((pln & 0x80) >> 4) | pln & 0x07;
+ring[1] =  (pln & 0x78) >> 3;
+
+return(ring);
+
+d387 1
+a387 1
+void matclose(filnam)
+d390 1
+a390 2
+char *filnam;
+
+d392 1
+d394 6
+a399 7
+int	i,fn;
+
+for(fn=0;fn<MAX_FILES;fn++) {
+    if(!strcmp(filnam,file_list[fn])) {
+	matrix_close(fp_list[fn]);
+	fp_list[fn] = NULL;
+	strcpy(file_list[fn]," ");
+a400 1
+    }
+@
+
+
+1.2
+log
+@free matrix data in rdimg
+@
+text
+@d18 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@a14 2
+static char rcsid []= "$Id$";
+
+d194 2
+d207 1
+a207 1
+void	*sh;
+d302 1
+a303 1
+free(smatrix);
+@

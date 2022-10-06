@@ -1,0 +1,167 @@
+head	1.1;
+access;
+symbols;
+locks
+	tom:1.1; strict;
+comment	@ * @;
+
+
+1.1
+date	94.10.07.14.36.39;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Working verison, initial checking in.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*_________________________________________________________________________________
+File Name:      getprm.c
+
+Date:           05-Oct-94
+
+Author:         Tom Yang
+
+Description:    Get scanner, acquisition, reconstruction, recfiler, imgfilter
+		from the image.
+
+History:	05-Oct-94	Created by Tom Yang
+  	
+Function:	PUBLIC int getlst (char *imgfile, PARAMETER_DATA *parameter_data)
+ 
+Arguments:	imgfile		image file name.
+		parameter_data:	structure containing parameter data, modified 
+				upon return.
+
+Return:		SUCCEED = 0, FAIL = -1.
+
+Calling:	None
+
+Called by:	main in makeprmlst.c.
+
+Algorithm:	1) Get the basic header information which contains scanner,
+		acquisition, reconstruction, and recfilter among others.
+
+		2) Obtain the image attributes (scanner, acquisition,
+		reconstruction, and recfilter) from the the basic header.
+
+		3) For ECAT 953B images, get imgfilter.
+
+		4) Copy the image attributes to parameter_data.
+_________________________________________________________________________________*/
+
+#include "makeprmlst.h"
+#include <petutil/matrix.h>
+
+static char rcsid [] = "$Header$";
+
+PUBLIC int getprm (imgfile, parameter_data)
+	char		*imgfile;
+	PARAMETER_DATA	*parameter_data;
+{
+	MatrixData		*matrix_read ();
+
+	COMMENT_INFO		comment_info_data;
+	Image_subheader		*image_subheader;
+	MatrixData		*matrixx_data;
+	MatrixFile		*fptr;
+	float			voxel_depth;
+	float			voxel_width;
+	int			image_type;
+	int			matnum;
+	short			height;
+	short			num_slices;
+	short			width;
+	struct ATTR_TYPE	attr;
+	struct BASIC_HEADER	basic_header;
+	struct Matval		matval;
+
+	if (read_hdr (imgfile, &basic_header) == PET_IMAGE)
+	{
+		image_type	= basic_header.Scanner;
+
+		/*
+		 * Get the image attributes.
+		 */
+		if (image_type == PETT6_SCANNER || image_type == SUPER_PETT_I_SCANNER  ||
+				image_type == SUPER_PETT_II_SCANNER)
+		{
+			if (pett6_attr (&basic_header, &attr) == INVALID)
+				return FAIL;
+		}
+		else if (image_type == ECAT_SCANNER)
+		{
+			if (ecat_hdr_attr (&basic_header, &attr) == INVALID)
+				return FAIL;
+
+			matval.frame	= 1;
+			matval.plane	= 1;
+			matval.gate	= 1;
+			matval.data	= 0;
+			matval.bed	= 0;
+
+			fptr	= OpenEcat (imgfile, &num_slices, &width, &height, 
+					&voxel_width, &voxel_depth, matval);
+			if (fptr == (MatrixFile *) NULL)
+			{
+				fprintf (stderr, "Cannnot open image %s.\n", imgfile);
+				return;
+			}
+
+			comment_info (fptr->mhptr->study_description, &comment_info_data);
+
+			matnum	= mat_numcod (matval.frame, matval.plane, matval.gate, 
+							matval.data, matval.bed);
+			matrixx_data	= matrix_read (fptr, matnum);
+			if (matrixx_data == NULL)
+			{
+				fprintf (stderr, "matrixx_read error in getrealimg.\n");
+				return FAIL;
+			}
+
+       			image_subheader	= (Image_subheader *) matrixx_data->shptr;
+
+			if (comment_info_data.gauss3d_filter)
+			{
+				parameter_data->imgfilter_type	= FILTER_GAUSS;
+				parameter_data->imgfilter_cutoff 
+					= image_subheader->filter_params [2];
+			}
+			else if (comment_info_data.butterworth3d_filter)
+			{
+				parameter_data->imgfilter_type	= FILTER_BUTTERWORTH;
+				parameter_data->imgfilter_cutoff 
+					= image_subheader->filter_params [2];
+				parameter_data->imgfilter_order 
+					= image_subheader->filter_params [3];
+			}
+			else
+				parameter_data->imgfilter_type	= FILTER_NONE;
+
+			free_matrix_data (matrixx_data);
+			matrix_close (fptr);
+		}
+		else
+			return FAIL;
+
+		strcpy (parameter_data->scanner, attr.scanner);
+		strcpy (parameter_data->acquisition, attr.acq);
+		strcpy (parameter_data->reconstruction, attr.recon);
+		strcpy (parameter_data->recfilter, attr.fltr);
+	}
+	else
+		return FAIL;
+
+	return SUCCEED;
+}
+@

@@ -1,0 +1,750 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*  $Id: cti.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $
+    $Log: cti.c,v $
+ * Revision 3.1  1998/03/24  23:43:10  jmo
+ * *** empty log message ***
+ *
+ * Revision 3.0  1997/10/29  19:26:43  jmo
+ * Support Exact HR
+ *
+ * Revision 2.5  1997/08/06  18:22:04  jmo
+ * Last version before adding CTI rev 7 support.
+ *
+ * Revision 2.4  1996/06/19  11:18:50  jmo
+ * *** empty log message ***
+ *
+ * Revision 2.3  1996/04/23  15:02:05  jmo
+ * Version released April 23, 1996
+ *
+ * Revision 2.2  1996/04/23  14:56:14  jmo
+ * Version Released on Web site, April 23, 1996
+ *
+ * Revision 2.1  1996/03/15  21:57:19  jmo
+ * Version installed in St. Louis.
+ *
+ * Revision 2.0  1996/01/27  13:43:27  jmo
+ * Version installed at Neuro-imaging group, January 1996
+ *
+ * Revision 1.2  1996/01/18  16:02:20  jmo
+ * Modified file formats, Interfile and Matrix Rev 7.0 support.
+ *
+ * Revision 1.1  1996/01/12  18:08:41  jmo
+ * Initial revision
+ *
+ * Revision 1.4  1995/11/21  14:40:51  jmo
+ * *** empty log message ***
+ *
+ */
+/* =============================================================================
+ *  Module:         cti.c
+ *  Date:           Nov-95
+ *  Author:         John Ollinger
+ *  Description:    Routines for ECAT image I/O
+ *	Functions:
+ *		getsbhdr	-	Read subheader; Version 6 or 7.
+ *		ssh7_to_sh	-	Fill scan subheader structure from version 7 scan subheader.
+ *		ish7_to_sh	-	Fill image subheader structure from version 7 image subheader.
+ *		ssh6_to_sh	-	Fill scan subheader structure from version 6 scan subheader.
+ *		ish6_to_sh	-	Fill image subheader structure from version 6 image subheader.
+ *		sh_to_ssh7	-	Fill version 7 scan subheader from scan subheader structure.
+ *		sh_to_ish7	-	Fill version 7 image subheader from image subheader structure.
+ *		sh_to_ssh6	-	Fill version 6 scan subheader from scan subheader structure.
+ *		sh_to_ish6	-	Fill version 6 image subheader from image subheader structure.
+ *		getmhdr		-	Read main header; Version 6 or 7.
+ *		mh6_to_mh	-	Fill main header structure from version 6 mainheader.
+ *		mh7_to_mh	-	Fill main header structure from version 7 mainheader.
+ *		mh_to_mh6	-	Fill version 6 mainheader from main header structure.
+ *		mh_to_mh7	-	Fill version 6 mainheader from main header structure.
+ *		rdimg		-	Read image data; Version 6 or 7.
+ *		putsbhdr	-	Write subheader; Version 6 or 7.
+ *		putmhdr		-	Write main header; Version 6 or 7.
+ *		wrimg		-	Write image data; Version 6 or 7.
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+ *
+ * =============================================================================
+ */
+static char     rcsid[] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/cti.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <math.h>
+#include <string.h>
+#include <time.h>
+#include <if.h>
+#include <cti7.h>
+#include <matrix.h>
+#include <imagio.h>
+#include <cti_proto.h>
+
+#define MAX_FILES 50
+#define TESTLEN 28
+#define MAXNAME 120
+
+/*SubHeader_if	*getsbhdr_if(),*ssh_to_ifsh(),*ish_to_ifsh();
+MainHeader_if	*getmhdr_if(),*mh_to_ifmh();
+MainHeader	*ifmh_to_mh();
+Main_header	*mh_to_mh6();
+Main_header7	*mh_to_mh7();
+SubHeader	*ifsh_to_sh();
+float		*rdimg_if();
+int		putmhdr_if(),wrimg_if(),file_type();*/
+
+/* =============================================================================
+ *	Function:		getsbhdr
+ *	Description:	Read file subheader.
+ *	Note:	A generic subheader is returned which contains a field pointing
+ *			to the original version 6 or 7 subheader.
+ *			Since ver 7 subheaders contain a pointer to a copy of the original
+ *			and the original may be freed after the generic subheader is created.
+ *			Ver 6 subheaders do not contain this copy and should not be freed
+ *			as the generic subheader points to the original.
+ * =============================================================================
+ */
+SubHeader      *getsbhdr (filnam, plane, frame, gate, data, bed)
+
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+{
+
+	int		filetype;
+	SubHeader  *sh, *ssh6_to_sh (), *ssh7_to_sh ();
+	SubHeader  *ish6_to_sh (), *ish7_to_sh ();
+	Scan_subheader *ssh6;
+	Image_subheader *ish6;
+	Scan3D_subheader7 *ssh7;
+	Image_subheader7 *ish7;
+	SubHeader_if	*ifsh;
+
+	filetype = get_filetype(filnam);
+
+	if(filetype == MATRIX_REV7) {		/* Matrix file version 7. */
+                if (strstr (filnam, ".S")) {                            /* 3D scan file. */
+                        if ((ssh7 = (Scan3D_subheader7 *)
+                                getsbhdr7 (filnam, frame, gate, data, bed)) == NULL)
+                                return (NULL);
+                        else {
+                                sh = ssh7_to_sh (ssh7);
+                        }
+                } else if (strstr (filnam, ".v")) {                     /* 3D image file. */
+                        if ((ish7 = (Image_subheader7 *)
+                             getsbhdr7 (filnam, frame, gate, data, bed)) == NULL)
+                                return (NULL);
+                        else {
+                                sh = ish7_to_sh (ish7);
+                        }
+                } else {
+                        fprintf (stderr, "ERROR [getsbhdr]: Version 7 file suffix ",
+                                "not recognized, %f\n", filnam);
+                        return (NULL);
+                	}
+		sh->file_format = MATRIX_REV7;
+	} else if (filetype == INTERFILE) {		/* Interfile file. */
+		if ((ifsh = getsbhdr_if (filnam, plane, frame)) == NULL)
+ 			return (NULL);
+		sh= ifsh_to_sh(ifsh);
+		sh->file_format = INTERFILE;
+	} else if (filetype == MATRIX_REV6) {			/* Matrix file version 6. */
+                if (strstr (filnam, ".scn")) {                  /* Scan file. */
+                        if ((ssh6 = (Scan_subheader *)
+                             getsbhdr6 (filnam, plane, frame, gate, data, bed)) == NULL)
+                                return (NULL);
+                        else {
+                                sh = ssh6_to_sh (ssh6);
+                        }
+                } else if (strstr (filnam, ".img")) {           /* 3D image file. */
+                        if ((ish6 = (Image_subheader *)
+                             getsbhdr6 (filnam, plane, frame, gate, data, bed)) == NULL)
+                                return (NULL);
+                        else {
+                                sh = ish6_to_sh (ish6);
+                        }
+                }
+		sh->file_format = MATRIX_REV6;
+	} else 
+		return(NULL);
+
+return(sh);
+
+}
+
+
+/* =============================================================================
+ *	Function:		getmhdr
+ *	Description:	Get main header from ECAT file
+ *	Note:	A generic mainheader is returned which contains a field pointing
+ *			to the original version 6 or 7 mainheader.
+ *			Since ver 7 mainheaders contain a pointer to a copy of the original
+ *			and the original may be freed after the generic mainheader is created.
+ *			Ver 6 mainheaders do not contain this copy and should not be freed
+ *			as the generic mainheader points to the original.
+ * =============================================================================
+ */
+MainHeader     *getmhdr (filnam)
+
+	char           *filnam;
+
+{
+	int		filetype,i;
+	MainHeader_if  *ifmh;
+	MainHeader     *mh, *mh7_to_mh (), *mh6_to_mh ();
+	Main_header    *mh6, *getmhdr6 ();
+	Main_header7   *mh7, *getmhdr7 ();
+        Scan3D_subheader7 *shscn;
+
+	filetype = get_filetype(filnam);
+
+	if(filetype == MATRIX_REV7) {		/* Matrix file version 7 */
+		mh7 = getmhdr7 (filnam);
+		mh = mh7_to_mh (mh7);
+                if((shscn = (Scan3D_subheader7 *)getsbhdr7(filnam,1,1,0,0)) == NULL)
+		    return(NULL);
+                mh->nplane = 0; i = 0;
+                while(shscn->num_z_elements[i] > 0) {
+		    mh->nplane += shscn->num_z_elements[i];
+		    ++i;
+                    }
+		free(shscn);
+	} else if (filetype == INTERFILE) {	/* Interfile file.*/
+		ifmh = getmhdr_if (filnam);
+		mh = ifmh_to_mh (ifmh);
+	} else if (filetype == MATRIX_REV6) {	/* Matrix file version 6 */
+		mh6 = getmhdr6 (filnam);
+		mh = mh6_to_mh (mh6);
+/*
+	} else if (filetype == PETT6) {	
+		mh = getmhdrp6 (filnam);*/
+	} else {
+		return(NULL);
+	}
+	mh->data_file = (char *)malloc(strlen(filnam)+1);
+	strcpy(mh->data_file,filnam);
+	return (mh);
+}
+
+/* =============================================================================
+ *	Function:		rdimg
+ *	Description:	Read Version 6 or 7 image file
+ * =============================================================================
+ */
+float          *rdimg (filnam, plane, frame, gate, data, bed)
+
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+
+{
+	float          *image, *rdimg6 (), *rdimg7 ();
+	int		filetype;
+
+	filetype = get_filetype(filnam);
+
+	if (filetype == MATRIX_REV7)
+		image = rdimg7 (filnam, plane, frame, gate, data, bed);
+	else if (filetype == INTERFILE)
+		image = rdimg_if (filnam, plane, frame);
+	else if (filetype == MATRIX_REV6) /* Matrix file version 6 */
+		image = rdimg6 (filnam, plane, frame, gate, data, bed);
+	else
+		return(NULL);
+	return (image);
+}
+
+/* =============================================================================
+ *	Function:		putsbhdr
+ *	Description:	Write Version 6 or 7 scan or image subheaders
+ *					after converting a generic subheader.
+ * =============================================================================
+ */
+int             putsbhdr (sh, filnam, plane, frame, gate, data, bed)
+
+	void           *sh;
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+
+{
+	int		filetype;
+	void           *sh1;
+
+	filetype = get_filetype(filnam);
+
+	if(filetype == MATRIX_REV7) {
+		if (strstr (filnam, ".S"))	 /* Scan file. */
+			sh1 = (void *) sh_to_ssh7 (sh);
+		else if (strstr (filnam, ".v"))	 /* 3D image file. */
+			sh1 = (void *) sh_to_ish7 (sh);
+		else {
+			fprintf (stderr, "ERROR [putsbhr]: Invalid file type, %s\n", filnam);
+			return (-1);
+		}
+		if ((putsbhdr_if (sh1, filnam, plane,frame)) != NULL) {
+			fprintf (stderr, "ERROR [putsbhr]: Error writing subheader for ",
+				"%d, %s\n", plane, filnam);
+			return (-1);
+		}
+		free(sh1);
+	} else if (filetype == INTERFILE) {
+		sh1 = (void *) sh_to_ifsh(sh);
+		if ((putsbhdr7 (sh1, filnam, plane, frame, gate, data, bed)) != NULL) {
+			fprintf (stderr, "ERROR [putsbhr]: Error writing subheader for ",
+				"%d, %s\n", plane, filnam);
+			return (-1);
+		}
+		free(sh1);
+	} else if (filetype == MATRIX_REV6) {	/* Matrix file version 6 */
+		if (strstr (filnam, ".scn"))	 /* Scan file. */
+			sh1 = (void *) sh_to_ssh6 (sh);
+		else if (strstr (filnam, ".img"))/* 3D image file. */
+			sh1 = (void *) sh_to_ish6 (sh);
+		else {
+			fprintf (stderr, "ERROR [putsbhr]: Invalid file type, %s\n", filnam);
+			return (-1);
+		}
+	if ((putsbhdr6 (sh1, filnam, plane, frame, gate, data, bed)) != NULL) {
+		fprintf (stderr, "ERROR [putsbhr]: Error writing subheader for ",
+			"%d, %s\n", plane, filnam);
+		return (-1);
+		}
+		free(sh1);
+	} else {
+		return(NULL);
+		}
+	free (sh1);
+	return (NULL);
+}
+
+/* =============================================================================
+ *	Function:		putmhdr
+ *	Description:	Write Version 6 or 7 scan or image main headers.
+ * =============================================================================
+ */
+int             putmhdr (filnam, mh)
+
+	MainHeader     *mh;
+	char           *filnam;
+
+{
+	int		filetype;
+	void		*mh1;
+        MainHeader_if   *mh_if;
+
+	filetype = get_filetype(filnam);
+
+	if(filetype == MATRIX_REV7) {
+		mh1 = (void *)mh_to_mh7(mh);
+		if ((putmhdr7 (mh1, filnam)) != NULL) {
+			fprintf (stderr, "ERROR [putmhdr]: Error writing main header for %s\n", filnam);
+			return (-1);
+			}
+		free(mh1);
+	} else if (filetype == INTERFILE) {
+	        mh_if = mh_to_ifmh(mh);
+		if ((putmhdr_if (mh_if, filnam)) != NULL) {
+			fprintf (stderr, "ERROR [putmhdr]: Error writing main header for %s\n", filnam);
+			return (-1);
+		}
+		free(mh_if);
+	} else if (filetype == MATRIX_REV6) {	/* Matrix file version 6 */
+		mh1 = (void *)mh_to_mh6(mh);
+		if ((putmhdr6 (mh1, filnam)) != NULL) {
+			fprintf (stderr, "ERROR [putmhdr]: Error writing main header for %s\n", filnam);
+			return (-1);
+			}
+		free(mh1);
+	} else {
+		return(-1);
+		}
+	
+	return (NULL);
+}
+
+/* =============================================================================
+ *	Function:		wrimg
+ *	Description:	Write Version 6 or 7 scan or image data.
+ * =============================================================================
+ */
+int             wrimg (filnam, image, mh, sh, plane, frame, gate, data, bed)
+
+	char           *filnam;
+	float          *image;
+	MainHeader     *mh;
+	void           *sh;
+	int             plane, frame, gate, data, bed;
+
+{
+	void			*mh1, *sh1;
+
+        float scl = 1.;
+
+	if (mh->file_format == MATRIX_REV7) {
+		mh1 = mh_to_mh7 (mh);
+		if (strstr (filnam, ".S"))	 			/* Scan file. */
+			sh1 = (void *) sh_to_ssh7 (sh);
+		else if (strstr (filnam, ".v"))	 			/* 3D image file. */
+			sh1 = (void *) sh_to_ish7 (sh);
+		else {
+			fprintf (stderr, "ERROR [wrimg]: Invalid file type, %s\n", filnam);
+			return (-1);
+		}
+		if ((wrimg7 (filnam, image, mh1, sh1,scl, plane, frame, gate, data, bed)) != NULL) {
+			fprintf (stderr, "ERROR [wrimg]: Could not write plane %d to %s\n", plane, filnam);
+			return (-1);
+		}
+		free (sh1);
+	} else if (mh->file_format == INTERFILE) {
+		mh1 = mh_to_ifmh (mh);
+		sh1 = (void *) sh_to_ifsh (sh);
+		if ((wrimg_if (filnam, image, mh1, sh1, plane, frame)) != NULL) {
+			fprintf (stderr, "ERROR [wrimg]: Could not write plane %d to %s\n", plane, filnam);
+			return (-1);
+		}
+		free (sh1);
+	} else if (mh->file_format == MATRIX_REV6) {
+		mh1 = (void *) mh_to_mh6 (mh);
+		if (strstr (filnam, ".scn"))	 /* Scan file. */
+			sh1 = (void *) sh_to_ssh6 (sh);
+		else if (strstr (filnam, ".img"))/* 3D image file. */
+			sh1 = (void *) sh_to_ish6 (sh);
+		else {
+			fprintf (stderr, "ERROR [wrimg]: Invalid file type, %s\n", filnam);
+			return (-1);
+		}
+		if ((wrimg6 (filnam, image, mh1, sh1, plane, frame, gate, data, bed)) != NULL) {
+			fprintf (stderr, "ERROR [wrimg]: ERROR [wrimg]: Could not write ",
+				"plane %d to %s\n", plane, filnam);
+			return (-1);
+		}
+	} else {
+		fprintf (stderr, "ERROR [wrimg]: Invalid file format in %s\n", filnam);
+		return (-1);
+	}
+	return (NULL);
+}
+
+/* =============================================================================
+ *	Function:		get_filetype
+ *	Description:	Return type of file (matrix-6, matrix-7, interfile, etc.
+ * =============================================================================
+ */
+
+get_filetype(filnam)
+
+char	*filnam;
+
+{
+
+union	conv {
+	short s[TESTLEN];
+	char  c[2*TESTLEN];
+	} test;
+
+FILE	*fp;
+
+int	filetype;
+
+short	system,data_type,sw_version;
+
+char	hdrfil[MAXNAME],*ptr;
+
+if ((fp = fopen (filnam, "rb")) == NULL) {
+/*	fprintf(stderr,"ERROR [get_filetype]: Could not open %s\n",filnam);*/
+    	return (NULL);
+	}
+if ((fread (test.s, sizeof (short), TESTLEN, fp)) != TESTLEN) {
+	fprintf (stderr, "ERROR [get_filetype]: Could not read %s\n", filnam);
+	return (NULL);
+	}
+
+fclose (fp);
+test.c[TESTLEN - 1] = NULL;
+
+data_type = (((test.s[25] & 0xff) << 8) | ((test.s[25] & 0xff00) >> 8));
+if(data_type == VAX_I2 || data_type == SUN_I2) {
+    system = (((test.s[26] & 0xff) << 8) | ((test.s[26] & 0xff00) >> 8));
+    sw_version = (((test.s[24] & 0xff) << 8) | ((test.s[24] & 0xff00) >> 8));
+    }
+else {
+    system = test.s[26];
+    sw_version = test.s[24];
+    }
+
+if (!strncmp (test.c, "MATRIX7", 7))		/* Matrix file version 7. */
+	filetype = MATRIX_REV7;
+else if(((system==921) || (system==951) || (system==953) || (system==961)) &&
+	((sw_version >=60 && sw_version < 70) || (sw_version ==6 )))
+	filetype = MATRIX_REV6;
+else {
+	strcpy(hdrfil,filnam);
+	ptr = strrchr(hdrfil,'.');
+	if(ptr != NULL)
+	    *ptr = NULL;
+	strcat(hdrfil,".ifh");
+	if ((fp = fopen (hdrfil, "rb")) == NULL)
+	    	filetype = NULL;
+	else {
+		if((fread(test.s,sizeof(short),TESTLEN,fp)) != TESTLEN) {
+			filetype = NULL;
+			}
+		else {
+			if (!strncmp (test.c, "INTERFILE", 9))	/* Interfile file. */
+				filetype = INTERFILE;
+			else
+				filetype = NULL;
+			}
+		fclose(fp);
+		}
+	}
+
+return(filetype);
+
+}
+
+/* =============================================================================
+ *	Function:		free_mh
+ *	Description:	free main header and its malloced date.
+ * =============================================================================
+ */
+
+void free_mh(mh)
+
+MainHeader *mh;
+
+{
+
+free(mh->data_file);
+free(mh->whole_header);
+free(mh);
+
+}
+
+/* =============================================================================
+ *	Function:	make_mainheader
+ *	Description:	Malloc and fill main header.
+ * =============================================================================
+ */
+
+MainHeader *make_mainheader(file_format,number_format,nplane,nframe,nbed)
+
+int	file_format,number_format,nplane,nframe,nbed;
+
+{
+
+MainHeader	*mh;
+
+mh = (MainHeader *)malloc(sizeof(MainHeader));
+
+mh->data_file = NULL;
+mh->file_format = file_format;
+mh->number_format = number_format;
+mh->nplane = nplane;
+mh->ngate = 0;
+mh->nframe = nframe;
+mh->nbed = nbed;
+mh->version = 0;
+mh->filtyp = 0;
+mh->scanner_type = 0;
+strcpy(mh->date_time," ");
+strcpy(mh->patnum," ");
+mh->start_time = 0;
+mh->bed_elevation = 0.;
+mh->init_bed_pos = 0.;
+mh->slcthk = 0.;
+mh->calibration_factor = 1.;
+mh->sw_revision = NULL;
+mh->whole_header = NULL;
+
+return(mh);
+
+}
+
+/* =============================================================================
+ *	Function:	make_subheader
+ *	Description:	Malloc and fill subheader.
+ * =============================================================================
+ */
+
+SubHeader *make_subheader(int file_format,int number_format,int ndim,int dim1,int dim2,int dim3,
+	float sample_size_1,float sample_size_2,float sample_size_3)
+
+{
+
+SubHeader	*sh;
+
+sh = (SubHeader *)malloc(sizeof(SubHeader));
+
+sh->file_format = file_format;
+sh->number_format = number_format;
+sh->ndim = ndim;
+sh->dim1 = dim1;
+sh->dim2 = dim2;
+sh->dim3 = dim3;
+sh->sample_size_1 = sample_size_1;
+sh->sample_size_2 = sample_size_2;
+sh->sample_size_3 = sample_size_3;
+sh->ring_diff = 0;
+sh->total = 0;
+sh->delayeds = 0;
+sh->multiples = 0;
+sh->trues = 0;
+sh->count_rate = 0;
+sh->scale_factor = 1.;
+sh->calibration_factor = 1.;
+sh->min = 0;
+sh->max = 0;
+sh->deadtime_corr = 0.;
+sh->start_time = 0;
+sh->duration = 0;
+sh->comment = NULL;
+sh->whole_header = NULL;
+
+return(sh);
+
+}
+
+int wrimg_easy(char *filnam,float *image,int plane,int file_format,
+	int number_format,int ndim,int dim1,int dim2,int dim3,
+	float sample_size_1,float sample_size_2,float sample_size_3,
+	char *comment)
+
+/*float	*image;
+char	*filnam;
+int	plane,ndim,number_format,dim1,dim2,dim3,file_format;
+float	sample_size_1,sample_size_2,sample_size_3;
+char	*comment;*/
+
+{
+
+MainHeader	*mh;
+SubHeader	*sh;
+
+if(file_format != MATRIX_REV7 && file_format != INTERFILE) {
+    fprintf(stderr,"Illegal file format in wrimg_vol.\n");
+    return(-1);
+    }
+
+mh = make_mainheader(file_format,number_format,dim3,1,1);
+
+sh = make_subheader(file_format,number_format,ndim,dim1,dim2,dim3,
+	sample_size_1,sample_size_2,sample_size_3);
+
+if((wrimg (filnam,image,mh,sh,plane,1,1,0,0)) != NULL) {
+	free(mh);
+	free(sh);
+	return(-1);
+	}
+
+free(sh);
+free(mh);
+return(NULL);
+
+}
+
+/*************************/
+void	close_img(filename)
+/*************************/
+
+char	*filename;
+
+{
+
+int		filetype;
+
+filetype = get_filetype(filename);
+
+if(filetype == MATRIX_REV7)		/* Matrix file version 7 */
+ 	close_cti7(filename);
+else if (filetype == INTERFILE)		/* Interfile file.*/
+	close_if(filename);
+else if (filetype == MATRIX_REV6) 	/* Matrix file version 6 */
+	matclose(filename);
+/*
+else if (filetype == PETT6) 
+	mh = getmhdrp6 (filnam);*/
+else
+	fprintf(stderr,"Invalid file type in close_img, %s\n",filename);
+
+}
+
+/****************************************/
+int plnnum_f3d_if(ring1,ring2,system_type)
+/****************************************/
+
+/* Convert ring1 and ring2 to plane number. */
+
+int	ring1,
+	ring2,
+	system_type; /* System type as stored in the main header. */
+
+{
+
+static int first=TRUE,*plane_number,*vplanes,rmax,span,ring_difference;
+int	i,r1,r2,index,phys_plane,plane;
+
+if(first == TRUE) {
+    first = FALSE;
+    switch(system_type) {
+        case 953:
+            plane_number = (int *)malloc(1024*sizeof(int));
+	    for(i=0;i<1024;i++)
+	        plane_number[i] = 0.;
+	    phys_plane = 0;
+    	    for(r1=0;r1<16;r1++) {
+                for(r2=0;r2<16;r2++) {
+                    index = ((r1 & 0x1f) << 5) | (r2 & 0x1f);
+	            plane_number[index] = phys_plane;
+                    ++phys_plane;
+                    }
+                }
+             break;
+/*        case 961:
+	     rmax = NUM_RINGS;
+	     span = SPAN;
+	     ring_difference = MAX_RING_DIFF;
+	     vplanes = (int*)calloc(rmax*rmax, sizeof(int));
+             plandefs(rmax,span,ring_difference,vplanes);
+             break;*/
+         default:
+	    fprintf(stderr,"Invalid system type %d in plnnum_f3d\n",system_type);
+	    return(0);
+         }
+    }
+
+switch(system_type) {
+    case 953:
+        index = (((ring1-1) & 0x1f) << 5) | ((ring2-1) & 0x1f);
+        plane = plane_number[index] + 1;
+ 	break;
+/*    case 961:
+        plane = vplanes[r2*rmax+r1];
+        break;*/
+    default:
+        plane = -1;
+        fprintf(stderr,"Error in plane definition in plnnum_f3d.\n");
+    }
+
+return(plane);
+
+}
+@

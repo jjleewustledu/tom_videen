@@ -1,0 +1,173 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.12.23.17.38.15;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@; $Id: tissue_cor.pro,v 1.2 1997/04/08 21:14:40 tom Exp $
+;+
+; NAME:
+;	TISSUE_COR
+;
+; PURPOSE:
+;   Divide a PET image by a filtered, tissue image to correct for
+;	partial volume effects.
+;
+; CATEGORY:
+;	Image processing
+;
+; CALLING SEQUENCE:
+;   TISSUE_COR, PETfile, Tissuefile, Maskfile, Correctedfile, Scale
+;
+; INPUTS:
+;	PETfile:	input filename for PET
+;	Tissuefile:	input filename for tissue
+;	Maskfile:	input filename for brain mask
+;	Correctedfile:	output filename
+;	Scale:		pixel value of tissuefile representing 100%
+;
+; OUTPUTS:
+;	Correctedfile:	PET activity scaled to units of brain tissue
+;
+; RESTRICTIONS:
+;	All files in Analyze format.
+;
+; PROCEDURE:
+;	Read PET and Tissue images.
+;	If (mask(i,j,k) > 0 and tissue(i,j,k) > 0)
+;		then corrected(i,j,k) = pet(i,j,k)/tissue(i,j,k)
+;	else corrected(i,j,k) = 0
+;	Write Corrected image to file.
+;
+; MODIFICATION HISTORY:
+;	Tom Videen, April 1995.
+;	TOV, Dec 1996 (runtime version)
+;-
+
+PRO TISSUE_COR
+
+   on_error,2   
+   
+   infile = ''
+   tissuefile = ''
+   maskfile = ''
+   correctedfile = ''
+   scale = 0.0
+   petfile = getenv('INFILE')
+   tissuefile = getenv('TISSUEFILE')
+   maskfile = getenv('MASKFILE')
+   correctedfile = getenv('OUTFILE')
+   scale =  getenv('SCALE')
+   
+; Determine image array size & type
+
+   tsize = intarr(3)
+   tpixsize = fltarr(3)
+   msize = intarr(3)
+   mpixsize = fltarr(3)
+   asize = intarr(3)
+   pixsize = fltarr(3)
+   analyze_dim, tissuefile, tsize, tdsize, tpixsize
+   analyze_dim, maskfile, msize, mdsize, mpixsize
+   analyze_dim, petfile, asize, dsize, pixsize
+
+   IF ((asize(0) NE tsize(0)) OR (asize(1) NE tsize(1)) OR (asize(2) NE tsize(2)) OR $
+       (asize(0) NE msize(0)) OR (asize(1) NE msize(1)) OR (asize(2) NE msize(2))) THEN BEGIN
+      print, asize, petfile
+      print, tsize, tissuefile
+      print, msize, maskfile
+      message, 'Error: input files must be same size'
+      RETURN
+   ENDIF
+
+   print, petfile, " is ",dsize, "-bit"
+   print, tissuefile, " is ",tdsize, "-bit"
+   print, maskfile, " is ",mdsize, "-bit"
+
+   IF (mdsize EQ 8) THEN BEGIN
+      mask = bytarr(asize(0), asize(1), asize(2))
+   ENDIF ELSE BEGIN
+      mask = intarr(asize(0), asize(1), asize(2))
+   ENDELSE
+
+   IF (tdsize EQ 8) THEN BEGIN
+      tissue = bytarr(asize(0), asize(1), asize(2))
+   ENDIF ELSE BEGIN
+      tissue = intarr(asize(0), asize(1), asize(2))
+   ENDELSE
+
+   IF (dsize EQ 8) THEN BEGIN
+      pet = bytarr(asize(0), asize(1), asize(2))
+   ENDIF ELSE BEGIN
+      pet = intarr(asize(0), asize(1), asize(2))
+   ENDELSE
+   get_lun,lu
+
+; Read images
+
+   openr,lu,petfile
+   readu,lu,pet,TRANSFER_COUNT=count
+   close,lu
+   openr,lu,tissuefile
+   readu,lu,tissue,TRANSFER_COUNT=count
+   close,lu
+   openr,lu,maskfile
+   readu,lu,mask,TRANSFER_COUNT=count
+   close,lu
+
+; Divide and scale
+
+   pet = float(pet)
+   tissue = float(tissue)
+   maxpet = max(pet)
+   cutoff = scale/2
+   print, "PET max = ", maxpet
+   print, "Tissue max = ",scale
+   print, "Mask <= ",cutoff
+   petmax = 0.
+   limit = 1.5 * maxpet
+
+   FOR k = 0, asize(2)-1 DO BEGIN
+      print, "Slice = ",k+1
+      FOR j = 0, asize(1)-1 DO BEGIN
+         FOR i = 0, asize(0)-1 DO BEGIN
+            IF ((mask(i,j,k) GT cutoff) AND (tissue(i,j,k) GT 1.)) THEN BEGIN
+               pet(i,j,k) = scale * pet(i,j,k) / tissue(i,j,k)
+               IF (pet(i,j,k) GT limit) THEN BEGIN
+                  print, i, j, k, pet(i,j,k), mask(i,j,k), tissue(i,j,k)
+               ENDIF
+               IF (pet(i,j,k) GT petmax) THEN petmax = pet(i,j,k)
+            ENDIF ELSE BEGIN
+               pet(i,j,k) = 0
+            ENDELSE
+         ENDFOR
+      ENDFOR
+   ENDFOR
+   print, "Corrected maximum = ", petmax
+   pet = fix(pet)
+
+; Write to correctedfile
+   
+   openw, lu, correctedfile
+   writeu, lu, pet
+   close, lu
+   free_lun,lu
+
+END
+@

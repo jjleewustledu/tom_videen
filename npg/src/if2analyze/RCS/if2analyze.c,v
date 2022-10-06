@@ -1,0 +1,1415 @@
+head	2.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.6
+date	2009.05.27.16.49.23;	author tom;	state Exp;
+branches;
+next	2.5;
+
+2.5
+date	2009.05.11.16.09.41;	author tom;	state Exp;
+branches;
+next	2.4;
+
+2.4
+date	2008.10.30.15.19.58;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	2008.10.28.21.26.51;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	2008.10.23.16.15.06;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	2004.04.12.19.04.22;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2004.02.16.16.23.51;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2002.03.06.21.55.18;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2001.05.25.20.50.49;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2001.05.25.20.49.36;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2001.04.18.15.36.11;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2001.02.05.20.11.37;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.02.05.18.09.22;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.12.16.18.14.26;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.12.15.18.47.56;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.01.20.17.47.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.6
+log
+@convert type byte to integer
+@
+text
+@/*$Log: if2analyze.c,v $
+ * Revision 2.5  2009/05/11  16:09:41  tom
+ * cleanup error messages
+ *
+ * Revision 2.4  2008/10/30  15:19:58  tom
+ * correct type from 8 to 4 for short integers
+ *
+ * Revision 2.3  2008/10/28  21:26:51  tom
+ * use dbh.h
+ *
+ * Revision 2.2  2008/10/23  16:15:06  tom
+ * add oriention (right, anterior, posterior) for SPM5 segmentation
+ *
+ * Revision 2.1  2004/04/12  19:04:22  tom
+ * scale_factor and Focus
+ *
+ * Revision 2.0  2004/02/16  16:23:51  tom
+ * Feb 2004
+ *
+ * Revision 1.9  2002/03/06  21:55:18  tom
+ * convert type float
+ *
+ * Revision 1.8  2001/05/25  20:50:49  tom
+ * remove comment
+ *
+ * Revision 1.7  2001/05/25  20:49:36  tom
+ * fix bug: pixel offset by 1 in x-dimension
+ *
+ * Revision 1.6  2001/04/18  15:36:11  tom
+ * if input image is in vidi orientation, check that output filename differs from input filename
+ *
+ * Revision 1.5  2001/02/05  20:11:37  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  2001/02/05  18:09:22  tom
+ * create a new output image
+ *
+ * Revision 1.3  1999/12/16  18:14:26  tom
+ * new libs, sync ver
+ *
+ * Revision 1.2  1999/12/15  18:47:56  tom
+ * lint cleaning
+ *
+ * Revision 1.1  1998/01/20  17:47:07  tom
+ * Initial revision
+ **/
+/*	===============================================================================
+ *	Module:			if2analyze.c
+ *	Date:			Jan 1998
+ *	Author:			Tom Videen
+ *	Description:	Create an Analyze hdr from Interfile ifh.
+ *					Optionally, create an Analyze img properly oriented.
+ *					For 16-bit signed integer images only!
+ *	Modification:
+ *		27-May-2009	read ntype = unsigned char and write as short integer
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 2.5 2009/05/11 16:09:41 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <dbh.h>
+
+#define MAXSTR 256
+#define TRANSVERSE '\000'
+#define CORONAL    '\001'
+#define SAGITTAL   '\002'
+
+/*	----------------------------
+ *	Function:	if2analyze
+ *	----------------------------
+ */
+int             main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* header for ANALYZE */
+	FILE           *afh;			 /* ANALYZE hdr file */
+	FILE           *afi;			 /* ANALYZE img file */
+	FILE           *ifh;			 /* Interfile ifh file */
+	FILE           *ifi;			 /* Interfile img file */
+	char           *afhname;		 /* Analyze header filename  */
+	char           *afiname;		 /* Analyze image filename  */
+	char           *ifhname;		 /* Interfile header filename */
+	char           *ifiname;		 /* Interfile image filename */
+	char            str[MAXSTR];
+	char            imagename[MAXSTR] = "";
+	char           *orient1;
+	char           *orient2;
+	char           *orient3;
+	char           *ptr;
+	float           size[3];
+	float           scaler = 1;
+	unsigned char  *crow;			 /* single row of input image */
+	short        ***img;
+	short          *srow;			 /* single row of input image */
+	float        ***fimg;
+	float          *frow;			 /* single row of input image */
+	long            dim1, dim2, dim3;	 /* dimensions of img */
+	int             dim[3];
+	int             i, j, k;
+	int             ndim = 0;
+	int             ntype = 0;
+	int             nbytes = 0;
+	int             global_max = 0;
+	int             global_min = 0;
+	float           fglobal_max = 0;
+	float           fglobal_min = 0;
+
+	if (argc != 5) {
+		(void) fprintf (stderr, "Usage: if2analyze ifhname ifiname afhname afiname\n");
+		return (ERROR);
+	}
+	ifhname = argv[1];
+	ifiname = argv[2];
+	afhname = argv[3];
+	afiname = argv[4];
+
+	orient1 = (char *) calloc (20, sizeof (char));
+	orient2 = (char *) calloc (20, sizeof (char));
+	orient3 = (char *) calloc (20, sizeof (char));
+	if (orient1 == NULL)
+		return (ERROR);
+	if (orient2 == NULL)
+		return (ERROR);
+	if (orient3 == NULL)
+		return (ERROR);
+
+/*
+ * Read Interfile header
+ */
+
+	if ((ifh = fopen (ifhname, "r")) == 0) {
+		(void) fprintf (stderr, "Unable to open Interfile header %s\n", ifhname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), ifh) == NULL) {
+		(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", ifhname);
+		return (ERROR);
+	}
+	if (strstr (str, "INTERFILE") == NULL) {
+		(void) fprintf (stderr, "ERROR [if2analyze]: %s is not Interfile header\n", ifhname);
+		return (ERROR);
+	}
+	while (fgets (str, sizeof (str), ifh) != NULL) {
+		ptr = strstr (str, ":=");
+		if (ptr != NULL) {
+			ptr += 2;
+			if (strstr (str, "name of data file") != NULL) {
+				(void) sscanf (ptr, "%s", imagename);
+				continue;
+			}
+			if (strstr (str, "number format") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				if (strstr (ptr, "signed integer") != NULL)
+					ntype = DT_SIGNED_INT;
+				else if (strstr (ptr, "float") != NULL)
+					ntype = DT_FLOAT;
+				else if (strstr (ptr, "byte") != NULL)
+					ntype = DT_UNSIGNED_CHAR;
+				else {
+					(void) fprintf (stderr, "ERROR [if2analyze]: image is not byte, signed integer, or float\n");
+					return (ERROR);
+				}
+				continue;
+			}
+			if (strstr (str, "number of bytes per pixel") != NULL) {
+				(void) sscanf (ptr, "%d", &nbytes);
+				continue;
+			}
+			if (strstr (str, "number of dimensions") != NULL) {
+				(void) sscanf (ptr, "%d", &ndim);
+				if (ndim < 3 || ndim > 4) {
+					(void) fprintf (stderr, "WARNING [if2analyze]: non-standard number of dimensions = %d\n",
+							ndim);
+					(void) fprintf (stderr, "Analyze may not handle this image properly without ");
+					(void) fprintf (stderr, "manually editing its header.\n");
+				}
+				continue;
+			}
+			if (strstr (str, "matrix size [1]") != NULL) {
+				(void) sscanf (ptr, "%d", &dim[0]);
+				continue;
+			}
+			if (strstr (str, "matrix size [2]") != NULL) {
+				(void) sscanf (ptr, "%d", &dim[1]);
+				continue;
+			}
+			if (strstr (str, "matrix size [3]") != NULL) {
+				(void) sscanf (ptr, "%d", &dim[2]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [1]") != NULL) {
+				(void) sscanf (ptr, "%f", &size[0]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [2]") != NULL) {
+				(void) sscanf (ptr, "%f", &size[1]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [3]") != NULL) {
+				(void) sscanf (ptr, "%f", &size[2]);
+				continue;
+			}
+			if (strstr (str, "matrix initial element [1]") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				(void) strcpy (orient1, ptr);
+				continue;
+			}
+			if (strstr (str, "matrix initial element [2]") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				(void) strcpy (orient2, ptr);
+				continue;
+			}
+			if (strstr (str, "matrix initial element [3]") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				(void) strcpy (orient3, ptr);
+				continue;
+			}
+			if (strstr (str, "scale_factor") != NULL) {
+				(void) sscanf (ptr, "%f", &scaler);
+				(void) fprintf (stderr, "scale_factor = %f\n", scaler);
+				continue;
+			}
+		}
+	}
+	(void) fclose (ifh);
+
+/*
+ *	All of our signed integer Interfiles have been short integers
+ *	but SPM5 interprets type separate from bitsperpix so...
+ */
+	if (ntype == DT_SIGNED_INT && nbytes == 2)
+		ntype = DT_SIGNED_SHORT;
+
+/*
+ *	Read image data and compute min and max
+ */
+
+	if ((ifi = fopen (ifiname, "r")) == 0) {
+		(void) fprintf (stderr, "ERROR [if2analyze]: opening %s\n", ifiname);
+		return (ERROR);
+	}
+	dim1 = dim[0];
+	dim2 = dim[1];
+	dim3 = dim[2];
+	if (ntype == DT_SIGNED_SHORT) {
+		if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+			(void) fprintf (stderr, "ERROR [if2analyze]: malloc img\n");
+			return (ERROR);
+		}
+		if (NULL == (srow = (short *) calloc (dim1, sizeof (short)))) {
+			(void) fprintf (stderr, "ERROR [if2analyze]: calloc srow\n");
+			return (ERROR);
+		}
+	} else if (ntype == DT_FLOAT) {
+		if ((fimg = f3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+			(void) fprintf (stderr, "ERROR [if2analyze]: malloc fimg\n");
+			return (ERROR);
+		}
+		if (NULL == (frow = (float *) calloc (dim1, sizeof (float)))) {
+			(void) fprintf (stderr, "ERROR [if2analyze]: calloc frow\n");
+			return (ERROR);
+		}
+	} else {
+		if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+			(void) fprintf (stderr, "ERROR [if2analyze]: malloc img\n");
+			return (ERROR);
+		}
+		if (NULL == (crow = (unsigned char *) calloc (dim1, sizeof (unsigned char)))) {
+			(void) fprintf (stderr, "ERROR [if2analyze]: calloc crow\n");
+			return (ERROR);
+		}
+	}
+
+/*	Standard Analyze orientation = right, posterior, inferior */
+
+	if ((strstr (orient1, "right") != NULL) &&
+	    (strstr (orient2, "posterior") != NULL) &&
+	    (strstr (orient3, "inferior") != NULL)) {
+		for (i = 1; i <= dim3; i++) {
+			for (j = 1; j <= dim2; j++) {
+				if (ntype == DT_SIGNED_SHORT) {
+					if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						if (srow[k] == -32768)
+							img[i][j][k + 1] = 0;
+						else
+							img[i][j][k + 1] = scaler * srow[k];
+						if ((int) srow[k] > global_max)
+							global_max = (int) srow[k];
+						else if ((int) srow[k] < global_min)
+							global_min = (int) srow[k];
+					}
+				} else if (ntype == DT_FLOAT) {
+					if ((fread (frow, sizeof (float), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						fimg[i][j][k + 1] = scaler * frow[k];
+						if (frow[k] > fglobal_max)
+							fglobal_max = frow[k];
+						else if (frow[k] < fglobal_min)
+							fglobal_min = frow[k];
+					}
+				} else {
+					if ((fread (crow, sizeof (unsigned char), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						img[i][j][k + 1] = scaler * (int) crow[k];
+						if ((int) crow[k] > global_max)
+							global_max = (int) crow[k];
+						else if ((int) crow[k] < global_min)
+							global_min = (int) crow[k];
+					}
+				}
+			}
+		}
+
+/*	Standard vidi = left, anterior, superior */
+
+	} else if ((strstr (orient1, "left") != NULL) &&
+		   (strstr (orient2, "anterior") != NULL) &&
+		   (strstr (orient3, "superior") != NULL)) {
+		if (strcmp (ifiname, afiname) == 0) {
+			(void) fprintf (stderr, "ERROR [if2analyze]: orientation differs from Analyze!\n");
+			(void) fprintf (stderr, "Enter:  if2analyze input output\n");
+			(void) fprintf (stderr, "with an output filename different from input filename\n");
+			return (ERROR);
+		}
+		for (i = dim3; i >= 1; i--) {
+			for (j = dim2; j >= 1; j--) {
+				if (ntype == DT_SIGNED_SHORT) {
+					if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						if (srow[k] == -32768)
+							img[i][j][dim1 - k] = 0;
+						else
+							img[i][j][dim1 - k] = scaler * srow[k];
+						if ((int) srow[k] > global_max)
+							global_max = (int) srow[k];
+						else if ((int) srow[k] < global_min)
+							global_min = (int) srow[k];
+					}
+				} else if (ntype == DT_FLOAT) {
+					if ((fread (frow, sizeof (float), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						fimg[i][j][dim1 - k] = scaler * frow[k];
+						if (frow[k] > fglobal_max)
+							fglobal_max = frow[k];
+						else if (frow[k] < fglobal_min)
+							fglobal_min = frow[k];
+					}
+				} else {
+					if ((fread (crow, sizeof (unsigned char), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						img[i][j][dim1 - k] = scaler * (int) crow[k];
+						if ((int) crow[k] > global_max)
+							global_max = (int) crow[k];
+						else if ((int) crow[k] < global_min)
+							global_min = (int) crow[k];
+					}
+				}
+			}
+		}
+		(void) strcpy (orient1, "right");
+		(void) strcpy (orient2, "posterior");
+		(void) strcpy (orient3, "inferior");
+
+/*	Focus = left, anterior, inferior */
+
+	} else if ((strstr (orient1, "left") != NULL) &&
+		   (strstr (orient2, "anterior") != NULL) &&
+		   (strstr (orient3, "inferior") != NULL)) {
+		if (strcmp (ifiname, afiname) == 0) {
+			(void) fprintf (stderr, "ERROR [if2analyze]: orientation differs from Analyze!\n");
+			(void) fprintf (stderr, "Enter:  if2analyze input output\n");
+			(void) fprintf (stderr, "with an output filename different from input filename\n");
+			return (ERROR);
+		}
+		(void) fprintf (stdout, "Focus\n");
+		for (i = 1; i <= dim3; i++) {
+			for (j = dim2; j >= 1; j--) {
+				if (ntype == DT_SIGNED_SHORT) {
+					if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						if (srow[k] == -32768)
+							img[i][j][dim1 - k] = 0;
+						else
+							img[i][j][dim1 - k] = scaler * srow[k];
+						if ((int) srow[k] > global_max)
+							global_max = (int) srow[k];
+						else if ((int) srow[k] < global_min)
+							global_min = (int) srow[k];
+					}
+				} else if (ntype == DT_FLOAT) {
+					if ((fread (frow, sizeof (float), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						fimg[i][j][dim1 - k] = scaler * frow[k];
+						if (frow[k] > fglobal_max)
+							fglobal_max = frow[k];
+						else if (frow[k] < fglobal_min)
+							fglobal_min = frow[k];
+					}
+				} else {
+					if ((fread (crow, sizeof (unsigned char), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						img[i][j][dim1 - k] = scaler * (int) crow[k];
+						if ((int) crow[k] > global_max)
+							global_max = (int) crow[k];
+						else if ((int) crow[k] < global_min)
+							global_min = (int) crow[k];
+					}
+				}
+			}
+		}
+		(void) strcpy (orient1, "right");
+		(void) strcpy (orient2, "posterior");
+		(void) strcpy (orient3, "inferior");
+
+/*	Y-flipped Analyze orientation for SPM5 segmentation = right, anterior, inferior */
+
+	} else if ((strstr (orient1, "right") != NULL) &&
+		   (strstr (orient2, "anterior") != NULL) &&
+		   (strstr (orient3, "inferior") != NULL)) {
+		(void) fprintf (stderr, "WARNING: Y-orientation will be REVERSED for SPM5 segmentation\n");
+		(void) strcpy (orient2, "posterior");
+		for (i = 1; i <= dim3; i++) {
+			for (j = dim2; j >= 1; j--) {
+				if (ntype == DT_SIGNED_SHORT) {
+					if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						if (srow[k] == -32768)
+							img[i][j][k + 1] = 0;
+						else
+							img[i][j][k + 1] = scaler * srow[k];
+						if ((int) srow[k] > global_max)
+							global_max = (int) srow[k];
+						else if ((int) srow[k] < global_min)
+							global_min = (int) srow[k];
+					}
+				} else if (ntype == DT_FLOAT) {
+					if ((fread (frow, sizeof (float), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						fimg[i][j][k + 1] = scaler * frow[k];
+						if (frow[k] > fglobal_max)
+							fglobal_max = frow[k];
+						else if (frow[k] < fglobal_min)
+							fglobal_min = frow[k];
+					}
+				} else {
+					if ((fread (crow, sizeof (unsigned char), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						img[i][j][k + 1] = scaler * (int) crow[k];
+						if ((int) crow[k] > global_max)
+							global_max = (int) crow[k];
+						else if ((int) crow[k] < global_min)
+							global_min = (int) crow[k];
+					}
+				}
+			}
+		}
+
+	} else if (strcmp (ifiname, afiname) != 0) {
+		(void) printf ("WARNING [if2analyze]: orientation is non-standard ");
+		(void) printf ("(%s %s %s)\n", orient1, orient2, orient3);
+		(void) printf ("and cannot be reoriented.\n");
+		return (ERROR);
+
+	} else {
+		for (i = 0; i < dim3; i++) {
+			for (j = 0; j < dim2; j++) {
+				if (ntype == DT_SIGNED_SHORT) {
+					if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						srow[k] = scaler * srow[k];
+						if ((int) srow[k] > global_max)
+							global_max = (int) srow[k];
+						else if ((int) srow[k] < global_min)
+							global_min = (int) srow[k];
+					}
+				} else if (ntype == DT_FLOAT) {
+					if ((fread (frow, sizeof (float), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						frow[k] = scaler * frow[k];
+						if (frow[k] > fglobal_max)
+							fglobal_max = frow[k];
+						else if (frow[k] < fglobal_min)
+							fglobal_min = frow[k];
+					}
+				} else {
+					if ((fread (crow, sizeof (unsigned char), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: reading %s\n", afiname);
+						return (ERROR);
+					}
+					for (k = 0; k < dim1; k++) {
+						crow[k] = scaler * crow[k];
+						if ((int) crow[k] > global_max)
+							global_max = (int) crow[k];
+						else if ((int) crow[k] < global_min)
+							global_min = (int) crow[k];
+					}
+				}
+			}
+		}
+	}
+	(void) fclose (ifi);
+
+/*
+ *	Write Analyze image
+ */
+
+	if (strcmp (ifiname, afiname) != 0) {
+		if ((afi = fopen (afiname, "w")) == 0) {
+			(void) printf ("ERROR [if2analyze]: Unable to open Analyze image %s\n", afiname);
+			return (ERROR);
+		}
+		for (i = 1; i <= dim3; i++) {
+			for (j = 1; j <= dim2; j++) {
+				if (ntype == DT_SIGNED_SHORT || ntype == DT_UNSIGNED_CHAR) {
+					for (k = 1; k <= dim1; k++)
+						srow[k - 1] = img[i][j][k];
+					if ((fwrite (srow, sizeof (short), dim1, afi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: writing %s\n", afiname);
+						return (ERROR);
+					}
+				} else {
+					for (k = 1; k <= dim1; k++)
+						frow[k - 1] = fimg[i][j][k];
+					if ((fwrite (frow, sizeof (float), dim1, afi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [if2analyze]: writing %s\n", afiname);
+						return (ERROR);
+					}
+				}
+			}
+		}
+		(void) fclose (afi);
+	}
+/*
+ *	Create Analyze hdr file
+ */
+
+	/* type char is written as short integers */
+	if (ntype == DT_UNSIGNED_CHAR) {
+		ntype = DT_SIGNED_SHORT;
+		nbytes = 2;
+	}
+	(void) memset (&hdr, 0, sizeof (struct dsr));
+	(void) strncpy (hdr.hk.db_name, imagename, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr);
+	hdr.hk.extents = 16384;
+	hdr.hk.regular = 'r';
+	hdr.dime.dim[0] = 4;			 /* all Analyze images are taken as 4 dimensional */
+	hdr.dime.dim[1] = dim[0];		 /* x dimension */
+	hdr.dime.dim[2] = dim[1];		 /* y dimension */
+	hdr.dime.dim[3] = dim[2];		 /* z dimension */
+	hdr.dime.dim[4] = 1;			 /* number of volumes per file */
+
+	hdr.dime.datatype = ntype;		 /* 4->signed short; 8-> signed integer; 16-> float */
+	hdr.dime.bitpix = 8 * nbytes;		 /* number of bits/pixel (16 or 32) */
+	hdr.dime.pixdim[0] = 1.0;
+	hdr.dime.pixdim[1] = size[0];		 /* in mm */
+	hdr.dime.pixdim[2] = size[1];		 /* in mm */
+	hdr.dime.pixdim[3] = size[2];		 /* in mm */
+	hdr.dime.roi_scale = 1.0;
+
+	if (ntype == DT_SIGNED_SHORT) {
+		hdr.dime.glmax = global_max;
+		hdr.dime.glmin = global_min;
+	} else {
+		hdr.dime.glmax = (int) fglobal_max;
+		hdr.dime.glmin = (int) fglobal_min;
+	}
+	if ((strstr (orient1, "right") != NULL) &&
+	    (strstr (orient2, "posterior") != NULL) &&
+	    (strstr (orient3, "inferior") != NULL))
+		hdr.hist.orient = 0;
+	else {
+		(void) fprintf (stderr, "WARNING [if2analyze]: non-standard orientation");
+		(void) fprintf (stderr, "(%s %s %s) in %s\n", orient1, orient2, orient3, imagename);
+		(void) fprintf (stderr, "Analyze will probably not orient this image properly.\n");
+	}
+
+	if ((afh = fopen (afhname, "w")) == 0) {
+		(void) fprintf (stderr, "ERROR [if2analyze]: opening %s\n", afhname);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, afh)) != 1) {
+		(void) fprintf (stderr, "ERROR [if2analyze]: writing %s\n", afhname);
+		return (ERROR);
+	}
+	(void) fclose (afh);
+	(void) fprintf (stderr, "if2analyze complete\n");
+	return (0);
+}
+@
+
+
+2.5
+log
+@cleanup error messages
+@
+text
+@d2 3
+d54 2
+d60 1
+a60 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 2.4 2008/10/30 15:19:58 tom Exp tom $";
+d102 1
+d168 2
+d171 1
+a171 1
+					(void) fprintf (stderr, "ERROR [if2analyze]: image is not signed integer or float\n");
+d268 1
+a268 1
+	} else {
+d277 9
+d310 1
+a310 1
+				} else {
+d322 12
+d366 1
+a366 1
+				} else {
+d378 12
+d408 1
+a408 1
+		(void) fprintf (stdout,"Focus\n");
+d426 1
+a426 1
+				} else {
+d438 12
+d481 1
+a481 1
+				} else {
+d493 12
+d530 1
+a530 1
+				} else {
+d542 12
+d571 1
+a571 1
+				if (ntype == DT_SIGNED_SHORT) {
+d594 5
+d644 1
+@
+
+
+2.4
+log
+@correct type from 8 to 4 for short integers
+@
+text
+@d2 3
+d55 1
+a55 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 2.3 2008/10/28 21:26:51 tom Exp tom $";
+d113 1
+a113 1
+		(void) printf ("Usage: if2analyze ifhname ifiname afhname afiname\n");
+d136 1
+a136 1
+		(void) printf ("Unable to open Interfile header %s\n", ifhname);
+d140 1
+a140 1
+		(void) printf ("ERROR [if2analyze]: reading %s\n", ifhname);
+d144 1
+a144 1
+		(void) printf ("ERROR [if2analyze]: %s is not an Interfile header\n", ifhname);
+d163 1
+a163 1
+					(void) printf ("ERROR [if2analyze]: image is not signed integer or float\n");
+d175 4
+a178 4
+					(void) printf ("WARNING [if2analyze]: non-standard number of dimensions = %d\n",
+						       ndim);
+					(void) printf ("Analyze may not handle this image properly without ");
+					(void) printf ("manually editing its header.\n");
+d226 1
+a226 1
+				(void) printf ("scale_factor = %f\n", scaler);
+d234 1
+a234 1
+ *	All of our signed integer Interfiles have been short integers 
+d245 1
+a245 1
+		(void) printf ("ERROR [if2analyze]: Unable to open Interfile image %s\n", ifiname);
+d280 1
+a280 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d295 1
+a295 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d324 1
+a324 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d339 1
+a339 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d367 1
+a367 1
+		printf ("Focus\n");
+d372 1
+a372 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d387 1
+a387 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d409 1
+a409 1
+		printf ("WARNING: Y-orientation will be REVERSED for SPM5 segmentation\n");
+d415 1
+a415 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d430 1
+a430 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d455 1
+a455 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d467 1
+a467 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+d498 1
+a498 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Writing: %s\n", afiname);
+d505 1
+a505 1
+						(void) fprintf (stderr, "ERROR [if2analyze]: Writing: %s\n", afiname);
+d517 1
+a517 1
+	(void) memset (&hdr,0,sizeof(struct dsr));
+d529 1
+a529 1
+	hdr.dime.bitpix = 8 * nbytes;	 /* number of bits/pixel (16 or 32) */
+d531 3
+a533 3
+	hdr.dime.pixdim[1] = size[0];	 /* in mm */
+	hdr.dime.pixdim[2] = size[1];	 /* in mm */
+	hdr.dime.pixdim[3] = size[2];	 /* in mm */
+d548 3
+a550 3
+		(void) printf ("WARNING [if2analyze]: orientation is non-standard ");
+		(void) printf ("(%s %s %s)\n", orient1, orient2, orient3);
+		(void) printf ("Analyze will probably not orient this image properly.\n");
+d554 1
+a554 1
+		(void) printf ("Unable to create ANALYZE header %s\n", afhname);
+d558 1
+a558 1
+		(void) printf ("Error writing to: %s\n", afhname);
+@
+
+
+2.3
+log
+@use dbh.h
+@
+text
+@d2 3
+d52 1
+a52 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 2.2 2008/10/23 16:15:06 tom Exp tom $";
+d231 7
+d248 1
+a248 1
+	if (ntype == DT_SIGNED_INT) {
+d275 1
+a275 1
+				if (ntype == DT_SIGNED_INT) {
+d319 1
+a319 1
+				if (ntype == DT_SIGNED_INT) {
+d367 1
+a367 1
+				if (ntype == DT_SIGNED_INT) {
+d410 1
+a410 1
+				if (ntype == DT_SIGNED_INT) {
+d450 1
+a450 1
+				if (ntype == DT_SIGNED_INT) {
+d491 1
+a491 1
+				if (ntype == DT_SIGNED_INT) {
+d525 1
+a525 1
+	hdr.dime.datatype = ntype;		 /* 8-> signed integer; 16-> float */
+d533 1
+a533 1
+	if (ntype == DT_SIGNED_INT) {
+@
+
+
+2.2
+log
+@add oriention (right, anterior, posterior) for SPM5 segmentation
+@
+text
+@d2 3
+d49 1
+a49 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 2.1 2004/04/12 19:04:22 tom Exp tom $";
+d58 1
+a58 1
+#include <ANALYZE.h>
+d153 1
+a153 1
+					ntype = 4;
+d155 1
+a155 1
+					ntype = 16;
+d238 1
+a238 1
+	if (ntype == 4) {
+d265 1
+a265 1
+				if (ntype == 4) {
+d309 1
+a309 1
+				if (ntype == 4) {
+d357 1
+a357 1
+				if (ntype == 4) {
+d400 1
+a400 1
+				if (ntype == 4) {
+d440 1
+a440 1
+				if (ntype == 4) {
+d481 1
+a481 1
+				if (ntype == 4) {
+d504 1
+d506 18
+a523 27
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	hdr.hk.extents = 16384;			 /* recommended by developers  */
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.dime.dim[0] = 4;			 /* typically 4 dimensions  */
+	hdr.dime.dim[1] = dim[0];		 /* x dimension of atlas   */
+	hdr.dime.dim[2] = dim[1];		 /* y dimension of atlas   */
+	hdr.dime.dim[3] = dim[2];		 /* number of slices in volume */
+	hdr.dime.dim[4] = 1;			 /* only one volume typically  */
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = ntype;		 /* 4-> 16-bit signed integer; 8-> float */
+	hdr.dime.bitpix = 8 * nbytes;		 /* number of bits/pixel */
+	hdr.dime.pixdim[1] = size[0];		 /* in mm */
+	hdr.dime.pixdim[2] = size[1];		 /* in mm */
+	hdr.dime.pixdim[3] = size[2];		 /* in mm */
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	if (ntype == 4) {
+a529 2
+	(void) strncpy (hdr.hist.descrip, imagename, 79);
+	(void) strcpy (hdr.hist.originator, "if2analyze");
+d533 1
+a533 1
+		hdr.hist.orient = TRANSVERSE;
+d539 1
+@
+
+
+2.1
+log
+@scale_factor and Focus
+@
+text
+@d2 3
+d46 1
+a46 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 2.0 2004/02/16 16:23:51 tom Exp tom $";
+d66 1
+a66 1
+main (argc, argv)
+d388 40
+a453 1
+					frow[k] = scaler * frow[k];
+d455 1
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@d2 3
+d43 1
+a43 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 1.9 2002/03/06 21:55:18 tom Exp tom $";
+d84 1
+d112 6
+a117 3
+	if (orient1 == NULL) return (ERROR);
+	if (orient2 == NULL) return (ERROR);
+	if (orient3 == NULL) return (ERROR);
+d212 5
+d254 2
+a255 2
+	if ((strstr (orient1, "right") != NULL) ||
+	    (strstr (orient2, "posterior") != NULL) ||
+d268 1
+a268 1
+							img[i][j][k + 1] = srow[k];
+d280 1
+a280 1
+						fimg[i][j][k + 1] = frow[k];
+d312 1
+a312 1
+							img[i][j][dim1 - k] = srow[k];
+d324 1
+a324 1
+						fimg[i][j][dim1 - k] = frow[k];
+d336 49
+d390 1
+d400 1
+d411 1
+@
+
+
+1.9
+log
+@convert type float
+@
+text
+@d2 3
+d31 1
+a31 1
+ *	Date:			Jan-98
+d38 1
+d40 1
+a40 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 1.8 2001/05/25 20:50:49 tom Exp tom $";
+d108 3
+d222 1
+a222 1
+			(void) fprintf (stderr, "ERROR [if2analyze]: Cannot malloc img\n");
+d226 1
+a226 1
+			(void) fprintf (stderr, "ERROR [if2analyze]: Cannot malloc srow\n");
+d231 1
+a231 1
+			(void) fprintf (stderr, "ERROR [if2analyze]: Cannot malloc fimg\n");
+d235 1
+a235 1
+			(void) fprintf (stderr, "ERROR [if2analyze]: Cannot malloc frow\n");
+@
+
+
+1.8
+log
+@remove comment
+@
+text
+@d2 3
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 1.7 2001/05/25 20:49:36 tom Exp tom $";
+d79 2
+d89 2
+d134 2
+d137 1
+a137 1
+					(void) printf ("ERROR [if2analyze]: image is not signed integer format\n");
+d213 18
+a230 3
+	if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		(void) fprintf (stderr, "ERROR [if2analyze]: Cannot malloc img\n");
+		return (ERROR);
+a231 4
+	if (NULL == (srow = (short *) calloc (dim1, sizeof (short)))) {
+		(void) fprintf (stderr, "ERROR [if2analyze]: Cannot malloc srow\n");
+		return (ERROR);
+	}
+d240 27
+a266 3
+				if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+					(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+					return (ERROR);
+a267 10
+				for (k = 0; k < dim1; k++) {
+					if (srow[k] == -32768)
+						img[i][j][k+1] = 0;
+					else
+						img[i][j][k+1] = srow[k];
+					if ((int) srow[k] > global_max)
+						global_max = (int) srow[k];
+					else if ((int) srow[k] < global_min)
+						global_min = (int) srow[k];
+				}
+d281 1
+a281 1
+		} 
+d284 27
+a310 3
+				if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+					(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+					return (ERROR);
+a311 10
+				for (k = 0; k < dim1; k++) {
+					if (srow[k] == -32768)
+						img[i][j][dim1-k] = 0;
+					else
+						img[i][j][dim1-k] = srow[k];
+					if ((int) srow[k] > global_max)
+						global_max = (int) srow[k];
+					else if ((int) srow[k] < global_min)
+						global_min = (int) srow[k];
+				}
+d325 22
+a346 3
+				if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+					(void) fprintf (stderr, "ERROR [if2analyze]: Reading: %s\n", afiname);
+					return (ERROR);
+a347 6
+				for (k = 0; k < dim1; k++) {
+					if ((int) srow[k] > global_max)
+						global_max = (int) srow[k];
+					else if ((int) srow[k] < global_min)
+						global_min = (int) srow[k];
+				}
+d364 14
+a377 5
+				for (k = 1; k <= dim1; k++)
+					srow[k-1] = img[i][j][k];
+				if ((fwrite (srow, sizeof (short), dim1, afi)) != dim1) {
+					(void) fprintf (stderr, "ERROR [if2analyze]: Writing: %s\n", afiname);
+					return (ERROR);
+d403 1
+a403 1
+	hdr.dime.datatype = ntype;		 /* 4 -> 16-bit signed integer  */
+d414 7
+a420 2
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+@
+
+
+1.7
+log
+@fix bug: pixel offset by 1 in x-dimension
+@
+text
+@d2 3
+d33 1
+a33 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 1.6 2001/04/18 15:36:11 tom Exp tom $";
+a88 1
+	(void) printf ("New\n");
+@
+
+
+1.6
+log
+@if input image is in vidi orientation, check that output filename differs from input filename
+@
+text
+@d2 3
+d30 1
+a30 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 1.5 2001/02/05 20:11:37 tom Exp tom $";
+d86 1
+d210 1
+d223 4
+a231 6
+				for (k = 1; k <= dim1; k++) {
+					if (srow[k - 1] == -32768)
+						img[i][j][k] = 0;
+					else
+						img[i][j][k] = srow[k - 1];
+				}
+d246 2
+a247 2
+		for (i = dim3; i > 0; i--) {
+			for (j = dim2; j > 0; j--) {
+d253 4
+a261 6
+				for (k = 1; k <= dim1; k++) {
+					if (srow[k - 1] == -32768)
+						img[i][j][dim1 - (k - 1)] = 0;
+					else
+						img[i][j][dim1 - (k - 1)] = srow[k - 1];
+				}
+d302 1
+a302 1
+					srow[k] = img[i][j][k];
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d27 1
+a27 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 1.4 2001/02/05 18:09:22 tom Exp $";
+d208 2
+a209 2
+	if ((strstr (orient1, "right") != NULL) &&
+	    (strstr (orient2, "posterior") != NULL) &&
+d237 6
+@
+
+
+1.4
+log
+@create a new output image
+@
+text
+@d2 3
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 1.3 1999/12/16 18:14:26 tom Exp tom $";
+d208 2
+a209 2
+		for (i = 0; i < dim3; i++) {
+			for (j = 0; j < dim2; j++) {
+@
+
+
+1.3
+log
+@new libs, sync ver
+@
+text
+@d2 3
+d16 2
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 1.2 1999/12/15 18:47:56 tom Exp tom $";
+d27 3
+d47 8
+a54 6
+	FILE           *afd;			 /* ANALYZE hdr file */
+	FILE           *ifd;			 /* Interfile ifh file */
+	FILE           *dfd;			 /* Interfile img file */
+	char           *afname;			 /* Analyze header filename  */
+	char           *ifname;			 /* Interfile header filename */
+	char           *dname;			 /* Interfile image filename */
+d62 3
+a64 2
+	short          *img;
+	int             j, k, len;
+d66 1
+d73 3
+a75 3
+	if (argc != 4) {
+		(void) printf ("Usage: if2analyze ifname dname afname\n");
+		return (-1);
+d77 4
+a80 3
+	ifname = argv[1];
+	dname = argv[2];
+	afname = argv[3];
+d90 3
+a92 3
+	if ((ifd = fopen (ifname, "r")) == 0) {
+		(void) printf ("Unable to open Interfile header %s\n", ifname);
+		return (-1);
+d94 3
+a96 4
+	if (fgets (str, sizeof (str), ifd)
+	    == NULL) {
+		(void) printf ("ERROR [if2analyze]: reading %s\n", ifname);
+		return (-1);
+d99 2
+a100 2
+		(void) printf ("ERROR [if2analyze]: %s is not an Interfile header\n", ifname);
+		return (-1);
+d102 1
+a102 1
+	while (fgets (str, sizeof (str), ifd) != NULL) {
+d115 4
+a118 2
+				else
+					ntype = 0;
+d179 1
+a179 1
+	(void) fclose (ifd);
+d185 39
+a223 4
+	if (ntype == 4) {
+		if ((dfd = fopen (dname, "r")) == 0) {
+			(void) printf ("ERROR [if2analyze]: Unable to open Interfile image %s\n", dname);
+			return (-1);
+d225 11
+a235 9
+		len = dim[0] * dim[1];
+		img = (short *) calloc (len, sizeof (short));
+		for (j = 0; j < dim[2]; j++) {
+			if (fread (img, len * sizeof (short), 1, dfd) == 1) {
+				for (k = 0; k < len; k++) {
+					if ((int) img[k] > global_max)
+						global_max = (int) img[k];
+					else if ((int) img[k] < global_min)
+						global_min = (int) img[k];
+d237 12
+a248 3
+			} else {
+				(void) printf ("ERROR [if2analyze]: reading imagefile %s\n", dname);
+				return (-1);
+d251 8
+a258 1
+		(void) fclose (dfd);
+d260 14
+a273 2
+		global_min = 0;
+		global_max = 32767;
+d275 1
+d278 21
+d342 3
+a344 3
+	if ((afd = fopen (afname, "w")) == 0) {
+		(void) printf ("Unable to create ANALYZE header %s\n", afname);
+		return (-1);
+d346 3
+a348 3
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, afd)) != 1) {
+		(void) printf ("Error writing to: %s\n", afname);
+		return (-1);
+d350 1
+a350 1
+	(void) fclose (afd);
+@
+
+
+1.2
+log
+@lint cleaning
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/RCS/if2analyze.c,v 1.1 1998/01/20 17:47:07 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*$Log$*/
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/if2analyze/if2analyze.c,v 1.1 1998/01/20 17:45:46 tom Exp $";
+d17 1
+d52 1
+a52 1
+	int             ndim;
+@

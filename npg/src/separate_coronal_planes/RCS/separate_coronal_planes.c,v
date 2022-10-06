@@ -1,0 +1,203 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	2010.07.27.14.34.11;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2009.02.20.16.08.18;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@switch pixdim
+@
+text
+@/*	$Log: separate_coronal_planes.c,v $
+ * Revision 1.1  2009/02/20  16:08:18  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			separate_coronal_planes.c
+ *	Date:			Feb 2009
+ *	Author:			Tom Videen
+ *	Description:	Separate all coronal planes of an Analyze image file into single-slice files
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/separate_coronal_planes/RCS/separate_coronal_planes.c,v 1.1 2009/02/20 16:08:18 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+int main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;	 /* input file */
+	char           *out;			 /* output root */
+	char            img2[256], hdr2[256];	 /* output file */
+	char            str[5];
+	float           pix1, pix2, pix3;
+	long            dim1, dim2, dim3; /* dimensions of image */
+	long            num, pln;
+	long            x,y,z,n,anan;
+	short          *img;
+	short          *arr;
+
+	if (argc != 4) {
+		printf ("Usage: separate_coronal_planes img1 hdr1 out\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	out  = argv[3];
+
+/*	Read header */
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [separate_coronal_planes]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [separate_coronal_planes]: reading %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [separate_coronal_planes]: reading %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [separate_coronal_planes]: reading %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [separate_coronal_planes]: reading %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	pix1 = hdr.dime.pixdim[1];
+	pix2 = hdr.dime.pixdim[2];
+	pix3 = hdr.dime.pixdim[3];
+	(void) fclose (fd_hdr);
+
+	hdr.dime.dim[1] = dim1;
+	hdr.dime.dim[2] = dim3;
+	hdr.dime.dim[3] = 1;
+
+/*	Read image */
+
+	pln = dim1 * dim3;
+	arr = (short *) calloc (pln, sizeof (short));
+	if (arr == NULL) {
+		fprintf (stderr, "ERROR [separate_coronal_planes]: calloc arr\n");
+		return (ERROR);
+	}
+
+	num = dim1 * dim2 * dim3;
+	img = (short *) calloc (num, sizeof (short));
+	if (img == NULL) {
+		fprintf (stderr, "ERROR [separate_coronal_planes]: calloc img\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [separate_coronal_planes]: opening %s\n", img1);
+		return (ERROR);
+	}
+	if ((fread (img, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [separate_coronal_planes]: reading %s\n", img1);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	fprintf (stdout, "Reading %s\n", img1);
+
+/*	Write single-slice images of coronal planes */
+/*	Note that the ordering of Analyze 3D arrays begins dorsal/posterior/right	*/
+
+	hdr.dime.pixdim[2] = pix3;
+	hdr.dime.pixdim[3] = pix2;
+
+	(void) strcpy (str, "");
+	for (y = 1; y <= dim2; y++) {
+		(void) strcpy (img2, out);
+		(void) sprintf(str,"%ld",y);
+		(void) strcat (img2, str);
+		(void) strcpy (hdr2, img2);
+		(void) strcat (img2, ".img");
+		(void) strcat (hdr2, ".hdr");
+
+		n = 0;
+		for (z = 1; z <= dim3; z++) {
+			for (x = 1; x <= dim1; x++) {
+				anan = (dim3-z)*dim1*dim2 + (y-1)*dim1 + (dim1-x+1);
+				arr[n] = img[num-anan];
+				n = n+1;
+			}
+		}
+
+		if ((fd_img = fopen (img2, "w")) == 0) {
+			fprintf (stderr, "ERROR [separate_coronal_planes]: opening %s\n", img2);
+			return (ERROR);
+		}
+		if ((fwrite (arr, sizeof (short), pln, fd_img)) != pln) {
+			fprintf (stderr, "ERROR [separate_coronal_planes]: writing %s\n", img2);
+			return (ERROR);
+		}
+		(void) fclose (fd_img);
+		if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+			fprintf (stderr, "ERROR [separate_coronal_planes]: opening %s\n", hdr2);
+			return (ERROR);
+		}
+		if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+			fprintf (stderr, "ERROR [separate_coronal_planes]: writing %s\n", hdr2);
+			return (ERROR);
+		}
+		(void) fclose (fd_hdr);
+	}
+	free (img);
+	free (arr);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/separate_coronal_planes/RCS/separate_coronal_planes.c,v 1.3 2004/02/19 22:24:38 tom Exp $";
+d34 1
+d77 3
+d115 3
+@

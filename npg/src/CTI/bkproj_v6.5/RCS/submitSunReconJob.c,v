@@ -1,0 +1,624 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.04.10.18.17.58;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.04.10.17.45.41;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@original v6.5 from CTI
+@
+
+
+1.2
+log
+@initial 961 version
+@
+text
+@/*
+$Id$
+$Log$
+*/
+/*  ===============================================================================
+ *  Module:         submitReconJob.c
+ *  Author:         twjansto 18 jun 1990
+ *  Description:    Sun backprojection
+ *	History:
+ *		10-Apr-95	Version for 961 TOV with rcsid
+ *  ===============================================================================
+ */
+
+static char     whatInfo[] = "@@(#) $Workfile:   submitSunReconJob.c  $ $Revision:   1.0  $ $Date:   12/12/94 17:28:46  $ Copyright (c) 1994 CTI PET Systems, Inc.";
+
+#include <stdio.h>
+#include "reconmgr.h"
+#include "matrix.h"
+#include "scatter.h"
+
+static char     rcsid[] = "$Header$";
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	int             result, command, inputOk = 0, prio = 0, matrixHit[2][5], verbose = 0;
+	int             seqNumber, fitSingleEllipse = 0;
+	int             no_found, i, k, value, jobid = 1, atoi ();
+	int             submitThisForRecon ();
+	extern char    *optarg;
+	extern int      optind;
+	void            usage ();
+	char            win[80], geo[80], filt[80], filtStr[80], matrix[80], fname[64];
+	char            thisMatStr[64], thisNrmStr[64], atnMatStr[64], tempName[64];
+	char            profile[64], scan[128], image[128], attn[128], norm[128];
+	char            scanStr[128], imageStr[128], attnStr[128], normStr[128], *buff;
+	struct Matval   thisMatrix;
+	Scan_subheader  sh;
+	MatrixFile     *mf, *matrix_open ();
+	struct MatDir  *matdir, *get_next_dir_entry ();
+	MatDirNode     *nextMatrix;
+
+	bzero (attn, 128);
+	bzero (norm, 128);
+	strcpy (matrix, "*");
+	strcpy (geo, "1.5, 1");
+	strcpy (win, "0, 0, 0, 128, 1, 0, 0");
+	strcpy (filt, "3, .4");
+	while ((command = getopt (argc, argv, "a:ce:f:g:i:m:n:p:s:vw:")) != -1) {
+		inputOk = 1;
+		switch (command) {
+		case 'a':
+			sprintf (attn, "%s", optarg);
+			break;
+		case 'e':
+			fitSingleEllipse = 1;
+			break;
+		case 'f':
+			sprintf (filt, "%s", optarg);
+			break;
+		case 'g':
+			sprintf (geo, "%s", optarg);
+			break;
+		case 'i':
+			sprintf (image, "%s", optarg);
+			break;
+		case 'm':
+			sprintf (matrix, "%s", optarg);
+			break;
+		case 'n':
+			sprintf (norm, "%s", optarg);
+			break;
+		case 'p':
+			prio = atoi (optarg);
+			break;
+		case 's':
+			sprintf (scan, "%s", optarg);
+			break;
+		case 'v':
+			verbose = 1;
+			break;
+		case 'w':
+			sprintf (win, "%s", optarg);
+			break;
+		}
+	}
+	if (!inputOk)
+		usage (argv[0]);
+	decode_selector (matrix, matrixHit);
+	if ((mf = matrix_open (scan, "r")) == NULL) {
+		printf ("%s: ERROR...unable to open %s\n", argv[0], scan);
+		exit (1);
+	}
+	if (verbose)
+		printf ("File contains %d matrices\n", mf->dirlist->nmats);
+	if ((buff = (char *) malloc (512)) == (char *) NULL) {
+		printf ("%s: ERROR...unable to malloc space for subheader\n", argv[0]);
+		matrix_close (mf);
+		exit (1);
+	}
+	for (nextMatrix = mf->dirlist->first; nextMatrix != (MatDirNode *) NULL;
+	     nextMatrix = nextMatrix->next) {
+		if (matrix_selector (nextMatrix->matnum, matrixHit)) {
+			mat_numdoc (nextMatrix->matnum, &thisMatrix);
+			sprintf (thisMatStr, "%d,%d,%d,%d,%d", thisMatrix.frame, thisMatrix.plane,
+				 thisMatrix.gate, thisMatrix.data, thisMatrix.bed);
+			sprintf (thisNrmStr, "1,%d,1,0,0", thisMatrix.plane);
+			sprintf (scanStr, "%s,%s", scan, thisMatStr);
+			sprintf (imageStr, "%s,%s", image, thisMatStr);
+			if (*norm)
+				sprintf (normStr, "%s,%s", norm, thisNrmStr);
+			if (*attn) {
+				if (fitSingleEllipse)
+					sprintf (attnStr, "%s,%s", attn, "1,1,1,0,0");
+				else
+					sprintf (attnStr, "%s,1,%d,1,0,%d", attn, thisMatrix.plane, thisMatrix.bed);
+			}
+			strcpy (filtStr, filt);
+			seqNumber = submitThisForRecon (scanStr, normStr, attnStr, imageStr,
+							win, geo, filtStr, prio, jobid);
+			jobid++;
+			if (seqNumber < 0) {
+				printf ("%s: ERROR...unable to submit %s for reconstruction\n",
+					argv[0], thisMatStr);
+				exit (1);
+			} else if (verbose)
+				printf ("Reconstruction sequence number %d\n", seqNumber);
+		}
+	}
+	matrix_close (mf);
+	exit (0);
+}
+
+void            usage (str)
+	char           *str;
+
+{
+	printf ("usage: %s -a -c -e -f -g -i -m -n -p -s -v -w\n", str);
+	printf ("\t\t\t -a attnfile\n");
+	printf ("\t\t\t -c use scatter correction\n");
+	printf ("\t\t\t -e use single ellipse\n");
+	printf ("\t\t\t -f filter spec [3, .4]\n");
+	printf ("\t\t\t -g geometry spec [1.5, 0]\n");
+	printf ("\t\t\t -i imagefile\n");
+	printf ("\t\t\t -m matrix spec [1, 8, 1, 0, 0]\n");
+	printf ("\t\t\t -n normfile\n");
+	printf ("\t\t\t -p priority [0]\n");
+	printf ("\t\t\t -s scanfile\n");
+	printf ("\t\t\t -v verbose [0]\n");
+	printf ("\t\t\t -w window spec [0, 0, 0, 128, 1, 0, 0]\n");
+	exit (1);
+}
+
+
+void            malloc_recon_space (target)
+	QUE_JOB_DATA   *target;
+
+{
+	target->imag_spec = (char *) malloc (256);
+	target->scan_spec = (char *) malloc (256);
+	target->norm_spec = (char *) malloc (256);
+	target->attn_spec = (char *) malloc (256);
+	target->zoom_spec = (char *) malloc (256);
+	target->offs_spec = (char *) malloc (256);
+	target->filt_spec = (char *) malloc (256);
+}
+
+
+void            free_recon_space (target)
+	QUE_JOB_DATA   *target;
+
+{
+	free (target->imag_spec);
+	free (target->scan_spec);
+	free (target->norm_spec);
+	free (target->attn_spec);
+	free (target->zoom_spec);
+	free (target->offs_spec);
+	free (target->filt_spec);
+}
+
+
+int             submitThisForRecon (scanName, normName, attnName, imageName, windowZoom, geometry, filter, priority, jobid)
+	char           *scanName, *normName, *attnName, *imageName, *windowZoom, *geometry, *filter;
+	int             priority, jobid;
+
+{
+	QUE_JOB_DATA    recon;
+	int             returnValue, retro_recon ();
+	struct cstype   cs;
+
+	malloc_recon_space (&recon);
+	sprintf (recon.scan_spec, "%s", scanName);
+	sprintf (recon.imag_spec, "%s", imageName);
+	if (normName != NULL)
+		sprintf (recon.norm_spec, "%s", normName);
+	else
+		sprintf (recon.norm_spec, "");
+	if (attnName != NULL)
+		sprintf (recon.attn_spec, "%s", attnName);
+	else
+		sprintf (recon.attn_spec, "");
+	sprintf (recon.zoom_spec, "%s", windowZoom);
+	sprintf (recon.offs_spec, "%s", geometry);
+	sprintf (recon.filt_spec, "%s", filter);
+	recon.priority = (short) priority;
+	returnValue = do_bkproj (jobid, &recon, &cs);
+	free_recon_space (&recon);
+	return (returnValue);
+}
+
+
+int             makeDefaultName (specifiedString, resultName, fileType)
+	char           *specifiedString, *resultName;
+	int             fileType;
+
+{
+	char           *fileExtension, filePath[16];
+
+	switch (fileType) {
+	case 0:
+		fileExtension = ".scn";
+		strcpy (filePath, "sd0");
+		break;
+	case 1:
+		fileExtension = ".img";
+		strcpy (filePath, "ecat_data");
+		break;
+	case 2:
+		fileExtension = ".nrm";
+		strcpy (filePath, "sd0");
+		break;
+	case 3:
+		fileExtension = ".atn";
+		strcpy (filePath, "sd0");
+		break;
+	}
+	if (specifiedString == (char *) NULL)	 /* nothing in, nothing out */
+		resultName = (char *) NULL;
+	if (!(strpbrk (specifiedString, "/")) && (!(strpbrk (specifiedString, "."))))	/* no path or extension */
+		sprintf (resultName, "/%s/%s%s", filePath, specifiedString, fileExtension);
+	if (!(strpbrk (specifiedString, "/")) && ((strpbrk (specifiedString, ".") != 0)))	/* no path with
+												 * extension */
+		sprintf (resultName, "/%s/%s", filePath, specifiedString);
+	if ((strpbrk (specifiedString, "/") != 0) && (!(strpbrk (specifiedString, "."))))	/* path with no
+												 * extension */
+		sprintf (resultName, "%s%s", specifiedString, fileExtension);
+	if ((strpbrk (specifiedString, "/") != 0) &&
+	    ((strpbrk (specifiedString, ".") != 0)))	/* path with extension */
+		sprintf (resultName, "%s", specifiedString);
+	return (0);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 12
+a12 6
+/* $Revision:   1.0  $ $Date:   12/12/94 17:28:46  $                                            */
+/* Copyright (c) 1993 CTI PET Systems, Inc.                     */
+ 
+static char whatInfo[] = "@@(#) $Workfile:   submitSunReconJob.c  $ $Revision:   1.0  $ $Date:   12/12/94 17:28:46  $ Copyright (c) 1994 CTI PET Systems, Inc.";
+ 
+/* program submitReconJob.c    twjansto 18 jun 1990 */
+d14 2
+d21 5
+a25 3
+main(argc, argv)
+int argc;
+char **argv;
+d27 16
+a42 48
+	int result,
+	    command,
+	    inputOk = 0,
+	    prio = 0,
+	    matrixHit[2][5],
+	    verbose = 0,
+	    scatterCorrect = 0,
+	    seqNumber,
+	    fitSingleEllipse = 0,
+	    read_scatter(),
+	    no_found,
+	    i,
+	    k,
+	    value,
+	    jobid=1,
+	    atoi();
+	int submitThisForRecon();
+	extern char *optarg;
+	extern int optind;
+	void usage();
+	char win[80],
+	     geo[80],
+	     filt[80],
+	     filtStr[80],
+	     matrix[80],
+	     fname[64],
+	     thisMatStr[64],
+	     thisNrmStr[64],
+	     atnMatStr[64],
+	     tempName[64],
+	     profile[64],
+	     scan[128],
+	     image[128],
+	     attn[128],
+	     norm[128],
+	     scanStr[128],
+	     imageStr[128],
+	     attnStr[128],
+	     normStr[128],
+	    *buff;
+	struct Matval thisMatrix;
+	Scan_subheader sh;
+	MatrixFile *mf,
+	          *matrix_open();
+	struct MatDir *matdir,
+	      *get_next_dir_entry();
+	MatDirNode *nextMatrix;
+	Scatter_values scatterParameters[100];
+d44 7
+a50 8
+	bzero(attn, 128);
+	bzero(norm, 128);
+	strcpy(matrix, "*");
+	strcpy(geo, "1.5, 1");
+	strcpy(win, "0, 0, 0, 128, 1, 0, 0");
+	strcpy(filt, "3, .4");
+	while ((command = getopt(argc, argv, "a:ce:f:g:i:m:n:p:s:vw:")) != -1)
+	{
+d52 3
+a54 4
+		switch (command)
+		{
+		    case 'a':
+			makeDefaultName(optarg, attn, 3);
+d56 1
+a56 4
+		    case 'c':
+			scatterCorrect = 1;
+			break;
+		    case 'e':
+d59 2
+a60 2
+		    case 'f':
+			sprintf(filt, "%s", optarg);
+d62 2
+a63 2
+		    case 'g':
+			sprintf(geo, "%s", optarg);
+d65 2
+a66 2
+		    case 'i':
+			makeDefaultName(optarg, image, 1);
+d68 2
+a69 2
+		    case 'm':
+			sprintf(matrix, "%s", optarg);
+d71 2
+a72 2
+		    case 'n':
+			makeDefaultName(optarg, norm, 2);
+d74 2
+a75 2
+		    case 'p':
+			prio = atoi(optarg);
+d77 2
+a78 2
+		    case 's':
+			makeDefaultName(optarg, scan, 0);
+d80 1
+a80 1
+		    case 'v':
+d83 2
+a84 2
+		    case 'w':
+			sprintf(win, "%s", optarg);
+d89 5
+a93 6
+		usage(argv[0]);
+	decode_selector(matrix, matrixHit);
+	if ((mf = matrix_open(scan, "r")) == NULL)
+	{
+		printf("%s: ERROR...unable to open %s\n", argv[0], scan);
+		exit(1);
+d96 5
+a100 10
+		printf("File contains %d matrices\n", mf->dirlist->nmats);
+ /** if the user selected scatter correction, read the values in */
+	if (scatterCorrect)
+		if ((read_scatter(scatterParameters, 100, &no_found)) != 0)
+			scatterCorrect = 0;
+	if ((buff = (char *) malloc(512)) == (char *) NULL)
+	{
+		printf("%s: ERROR...unable to malloc space for subheader\n", argv[0]);
+		matrix_close(mf);
+		exit(1);
+d103 15
+a117 14
+		nextMatrix = nextMatrix->next)
+	{
+		if (matrix_selector(nextMatrix->matnum, matrixHit))
+		{
+			mat_numdoc(nextMatrix->matnum, &thisMatrix);
+/**********
+			if (rtsRblk(mf->fname, nextMatrix->strtblk, buff))
+			{
+				printf("%s:ERROR...unable to read sinogram data for %d %d %d %d %d\n",
+					argv[0], thisMatrix.frame, thisMatrix.plane, thisMatrix.gate,
+					thisMatrix.data, thisMatrix.bed);
+				matrix_close(mf);
+				free((char *) buff);
+				exit(1);
+d119 10
+a128 45
+			convertScanHeaderFromVax(buff, &sh);
+			if (sh.data_type == 0)
+			{
+				fprintf(stderr,
+					"Matrix %d,%d,%d,%d,%d does not contain legitimate sinogram data.",
+					thisMatrix.frame, thisMatrix.plane, thisMatrix.gate,
+					thisMatrix.data, thisMatrix.bed);
+			} else
+			{
+**********/
+				sprintf(thisMatStr, "%d,%d,%d,%d,%d", thisMatrix.frame, thisMatrix.plane,
+					thisMatrix.gate, thisMatrix.data, thisMatrix.bed);
+				sprintf(thisNrmStr, "1,%d,1,0,0", thisMatrix.plane);
+				sprintf(scanStr, "%s,%s", scan, thisMatStr);
+				sprintf(imageStr, "%s,%s", image, thisMatStr);
+				if (*norm)
+					sprintf(normStr, "%s,%s", norm, thisNrmStr);
+				if (*attn)
+				{
+					if (fitSingleEllipse)
+						sprintf(attnStr, "%s,%s", attn, "1,1,1,0,0");
+					else
+						sprintf(attnStr, "%s,1,%d,1,0,%d", 
+							attn, thisMatrix.plane, thisMatrix.bed);
+				}
+				if (scatterCorrect)
+				{
+					sprintf(filtStr, "%s,0,0,0,%s,%s", filt,
+						scatterParameters[thisMatrix.plane - 1].fraction,
+						scatterParameters[thisMatrix.plane - 1].slope);
+				} else
+					strcpy(filtStr, filt);
+				seqNumber = submitThisForRecon(scanStr, normStr, attnStr, imageStr,
+					geo, win, filtStr, prio, jobid);
+                                jobid++;
+				if (seqNumber < 0)
+				{
+					printf("%s: ERROR...unable to submit %s for reconstruction\n",
+						argv[0], thisMatStr);
+					exit(1);
+				} else if (verbose)
+					printf("Reconstruction sequence number %d\n", seqNumber);
+/***********
+			}
+**********/
+d131 2
+a132 2
+	matrix_close(mf);
+	exit(0);
+d135 3
+a137 3
+void 
+usage(str)
+char *str;
+d139 14
+a152 14
+	printf("usage: %s -a -c -e -f -g -i -m -n -p -s -v -w\n", str);
+	printf("\t\t\t -a attnfile\n");
+	printf("\t\t\t -c use scatter correction\n");
+	printf("\t\t\t -e use single ellipse\n");
+	printf("\t\t\t -f filter spec [3, .4]\n");
+	printf("\t\t\t -g geometry spec [1.5, 0]\n");
+	printf("\t\t\t -i imagefile\n");
+	printf("\t\t\t -m matrix spec [1, 8, 1, 0, 0]\n");
+	printf("\t\t\t -n normfile\n");
+	printf("\t\t\t -p priority [0]\n");
+	printf("\t\t\t -s scanfile\n");
+	printf("\t\t\t -v verbose [0]\n");
+	printf("\t\t\t -w window spec [0, 0, 0, 128, 1, 0, 0]\n");
+	exit(1);
+d156 3
+a158 2
+void malloc_recon_space (target)
+QUE_JOB_DATA *target;
+d160 7
+a166 7
+    target->imag_spec = (char *) malloc (256);
+    target->scan_spec = (char *) malloc (256);
+    target->norm_spec = (char *) malloc (256);
+    target->attn_spec = (char *) malloc (256);
+    target->zoom_spec = (char *) malloc (256);
+    target->offs_spec = (char *) malloc (256);
+    target->filt_spec = (char *) malloc (256);
+d170 3
+a172 2
+void free_recon_space (target)
+QUE_JOB_DATA *target;
+d174 7
+a180 7
+    free (target->imag_spec);
+    free (target->scan_spec);
+    free (target->norm_spec);
+    free (target->attn_spec);
+    free (target->zoom_spec);
+    free (target->offs_spec);
+    free (target->filt_spec);
+d184 4
+a187 3
+int submitThisForRecon (scanName, normName, attnName, imageName, windowZoom, geometry, filter, priority, jobid)
+char *scanName, *normName, *attnName, *imageName, *windowZoom, *geometry, *filter;
+int priority, jobid;
+d189 3
+a191 2
+    QUE_JOB_DATA recon;
+    int returnValue,  retro_recon ();
+d193 18
+a210 20
+    struct cstype cs;
+
+    malloc_recon_space (&recon);
+    sprintf (recon.scan_spec, "%s", scanName);
+    sprintf (recon.imag_spec, "%s", imageName);
+    if (normName != NULL)
+        sprintf (recon.norm_spec, "%s", normName);
+    else
+        sprintf (recon.norm_spec, "");
+    if (attnName != NULL)
+        sprintf (recon.attn_spec, "%s", attnName);
+    else
+        sprintf (recon.attn_spec, "");
+    sprintf (recon.zoom_spec, "%s", windowZoom);
+    sprintf (recon.filt_spec, "%s", filter);
+    sprintf (recon.offs_spec, "%s", geometry);
+    recon.priority = (short) priority;
+    returnValue = do_bkproj( jobid, &recon, &cs);
+    free_recon_space (&recon);
+    return (returnValue);
+d214 4
+a217 4
+int makeDefaultName (specifiedString, resultName, fileType)
+char *specifiedString,
+    *resultName;
+int fileType;
+d219 1
+a219 2
+    char *fileExtension,
+         filePath[16];
+d221 32
+a252 34
+    switch (fileType)
+    {
+      case 0:
+	fileExtension = ".scn";
+	strcpy (filePath, "sd0");
+	break;
+      case 1:
+	fileExtension = ".img";
+	strcpy (filePath, "ecat_data");
+	break;
+      case 2:
+	fileExtension = ".nrm";
+	strcpy (filePath, "sd0");
+	break;
+      case 3:
+	fileExtension = ".atn";
+	strcpy (filePath, "sd0");
+	break;
+    }
+    if (specifiedString == (char *) NULL)	/* nothing in, nothing
+						   out */
+	resultName = (char *) NULL;
+    if (!(strpbrk (specifiedString, "/")) && (!(strpbrk (specifiedString, "."))))	/* no path or extension */
+	sprintf (resultName, "/%s/%s%s", filePath, specifiedString, fileExtension);
+    if (!(strpbrk (specifiedString, "/")) && ((strpbrk (specifiedString, ".") != 0)))	/* no path with
+											   extension */
+	sprintf (resultName, "/%s/%s", filePath, specifiedString);
+    if ((strpbrk (specifiedString, "/") != 0) && (!(strpbrk (specifiedString, "."))))	/* path with no
+											   extension */
+	sprintf (resultName, "%s%s", specifiedString, fileExtension);
+    if ((strpbrk (specifiedString, "/") != 0) && 
+	((strpbrk (specifiedString, ".") != 0)))	/* path with extension */
+	sprintf (resultName, "%s", specifiedString);
+    return (0);
+a253 1
+
+@

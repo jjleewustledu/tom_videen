@@ -1,0 +1,266 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.17.14.16.51;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.27.16.41.30;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.09.15.16.19.27;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.09.15.15.57.28;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/*	$Log: metrgt.c,v $
+ * Revision 1.3  2002/11/27  16:41:30  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2000/09/15  16:19:27  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2000/09/15  15:57:28  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			metrgt.c
+ *	Date:			Sept 2000
+ *	Author:			Tom Videen
+ *	Description:	Compute PVC corrected CBF, CBV, OEF, CMRO2
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/metrgt/RCS/metrgt.c,v 1.3 2002/11/27 16:41:30 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <imgutil.h>
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	FILE           *fp;
+	HEADER_DATA     hdr;
+	float           h1c = 0.;		/* clot counts */
+	float           c1c = 0.;
+	float           o1c = 0.;
+	float           t1c = 0.;
+	float           h1p = 0.;		/* peri counts */
+	float           c1p = 0.;
+	float           o1p = 0.;
+	float           t1p = 0.;
+	float           cbfcnts1, cbvcnts1, oefcnts1, tiscnts1;
+	float           cbf1, cbv1, oef1, cmr1;
+	int				proc;
+	long			pixc = 0;
+	long			pixp = 0;
+	long			tpixc, tpixp;
+	long			totpix;
+	char           *rgtfile, *outfile;
+	char           *cbfhdr, *cbvhdr, *oefhdr;
+	char           *pid;
+	char            rnam[20];
+	char            str[256];
+
+/*
+ * Get command line arguments.
+ */
+	if (argc != 7) {
+		fprintf (stderr, "Usage: metrgt RGT HOhdr COhdr OOhdr OUT PID\n");
+		return (ERROR);
+	}
+	rgtfile = argv[1];
+	cbfhdr  = argv[2];
+	cbvhdr  = argv[3];
+	oefhdr  = argv[4];
+	outfile = argv[5];
+	pid     = argv[6];
+
+	cbfcnts1 = 0;
+	cbvcnts1 = 0;
+	oefcnts1 = 0;
+	tiscnts1 = 0;
+	totpix = 0;
+	tpixc = 0;
+	tpixp = 0;
+
+	fp = fopen (rgtfile, "r");
+	if (fp == NULL) {
+		fprintf (stderr, "ERROR [metrgt]: Cannot open region file %s\n", rgtfile);
+		return (ERROR);
+	}
+	(void) fgets (str, 100, fp);
+	while (fscanf (fp, "%s %ld %f %f %f %f", rnam, &pixc, &h1c, &c1c, &o1c, &t1c) == 6) {
+		if (strstr (rnam, "clot") == NULL) {
+			fprintf (stderr, "ERROR [metrgt]: Odd numbered regions must be clot\n");
+			return (ERROR);
+		}
+		(void) fscanf (fp, "%s %ld %f %f %f %f", rnam, &pixp, &h1p, &c1p, &o1p, &t1p);
+		if (strstr (rnam, "peri") == NULL) {
+			fprintf (stderr, "ERROR [metrgt]: Even numbered regions must be peri\n");
+			return (ERROR);
+		}
+		cbfcnts1 += h1p * pixp - h1c * pixc;
+		cbvcnts1 += c1p * pixp - c1c * pixc;
+		oefcnts1 += o1p * pixp - o1c * pixc;
+		tiscnts1 += t1p * pixp - t1c * pixc;
+		totpix += pixp - pixc;
+		tpixp += pixp;
+		tpixc += pixc;
+	}
+	(void) fclose (fp);
+	tiscnts1 *= 0.001;
+	cbfcnts1 /= tiscnts1;
+	cbvcnts1 /= tiscnts1;
+	oefcnts1 /= tiscnts1;
+	proc = PROC_CBF;
+	cbf1 = procPET (cbfcnts1, proc, cbfhdr, &hdr, fp);
+	proc = PROC_CBV;
+	cbv1 = procPET (cbvcnts1, proc, cbvhdr, &hdr, fp);
+	proc = PROC_OEF;
+	oef1 = procOxygen (oefcnts1, cbfcnts1, cbvcnts1, proc, oefhdr, cbfhdr, cbvhdr, &hdr, fp);
+	proc = PROC_CMRO2;
+	cmr1 = procOxygen (oefcnts1, cbfcnts1, cbvcnts1, proc, oefhdr, cbfhdr, cbvhdr, &hdr, fp);
+	
+	fp = fopen (outfile, "w");
+	if (fp == NULL) {
+		fprintf (stderr, "ERROR [metrgt]: Cannot open region file %s\n", outfile);
+		return (ERROR);
+	}
+	fprintf (fp, "%s  (%ld pixels)\n", pid, totpix);
+	fprintf (fp, "-------------------\n");
+	fprintf (fp, "CBF    = %8.3f \n", cbf1);
+	fprintf (fp, "CBV    = %8.3f \n", cbv1);
+	fprintf (fp, "OEF    = %8.3f \n", oef1);
+	fprintf (fp, "CMRO2  = %8.3f \n", cmr1);
+	(void) fclose (fp);
+
+    fprintf (stdout, "------------------------------\n");
+    fprintf (stdout, "%8s %8s %8s %8s\n","CBF","CBV","OEF","CMRO2");
+    fprintf (stdout, "%8.3f %8.3f %8.3f %8.3f\n", cbf1, cbv1, oef1, cmr1);
+
+	return (OK);
+}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d18 2
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/metrgt/RCS/metrgt.c,v 1.2 2000/09/15 16:19:27 tom Exp tom $";
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/metrgt/RCS/metrgt.c,v 1.1 2000/09/15 15:57:28 tom Exp tom $";
+a20 1
+#include <libimage.h>
+d27 1
+a27 1
+	FILE           *fp = NULL;
+d29 8
+a36 2
+	float           h1c, c1c, o1c, t1c;		/* clot counts */
+	float           h1p, c1p, o1p, t1p;		/* peri counts */
+d40 2
+a41 1
+	long			pixc, pixp;
+d44 1
+a44 1
+	char           *rgtfile, *outfile, *logfile;
+d53 2
+a54 2
+	if (argc < 7 || argc > 8) {
+		fprintf (stderr, "Usage: metrgt RGT HOhdr COhdr OOhdr OUT PID [LOG]\n");
+a62 1
+	logfile = argv[7];
+d78 1
+a78 1
+	while (fscanf (fp, "%s %d %f %f %f %f", rnam, &pixc, &h1c, &c1c, &o1c, &t1c) == 6) {
+d83 1
+a83 1
+		fscanf (fp, "%s %d %f %f %f %f", rnam, &pixp, &h1p, &c1p, &o1p, &t1p);
+d96 1
+a96 1
+	fclose (fp);
+d115 1
+a115 1
+	fprintf (fp, "%s  (%d pixels)\n", pid, totpix);
+d121 1
+a121 1
+	fclose (fp);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/metrgt/RCS/metrgt.c,v 1.1 1998/05/27 16:50:55 tom Exp $";
+d35 1
+a35 1
+	char           *rgtfile, *outfile;
+d44 2
+a45 2
+	if (argc != 7) {
+		fprintf (stderr, "Usage: metrgt RGT HOhdr COhdr OOhdr OUT PID\n");
+d53 2
+a54 1
+	pid = argv[6];
+a101 7
+	printf ("%s  (%d pixels = %d - %d)\n", pid, totpix, tpixp, tpixc);
+	printf ("-------------------\n");
+	printf ("CBF    = %8.3f \n", cbf1);
+	printf ("CBV    = %8.3f \n", cbv1);
+	printf ("OEF    = %8.3f \n", oef1);
+	printf ("CMRO2  = %8.3f \n", cmr1);
+
+d113 1
+d115 4
+a118 1
+	fclose (fp);
+@

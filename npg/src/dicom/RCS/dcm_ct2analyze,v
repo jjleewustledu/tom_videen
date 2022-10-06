@@ -1,0 +1,514 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	2003.10.01.16.40.50;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.01.18.21.32.34;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.10.11.19.59.02;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.09.10.15.23.30;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.12.30.20.17.05;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.30.19.37.57;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Jane's version
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@#!/usr/local/bin/perl
+# ========================================================================
+# File:     dcm_ct2analyze.pl
+# Date:     13-Jan-98
+# Author:   Jane Dunford-Shore
+# Filetype: Perl program - perl5
+# Purpose:  Convert DICOM-format CT file to Analyze format
+# Syntax:   dcm_ct2analyze <first_slice> <last_slice> <outprefix> 
+#           [-n] [-debug]
+# Parameters:
+#           first_slice: number (filename prefix) of first file
+#           last_slice:  number (filename prefix) of last file
+#           outprefix: filename prefix for output files
+#           -n: do NOT correct for gantry tilt - default is to correct
+#           -debug: print debug values to STDERR for checking
+# Files created: 
+#           1. Analyze header file    (*.img)
+#           2. Analyze data file      (*.hdr)
+#           3. Interfile header file  (*.ifh)
+# Pseudocode:
+#    1. Find first axial file, for extracting header values.
+#    2. Parse header info.
+#    3. Create Analyze data file (*.img)
+#    4. Correct for GT, if specified (no '-n' option)
+#    5. Create Analyze header file (*.hdr)
+#    6. Create Interfile header file (*.ifh)
+# ========================================================================
+
+use strict;        # use strict code checking; variables must be declared
+
+# ---------------
+# Packages to use
+# ---------------
+
+# Packages are in /usr/local/lib/perl5/site_perl/Dicom
+use Dicom::Anal_util;
+use Dicom::Dicom_util;
+use Dicom::Image_util;   # reverse_rows()
+use Dicom::Config;
+
+# ---------------
+# Variable declarations
+# ---------------
+
+# Pseudo-constants (not technically constants, but used as such)
+my $ROWS = 512;
+my $COLS = 512;
+my $FILESIZE = 512 * 512 * 2;
+
+# Command-line arguments and associated variables
+my $arg;             # generic
+my $first;           # first file number - e.g., "2" (00002.dcm)
+my $last;            # last file number - e.g., "47" (00047.dcm)
+my $outprefix;       # output filename prefix - e.g., "p5342"
+my $corr_gt;         # whether or not to correct for GT; 0 or 1
+my $corr_gt_yn;      # whether or not there is corr. for GT; "YES" or "NO"
+my $debug;           # whether or not to print debug values to STDERR; 0 or 1
+my $infile;          # input filename (*.dcm)
+my $outfile;         # output filename (*.img)
+
+# File checking
+my $axial_file;      # name of first axial file in list of files specified
+my @@dcmfiles;        # names of Dicom files specified - e.g., 00001.dcm
+my $file;            # one Dicom filename
+
+my %name_and_key_ex; # name/key pairs from first axial file specified
+my $name;            # Dicom field names (e.g., "PAT Patient Birthdate") 
+
+# Data file creation
+my $slice_index;     # array index in slice filenames array (@@dcmfiles)
+my $r_new_pix_buf;   # reoriented pixel volume
+my $pix_max_slice;   # max. pixel value (in CT numbers) for given slice
+my $pix_min_slice;   # min. pixel value (in CT numbers) for given slice
+my $pix_max_vol;     # max. pixel value (in CT numbers) for all slices
+my $pix_min_vol;     # min. pixel value (in CT numbers) for all slices
+
+my $i;
+my $line;
+my %key_and_val;
+my %name_and_val;
+my $inprefix;
+my $outprefix;
+my $gantry_tilt;
+my $key;
+
+# Values necessary for Analyze header
+my %init_vals = {               
+                  'db_name',     '',        # output filename prefix
+                  'glmax',       '',        # max. pixel value in all files
+                  'glmin',       '',        # min. pixel value in all files
+                  'slices',      '',        # number of axial slices
+		};
+
+my $pix_max;
+my $pix_min;
+
+my $imgfile;       # name of Analyze *.img file that is created (pixel data) 
+
+my $pix_max_slice;
+my $pix_min_slice;
+my $pix_max_vol;
+my $pix_min_vol;
+
+# Analyze header creation
+my $anal_elem;
+my $off_elem;
+my $len_elem;
+my $type_elem;
+my $dcm_elem;
+my $val_elem;
+
+# Required fields
+my @@signif_fields = (
+                'ID Image Type',
+                'ID Image Date',
+                'ID Image Time',
+                'PAT Patient Name',
+                'PAT Patient Birthdate',
+                'ACQ Slice Thickness',
+                'ACQ KVP',
+                'ACQ Gantry/Detector Tilt',
+                'ACQ Exposure Time',
+                'REL Acquisition Number',
+                'REL Image Number',
+                'REL Image Position Patient',
+                'REL Slice Location',
+                'IMG Window Center',
+                'IMG Window Width',
+		 );
+my @@fieldnames;
+my $name;
+my $signif_field;
+              
+# ---------------
+# Get command-line args
+# ---------------
+
+#Check argument number; should be 3-6
+if (($#ARGV < 2) || ($#ARGV >6)) {
+    printusage();
+    exit(0);
+}
+
+$first = shift(@@ARGV);
+$last = shift(@@ARGV);
+$outprefix = shift(@@ARGV);
+
+# Set defaults for gantry-tilt correction and for debug info.
+$corr_gt = 1;    # correct for GT by default
+$debug = 0;      # no debug info. by default
+
+# Get values, if specified, for gantry-tilt correction and debug info.
+while (@@ARGV) {
+    $arg = shift(@@ARGV);
+    if ($arg =~ /-n/) {
+        $corr_gt = 0;
+    }
+    elsif ($arg =~ /-debug/) {
+        $debug = 1;
+    }
+}
+
+if ($debug) {
+    print STDERR "---------------------\n";
+    print STDERR "Parameters specified:\n";
+    print STDERR "    \$first = $first\n";
+    print STDERR "    \$last = $last\n";
+    print STDERR "    \$outprefix = \"$outprefix\"\n";
+    print STDERR "    \$corr_gt = $corr_gt\n";
+    print STDERR "    \$debug = $debug\n";
+    print STDERR "---------------------\n";
+}
+
+# ---------------
+# Check for specified files, and check file names (must be 000xx.dcm)
+# ---------------
+
+print STDOUT "-----\n";
+print STDOUT "Checking for specified files:\n";
+
+@@dcmfiles = Dicom_util::get_dcm_filenames($first, $last);
+$debug && print STDERR "Dicom files specified:\n    ";
+$debug && print STDERR join("\n    ", @@dcmfiles), "\n";
+
+foreach $file (@@dcmfiles) {
+    (-e $file) || die "File does not exist: $file\n";
+    (-r $file) || die "File permissions do not allow read access: $file\n";
+}
+
+print STDOUT "    All specified files are present and readable\n";
+
+# ---------------
+# Find first axial file, for extracting header value.
+# Localizers don't have necessary values such as gantry tilt.
+# ---------------
+#
+#print STDOUT "Finding first axial file: ";
+#$axial_file = Dicom_util::find_axial($first, $last);
+#print STDOUT "    $axial_file\n";
+#
+#($axial_file) || die "Error: No axial files were specified.\n";
+#
+#$debug && print STDERR "---------------------\n";
+#$debug && print STDERR "\$axial_file = $axial_file\n";
+#$debug && print STDERR "---------------------\n";
+
+# ---------------------
+# Check for required Dicom fields
+# ---------------------
+
+if ($first < 10) {
+	$axial_file = "0000" . $first . ".dcm";
+}
+elsif ($first < 100) {
+	$axial_file = "000" . $first . ".dcm";
+}
+elsif ($first < 1000) {
+	$axial_file = "00" . $first . ".dcm";
+}
+print STDOUT "Getting key/name pairs for first axial file: $axial_file\n";
+Dicom_util::get_name_and_key($axial_file, \%name_and_key_ex) || die "Cannot read Dicom file $axial_file\n";
+
+@@fieldnames = (sort keys(%name_and_key_ex));
+
+if ($debug) {
+    print STDERR "Fields present:\n";
+    foreach $name (@@fieldnames) {
+        print STDERR "$name\n";
+    }
+}
+
+foreach $signif_field (@@signif_fields) {
+    (grep(/$signif_field/, @@fieldnames)) || die "Required field not present: $signif_field\n";
+}
+
+# ---------------
+# Parse header info.
+# ---------------
+
+Dicom_util::get_name_and_val($axial_file, \%name_and_val);
+
+if ($debug ) {
+    print STDERR "---------------------\nKeys and values:\n";
+    foreach $name (sort(keys %name_and_val)) {
+        print "    $name: $name_and_val{$name}\n";
+    }
+    print STDERR "---------------------\n";
+}
+
+# ---------------
+# Create Analyze data file:
+# 1) Dump pixel data to temporary binary file
+# 2) Reorder slice pixels (reverse row order so that anterior is on
+#    bottom when image is displayed; R is still on L)
+# ---------------
+
+# Open new file for placing reordered pixel data for all slices
+$imgfile = $outprefix . ".img";
+open(IMGFILE, "> $imgfile");
+binmode(IMGFILE);
+
+print STDOUT "Processing files $first through $last\n";
+
+# Initialize volume pixel max and min
+$pix_min_vol = (2**16) - 1;     # max. 16-bit integer possible
+$pix_max_vol = 0;
+$debug && print STDERR "---------------------\n";
+$debug && print STDERR "Global pixel min. initialized to: $pix_min_vol\n";
+$debug && print STDERR "Global pixel max. initialized to: $pix_max_vol\n";
+$debug && print STDERR "---------------------\n";
+
+print STDOUT "Reorienting image: rotating 180 deg. on x-axis so that anterior is up\n";
+
+# Reverse rows (last=first) for pixels in each slice and store in array of buffers
+for($slice_index = 0; $slice_index <= $last - $first; $slice_index++) {
+
+    # Open DICOM file for this slice
+    $infile = $dcmfiles[$slice_index];
+    open(INFILE, "$infile");
+    $debug && print STDERR "---------------------\nReorienting $infile\n";
+
+    # To avoid errors on forking ('system' call below), set '$|' to non-zero 
+    # value so that no buffer is defined for files, and output is written out 
+    # right away (recommended when "system" will be called)
+    select(INFILE);                        
+    $| = 1;                                # non-zero value = no buffer defined
+    select(STDOUT);                        # Reselect STDOUT, normal default
+
+    # Initialize pixel max and min
+    $pix_min_slice = (2**16) - 1;     # max. 16-bit integer possible
+    $pix_max_slice = 0;
+    $debug && print STDERR "---------------------\n";
+    $debug && print STDERR "Pixel min. initialized to: $pix_min_slice\n";
+    $debug && print STDERR "Pixel max. initialized to: $pix_max_slice\n";
+    $debug && print STDERR "---------------------\n";
+
+    # Reverse pixel rows
+    $r_new_pix_buf = Image_util::reverse_rows($ROWS, $COLS, $FILESIZE, $infile, \*INFILE, \$pix_min_slice, \$pix_max_slice, $debug);
+
+    # Update pixel max and min for volume
+    print STDOUT "$infile : pixmin = $pix_min_slice    pixmax = $pix_max_slice \n";
+    ($pix_max_slice > $pix_max_vol) && ($pix_max_vol = $pix_max_slice);
+    ($pix_min_slice < $pix_min_vol) && ($pix_min_vol = $pix_min_slice);
+
+    # Print reoriented image to data file
+    print IMGFILE "$$r_new_pix_buf";
+
+}
+
+print STDOUT "-----\n";
+print STDOUT "Pixel max (volume) = $pix_max_vol\n";
+print STDOUT "Pixel min (volume) = $pix_min_vol\n";
+
+# ---------------
+# Write header info. to Analyze-format header file
+# ---------------
+
+# Get Analyze header file name and open Analyze header file
+$outfile = $outprefix . ".hdr";
+open(OUTFILE, "> $outfile");
+print STDOUT "-----\n";
+
+# Initialize values
+$init_vals{'slices'} = $last - $first + 1;
+$init_vals{'db_name'} = $outprefix;
+$init_vals{'glmax'} = $pix_max_vol;
+$init_vals{'glmin'} = $pix_min_vol;
+$init_vals{'progname'} = 'dcm_ct2analyze';
+
+print STDOUT "Creating Analyze header file: $outfile\n";
+Anal_util::create_anal_hdr(\%name_and_val, \%init_vals, \*OUTFILE, $debug);
+
+exit(0);
+
+# ---------------
+# Write header info. to Interfile-format header file
+# ---------------
+
+# =====
+# Subroutines
+# =====
+
+# -----
+# Subroutine: printusage
+# Purpose: Print program usage info., as contained in format "USAGE".
+# Parameters: none
+# Returns: 0 if successful
+# Requires: 1) definition of format "USAGE"
+# -----
+sub printusage {
+    $~ = "USAGE";
+    write STDOUT;
+    return 0;
+}
+
+# ---------------
+# If specified, correct for gantry tilt
+# ---------------
+
+$gantry_tilt = Dicom_util::get_gantry_tilt_as_float(\%name_and_val);
+($corr_gt) && print STDOUT "Correcting for gantry tilt (= $gantry_tilt)\n";
+
+# Get input and output filename prefixes to be used
+# Input file is data file just created (*.img)
+
+($inprefix) = ($imgfile =~ /(\w+)\.img/);
+$outprefix = $inprefix;
+$debug && print STDERR "\$inprefix = $inprefix\n";
+$debug && print STDERR "\$outprefix = $outprefix\n";
+
+# Call C program which corrects Analyze-format file for GT
+`cttilt $inprefix $outprefix $gantry_tilt`;
+
+exit(0);
+
+# =====
+# Formats
+# =====
+
+format USAGE =
+   Usage: dcm_ct2analyze <firstfile> <lastfile> <outprefix> [-n] [-debug]
+ Example: dcm_ct2analyze 2 47 p2134 -n     # do not correct for gantry tilt
+          dcm_ct2analyze 3 3 p4567         # correct for gantry tilt (default)
+          dcm_ct2analyze 3 3 p4567 -debug  # print various values to STDERR
+.
+
+
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@a1 10
+# $Log: dcm_ct2analyze,v $
+# Revision 1.3  1999/09/10  15:23:30  tom
+# omit search for axial files to permit conversion of scouts
+#
+# Revision 1.2  1998/12/30  20:17:05  tom
+# remove 2 fields to permit conversion of p5122
+#
+# Revision 1.1  1998/12/30  19:37:57  tom
+# Initial revision
+#
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@@
+
+
+1.3
+log
+@omit search for axial files to permit conversion of scouts
+@
+text
+@d3 3
+d224 1
+a224 1
+elsif ($$first < 100) {
+d227 1
+a227 1
+elsif ($$first < 1000) {
+@
+
+
+1.2
+log
+@remove 2 fields to permit conversion of p5122
+@
+text
+@d3 3
+d203 10
+a213 10
+print STDOUT "Finding first axial file: ";
+$axial_file = Dicom_util::find_axial($first, $last);
+print STDOUT "    $axial_file\n";
+
+($axial_file) || die "Error: No axial files were specified.\n";
+
+$debug && print STDERR "---------------------\n";
+$debug && print STDERR "\$axial_file = $axial_file\n";
+$debug && print STDERR "---------------------\n";
+
+d218 9
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 4
+a5 1
+# $Log$
+a126 2
+                'ACQ X-ray Tube Current',
+                'ACQ Convolution Kernel',
+@

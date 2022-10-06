@@ -1,0 +1,284 @@
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      TEMECAT2.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         29-Dec-92
+C  Written For:  Movement artifact correction
+C
+C  History:
+C     Modified TEMECAT2 28-Dec-92 to create list for SUMECAT.
+C       (threshold to 50%)
+C     Modified 30-Dec-92 to scale to 10,000
+C
+C  Intent:  Create list of 2 images and scale factors form SUMECAT using
+C      50% of maximum value for all slices for each image.
+C
+C     Templating code taken from D2TEMPLA.FTN
+C
+C  Logical Units:
+C     0 = input from CSS
+C     1 = input image
+C     2 = output image
+C     3 = list output file
+C     5 = user output
+C
+C  Uses subroutines:
+C     GETIMAGE
+C
+C     SYSIO
+C
+C  Instructions for Compiling/Linking:
+C     LINK7T TEMECAT2,SYS:GETIMAGE.OBJ/S
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM TEMECAT2
+C
+      INTEGER*2    IMG(128,128) ; input image file
+      INTEGER*2    MASK(128,128); internal array for generating template
+      INTEGER*2    TEMP(100,100); output template file
+      INTEGER*2    HEADER(128) ; header
+      INTEGER*2    MAX         ; max value
+      INTEGER*2    THRESH      ; threshold value
+      INTEGER*2    IN          ; value assigned for point in template
+      INTEGER*2    OUT         ; value assigned for point not in template
+C
+      INTEGER*4    AUXLU       ; lu for reading from CSS
+      INTEGER*4    DISK        ; lu for reading image
+      INTEGER*4    TEMPLU      ; lu for writing image
+      INTEGER*4    LISTOUT     ; lu for output list suitable for SUMECAT
+      INTEGER*4    USEROUT     ; lu for user output
+      INTEGER*4    SLICE       ; slice no.
+      INTEGER*4    NSLICES     ; no. slices
+      INTEGER*4    TOTSLICES   ; no. slices of slices to process
+      INTEGER*4    PETTNUM     ; PETT number
+      INTEGER*4    PB(6)       ; parameter block for SYSIO
+      INTEGER*4    IOWRITE     ; write, binary, sequential, wait
+      INTEGER*4    NBYTES      ; no. bytes to write
+      INTEGER*4    I,J         ; array indices
+      INTEGER*4    SLCPIX      ; pixels in template for each slice
+      INTEGER*4    TOTPIX      ; total pixels in template
+      INTEGER*4    SLCSUM      ; slice sum of pixels within template
+      REAL*4       TOTSUM      ; total sum of pixels within template
+C
+      REAL*4       SLCMEAN     ; slice mean pixel value within template
+      REAL*4       TOTMEAN     ; total mean pixel value within template
+C
+      CHARACTER*20 FNAME       ; file name
+      CHARACTER*20 FNAME1      ; file name 1
+      CHARACTER*20 FNAME2      ; file name 2
+C
+      LOGICAL*1    HDRONLY
+      LOGICAL*1    ERR
+      LOGICAL*1    MORE        ; more points added to exterior
+C
+      DATA AUXLU, DISK, TEMPLU, LISTOUT, USEROUT /0,1,2,3,5/
+      DATA HDRONLY  /.FALSE./
+      DATA IOWRITE  /Y'00000038'/      ; write sequential, bin, wait
+      DATA IN, OUT  /1,2/
+C
+      PB(6) = 0
+      NBYTES = 100*100*2
+C
+      WRITE(USEROUT,*) '*** TEMECAT2  30-Dec-92 {Create a list ',
+     & 'for SUMECAT -- scaling to 10000}'
+C
+C  Get input file name
+C
+8100  FORMAT(A20)
+8200  FORMAT(I)
+      READ(AUXLU,8100) FNAME1
+      READ(AUXLU,8100) FNAME2
+      READ(AUXLU,8200) TOTSLICES
+C
+      WRITE(LISTOUT,*) '2   1.0  ',TOTSLICES
+      FNAME = FNAME1
+C
+100   SLICE = 1
+      CALL GETIMAGE(IMG,HEADER,FNAME,SLICE,NSLICES,PETTNUM,DISK,
+     &  USEROUT,HDRONLY,ERR)
+      IF (ERR) THEN
+        WRITE(USEROUT,*) '*** ERROR opening file ',FNAME
+        STOP
+      ELSE IF (NSLICES.NE.TOTSLICES) THEN
+        WRITE(USEROUT,*) 'Error:  Input file is  ',NSLICES,' slices'
+        WRITE(USEROUT,*) '        Output file is ',TOTSLICES,' slices'
+        STOP
+      END IF
+C
+C  Find  maximum
+C
+      MAX = 0
+      DO 200 SLICE=1,TOTSLICES
+        CALL GETIMAGE(IMG,HEADER,FNAME,SLICE,NSLICES,PETTNUM,DISK,
+     &    USEROUT,HDRONLY,ERR)
+        IF (ERR) GO TO 110
+        GO TO 120
+110     WRITE(USEROUT,*) '*** ERROR opening file ',FNAME
+        STOP
+C
+120     DO 140 J=1,100
+          DO 130 I=1,100
+            M = I+14
+            N = J+14
+            VAL = IMG(M,N)
+            IF (VAL.GT.MAX) MAX = VAL
+130       CONTINUE
+140     CONTINUE
+200   CONTINUE
+      WRITE(USEROUT,*) 'Maximum = ',MAX
+C
+C  Create a template with 50% of MAX
+C
+      THRESH = INT2(NINT(0.5*FLOAT(MAX)))
+C
+      TOTPIX = 0
+      TOTSUM = 0
+      DO 5000 SLICE=1,TOTSLICES
+        SLCPIX = 0
+        SLCSUM = 0
+        CALL GETIMAGE(IMG,HEADER,FNAME,SLICE,NSLICES,PETTNUM,DISK,
+     &    USEROUT,HDRONLY,ERR)
+        IF (ERR) GO TO 210
+        GO TO 220
+210     WRITE(USEROUT,*) '*** ERROR opening file ',FNAME
+        STOP
+C
+C  Assign  IN to all points >= threshold value
+C  Assign   0 to all points  < threshold value
+C
+220     DO 260 J=1,128
+          DO 240 I=1,128
+            IF (IMG(I,J).GE.THRESH) THEN
+              MASK(I,J) = IN
+            ELSE
+              MASK(I,J) = 0
+            END IF
+240       CONTINUE
+260     CONTINUE
+C
+C  Assign OUT to all points along the boundaries of the array
+C  which are not IN the template.
+C
+        DO 300 I=1,128
+          IF (MASK(I,1).NE.IN) MASK(I,1) = OUT
+          IF (MASK(I,128).NE.IN) MASK(I,128) = OUT
+300     CONTINUE
+        DO 400 J=2,127
+          IF (MASK(1,J).NE.IN) MASK(1,J) = OUT
+          IF (MASK(128,J).NE.IN) MASK(1,J) = OUT
+400     CONTINUE
+C
+C  Now, starting with the boundaries of the array, expand the
+C  area excluded from the template by assigning OUT to all points
+C  directly adjacent to a point whose value is OUT and which
+C  are currently zero (neither IN nor OUT).
+C
+        MORE = .FALSE.
+C
+C  Outside Rows
+C
+        DO 500 I=2,127
+          IF (MASK(I,1).EQ.OUT .AND. MASK(I,2).LT.IN) THEN
+            MASK(I,2) = OUT
+            MORE = .TRUE.
+          END IF
+          IF (MASK(I,128).EQ.OUT .AND. MASK(I,127).LT.IN) THEN
+            MASK(I,127) = OUT
+            MORE = .TRUE.
+          END IF
+500     CONTINUE
+C
+C  Outside Columns
+C
+        DO 600 J=2,127
+          IF (MASK(1,J).EQ.OUT .AND. MASK(2,J).LT.IN) THEN
+            MASK(2,J) = OUT
+            MORE = .TRUE.
+          END IF
+          IF (MASK(128,J).EQ.OUT .AND. MASK(127,J).LT.IN) THEN
+            MASK(127,J) = OUT
+            MORE = .TRUE.
+          END IF
+600     CONTINUE
+C
+C  The following loop is repeated until it cycles with no more points
+C  added to the outside of the region.
+C
+1000    IF (MORE) THEN
+          MORE = .FALSE.
+          DO 1500 I=2,127
+            DO 1400 J=2,127
+              IF (MASK(I,J).EQ.OUT) THEN
+                IF (MASK(I-1,J).LT.IN) THEN
+                  MASK(I-1,J) = OUT
+                  MORE = .TRUE.
+                END IF
+                IF (MASK(I+1,J).LT.IN) THEN
+                  MASK(I+1,J) = OUT
+                  MORE = .TRUE.
+                END IF
+                IF (MASK(I,J-1).LT.IN) THEN
+                  MASK(I,J-1) = OUT
+                  MORE = .TRUE.
+                END IF
+                IF (MASK(I,J+1).LT.IN) THEN
+                  MASK(I,J+1) = OUT
+                  MORE = .TRUE.
+                END IF
+              END IF
+1400        CONTINUE
+1500      CONTINUE
+          GO TO 1000
+        END IF
+C
+C  All points that are < OUT are assigned IN
+C  All points that are >=OUT are assigned 0
+C
+        DO 2000 I=1,100
+          DO 1800 J=1,100
+            M = I+14
+            N = J+14
+            IF (MASK(M,N).LT.OUT) THEN
+              TEMP(I,J) = IN
+              SLCPIX = SLCPIX + 1
+              SLCSUM = SLCSUM + IMG(M,N)
+            ELSE
+              TEMP(I,J) = 0
+            END IF
+1800      CONTINUE
+2000    CONTINUE
+        IF (SLCPIX.GT.0) THEN
+          WRITE(USEROUT,8500) SLICE,SLCPIX,FLOAT(SLCSUM)/FLOAT(SLCPIX)
+        ELSE
+          WRITE(USEROUT,8500) SLICE, SLCPIX, 0.
+        END IF
+        TOTPIX = TOTPIX + SLCPIX
+        TOTSUM = TOTSUM + FLOAT(SLCSUM)
+C
+C  Write to output file
+C
+        CALL SYSIO(PB,IOWRITE,TEMPLU,HEADER,256,0)
+        CALL SYSIO(PB,IOWRITE,TEMPLU,TEMP,NBYTES,0)
+C
+5000  CONTINUE
+C
+      TOTMEAN = TOTSUM/FLOAT(TOTPIX)
+      WRITE(USEROUT,8600) TOTPIX, TOTMEAN, 10000./TOTMEAN
+C
+      IF (FNAME.EQ.FNAME1) THEN
+        WRITE(LISTOUT,8700)  FNAME, 10000./TOTMEAN
+        FNAME = FNAME2
+        GO TO 100
+      ELSE
+        WRITE(LISTOUT,8700)  FNAME, -10000./TOTMEAN
+      END IF
+C
+8500  FORMAT(1X,'Slice ',I2,'  Pixels = ',I6,'  Mean = ',F)
+8600  FORMAT(1X,'TOTAL     Pixels =',I7,'  Mean = ',F8.2,
+     &  '  Factor =',F7.4)
+8700  FORMAT(1X,A20,F7.4)
+C
+      STOP
+      END

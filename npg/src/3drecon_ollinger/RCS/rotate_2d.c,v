@@ -1,0 +1,171 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: rotate_2d.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $*/
+/*$Log: rotate_2d.c,v $
+ * Revision 3.1  1998/03/24  23:43:10  jmo
+ * ..
+ *
+ * Revision 3.0  1997/10/29  19:26:43  jmo
+ * Support Exact HR.
+ *
+ * Revision 2.6  1997/08/06  18:33:42  jmo
+ * Last version before cti rev 7 capability added.
+ *
+ * Revision 2.4  1996/06/19  11:20:35  jmo
+ *
+ * Revision 2.3  1996/04/23  15:02:05  jmo
+ * Version released April 23, 1996
+ *
+ * Revision 2.0  1996/01/27  13:46:12  jmo
+ * Version installed at Neuro-imaging group, January 1996
+ *
+ * Revision 1.2  1996/01/18  16:10:09  jmo
+ * Modified file formats, Interfile and Matrix Rev 7.0 support.
+ *
+ * Revision 1.1  1996/01/12  18:09:23  jmo
+ * Initial revision
+ *
+ * Revision 1.2  1995/03/03  16:25:55  jmo
+ * Modifed for cti951
+ *
+ * Revision 1.1  95/01/19  22:40:20  ty7777
+ * Initial revision
+ * */
+
+/*---------------------------------------------------------------
+
+Subroutine: rotate_2d
+
+Purpose: Use bilinear interpolation to rotate image with same 
+	 reference frame as rotate_3d
+
+Coordinate system: This routine assumes that the pixel represented
+	by volume[0][0][0] in "C" lies at the upper left corner 
+	in the rear of the volume. 
+
+By: John Ollinger
+
+Date: July 29, 1992
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+----------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <malloc.h>
+
+#include <matrix.h>
+#include <imagio.h>
+#include <scatter.h>
+
+#define TRUE 1
+#define FALSE 0
+#define PAD 1 /* Amount to pad inscribed circle. */
+
+/***********************************/
+void rotate_2d(
+float	theta,		/* Rotation about z axis.		*/
+float *image, 	/* Images in lab coordinates.	*/
+float *rotimg,	/* Rotated image. */
+ScatterTable *sc)
+/************************************/
+
+{
+
+static int 
+	first=TRUE,
+	*imin,			/* Starting pixel of circle.	*/
+	*imax;			/* Ending pixel of circle.	*/
+
+static float 
+	*tab,
+	radius;
+
+int	i,j,ki,joff,ix,iy,radsq,ray;
+
+float	cdsq,ctht,stht,x,y,dx,dy,dx1,dy1,
+	x_cnst,y_cnst;
+
+if(first == TRUE) {
+    /* Compute boundaries of plane region to be rotated. */
+    first = FALSE;
+    if(NULL==(imin =(int *)malloc((unsigned)(IMGDIM*sizeof(int))))) {
+        printf("Could not malloc memory for imin, \"rotate\".\n");
+        exit(-1);
+        }
+    if(NULL==(imax =(int *)malloc((unsigned)(IMGDIM*sizeof(int))))) {
+        printf("Could not malloc memory for imax, \"rotate\".\n");
+        exit(-1);
+        }
+    radius = (float)(sc->imgdim-1)/2.;
+    radsq = radius*radius;
+    for(j=0;j<sc->imgdim;j++) {
+        cdsq = (float)j - radius;
+        cdsq = radsq - cdsq*cdsq;
+	if(cdsq > 0) {
+            imin[j] = (int)(radius - sqrt((double)cdsq)) + PAD;
+            imax[j] = (int)(radius + sqrt((double)cdsq)) - PAD;
+	    }
+	else {
+            imin[j] = 0;
+            imax[j] = 0;
+	    }
+	}
+    if(NULL==(tab =(float *)malloc((unsigned)(sc->imgdim*sizeof(float))))) {
+        printf("Could not malloc memory for tab, \"rotate\".\n");
+        exit(-1);
+        }
+    for(i=0;i<sc->imgdim;i++) tab[i] = (float)i;
+    }
+
+for(i=0;i<sc->imgsq;i++)
+    rotimg[i] = 0.;
+ctht = (float)cos((double)theta);
+stht = (float)sin((double)theta);
+x_cnst   =  radius*(1 - ctht - stht); 
+y_cnst   =  radius*(1 + stht - ctht); 
+for(j=0,ray=0,joff=0;j<sc->imgdim;j++,joff+=sc->imgdim,ray+=sc->ray_step) {
+    x =  (float)imin[j]*ctht + x_cnst;
+    y = -(float)imin[j]*stht + y_cnst;
+    for(i=imin[j];i<imax[j];i++) {
+	ix = (int)x;
+	iy = (int)y;
+	dx = x - tab[ix];
+	dy = y - tab[iy];
+	dx1 = 1. - dx;
+	dy1 = 1. - dy;
+	ki = ix + iy*sc->imgdim;
+	rotimg[i+joff] = dx1*dy1*image[ki]  + dx1*dy*image[ki+sc->imgdim]
+		       + dx*dy1*image[ki+1] + dx*dy*image[ki+sc->imgdim+1];
+	x += ctht;
+        y -= stht;
+	}
+    x_cnst += stht;
+    y_cnst += ctht;
+    }
+
+}
+@

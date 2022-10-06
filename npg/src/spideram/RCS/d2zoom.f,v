@@ -1,0 +1,529 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   D2ZOOM.FTN
+C     Author:       Tom O. Videen
+C     Date:         01-Jun-87
+C     Intent:
+C     .  Zoom an image.
+C     History:
+C     .  Modified by Tom Yang on 04-Oct-91 to port to Sun Workstation.
+C     .  Modified by Tom Yang on 10-Oct-91 to get character on zoom without
+C     .     carriage return. Clear old outline for moving region.
+C     
+C     NOTE:  uses region number 100 for the zoom, but restores original values;
+C     
+C     Common Blocks from SPIDERAM.INC:
+C     .  **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .  **DISPLAY  - display parameters             (read only)
+C     .  **REGION   - region analysis parameters     (read & write)
+C     
+C     Variables:
+C     .  OXLOC,OYLOC = original values for XLOC and YLOC;
+C     .  OXMIN,OXMAX = original values for XMIN and XMAX;
+C     .  OYMIN,OYMAX = original values for YMIN and YMAX;
+C     .  MENUSET - set of characters allowed for menu options;
+C     .  OTYPE = original value of REGTYPE;
+C     .     (restored before exitting subroutine)
+C     .  ZMIN = minimum zoom;
+C     .  Z = current level of zoom;
+C     .  DIFF = difference of XHIGH-XLOW (or YHIGH-YLOW);
+C     .  CH = input character from the terminal;
+C     
+C     Uses:
+C     
+C     TERMINAL.LIB
+C     .  TCONTROL - terminal control;
+C     .  INCHAR   - get a character from user;
+C     .  GETINT   - get an integer from user;
+C     
+C     SPIDERAM.LIB
+C     .  P2RECT   - draws a rectangle
+C     .  P2NORECT - erases a rectangle
+C     .  R2MOVE   - move a rectangular region;
+C     .  D2RAW    - display an uninterpolated image;
+C     .  D2SMOOTH - display an interpolated image;
+C     .  D2BAR    - display a color bar;
+C     .  D2LABEL4 - write labels on MAG=4 display;
+C     
+C     Internal Subroutines:
+C     .  ZOOMAREA - create the zoom area;
+C     
+C     Called by:  M2DISPLA
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: d2zoom.f,v 1.4 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE D2ZOOM
+
+      INTEGER*4		OXMIN,OXMAX,OYMIN,OYMAX,ZMIN,Z,DIFF,N,ROWCH,COLCH,HOME,CLEAR
+      INTEGER*2		ZERO
+      REAL			OXLOC, OYLOC
+      CHARACTER*1	CH, OTYPE
+      CHARACTER*80	Q,MENUSET
+      LOGICAL*1		SPLIT
+
+      INCLUDE 'spideram.inc'
+
+      DATA	N,ZERO /100,0/
+      DATA	HOME,CLEAR /1,2/
+      DATA MENUSET      /'ERI12346789XZerixz'/
+      DATA ROWCH,COLCH  /11,1/
+
+      SPLIT = .FALSE.
+
+C     Display the menu at the upper left corner of screen
+      CALL TCONTROL (HOME,0,0)
+      CALL TCONTROL (CLEAR,0,0)
+
+C     Save original values of MIN and MAX values for region N
+
+      OXLOC = XLOC (N)
+      OYLOC = YLOC (N)
+      OXMIN = XMIN (N)
+      OXMAX = XMAX (N)
+      OYMIN = YMIN (N)
+      OYMAX = YMAX (N)
+      OTYPE = REGTYPE (N)
+
+C     Display the largest square that can be zoomed with current image
+
+      REGTYPE (N) = 'R'
+      DIFF = XHIGH - XLOW + 1
+      XLOC (N) = DIFF / 2 + XLOW
+      YLOC (N) = DIFF / 2 + YLOW
+      ZMIN = SIZE / DIFF
+      IF (ZMIN .EQ. 1) ZMIN = 2
+      Z = ZMIN
+      CALL ZOOMAREA (N,Z)
+      CALL P2RECT (N,REGPLANE)
+
+      WRITE (USEROUT, *) 'Select Region to Zoom:'
+      WRITE (USEROUT, *) '---------------------'
+      WRITE (USEROUT, *)
+      WRITE (USEROUT, *) '   E = Expand size of region'
+      WRITE (USEROUT, *) '   R = Reduce size of region'
+      WRITE (USEROUT, *) '   I = Change increment for move'
+      WRITE (USEROUT, *) '   1-9 = Move the region'
+      WRITE (USEROUT, *) '   X = Exit without zooming'
+      WRITE (USEROUT, *) '   Z = Zoom the region'
+      WRITE (USEROUT, *) 
+
+ 100  CALL CHFIELD(CH,MENUSET,ROWCH,COLCH,0)
+      IF (CH .EQ. '1') THEN
+         CALL R2MOVE (N, -INC, +INC)
+      ELSE IF (CH .EQ. '2') THEN
+         CALL R2MOVE (N, ZERO, +INC)
+      ELSE IF (CH .EQ. '3') THEN
+         CALL R2MOVE (N, +INC, +INC)
+      ELSE IF (CH .EQ. '4') THEN
+         CALL R2MOVE (N, -INC, ZERO)
+      ELSE IF (CH .EQ. '6') THEN
+         CALL R2MOVE (N, +INC, ZERO)
+      ELSE IF (CH .EQ. '7') THEN
+         CALL R2MOVE (N, -INC, -INC)
+      ELSE IF (CH .EQ. '8') THEN
+         CALL R2MOVE (N, ZERO, -INC)
+      ELSE IF (CH .EQ. '9') THEN
+         CALL R2MOVE (N, +INC, -INC)
+      ELSE IF ((CH.EQ.'E'.OR.CH.EQ.'e') .AND. (Z.GT.ZMIN)) THEN
+         Z = Z - 1
+         CALL ZOOMAREA (N, Z)
+         CALL P2RECT (N, REGPLANE)
+      ELSE IF ((CH .EQ. 'R' .OR. CH .EQ. 'r') .AND. (Z .LT. 128)) THEN
+         Z = Z + 1
+         CALL ZOOMAREA (N, Z)
+         CALL P2RECT (N, REGPLANE)
+      ELSE IF (CH .EQ. 'I' .OR. CH .EQ. 'i') THEN
+         WRITE (USEROUT, *) 
+         Q = 'Increment size for moving region'
+         I = INT (INC)
+         CALL GETINT (Q,I,1,100)
+         INC = INT (I)
+         CALL ERSFIELD(40,ROWCH+1,COLCH)
+         CALL ERSFIELD(40,ROWCH+2,COLCH)
+         GO TO 100
+      ELSE IF (CH .EQ. 'X' .OR. CH .EQ. 'x') THEN
+         CALL P2NORECT (N, REGPLANE)
+         GO TO 9000
+      ELSE IF (CH .EQ. 'Z' .OR. CH .EQ. 'z') THEN
+         CALL P2NORECT (N, REGPLANE)
+         ZFACTOR = Z
+         XLOW = XMIN (N)
+         XHIGH = XMAX (N)
+         YLOW = YMIN (N)
+         YHIGH = YMAX (N)
+         IF (SMOOTH) THEN
+            CALL D2SMOOTH (SPLIT)
+         ELSE
+            CALL D2RAW
+         END IF
+         CALL D2BAR
+         IF (ANNOTATE) THEN
+            IF (MAG .EQ. 4) THEN
+               CALL D2LABEL4
+            END IF
+         END IF
+         GO TO 9000
+      ELSE
+         GO TO 100
+      END IF
+
+      GO TO 100
+
+C     Restore original values of MIN and MAX values for region N
+
+ 9000 XLOC (N) = OXLOC
+      YLOC (N) = OYLOC
+      XMIN (N) = OXMIN
+      XMAX (N) = OXMAX
+      YMIN (N) = OYMIN
+      YMAX (N) = OYMAX
+      REGTYPE (N) = OTYPE
+      RETURN
+      END
+
+C *********************************************************************
+
+      SUBROUTINE ZOOMAREA (N,Z)
+
+C  Create a zoom region with ZFACTOR = Z
+
+      INTEGER*4 TXMIN,TXMAX,TYMIN,TYMAX,Z,SIDE,N
+
+      INCLUDE 'spideram.inc'
+
+      CALL P2NORECT (N,REGPLANE)
+      SIDE = SIZE / Z
+      TXMIN = NINT (XLOC (N)) - SIDE / 2
+      TXMAX = TXMIN + SIDE - 1
+      TYMIN = NINT (YLOC (N)) - SIDE / 2
+      TYMAX = TYMIN + SIDE - 1
+      IF (TXMIN .GE. XLOW .AND. TXMAX .LE. XHIGH) THEN
+         XMIN (N) = INT (TXMIN)
+         XMAX (N) = INT (TYMAX)
+      END IF
+      IF (TYMIN .GE. YLOW .AND. TYMAX .LE. YHIGH) THEN
+         YMIN (N) = INT (TYMIN)
+         YMAX (N) = INT (TYMAX)
+      END IF
+
+      RETURN
+      END
+@
+
+
+1.4
+log
+@format changes plus fixes for g77
+@
+text
+@d54 1
+a54 1
+C     rcsheader = "$Id: d2zoom.f,v 1.3 1993/10/04 21:55:32 tom Exp tom $"
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d2 51
+a52 56
+C
+C  Subroutine:   D2ZOOM.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         01-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified by Tom Yang on 04-Oct-91 to port to Sun Workstation.
+C     Modified by Tom Yang on 10-Oct-91 to get character on zoom without
+C	carriage return. Clear old outline for moving region.
+C
+C  Intent:
+C     Zoom an image.
+C
+C  NOTE:  uses region number 100 for the zoom, but restores original
+C     values;
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (read only)
+C     **REGION   - region analysis parameters     (read & write)
+C
+C  Variables:
+C     OXLOC,OYLOC = original values for XLOC and YLOC;
+C     OXMIN,OXMAX = original values for XMIN and XMAX;
+C     OYMIN,OYMAX = original values for YMIN and YMAX;
+C     MENUSET - set of characters allowed for menu options;
+C     OTYPE = original value of REGTYPE;
+C        (restored before exitting subroutine)
+C     ZMIN = minimum zoom;
+C     Z = current level of zoom;
+C     DIFF = difference of XHIGH-XLOW (or YHIGH-YLOW);
+C     CH = input character from the terminal;
+C
+C  Uses:
+C
+C  TERMINAL.LIB
+C     TCONTROL - terminal control;
+C     INCHAR   - get a character from user;
+C     GETINT   - get an integer from user;
+C
+C  SPIDERAM.LIB
+C     P2RECT   - draws a rectangle
+C     P2NORECT - erases a rectangle
+C     R2MOVE   - move a rectangular region;
+C     D2RAW    - display an uninterpolated image;
+C     D2SMOOTH - display an interpolated image;
+C     D2BAR    - display a color bar;
+C     D2LABEL4 - write labels on MAG=4 display;
+C
+C  Internal Subroutines:
+C     ZOOMAREA - create the zoom area;
+C
+C  Called by:  M2DISPLA
+C
+d54 2
+a55 1
+C
+d57 2
+a58 3
+C
+      INTEGER*4		OXMIN,OXMAX,OYMIN,OYMAX,ZMIN,Z,DIFF,N,
+     &			ROWCH,COLCH,HOME,CLEAR
+d60 1
+a60 1
+      REAL		OXLOC, OYLOC
+d64 1
+a64 2
+      character*256 rcsheader
+C
+d66 1
+a66 2
+      rcsheader = "$Id$"
+C
+d71 4
+a74 4
+C
+      SPLIT	= .FALSE.
+C
+C  Display the menu at the upper left corner of screen
+d77 18
+a94 18
+C
+C  Save original values of MIN and MAX values for region N
+C
+      OXLOC	= XLOC (N)
+      OYLOC	= YLOC (N)
+      OXMIN	= XMIN (N)
+      OXMAX	= XMAX (N)
+      OYMIN	= YMIN (N)
+      OYMAX	= YMAX (N)
+      OTYPE	= REGTYPE (N)
+C
+C  Display the largest square that can be zoomed with current image
+C
+      REGTYPE (N)	= 'R'
+      DIFF		= XHIGH - XLOW + 1
+      XLOC (N)		= DIFF / 2 + XLOW
+      YLOC (N)		= DIFF / 2 + YLOW
+      ZMIN		= SIZE / DIFF
+d96 1
+a96 1
+      Z		= ZMIN
+d99 1
+a99 1
+C
+d110 2
+a111 2
+C
+100   CALL CHFIELD(CH,MENUSET,ROWCH,COLCH,0)
+d113 1
+a113 1
+	CALL R2MOVE (N, -INC, +INC)
+d115 1
+a115 1
+	CALL R2MOVE (N, ZERO, +INC)
+d117 1
+a117 1
+	CALL R2MOVE (N, +INC, +INC)
+d119 1
+a119 1
+	CALL R2MOVE (N, -INC, ZERO)
+d121 1
+a121 1
+	CALL R2MOVE (N, +INC, ZERO)
+d123 1
+a123 1
+	CALL R2MOVE (N, -INC, -INC)
+d125 1
+a125 1
+	CALL R2MOVE (N, ZERO, -INC)
+d127 1
+a127 1
+	CALL R2MOVE (N, +INC, -INC)
+d129 3
+a131 3
+	Z	= Z - 1
+	CALL ZOOMAREA (N, Z)
+        CALL P2RECT (N, REGPLANE)
+d133 3
+a135 3
+	Z	= Z + 1
+	CALL ZOOMAREA (N, Z)
+        CALL P2RECT (N, REGPLANE)
+d137 8
+a144 8
+        WRITE (USEROUT, *) 
+	Q	= 'Increment size for moving region'
+	I	= INT (INC)
+	CALL GETINT (Q,I,1,100)
+	INC	= INT (I)
+        CALL ERSFIELD(40,ROWCH+1,COLCH)
+        CALL ERSFIELD(40,ROWCH+2,COLCH)
+	GO TO 100
+d146 2
+a147 2
+	CALL P2NORECT (N, REGPLANE)
+        GO TO 9000
+d149 18
+a166 18
+	CALL P2NORECT (N, REGPLANE)
+	ZFACTOR		= Z
+	XLOW		= XMIN (N)
+	XHIGH		= XMAX (N)
+	YLOW		= YMIN (N)
+	YHIGH		= YMAX (N)
+	IF (SMOOTH) THEN
+		CALL D2SMOOTH (SPLIT)
+	ELSE
+		CALL D2RAW
+	END IF
+	CALL D2BAR
+	IF (ANNOTATE) THEN
+		IF (MAG .EQ. 4) THEN
+			CALL D2LABEL4
+		END IF
+	END IF
+	GO TO 9000
+d168 1
+a168 1
+	GO TO 100
+d170 1
+a170 1
+C
+d172 10
+a181 10
+C
+C  Restore original values of MIN and MAX values for region N
+C
+9000  XLOC (N)		= OXLOC
+      YLOC (N)		= OYLOC
+      XMIN (N)		= OXMIN
+      XMAX (N)		= OXMAX
+      YMIN (N)		= OYMIN
+      YMAX (N)		= OYMAX
+      REGTYPE (N)	= OTYPE
+d184 1
+a184 1
+C
+d186 1
+a186 1
+C
+d188 1
+a188 1
+C
+d190 3
+a192 3
+C
+      INTEGER*4	 TXMIN,TXMAX,TYMIN,TYMAX,Z,SIDE,N
+C
+d194 1
+a194 1
+C
+d196 5
+a200 5
+      SIDE	= SIZE / Z
+      TXMIN	= NINT (XLOC (N)) - SIDE / 2
+      TXMAX	= TXMIN + SIDE - 1
+      TYMIN	= NINT (YLOC (N)) - SIDE / 2
+      TYMAX	= TYMIN + SIDE - 1
+d202 2
+a203 2
+	XMIN (N)	= INT (TXMIN)
+	XMAX (N)	= INT (TYMAX)
+d206 2
+a207 2
+	YMIN (N)	= INT (TYMIN)
+	YMAX (N)	= INT (TYMAX)
+d209 1
+a209 1
+C
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d63 1
+a63 1
+     2			ROWCH,COLCH,HOME,CLEAR
+d69 1
+d72 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

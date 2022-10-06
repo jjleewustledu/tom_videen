@@ -1,0 +1,266 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.04.14.15.55.14;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.04.07.20.07.49;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.2
+log
+@Final releae.
+@
+text
+@/*$Id: pick.c,v 1.1 1995/04/07 20:07:49 ty7777 Exp ty7777 $*/
+/*$Log: pick.c,v $
+ * Revision 1.1  1995/04/07  20:07:49  ty7777
+ * Initial revision
+ **/
+
+/*___________________________________________________________________________
+File:		pick.c
+
+Function:	void pick (POINT3D *list, float *value_list, int list_size);
+
+Arguments:	list,		3d list array.
+		value_list,	list of magnitude.
+		list_size,	list array size.
+
+Description:	This function picks only one peak from contagious peaks
+		with the same pixel value.
+
+Authors:	Tom Yang, Gordon Shulman
+
+History:	Created by Tom Yang and Gordon Shulman on 04/07/95. 
+___________________________________________________________________________*/
+
+#include "af3d_par.h"
+#include <math.h>
+
+#define OUTSIDE		-100
+
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/pick.c,v 1.1 1995/04/07 20:07:49 ty7777 Exp ty7777 $";
+
+PUBLIC void pick (list, value_list, list_size)
+	POINT3D	*list;
+	float	*value_list;
+	int	list_size;
+{
+	BOOLEAN	component_completed;
+	POINT3D	*final_list;
+	POINT3D	*temp_list;
+	float	distance;
+	float	*dist_list;
+	int	*final_index_list;
+	int	final_list_size;
+	int	i;
+	int	j;
+	int	k;
+	int	old_final_list_size;
+	int	*temp_index_list;
+	int	temp_list_size;
+
+	/*
+	 * Select only one peak value from a block of contagious peaks with the same peak value.
+	 */
+	for (i = 0; i < list_size; i++)
+	{
+		if (value_list [i] > 0.0)
+		{
+			temp_list	= (POINT3D *) malloc (list_size * sizeof (POINT3D));
+			temp_index_list	= (int *) malloc (list_size * sizeof (int));
+			if (temp_list == (POINT3D *) NULL || temp_index_list == (int *) NULL)
+			{
+				fprintf (stderr, "Out of memory for temp_list or temp_index_list");
+				return;
+			}
+
+			/*
+			 * Find all the points that have the same peak value.
+			 */
+			temp_list_size = 0;
+			for (j = i; j < list_size; j++)
+			{
+				if (pkg_abs (value_list [j] - value_list [i]) < ERROR_BOUND)
+				{
+					temp_list [temp_list_size].x		= list [j].x;
+					temp_list [temp_list_size].y		= list [j].y;
+					temp_list [temp_list_size].z		= list [j].z;
+					temp_index_list [temp_list_size]	= j;
+					temp_list_size++;
+				}
+			}
+
+			temp_list	= (POINT3D *) realloc ((char *) temp_list, 
+						temp_list_size * sizeof (POINT3D));
+			temp_index_list	= (int *) realloc ((char *) temp_index_list, 
+						temp_list_size * sizeof (int));
+
+			/*
+			 * Find the connected component.
+			 */
+			if (temp_list_size > 1)
+			{
+				final_list		= (POINT3D *) malloc (temp_list_size 
+									* sizeof (POINT3D));
+				final_index_list	= (int *) malloc (temp_list_size * sizeof (int));
+				if (final_list == (POINT3D *) NULL || final_index_list == (int *) NULL)
+				{
+					fprintf (stderr, 
+					"Out of memory for final_list or final_index_list.");
+					return;
+				}
+
+				final_list [0].x	= temp_list [0].x;
+				final_list [0].y	= temp_list [0].y;
+				final_list [0].z	= temp_list [0].z;
+				final_index_list [0]	= temp_index_list [0];
+				final_list_size		= 1;
+				component_completed	= FALSE;
+
+				while (!component_completed)
+				{
+					old_final_list_size	= final_list_size;
+					for (j = 1; j < temp_list_size; j++)
+					{
+						for (k = 0; k < final_list_size; k++)
+						{
+							if (pkg_abs (temp_list [j].x 
+								- final_list [k].x) <= 1
+							&& pkg_abs (temp_list [j].y 
+								- final_list [k].y) <= 1
+							&& pkg_abs (temp_list [j].z 
+								- final_list [k].z) <= 1
+							&& (pkg_abs (temp_list [j].x 
+								- final_list [k].x) == 1
+							|| pkg_abs (temp_list [j].y 
+								- final_list [k].y) == 1
+							|| pkg_abs (temp_list [j].z 
+								- final_list [k].z) == 1))
+							{
+								final_list [final_list_size].x
+									= temp_list [j].x;
+								final_list [final_list_size].y
+									= temp_list [j].y;
+								final_list [final_list_size].z 
+									= temp_list [j].z;
+								final_index_list [final_list_size] 
+									= temp_index_list [j];
+								temp_list [j].x = OUTSIDE;
+								temp_list [j].y = OUTSIDE;
+								temp_list [j].z = OUTSIDE;
+								final_list_size++;
+								break;
+							}
+						}
+					}
+					if (final_list_size == old_final_list_size)
+						component_completed = TRUE;		
+				}
+
+				if (final_list_size > 1)
+				{
+					dist_list	= (float *) malloc (final_list_size * sizeof (float));
+					if (dist_list == (float *) NULL)
+					{
+						fprintf (stderr, "Out of memory for dist_list.");
+						return;
+					}
+
+					/* 
+					 * Compute the distances 
+					 */
+					for (j = 0; j < final_list_size; j++)
+					{
+						dist_list [j] = 0.0;
+						for (k = 0; k < final_list_size; k++)
+						{
+							dist_list [j] 
+							+= sqrt ( (final_list [k].x - final_list [j].x)
+							* ((float) final_list [k].x - final_list [j].x)
+							+ (final_list [k].y - final_list [j].y)
+							* ((float) final_list [k].y - final_list [j].y)
+							+ (final_list [k].z - final_list [j].z)
+							* ((float) final_list [k].z - final_list [j].z) );
+						}
+					}
+
+					/* 
+					 * Find peak with the smallest distance 
+					 */
+					k		= 0;
+					distance	= dist_list [0];
+					for (j = 1; j < final_list_size; j++)
+					{
+						if (dist_list [j] < distance)
+						{
+							value_list [final_index_list [k]]	= 0.0;
+							k		= j;
+							distance	= dist_list [j];
+						}
+						else
+						{
+							value_list [final_index_list [j]]	= 0.0;
+						}
+					}
+
+					free (dist_list);
+				}
+				free (final_list);
+				free (final_index_list);
+			}
+
+			free (temp_list);
+			free (temp_index_list);
+		}
+	}
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d8 1
+a8 1
+  File:		pick.c
+d10 1
+a10 1
+  Function:	void pick (POINT3D *list, float *value_list, int list_size);
+d12 1
+a12 1
+  Arguments:	list,		3d list array.
+d16 1
+a16 1
+  Description:	This function picks only one peak from contagious peaks
+d19 1
+a19 1
+  Author:	Tom Yang
+d21 1
+a21 1
+  History:	Created by Tom Yang on 04/07/95. 
+d29 1
+a29 1
+static char rcsid [] = "$Header: /data/petsun4/src/af3d_par/RCS/search.c,v 1.3 1995/04/07 14:46:12 ty7777 Exp $";
+@

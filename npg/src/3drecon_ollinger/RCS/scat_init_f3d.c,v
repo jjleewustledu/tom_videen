@@ -1,0 +1,1559 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: scat_init_f3d.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $*/
+/*$Log: scat_init_f3d.c,v $
+ * Revision 3.1  1998/03/24  23:43:10  jmo
+ * ..
+ *
+ * Revision 3.0  1997/10/29  19:26:43  jmo
+ * Support Exact HR.
+ *
+ * Revision 2.6  1997/08/06  18:33:42  jmo
+ * Last version before cti rev 7 capability added.
+ *
+ * Revision 2.4  1996/06/19  11:20:48  jmo
+ *
+ * Revision 2.3  1996/04/23  15:02:05  jmo
+ * Version released April 23, 1996
+ *
+ * Revision 2.1  1996/03/15  21:57:19  jmo
+ * Version installed in St. Louis.
+ *
+ * Revision 2.0  1996/01/27  13:46:19  jmo
+ * Version installed at Neuro-imaging group, January 1996
+ *
+ * Revision 1.2  1996/01/18  16:10:13  jmo
+ * Modified file formats, Interfile and Matrix Rev 7.0 support.
+ *
+ * Revision 1.1  1996/01/12  18:09:29  jmo
+ * Initial revision
+ *
+ * Revision 1.8  1995/10/25  16:36:47  jmo
+ * Fix .rec files.
+ *
+ * Revision 1.7  1995/09/19  10:44:33  jmo
+ * Version for revised paper to physics in medicine and biology.
+ *
+ * Revision 1.6  95/05/26  14:29:58  jmo
+ * Version sent to Pittsburgh, 5/26/95
+ * 
+ * Revision 1.5  95/05/04  10:37:46  jmo
+ * Modified normalization files.
+ * 
+ * Revision 1.4  95/04/27  17:43:24  jmo
+ * Version used for 3d95
+ * 
+ * Revision 1.3  95/03/31  15:48:16  jmo
+ *  Version for 951 sent to Pittsburgh.
+ * 
+ * Revision 1.2  95/03/03  16:27:04  jmo
+ * Modified but not tested for cti951
+ * 
+ * Revision 1.1  95/01/19  22:40:20  ty7777
+ * Initial revision
+ * */
+
+/*---------------------------------------------------------------- 
+
+Subroutine: scat_init
+
+Purpose: Initialize tables used for scatter computations.
+
+By: John Ollinger
+
+Date: March 5, 1990
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+-----------------------------------------------------------------*/
+
+#include <math.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <ctype.h>
+#include <stdlib.h>
+
+#include <matrix.h>
+#include <imagio.h>
+#include <scatter.h>
+
+/* CUB_WR(filnam,image,xdim,ydim,type,id)*/
+#define CUB_WR(A,B,C,D,E) PutCubePlaneZero(A,B,C,D,E,A);
+#define FUNC(x) ((*func)(x))
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/scat_init_f3d.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+float   atten_scl [NUM_ENERGY] = {ATTEN_SCL_MAX, 1.236, 1.105, 1.009, ATTEN_SCL_MIN};
+float   atten_enrg [NUM_ENERGY]= {200., 300., 400., 500., 511.};
+
+/* Variables used by integration routines for Klein-Nishina equation.*/
+float	theta,ctht,psimin,psimax,l2,l2_xtal,zs,l1p;
+
+float   mult_energies[NUM_ENERGIES] = MULT_ENERGIES;
+float   mult_sigs[NUM_ENERGIES] = MULT_SIG;
+float   mult_As[NUM_ENERGIES] = MULT_SCALE;
+
+/******************************/
+int scat_init(
+/******************************/
+
+struct scatter_tab *sc,
+int	num_psi_factor)
+
+{
+
+int	i,j,k,count,stat,ell,st,iang,jang,kang,idtht,ray,
+	ipsi,iups,
+	write_table();
+
+FILE	*fd,*fdnorm;
+
+float	thetas,psis,energy_res,d,sum,psi_inc,
+	l1overL,x,mintht,maxtht,upsilon,dtht,cdtht,
+	l1,
+	L,
+	loverL,
+	l2overL,
+	lxoverL,
+	l3overl2,
+	psic,
+	psi,
+	delpsi,delpsi_att,psi_step,cthts,cdthtpp,cpsi,spsi,dthtpp,
+	l2poverL,delta,scl,l1ppoverL,l2ppoverL,psio,psic_p_psio,
+	ups, energy,atten,ex,spsio,cpsis,cdpsi,sdpsi;
+
+float	klein_nishina(),erfc1(),detector_surv(),dir_scl();
+
+char	filnam[MAXNAME],normtab[MAXNAME],*tables;
+
+if(NULL==(sc->l1p[0]=(int *)malloc((L_PSI*L_L1*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l1p, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,psi=PSI_MIN;i<L_PSI;psi+=PSI_INC,i++) {
+    if(i > 0)
+	sc->l1p[i] = sc->l1p[i-1] + L_L1;
+    for(j=0,l1=L1_MIN;j<L_L1;j++,l1+=L1_INC)
+	sc->l1p[i][j] = (int)((l1*(float)cos((double)psi)-LP_MIN)*LP_RATE+.5);
+    } 
+
+if(NULL==(sc->loverL[0]=(int *)malloc((L_L1*L_L*sizeof(int))))) {
+    printf("Could not malloc memory for sc->loverL, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,l1=L1_MIN;i<L_L1;i++,l1+=L1_INC) { 
+    if(i > 0)
+	sc->loverL[i] = sc->loverL[i-1] + L_L;
+    for(j=0,L=L_MIN;j<L_L;j++,L+=L_INC) { 
+	sc->loverL[i][j] = (int)((l1/L - LOVERL_MIN)*LOVERL_RATE + .5); 
+	} 
+    } 
+
+if(NULL==(sc->lxoverL[0]=(int *)malloc((L_LOVERL*L_PSI_DIFF*sizeof(int))))) {
+    printf("Could not malloc memory for sc->lxoverL, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,loverL=LOVERL_MIN;i<L_LOVERL;i++,loverL+=LOVERL_INC) {
+    if(i > 0)
+	sc->lxoverL[i] = sc->lxoverL[i-1] + L_PSI_DIFF;
+    for(j=0,psi=PSI_DIFF_MIN;j<L_PSI_DIFF;j++,psi+=PSI_DIFF_INC) {
+	spsi = (float)sin((double)psi);
+	sc->lxoverL[i][j]=(int)((loverL*spsi-LXOVERL_MIN)*LXOVERL_RATE+.5);
+	}
+    }
+
+if(NULL==(sc->l3ppoverl2pp[0]=(int *)malloc((L_LOVERL*L_LOVERL*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l3ppoverl2pp, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,l1overL=LOVERL_MIN;i<L_LOVERL;i++,l1overL+=LOVERL_INC) {
+    if(i > 0)
+	sc->l3ppoverl2pp[i] = sc->l3ppoverl2pp[i-1] + L_LOVERL;
+    for(j=0,l2overL=LOVERL_MIN;j<L_LOVERL;j++,l2overL+=LOVERL_INC) {
+	sc->l3ppoverl2pp[i][j]=(int)((((1 - l1overL)/l2overL) -
+					L3OVERL2_MIN)*L3OVERL2_RATE + .5);
+	}
+    }
+
+if(NULL==(sc->l1ppoverL[0]=(int *)malloc((L_LOVERL*L_PSI_DIFF*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l1ppoverL, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,loverL=LOVERL_MIN;i<L_LOVERL;i++,loverL+=LOVERL_INC) {
+    if(i > 0)
+	sc->l1ppoverL[i] = sc->l1ppoverL[i-1] + L_PSI_DIFF;
+    for(j=0,psi=PSI_DIFF_MIN;j<L_PSI_DIFF;j++,psi+=PSI_DIFF_INC) {
+	cpsi = (float)cos((double)psi);
+	sc->l1ppoverL[i][j]=(int)((loverL*cpsi-LOVERL_MIN)*LOVERL_RATE+.5);
+	}
+    }
+
+if(NULL==(sc->l2ppoverL[0]=(int *)malloc((L_LOVERL*L_THETAS*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l2ppoverL, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,dthtpp=THETAS_MIN;i<L_THETAS;i++,dthtpp+=THETAS_INC) {
+    if(i > 0)
+	sc->l2ppoverL[i] = sc->l2ppoverL[i-1] + L_LOVERL;
+    for(j=0,loverL=LOVERL_MIN;j<L_LOVERL;j++,loverL+=LOVERL_INC) {
+	cdthtpp = (float)cos((double)dthtpp);
+	sc->l2ppoverL[i][j]=(int)((sqrt((double)(1+loverL*(loverL-2*cdthtpp)))
+					-LOVERL_MIN)*LOVERL_RATE+.5);
+	}
+    }
+
+/* Calculate l2overL as a function of l1overL, sin(psi) and l2poverL. */
+if(NULL==(sc->l2overL[0]=(int *)malloc((L_LOVERL_SPSI*L_LXOVERL*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l2overL, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+
+for(i=0,lxoverL=LXOVERL_MIN;i<L_LXOVERL;lxoverL+=LXOVERL_INC,i++) {
+    if(i > 0)
+	sc->l2overL[i] = sc->l2overL[i-1] + L_LOVERL;
+    for(j=0,l2ppoverL=LOVERL_MIN;j<L_LOVERL;l2ppoverL+= LOVERL_INC,j++) {
+	sc->l2overL[i][j]  = (int)(((float)sqrt((double)
+            		     (lxoverL*lxoverL + l2ppoverL*l2ppoverL))
+	    		   - LOVERL_MIN)*LOVERL_RATE + .5);
+	}
+    }
+
+if(NULL==(sc->psic_p_psio[0]=(int *)malloc((L_LXOVERL*L_LOVERL*sizeof(int))))) {
+    printf("Could not malloc memory for sc->psi_p_psio, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,lxoverL=LXOVERL_MIN;i<L_LXOVERL;lxoverL+=LXOVERL_INC,i++) {
+    if(i > 0)
+	sc->psic_p_psio[i] = sc->psic_p_psio[i-1] + L_LOVERL;
+    for(j=0,l2overL=LOVERL_MIN;j<L_LOVERL;l2overL+= LOVERL_INC,j++) {
+        x = lxoverL/l2overL;
+	if(x >= -1. && x <= 1.) 
+	    sc->psic_p_psio[i][j] = (int)(((float)asin((double)x)
+	    		   	-  PSIC_P_PSIO_MIN)*PSIC_P_PSIO_RATE + .5);
+	else
+	    sc->psic_p_psio[i][j] = 32767;
+	}
+    }
+
+if(NULL==(sc->psic[0]=(int *)malloc((L_PSIC_P_PSIO*L_PSIO*sizeof(int))))) {
+    printf("Could not malloc memory for sc->psic, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,psic_p_psio=PSIC_P_PSIO_MIN;i<L_PSIC_P_PSIO;
+				i++,psic_p_psio+=PSIC_P_PSIO_INC) {
+    if(i > 0)
+	sc->psic[i] = sc->psic[i-1] + L_PSIO;
+    for(j=0,psio=PSIO_MIN;j<L_PSIO;j++,psio+=PSIO_INC) {
+	sc->psic[i][j] = (int)((psic_p_psio - psio - PSIC_MIN)*PSIC_RATE + .5);
+	}
+    }
+
+if(NULL==(sc->psis[0]=(int *)malloc((L_PSIC*L_PSI*sizeof(int))))) {
+    printf("Could not malloc memory for sc->psis, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,psic=PSIC_MIN;i<L_PSIC;i++,psic+=PSIC_INC) {
+    if(i > 0)
+	sc->psis[i] = sc->psis[i-1] + L_PSI;
+    for(j=0,psi=PSI_MIN;j<L_PSI;j++,psi+=PSI_INC) {
+	sc->psis[i][j] = (int)((psic + psi - PSIS_MIN)*PSIS_RATE + .5);
+	}
+    }
+
+/* Calculate angle of inclined plane with horizontal at scatter detector.  */
+if(NULL==(sc->psiopp[0]=(int *)malloc((L_PSIO*L_L3OVERL2*sizeof(int))))) {
+    printf("Could not malloc memory for sc->psiopp, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(j=0,psio=PSIO_MIN;j<L_PSIO;psio+=PSIO_INC,j++) {
+    if(j > 0)
+	sc->psiopp[j] = sc->psiopp[j-1] + L_L3OVERL2;
+    spsio = (float)sin((double)psio);
+    for(i=0,l3overl2=L3OVERL2_MIN;i<L_L3OVERL2;l3overl2+=L3OVERL2_INC,i++) {
+        x = spsio*l3overl2;
+        if(x > -1 && x < 1.)
+	    sc->psiopp[j][i]=(int)(((asin(x)) - PSIO_MIN)*PSIO_RATE + .5);
+	else
+	    sc->psiopp[j][i] = 0.; /* This value should never be used. */
+	}
+    }
+
+if(NULL==(sc->l2[0]=(int *)malloc((L_L*L_LOVERL*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l2, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,L=L_MIN;i<L_L;i++,L+=L_INC) {
+    if(i > 0)
+	sc->l2[i] = sc->l2[i-1] + L_LOVERL;
+    for(j=0,l2overL=LOVERL_MIN;j<L_LOVERL;j++,l2overL+=LOVERL_INC) {
+	sc->l2[i][j] = (int)((l2overL*L - L2_MIN)*L2_RATE + .5);
+	}
+    }
+
+/* Calculate indices energy correction for attenuation coefficients. */
+for(i=0,ups=UPS_MIN;i<L_UPS;i++,ups+=UPS_INC) {
+    energy = 511./(2. - (float)cos((double)ups));
+    energy_res = ENERGY_RESOL*(float)sqrt((double)(energy*511));
+    x = (energy - sc->energy_thresh)/energy_res;
+    if(ups > -PI/2 && ups < PI/2)
+        sc->energy_frac[i] = erfc1(x);
+    else /* Several geometric transforms undefined for thetas > PI/2,
+	    so set energy fraction to zero to eliminate contribution. */
+        sc->energy_frac[i] = 0.;
+    for(j=0;j<NUM_ENERGY-1;j++) {
+	if(energy >= atten_enrg[j]) {
+	    x = (energy - atten_enrg[j])/(atten_enrg[j+1]- atten_enrg[j]);
+	    scl = atten_scl[j] +  x*(atten_scl[j+1] - atten_scl[j]);
+	    sc->energy_corr[i] = (int)((scl-ATTEN_SCL_MIN)*ATTEN_SCL_RATE+.5);
+	    }
+	}
+    }
+
+/* Compute table of corrected attenuation factors. */
+if(NULL==(sc->pow[0]=(float *)malloc((L_ATTEN*L_ATTEN_SCL*sizeof(int))))) {
+    printf("Could not malloc memory for sc->pow, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=0,atten=ATTEN_MIN;i<L_ATTEN;i++,atten+=ATTEN_INC) {
+    if(i > 0)
+	sc->pow[i] = sc->pow[i-1] + L_ATTEN_SCL;
+    for(j=0,ex=ATTEN_SCL_MIN;j<L_ATTEN_SCL;j++,ex+=ATTEN_SCL_INC) {
+	sc->pow[i][j] = (float)pow((double)atten,(double)ex);
+	}
+    }
+
+
+if((tables = getenv("TABLES")) == NULL) 
+    tables = "/usr/local/lib/tables";
+sprintf(filnam,"%s/prthts_%s.dat",tables,sc->table_name);
+if(NULL==(sc->prthts[0]=(float *)malloc((L_UPS*L_L2*sizeof(float))))) {
+    printf("Could not malloc memory for sc->prthts, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=1;i<L_UPS;i++)
+    sc->prthts[i] = sc->prthts[i-1] + L_L2;
+if((fd = fopen(filnam,"rb")) != NULL) {
+    count = L_UPS*L_L2;
+    if((stat=fread(sc->prthts[0],sizeof(float),count,fd)) != count) {
+        printf("Error occurred while reading prthts, status = %d\n",stat);
+        exit(-1);
+        }
+    fclose(fd);
+    }
+else { /* Integrate Klein-Nishina equation and store in tables. */
+    printf("Could not read table of Klein-Nishina integrals, recomputing.\n");
+
+    for(iups=0,upsilon=UPS_MIN;iups<L_UPS;upsilon+=UPS_INC,iups++) {
+        if(20*(iups/20) == iups)
+            printf("Processing angle %d out of %d\n",iups,L_INTERP2);
+        for(ell=0,l2=L2_MIN;ell<L_L2;l2+= L2_INC,ell++) {
+	    /* Assume that upsilon is entirely along theta in calculating
+	       ranges for the scattering angles.  This reduces table to 2D. */
+    	    delta = (float)atan((double)(.5*(WC+WICS)/l2));
+	    mintht = upsilon - delta;
+	    maxtht = upsilon + delta;
+	    psimax = delta;
+	    psimin = -psimax;
+	    /* psimin and psimax passed as global variables.*/
+	    sc->prthts[iups][ell] = klein_nishina(mintht,maxtht);
+    	    }
+        }
+    if((fd = fopen(filnam,"wb")) == NULL) {
+        fprintf(stderr,"\nCould not create %s in scat_init_3d\n",filnam);
+        exit(-1);
+        }
+    count = L_UPS*L_L2;
+    if((stat=fwrite(sc->prthts[0],sizeof(float),count,fd)) != count) {
+        fprintf(stderr,"Error occurred while writing prthts, status = %d\n",stat);
+        exit(-1);
+        }
+    fclose(fd);
+    }
+
+/* Recompute table of sensitivites to direct photon. First, compute 
+   transition angles. */
+sc->num_psi = 2*(NUM_PSI_F3D/2)*num_psi_factor + 1;
+if(NULL == (sc->septal_pen_l1 = (float **)
+        malloc((unsigned)(sc->num_psi*sizeof(float *))))) {
+    printf("Could not malloc memory for sc->septal_pen_l1\n");
+    exit(-1);
+    }
+if(NULL == (sc->psi = (float *)
+        malloc((unsigned)((sc->num_psi)*sizeof(float))))) {
+    printf("Could not malloc memory for sc->psi.psi\n");
+    exit(-1);
+    }
+if(NULL == (sc->delpsi = (float *)
+        malloc((unsigned)((sc->num_psi)*sizeof(float))))) {
+    printf("Could not malloc memory for sc->delpsi\n");
+    exit(-1);
+    }
+psi_inc = 2*MAXPSI/(float)sc->num_psi;
+sc->delpsi[0] = psi_inc;
+sc->psi[0] = 0.;
+for(i=1;i<sc->num_psi/2+1;i++,j++) {
+    sc->psi[i] = sc->psi[i-1] + psi_inc;
+    sc->delpsi[i] = psi_inc;
+    }
+sc->psi[sc->num_psi/2+1] = -psi_inc;
+sc->delpsi[sc->num_psi/2+1] = psi_inc;
+for(i=sc->num_psi/2+2;i<sc->num_psi;i++,j++) {
+    sc->psi[i] = sc->psi[i-1] - psi_inc;
+    sc->delpsi[i] = psi_inc;
+    }
+for(ipsi=0;ipsi<sc->num_psi;ipsi++) {
+    cpsi = (float)cos((double)sc->psi[ipsi]);
+    if(NULL == (sc->septal_pen_l1[ipsi] = (float *)
+            malloc((unsigned)(L_INTERP*sizeof(float))))) {
+        printf("Could not malloc memory for sc->septal_pen_l1[j]\n");
+        exit(-1);
+        }
+    for (i=0,l1=L1_MIN;i < L_L1;i++,l1+=L1_INC)
+        sc->septal_pen_l1[ipsi][i] = dir_scl(l1,sc->psi[ipsi],sc->delpsi[ipsi]);
+    }
+
+if(NULL == (sc->psi_att=(float *)
+			malloc(sc->num_psi_att*sc->num_psi*sizeof(float)))) {
+    printf("Could not malloc memory for sc->num_psi_att.prob\n");
+    exit(-1);
+    }
+delpsi = sc->psi[1] - sc->psi[0];
+delpsi_att = delpsi*MAXPSI_ATTEN_OVER_MAXPSI/sc->num_psi_att;
+for(i=1;i<sc->num_psi/2;i++)
+    if((sc->psi[i] - sc->psi[i-1]) < .00001 && 
+			(sc->psi[i] - sc->psi[i-1]) > -.00001) {
+    fprintf(stderr,"WARNING: Attenuation table assumes evenly-spaced values of psi.\n");
+    exit(-1);
+    }
+
+/* Minimum attenuation table psi is an integral multiple of minimum psi.*/
+psi_step = sc->num_psi_att/MAXPSI_ATTEN_OVER_MAXPSI;
+psimin = MAXPSI_ATTEN_OVER_MAXPSI*sc->psi[sc->num_psi-1];
+sc->num_psi_att = sc->num_psi_att*(sc->num_psi-1) + 1;
+sc->psi_att[sc->num_psi_att/2+1] = -delpsi_att;
+sc->psi_att[0] = 0.;
+for(j=1;j<sc->num_psi_att/2+1;j++)
+    sc->psi_att[j] = sc->psi_att[j-1] + delpsi_att;
+for(j=sc->num_psi_att/2+2;j<sc->num_psi_att;j++)
+    sc->psi_att[j] = sc->psi_att[j-1] - delpsi_att;
+
+for(i=0,psic=PSIC_MIN;i<L_PSIC;i++,psic+=PSIC_INC) {
+    if(psic <= sc->psi_att[sc->num_psi_att - 1]) {
+	sc->npsic[i] = sc->num_psi_att - 1;
+	}
+    else if(psic >= sc->psi_att[sc->num_psi_att/2]) {
+	sc->npsic[i] = sc->num_psi_att/2;
+	}
+    else {
+        for(ipsi=0;ipsi<sc->num_psi_att;ipsi++) {
+    	    if(((psic-sc->psi_att[ipsi]) < .5*delpsi_att) && 
+			((psic-sc->psi_att[ipsi]) >= -.5*delpsi_att)) {
+	        sc->npsic[i] = ipsi;
+		break;
+	        }
+	    }
+	}
+    }
+
+/* Calculate total scattering angle, upsilons, as fcn of psis and thetas.  */
+if(NULL==(sc->upsilons=(short ***)malloc((sc->num_psi*sizeof(short **))))) {
+    printf("Could not malloc memory for sc->upsilons[], \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(ipsi=0;ipsi<sc->num_psi;ipsi++) {
+    if(NULL==(sc->upsilons[ipsi]=(short **)malloc((L_PSIS*sizeof(short *))))) {
+        printf("Could not malloc memory for sc->upsilons[][], \"scat_init_3d\".\n");
+        exit(-1);
+        }
+    psi = sc->psi[ipsi];
+    cpsi = cos((double)psi);
+    spsi = sin((double)psi);
+    if(NULL==(sc->upsilons[ipsi][0]=(short *)malloc((L_PSIS*L_THETAS*sizeof(short *))))) {
+        printf("Could not malloc memory for sc->upsilons[][], \"scat_init_3d\".\n");
+        exit(-1);
+        }
+    for(i=0,psis=PSIS_MIN;i<L_PSIS;psis+=PSIS_INC,i++)  {
+        if(i > 0)
+    	    sc->upsilons[ipsi][i] = sc->upsilons[ipsi][i-1] + L_THETAS;
+        cdpsi = (float)cos((double)(psi-psis));
+        sdpsi = (float)sin((double)(psi-psis));
+        for(j=0,thetas=THETAS_MIN;j<L_THETAS;thetas+=THETAS_INC,j++) {
+	    cthts = cos((double)thetas);
+	    x = cpsi*cdpsi*cthts + spsi*sdpsi;
+	    if(x < 1.)
+		x = acos((double)x);
+	    else
+		x = 0.;
+	    sc->upsilons[ipsi][i][j] = (int)((x - UPS_MIN)*UPS_RATE + .5);
+	    }
+	}
+    }
+
+l2 = RADIUS_DET;
+for (j=0,psic=PSIC_MIN;j<L_PSIC;j++,psi+=PSIC_INC) 
+    sc->det_surv_511[j] = (int)(detector_surv(l2,psic)*DET_SURV_RATE + .5);
+
+/*sprintf(filnam,"%s/detector_eff_953B_%4.2f_scat.plt",tables,MAXPSI*RAD2DEG);
+fp = fopen(filnam,"wb");
+fprintf(fp,"*\nPsi\tProb\n");
+for(i=0;i<L_INTERP4;i+=8) {
+    psi = (float)i*PSIO_INC + PSIO_MIN;
+    fprintf(fp,"%f\t%f\n",psi*RAD2DEG,1.-sc->det_surv[i]);
+    }
+fclose(fp);*/
+
+/* Scatter kernel for multiple scatter model. */
+for(i=0;i<NUM_ENERGIES;i++) {
+    if(sc->energy_thresh == mult_energies[i]) {
+	sc->mult_sigma = mult_sigs[i];
+	sc->mult_A = mult_As[i];
+	break;
+	}
+    }
+if(i == NUM_ENERGIES) {
+    fprintf(stderr,"Energy threshold requested not supported.\n");
+    fprintf(stderr,"Supported energies: ");
+    for(i=0;i<NUM_ENERGIES;i++)
+	fprintf(stderr,"%f keV",mult_energies[i]);
+    fprintf(stderr,"\n");
+    exit(-1);
+    }
+if(sc->mult_sigma > 0) {
+    sc->mult_len = (int)(3*sc->mult_sigma/(RAYSIZ*RAY_DSAMP)) + 2;
+    for(ray=0.,d=0.;ray<sc->mult_len;ray++,d+=RAYSIZ*RAY_DSAMP) {
+        x = d/sc->mult_sigma;
+        sc->mult_krnl[ray] = (float)exp((double)(-x*x/2))/sc->mult_sigma;
+        if(ray == 0)
+          sum = sc->mult_krnl[ray];
+	else
+          sum += 2.*sc->mult_krnl[ray];
+        }
+    for(ray=0;ray<sc->mult_len;ray++) 
+        sc->mult_krnl[ray] *= 1./sum;
+    }
+else {
+    /* Impulsive kernel, i.e., model multiples as scaled single scatters.  */
+    sc->mult_len = 1;
+    sc->mult_krnl[0] = sc->mult_A;
+    }
+
+/* Malloc memory for tables calculated in scat_reinit. Table sizes are
+   allocated for maximum length to be encountered. */
+if(NULL==(sc->L[0]=(int *)malloc((L_PSI*NUMRAY*sizeof(int))))) {
+    printf("Could not malloc memory for sc->L, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+if(NULL==(sc->l10[0]=(int *)malloc((L_PSI*NUMRAY*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l10, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+
+if(NULL==(sc->xl10[0]=(float *)malloc((L_PSI*NUMRAY*sizeof(float))))) {
+    printf("Could not malloc memory for sc->xl10, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=1;i<L_PSI;i++) {
+    sc->L[i]    = sc->L[i-1]    + NUMRAY;
+    sc->l10[i]  = sc->l10[i-1]  + NUMRAY;
+    sc->xl10[i] = sc->xl10[i-1] + NUMRAY;
+    }
+if(NULL==(sc->xl10c[0]=(float *)malloc((L_PSIC*NUMRAY*sizeof(float))))) {
+    printf("Could not malloc memory for sc->xl10c, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=1;i<L_PSIC;i++) 
+    sc->xl10c[i] = sc->xl10c[i-1] + NUMRAY;
+
+if(NULL==(sc->l20[0]=(int *)malloc((L_PSIC*NUMRAY*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l20, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(i=1;i<L_PSIC;i++)
+    sc->l20[i] = sc->l20[i-1] + NUMRAY;
+
+if(NULL==(sc->l2poverL[0]=(int *)malloc((2*NUMANG*L_LOVERL*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l2poverL, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(idtht=1;idtht<2*NUMANG;idtht++) 
+	sc->l2poverL[idtht] = sc->l2poverL[idtht-1] + L_LOVERL;
+
+if(NULL==(sc->thetas[0]=(int *)malloc((2*NUMANG*L_LOVERL*sizeof(int))))) {
+    printf("Could not malloc memory for sc->thetas, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(idtht=0;idtht<2*NUMANG;idtht++) {
+    if(idtht > 0)
+	sc->thetas[idtht] = sc->thetas[idtht-1] + L_LOVERL;
+    }
+
+if(NULL==(sc->theta_diff[0]=(int *)malloc((L_THETAS*NUMANG*sizeof(int))))) {
+    printf("Could not malloc memory for sc->theta_diff, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+sc->theta_diff[0] += sc->numang/2;
+
+if(NULL==(sc->ds[0]=(int *)malloc((L_THETA_DIFF*NUMRAY*sizeof(int))))) {
+    printf("Could not malloc memory for sc->ds, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(idtht=0;idtht<L_THETA_DIFF;idtht++) {
+    if(idtht > 0)
+	sc->ds[idtht] = sc->ds[idtht-1] + sc->numray;
+    }
+
+
+if(NULL==(sc->l2_att[0]=(int *)malloc((L_L2*(L_PSIC+1)*sizeof(int))))) {
+    printf("Could not malloc memory for sc->l2_att, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+/* Messy fix to problem of undefined theta.  Geometry undefined for 
+theta > PI/2, but no easy way to fix, so energy-correction used to 
+zero results.  Pad att-ls to handle incorrect values of l2. */
+for(i=0;i<L_L2;i++)
+    sc->l2_att[0][i] = 0;
+sc->l2_att[0] += L_L2;  
+for(i=1;i<L_PSIC;i++) 
+	sc->l2_att[i] = sc->l2_att[i-1] + L_L2;
+
+if(NULL==(sc->angle_wrap_atten[0]=
+	(int *)malloc((4*NUMANG*NUMRAY*sizeof(int))))) {
+    printf("Could not malloc memory for angle_wrap_atten \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(iang=1;iang<4*NUMANG;iang++)
+    sc->angle_wrap_atten[iang] = sc->angle_wrap_atten[iang-1] + NUMRAY;
+
+
+if(NULL==(sc->angle_wrap_scat[0]=
+		(int *)malloc((NUMANG3*NUMRAY_OUT*sizeof(int))))) {
+    printf("Could not malloc memory for angle_wrap_scat, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+for(iang=1;iang<3*NUMANG;iang++)
+    sc->angle_wrap_scat[iang] = sc->angle_wrap_scat[iang-1] + NUMRAY_OUT;
+
+if(NULL==(sc->dthtpp=(int **)malloc((NUMANG*sizeof(int *))))) {
+    printf("Could not malloc memory for sc->dthtpp, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+if(NULL==(sc->dthtpp[0]=(int *)malloc((L_PSIO*NUMANG*sizeof(int))))) {
+    printf("Could not malloc memory for sc->dthtpp, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+sc->dthtpp += NUMANG/2;
+for(i=-NUMANG/2+1;i<NUMANG/2;i++)
+    sc->dthtpp[i] = sc->dthtpp[i-1] + L_PSIO;
+
+/* Calculate tables dependent on sampling rates. */
+scat_reinit(sc);
+
+return(OK);
+
+}
+
+/*****************/
+int scat_reinit(
+/*****************/
+
+ScatterTable *sc)
+
+{
+
+int	i,j,k,iang,jang,kang,ell,
+	numang4,numang3,numang2,
+	idtht,ipsi,ray,
+	write_table();
+
+float	thetas,dtht,d,dsq,Lp,psi,l1poverL,darc,dpar,dspar,
+	x,l2poverL,psic,cpsic,cdtht,psio,cpsi,
+	klein_nishina(),erfc1(),detector_surv();
+
+FILE	*fp;
+
+void 	get_coords();
+
+numang2 = 2*sc->numang;
+numang3 = 3*sc->numang;
+numang4 = 4*sc->numang;
+
+/* Compute coordinates of circle inscribed in image.  Coordinates
+   are relative to the image, not the detector ring.
+   Compute scatter path length and distances from detector ring
+   to start of region being imaged. */
+for(i=0,darc=DMIN;i<sc->numray;i++,darc+=sc->raysiz) {
+    d = RADIUS_DET_PHYS*cos((double)(PI/2-darc/RADIUS_DET_PHYS)); /* Arc correct. */
+    dsq = d*d;
+    x = RSQ_MM - dsq;
+    if(x > 0)
+        x = (float)sqrt((double)x);
+    else
+        x = 0.;
+    sc->lmin[i] = sc->imgdim/2 - (int)(x/sc->pixsiz + .5);
+    sc->lmax[i] = sc->imgdim/2 + (int)(x/sc->pixsiz + .5);
+    Lp =    (float)sqrt((double)(RSQ_DET - dsq));
+    sc->Lp[i] = (int)((2.*Lp - L_MIN)*L_RATE + .5);
+    for(j=0,psi=PSIC_MIN;j<L_PSIC;psi+=PSIC_INC,j++) {
+	cpsi = (float)cos((double)psi);
+        sc->l20[j][i] = (int)((Lp/cpsi - RADIUS_MM - L2_MIN)*L2_RATE);
+	sc->xl10c[j][i] = Lp/cpsi - RADIUS_MM;
+	}
+    for(j=0,psi=PSI_MIN;j<L_PSI;psi+=PSI_INC,j++) {
+	cpsi = (float)cos((double)psi);
+	sc->xl10[j][i] = Lp/cpsi - x;
+        sc->l10[j][i] = (int)((Lp/cpsi - x - L10_MIN)*L10_RATE);
+        sc->L[j][i]   = (int)((2.*Lp/cpsi - L_MIN)*L_RATE + .5);
+	}
+    }
+
+/* Get coordinates of sparsely sample output detectors. */ 
+get_coords(sc);
+/*fp = fopen("coords.txt","wb");
+for(i=0;i<sc->numray;i++) {
+    for(j=0;j<2;j++) {
+	for(k=0;k<sc->coords.entry[i][j].N;k++) {
+	    if(k == 0)
+                fprintf(fp,"%d: ",i);
+	    fprintf(fp,"(%d,%d,%3.2f) ",sc->coords.entry[i][j].deltht[k],sc->coords.entry[i][j].d2[k],sc->coords.entry[i][j].fo[k]);
+	    }
+	if(sc->coords.entry[i][j].N > 0)
+	    fprintf(fp,"\n");
+	}
+    }
+fclose(fp);*/
+
+/* Calculate l2poverL as function of angular offset and l1poverL. */
+for(idtht=0,theta=(-PI);idtht<numang2;idtht++,theta+=sc->ang_inc) {
+    for(ell=0,l1poverL=LOVERL_MIN;ell<L_LOVERL;
+		l1poverL+= LOVERL_INC,ell++) {
+        sc->l2poverL[idtht][ell] = (int)(((float)sqrt((double)
+           (l1poverL*l1poverL + 1 - 2.*l1poverL*cos((double)
+	   (theta)))) - LOVERL_MIN)*LOVERL_RATE + .5);
+	}
+    }
+
+for(i=0,thetas=THETAS_MIN;i<L_THETAS;i++,thetas+=THETAS_INC) 
+    sc->thts_cvt[i] = (int)(thetas/sc->ang_inc + sc->numang + .5);
+
+/* Calculate thetas as function of angular offset and l2poverL. */
+for(idtht=0;idtht<numang2;idtht++) {
+    /* This calculation is not valid for all values.  The array will
+       be filled with some NaN valued elements, but these should never
+       be accessed.  Errors should be trapped. */
+    dtht = (float)(idtht - sc->numang)*sc->ang_inc;
+    for(ell=0,l2poverL=LOVERL_MIN;ell<L_LOVERL;
+		l2poverL+= LOVERL_INC,ell++) {
+	if(l2poverL > 0) 
+	   x = (float)sin((double)dtht)/(double)l2poverL;
+	else
+	   x = 0.;
+
+	if(x > 1.) 
+	    thetas  = PI/2;
+	else if(x < -1.)
+	    thetas  = -PI/2;
+	else
+            thetas = asin((double)x);
+	sc->thetas[idtht][ell] = (int)((thetas - THETAS_MIN)*THETAS_RATE + .5);
+	}
+    }
+
+for(i=0,thetas=THETAS_MIN;i<L_THETAS;i++,thetas+=THETAS_INC) {
+    if(i > 0)
+	sc->theta_diff[i] = sc->theta_diff[i-1] + sc->numang;
+    for(idtht=-sc->numang/2,theta=-PI/2;idtht<sc->numang/2;
+						idtht++,theta+=sc->ang_inc) 
+        sc->theta_diff[i][idtht] = 
+		(int)((theta - thetas - THETA_DIFF_MIN)*THETA_DIFF_RATE + .5);
+    }
+
+/* Calculate distance of ray along which scattered photon propagates (ds)
+   to measurement distance (d2 or do) and the difference of the change
+   in output angle (dtht) and the scattering angle (thetas). */
+for(idtht=0,dtht=THETA_DIFF_MIN;idtht<L_THETA_DIFF;
+				idtht++,dtht+=THETA_DIFF_INC) {
+    for(ray=0,darc=DMIN;ray<sc->numray;darc+=sc->raysiz,ray++) {
+	/* Calculate arc-corrected output position. */
+	dpar = RADIUS_DET_PHYS*cos((double)(PI/2-darc/RADIUS_DET_PHYS));
+	/* Calculate arc-corrected position of scatter path. */
+	dspar = RADIUS_DET_PHYS*(float)sin(asin((double)(dpar/RADIUS_DET_PHYS)) + dtht);
+	/* Now convert to un-arc-corrected position and account for
+	   rotation through PI degrees. */
+	if(fabs(dspar) > RADIUS_DET_PHYS)/* Roundoff error can cause DOMAIN error.*/
+	    sc->ds[idtht][ray] = NUMRAY - 1 - 
+	  	(int)((-DMIN + RADIUS_DET_PHYS*PI/2)/RAYSIZ + .5);
+	else
+	    sc->ds[idtht][ray] = NUMRAY - 1 - (int)((-DMIN + RADIUS_DET_PHYS*
+	      (PI/2 - acos((double)(dspar/RADIUS_DET_PHYS))))/RAYSIZ + .5);
+	/* Guard against numerical inaccuracy causing under- or over-flow.*/
+	if(sc->ds[idtht][ray] < 0)
+	    sc->ds[idtht][ray] = 0.;
+	else if(sc->ds[idtht][ray] >= NUMRAY)
+	    sc->ds[idtht][ray] = NUMRAY - 1;
+	}
+    }
+
+for(j=0,psic=PSIC_MIN;j<L_PSIC;j++,psic+=PSIC_INC) {
+    cpsic = (float)cos((double)psic);
+    for(i=0,l2=L2_MIN;i<L_L2;i++,l2+=L2_INC) {
+	sc->l2_att[j][i] = (int)(l2/sc->pixsiz + .5);
+	if(sc->l2_att[j][i] > sc->imgdim-1)
+	     sc->l2_att[j][i] = sc->imgdim-1;
+	}
+    sc->l2_att[j][L_L2-1] = 0;
+    sc->l2_att[j][L_L2-2] = 0;
+    sc->l2_att[j][L_L2-3] = 0;
+    }
+
+/* Calculate indices from delta theta and distance.
+   This table accounts for downsampling, "wrapping"
+   overflows (angles > 360 degrees) and underflows (angles < 0 degrees).
+   Note that the output plane is rotated by 180 degrees from the input
+   angle.  The same angle cannot be used for theta =0 because the output
+   occurs at a different oblique angle psi. For attenuation array, wrap
+   by 180 degrees and flip each row.  For scatter array, downsample by
+   and handle overflows and underflows. */
+for(iang=0,jang=(-NUMANG_OUT);iang<4*sc->numang;iang+=sc->ang_step,jang++) {
+    /* Calculate for every ANG_DSAMP angles.  Note that only one in
+       ANG_DSAMP angles is used.  Other values are kept to obviate
+       need to calculate index in main loop. */
+    if(iang < sc->numang) {
+        for(i=0;i<sc->numray;i++) {
+	    /* Calculate index for every fourth ray, others are unused. */
+	    j = i/RAY_DSAMP;
+	    sc->angle_wrap_atten[iang][i] = 
+		    ((NUMANG_OUT + jang)*NUMRAY_OUT + j)*sc->imgdim;
+	    }
+	}
+    else if(iang >=  3*sc->numang) {
+        for(i=0;i<sc->numray;i++) {
+	    j = i/RAY_DSAMP;
+	    sc->angle_wrap_atten[iang][i] = 
+		((jang - NUMANG_OUT)*NUMRAY_OUT + j)*sc->imgdim;
+	    }
+	}
+    else {
+        for(i=0;i<sc->numray;i++) {
+	    j = i/RAY_DSAMP;
+	    if(jang < NUMANG_OUT)
+	        sc->angle_wrap_atten[iang][i] = 
+		    ((jang+NUMANG_OUT)*NUMRAY_OUT + j)*sc->imgdim;
+	    else
+	        sc->angle_wrap_atten[iang][i] = 
+		    ((jang-NUMANG_OUT)*NUMRAY_OUT + j)*sc->imgdim;
+	    }
+	}
+    /* Fill in in-between angles. Set to value of nearest neighbor. */
+    for(kang=1-sc->ang_step/2;kang<=1+sc->ang_step/2;kang++) {
+	if( (iang+kang) >=0 && (iang+kang) < numang4) {
+	    for(i=0;i<sc->numray;i++)
+	        sc->angle_wrap_atten[iang+kang][i] = 
+				sc->angle_wrap_atten[iang][i];
+	    }
+	}
+    }
+
+for(iang=0,jang=(-NUMANG_OUT/2);iang<3*sc->numang;iang+=sc->ang_step,jang++) {
+    /* Calculate for every ANG_DSAMP angles.  Note that only one in
+       ANG_DSAMP angles is used.  Other values are kept to obviate
+       need to calculate index in main loop. */
+    if(iang < sc->numang/2) {
+        for(i=0;i<NUMRAY_OUT;i++) {
+	    sc->angle_wrap_scat[iang][i] = (2*NUMANG_OUT + jang)*NUMRAY_OUT + i;
+	    }
+	}
+    else if(iang >=  5*sc->numang/2) {
+        for(i=0;i<NUMRAY_OUT;i++) {
+	    sc->angle_wrap_scat[iang][i] = (jang - 2*NUMANG_OUT)*NUMRAY_OUT + i;
+	    }
+	}
+    else {
+        for(i=0;i<NUMRAY_OUT;i++) {
+	    sc->angle_wrap_scat[iang][i] = jang*NUMRAY_OUT + i;
+	    }
+	}
+    /* Fill in in-between angles. Set to value of nearest neighbor. */
+    for(kang=(-sc->ang_step/2);kang<sc->ang_step/2;kang++) {
+	if( (iang+kang) >=0 && ((iang+kang) < 3*sc->numang)) {
+	    for(i=0;i<NUMRAY_OUT;i++)
+	        sc->angle_wrap_scat[iang+kang][i] = 
+				sc->angle_wrap_scat[iang][i];
+	    }
+	}
+    }
+
+/* Calculate component of scattering angle in plane inclined at psio. */
+for(i=(-sc->numang/2),dtht=-PI/2;i<sc->numang/2;dtht+=sc->ang_inc,i++)  {
+    cdtht = (float)cos((double)dtht);
+    for(j=0,psio=PSIO_MIN;j<L_PSIO;psio+=PSIO_INC,j++) {
+	if(dtht < 0)
+	    sc->dthtpp[i][j] = (int)((-acos(cos((double)psio)*cdtht)
+			     - THETAS_MIN)*THETAS_RATE + .5);
+	else
+	    sc->dthtpp[i][j] = (int)((acos(cos((double)psio)*cdtht)
+			     - THETAS_MIN)*THETAS_RATE + .5);
+	}
+    }
+
+}
+
+
+
+/*****************/
+void get_coords(sc)
+/*****************/
+
+/* Assumes squashed images, sinogram binned without arc-correction. */
+
+struct scatter_tab *sc;
+
+{
+
+int	i,j,k,n,idtht,id,idx,angmod,nhit=0,ntot=0,*d2,*idout,ray,slope_inv,
+	idthtmin,idthtmax,outray,thtmod,raydelta,angdelta,modtht,
+	ray_mod,ang_dsamp;
+
+float	*fo,*deltht,dx,xdx,dtht,d,scl,subray,width,dout,slope,
+	sino[NUMANG][NUMRAY],
+	overlap1d(),overlap2d();
+
+double	asin_d;
+
+if(NULL == (fo = (float *)malloc((unsigned)(NUMANG*sizeof(float))))) {
+    printf("Could not malloc memory for fo, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+if(NULL == (deltht = (float *)malloc((unsigned)(NUMANG*sizeof(float))))) {
+    printf("Could not malloc memory for deltht, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+if(NULL == (idout = (int *)malloc((unsigned)(NUMANG*sizeof(int))))) {
+    printf("Could not malloc memory for idout, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+if(NULL == (d2 = (int *)malloc((unsigned)(NUMANG*sizeof(int))))) {
+    printf("Could not malloc memory for d2, \"scat_init_3d\".\n");
+    exit(-1);
+    }
+
+raydelta = NUMRAY/sc->numray;
+angdelta = NUMANG/sc->numang;
+slope_inv = 1./SCATTER_SLOPE;
+ang_dsamp = ANG_DSAMP;
+/*#ifdef cti961
+        slope_inv *= (float)NUMANG/(float)sc->numang;
+        ang_dsamp = sc->numang/NUMANG_OUT;
+#endif*/
+slope = 1./slope_inv;
+ray_mod = RAY_DSAMP*slope_inv;
+for(ray=0;ray<NUMRAY;ray++) {
+
+    for(angmod=0,modtht=0;angmod<sc->ang_step*angdelta;
+						angmod+=angdelta,modtht++) {
+	/* Assume that current angle is sampled in output, "modulus" angles
+	   are assumed not to correspond to sampled output angles. */
+        idthtmin = -(ray/slope_inv);
+        idthtmax =  ((NUMRAY-1-ray)/slope_inv);
+        outray = ray + (int)(idthtmin*slope_inv);
+	n = 0;
+        for(idtht=idthtmin;idtht<=idthtmax;idtht++,outray+=slope_inv) {
+    	    if(ang_dsamp*((idtht-angmod)/ang_dsamp)==(idtht-angmod)) {
+	        if((outray+RAY_DSAMP/2)%RAY_DSAMP == 0) {
+	            /* Output ray intersects detector. */
+	            d2[n] = outray/raydelta;
+	            deltht[n] = idtht/angdelta;
+	            idout[n] = outray/RAY_DSAMP;
+	            ++n;
+	            }
+		}
+	    }
+	if(NULL == (sc->coords.entry[ray][modtht].fo = 
+	    (float *)malloc((unsigned)(n*sizeof(float))))) {
+	    printf("Could not malloc memory for fo, \"scat_init_3d\".\n");
+	    exit(-1);
+	    }
+	if(NULL == (sc->coords.entry[ray][modtht].deltht = 
+	    (int *)malloc((unsigned)(n*sizeof(int))))) {
+	    printf("Could not malloc memory for deltht, \"scat_init_3d\".\n");
+	    exit(-1);
+	    }
+	if(NULL == (sc->coords.entry[ray][modtht].d2 = 
+	    (int *)malloc((unsigned)(n*sizeof(int))))) {
+	    printf("Could not malloc memory for sc->d2, \"scat_init_3d\".\n");
+	    exit(-1);
+	    }
+        if(n > 0) {
+	    if(NULL == (sc->coords.entry[ray][modtht].idout = 
+	        (int *)malloc((unsigned)(n*sizeof(int))))) {
+	        printf("Could not malloc memory for sc->idout, \"scat_init_3d\".\n");
+	        exit(-1);
+	        }
+	    sc->coords.entry[ray][modtht].N = n;
+  	    }
+	for(i=0;i<n;i++) {
+/*	    sc->coords.entry[ray][modtht].fo[i] = WCT_TOT/sc->pixsiz;*/
+	    sc->coords.entry[ray][modtht].deltht[i]= deltht[i];
+	    sc->coords.entry[ray][modtht].d2[i] = d2[i];
+	    sc->coords.entry[ray][modtht].idout[i] = idout[i];
+	    }
+        }
+    }
+
+free(fo);
+free(deltht);
+free(d2);
+free(idout);
+
+}
+
+/*******************************/
+float overlap1d(sc,width,dx,dout)
+/*******************************/
+
+struct scatter_tab *sc;
+
+float	width,		/* Width of "strip" of scattered radiation. 	*/
+	dx,		/* Center of scatter at angle dtht.		*/
+	dout;		/* Output ray.					*/
+
+{
+
+float	frac;
+
+/* Assume that width is >= RAYSIZ. */
+if((dx-.5*width) < (dout+.5*RAYSIZ) && (dx-.5*width) > (dout-.5*RAYSIZ)) 
+    frac = .5*RAYSIZ + dout - (dx - .5*width);
+else if((dx+.5*width) > (dout-.5*RAYSIZ) && (dx+.5*width) < (dout+.5*RAYSIZ))
+    frac = .5*RAYSIZ + dx + .5*width - dout;
+else if((dx-.5*width) < (dout-.5*RAYSIZ) && (dx+.5*width) > (dout+.5*RAYSIZ))
+    frac = RAYSIZ;
+else
+    frac = 0.;
+
+frac *= (1./RAYSIZ)*(RAYSIZ/width);
+
+return(frac);
+
+}
+
+/*******************************/
+float overlap2d(sc,width,dx,dout)
+/*******************************/
+
+struct scatter_tab *sc;
+
+float	width,		/* Width of "strip" of scattered radiation. 	*/
+	dx,		/* Center of scatter at angle dtht.		*/
+	dout;		/* Output ray.					*/
+
+{
+
+static int numang1=-1;
+static float slope[NUMRAY];
+
+int	i,k,idx;
+
+float	d,dol,dou,dxul,dxuu,dxll,dxlu,thtou,thtol,thtxl,thtxr,frac;
+
+if(sc->numang != numang1) {
+    numang1 = sc->numang;
+    for(i=0,d=DMIN;i<NUMRAY;i++,d+=RAYSIZ) 
+        slope[i] = 1./(float)sqrt((double)(RSQ_DET - d*d));
+    }
+
+idx = (int)((dx - DMIN)/sc->pixsiz + .5);
+dxuu = dx + .5*width + .5*ANG_INC/slope[idx];
+dxul = dxuu - width;
+dxlu = dxuu - ANG_INC/slope[idx];
+dxll = dxlu - width;
+dol = dout - .5*RAYSIZ;
+dou = dout + .5*RAYSIZ;
+
+/* Assume that width >= RAYSIZ. */
+if(dxul < dol) { 
+    /* Left edge of strip passes to left of pixel. */
+    if(dxuu < dol) 
+	/* No intersection. */
+	frac = 0.;
+    else if(dxuu < dou) {
+ 	/* Right edge of strip intersects top edge of pixel. */
+	if(dxlu < dol)
+	    /* Right edge of strip intersects left edge of pixel. */
+	    frac = .5*slope[idx]*(dxuu-dol)*(dxuu-dol);
+	else
+	    /* Right edge of strip intersects bottom of pixel. */
+	    frac = (.5*(dxuu-dxlu) + (dxlu-dol))*ANG_INC;
+	}
+    else if(dxlu > dou) 
+	/* Strip covers pixel.*/
+	frac = ANG_INC*RAYSIZ;
+    else {
+	/* Right edge of strip passes to right of top left corner. */
+	if(dxlu < dol)
+	    /* Right edge passes to left of lower-left corner. */
+	    frac = ANG_INC*RAYSIZ - slope[idx]*(.5*RAYSIZ + (dol-dxlu))*RAYSIZ;
+	else
+	    /* Right edge of strip passes through lower edge of pixel. */
+	    frac = ANG_INC*RAYSIZ - .5*slope[idx]*(dou - dxlu)*(dou - dxlu);
+	}
+    }
+else { /* dxul >= dol */
+    /* Left edge of strip passes to right of left edge of pixel. */
+    if(dxlu < dou) {
+	/* Both edges of strip intersect pixel. Assume strip width is 
+	>= to pixel width, so right edge of strip intersects right
+	edge of pixel. */
+	frac = ANG_INC*RAYSIZ - 
+		slope[idx]*((dxul-dol)*(dxul-dol) + (dou-dxlu)*(dou-dxlu));
+	}
+    else if(dxul < dou) {
+	/* Right edge passes to right of pixel, left edge intersects top. */
+	if(dxll < dol)
+	    /* Left edge of strip intersects left edge of pixel. */
+	    frac = ANG_INC*RAYSIZ - .5*slope[idx]*(dxul-dol)*(dxul-dol);
+	else
+	    /* Left edge of strip intersect bottom edge of pixel. */
+	    frac = (.5*(dxul - dxll) + (dou - dxul))*ANG_INC;
+	}
+    else if(dxll < dol) {
+        /* Left edge of strip intersects right edge of pixel. */
+	if(dxll < dol) 
+	    /* Left edge of strip intersects right and left sides of pixel. */
+	    frac = slope[idx]*(.5*RAYSIZ + (dol-dxll))*RAYSIZ;
+	else
+	    /* Left edge of strip intersects bottom edge of pixel. */
+	    frac = .5*slope[idx]*(dou-dxll)*(dou-dxll);
+	}
+    else
+	/* Strip misses pixel. */
+	frac = 0.;
+    }
+
+
+
+
+frac *= (1./(ANG_INC*RAYSIZ))*(RAYSIZ/width);
+
+return(frac);
+
+}
+
+
+
+/*****************/
+int write_table(sc)
+/*****************/
+
+struct scatter_tab *sc;
+
+{
+
+int	count,stat;
+
+FILE 	*fd;
+
+char	filnam[MAXNAME],*tables;
+
+float	out[10];
+
+tables = getenv("TABLES");
+sprintf(filnam,"%s/scat_3d_%s.dat",tables,sc->table_name);
+if((fd = fopen(filnam,"wb")) == NULL) {
+    printf("\nCould not create file %s in scat_init_3dc.\n",filnam);
+    return(-1);
+    }
+
+count = MAXNAME;
+if((stat=fwrite(sc->table_name,sizeof(char),count,fd)) != count) {
+    printf("Error occurred while writing table_name, status = %d\n",stat);
+    return(-1);
+    }
+
+count = NUMRAY;
+if((stat=fwrite(sc->lmin,sizeof(int),count,fd)) != count) {
+    printf("Error occurred while writing lmin, status = %d\n",stat);
+    return(-1);
+    }
+
+count = NUMRAY;
+if((stat=fwrite(sc->lmax,sizeof(int),count,fd)) != count) {
+    printf("Error occurred while writing lmax, status = %d\n",stat);
+    return(-1);
+    }
+
+count = NUMRAY;
+if((stat=fwrite(sc->L,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing L_tab, status = %d\n",stat);
+    return(-1);
+    }
+
+count = NUMRAY;
+if((stat=fwrite(sc->l10,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing L_tab, status = %d\n",stat);
+    return(-1);
+    }
+
+count = 6;
+if((stat=fwrite(out,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing scalars, status = %d\n",stat);
+    return(-1);
+    }
+
+count = NUMANG2*L_INTERP;
+if((stat=fwrite(sc->l2poverL,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing l2poverL, status = %d\n",stat);
+    return(-1);
+    }
+
+count = L_INTERP*L_INTERP;
+if((stat=fwrite(sc->l2overL,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing l2overL, status = %d\n",stat);
+    return(-1);
+    }
+
+count = L_INTERP2*L_INTERP;
+if((stat=fwrite(sc->thetas,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing thetas, status = %d\n",stat);
+    return(-1);
+    }
+
+count = L_INTERP;
+if((stat=fwrite(sc->psic,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing psic, status = %d\n",stat);
+    return(-1);
+    }
+
+count = L_INTERP*L_INTERP2;
+if((stat=fwrite(sc->upsilons,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing upsilons, status = %d\n",stat);
+    return(-1);
+    }
+
+count = NUMRAY*NUMANG3;
+if((stat=fwrite(sc->angle_wrap_atten,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing angle_wrap_atten, status = %d\n",stat);
+    return(-1);
+    }
+
+count = NUMRAY*NUMANG3;
+if((stat=fwrite(sc->angle_wrap_scat,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing angle_wrap_scat, status = %d\n",stat);
+    return(-1);
+    }
+
+count = LEN_PSI_TAB;
+if((stat=fwrite(sc->npsic,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing npsic, status = %d\n",stat);
+    return(-1);
+    }
+
+count = L_INTERP2;
+if((stat=fwrite(sc->energy_corr,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing energy_corr, status = %d\n",stat);
+    return(-1);
+    }
+
+count = L_INTERP*L_INTERP;
+if((stat=fwrite(sc->pow,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing pow, status = %d\n",stat);
+    return(-1);
+    }
+
+count = NUMANG2*NUMRAY;
+if((stat=fwrite(sc->ds,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing ds, status = %d\n",stat);
+    return(-1);
+    }
+
+count = L_INTERP2*L_INTERP;
+if((stat=fwrite(sc->prthts,sizeof(float),count,fd)) != count) {
+    printf("Error occurred while writing prthts, status = %d\n",stat);
+    return(-1);
+    }
+
+fclose(fd);
+
+return(NULL);
+
+}
+
+/*------------------------------*/
+float klein_nishina(mintht,maxtht)
+/*------------------------------*/
+
+float	mintht,
+	maxtht;
+
+{
+
+float	prob,
+	romberg(),
+	kn_func_theta();
+
+static int first=TRUE;
+
+static float kn_4pi;
+
+float	psi1,psi2;
+
+if(first == TRUE) {
+    first = FALSE;
+    psi1 = psimin;
+    psi2 = psimax;
+    psimin = -PI/2;
+    psimax = PI/2;
+    kn_4pi = romberg(*kn_func_theta,-PI,PI);
+    psimin = psi1;
+    psimax = psi2;
+    }
+
+prob = romberg(*kn_func_theta,mintht,maxtht)/kn_4pi;
+
+return(prob);
+
+}
+
+
+/******************************/
+float kn_func_theta(theta_local)
+/******************************/
+
+/* Purpose: Evaluates inner integral. Assumes l2 is in global area. */
+
+float   theta_local;
+
+{
+
+float 	dp,x,
+	romberg1(),
+	kn_func_psi();
+
+ctht = (float)cos((double)theta_local);
+dp = romberg1(*kn_func_psi,psimin,psimax);
+
+return(dp);
+
+}
+
+/********************/
+float kn_func_psi(psi)
+/********************/
+
+/* Purpose: Integrates Klein-Nishina equation over possible scattering
+   angles. */
+
+float	psi;
+
+{
+
+float   cpsi,cpsictht,x,detector_model();
+
+cpsi = (float)cos((double)psi);
+cpsictht = ctht*cpsi;
+x = 2 - cpsictht;
+x = cpsi*(1./(x*x))*(x + 1./x - (1-cpsictht*cpsictht));
+
+return(x);
+
+}
+
+/*************************************************************************
+ 
+Subroutine: erfc1
+ 
+Purpose: Compute error function.
+ 
+Source: IBM Scientific Subroutine Package.
+ 
+I/O variables: x: Input variable. 
+         p: erfc1(x)
+ 
+Copied Right: February 27, 1986 by J. M. Ollinger
+ 
+*************************************************************************/
+ 
+float erfc1(x)
+
+float	x;
+
+{
+
+float	ax,t,d,p;
+
+if(x < 0.)
+    ax = -x;
+else
+    ax = x;
+ 
+t = 1./(1. + .2316419*ax);
+d = .3989423*(float)exp((double)(-(ax*ax)/2.));
+p = 1.- d*((((1.330274*t-1.821256)*t+1.781478)*t-.3565638)*t+.3193815)*t;
+ 
+if( x < 0.)
+    p = 1. - p;
+
+return(p);
+
+}
+
+/*****************************/
+float detector_surv(l2_loc,psi)
+/*****************************/
+
+/* Compute probability of scintillation using single interaction  model. */
+
+float l2_loc,psi;
+
+{
+
+float x;
+
+float	trapzd_mod(),xtal_model(),romberg(),
+	l2cpsi,l2spsi;
+
+l2cpsi = l2_loc*(float) cos( (double) psi) ;
+l2spsi = l2_loc*(float) sin( (double) psi) ;
+
+zs = l2spsi;
+l2_xtal = l2;
+
+psimin = atan( (l2spsi - WC2)/l2cpsi);
+psimax = atan( (l2spsi + WC2)/l2cpsi);
+
+x = (1./(psimax - psimin))*romberg(*xtal_model,psimin,psimax);
+
+return(x);
+
+}
+
+/*******************/
+float xtal_model(psi)
+/*******************/
+
+float	psi;
+
+{
+
+float	z_edge,lc,spsi,cpsi,x;
+
+spsi = (float)sin((double)psi);
+cpsi = (float)cos((double)psi);
+
+/* Get distance to edge of crystal. */
+z_edge = WC2 - (zs - l2_xtal*spsi);
+if(z_edge < 0)
+    z_edge = 0.; /* Get rid of small negative values. */
+
+/* Get propagation length through crystal. */
+if(psi > 0)
+    lc = z_edge/spsi;
+else if (psi < 0 )
+    lc = -z_edge/spsi;
+else
+    lc = DC;
+
+/* Limit at maximum length. */
+if(lc > DC/cpsi)
+    lc = DC/cpsi;
+
+/* Apply Beer's law. Do not subtract from one, wait for energy corrrecton
+   in main loop of program. */ 
+x = (float)exp((double)(-MU_XTAL*lc));
+
+return(x);
+
+}
+
+/**************************/
+float dir_scl(l1,psi,delpsi)
+/**************************/
+
+float   l1,     /* Distance to detector of unscattered photon.  */
+        psi,    /* Mean oblique angle (one plane rotated to).   */
+        delpsi; /* Sampling interval of oblique angles.         */
+
+{
+
+float   x,y,z0,z1,cpsi,
+        trapzd_mod(),dir_scl_func();
+
+cpsi = (float)cos((double)psi);
+l1p = l1*cpsi;
+z0  = l1p*(float)tan((double)(psi - .5*delpsi));
+z1  = l1p*(float)tan((double)(psi + .5*delpsi));
+
+/* Average the aperture over the axial extent of this wedge. */
+if((z1 - z0) > 0) {
+    x = (cpsi/(z1 - z0))*trapzd_mod(dir_scl_func,z0,z1,50);
+    }
+else
+    x = 0;
+
+return(x);
+
+}
+
+/*******************/
+float dir_scl_func(z)
+/*******************/
+
+/* Effective aperture for the unscattered photon.  This is given by
+   the integral of the probability of septal penetration over the
+   solid angle defined by the detector from position z and l2.  Integrate
+   only in psi, which assumes symmetry in the transverse plane. */
+
+float z;
+
+{
+
+float   psimin,psimax;
+
+psimin = atan( (z - WC2)/l1p);
+psimax = atan( (z + WC2)/l1p);
+
+return(psimax - psimin);
+
+}
+
+
+/**************************/
+float trapzd_mod(func,a,b,n)
+/**************************/
+float (*func)(),a,b;    /* ANSI: float (*func)(float); */
+int n;
+{
+        float x,sum,del;
+        int j;
+
+                del=(b-a)/(float) (n);
+                sum = 0.5*FUNC(a);
+                x = a + del;
+                for (j=1;j< n;j++,x+=del) {
+                  sum += FUNC(x);
+                }
+                sum += 0.5*FUNC(b);
+
+                return (sum*del);
+}
+@

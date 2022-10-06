@@ -1,0 +1,56 @@
+#!/bin/csh
+# Program:	alignslices_single
+# Author:	Tom Videen
+# Date:		Jul 2010
+# Function:	Align coronal slices in an Analyze image.
+#	Uses alignlinear to align single slices in 2D.
+#	Align adjacent images and compute a combined_air file for the
+#	new slice using all air files from the first slice;
+#	Air files are used to reslice single-slice images.
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv != 3) then
+	echo "Usage:  alignslices_single in mask thresh slices"
+	echo " e.g.,  alignslices_single db500 db500a 1000 40"
+	exit 1
+endif
+
+set IN  = $1
+set THR = $2
+set NUM = $3
+set LOGFILE = ${IN}_align_slices.log
+
+touch $LOGFILE
+unalias rm
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set PRM = "-m 23 -t1 $THR -t2 $THR -p1 1 -p2 1 -x 1"
+set i = 1
+set FIRST = $IN$i
+${NPG}/bin/setanamin $FIRST 0
+alignlinear $FIRST $FIRST $FIRST.air $PRM
+cp $FIRST.hdr r$FIRST.hdr
+cp $FIRST.img r$FIRST.img
+
+# Align all adjacent pairs 
+# ---------------------------------------------------------
+set TOTAIR = $FIRST.air
+while ($i < $NUM)
+	set k = `echo "$i + 1" | bc`
+	set PREV = $IN$i
+	set NEXT = $IN$k
+	set NEWAIR = ${NEXT}vs${i}.air
+	${NPG}/bin/setanamin $PREV 0
+	${NPG}/bin/setanamin $NEXT 0
+	alignlinear $PREV $NEXT $NEWAIR $PRM
+	combine_air $NEXT.air y $TOTAIR $NEWAIR
+	${NPG}/bin/airdif $NEXT.air $FIRST.air | head -3 >> $LOGFILE
+	${NPG}/bin/airdif $NEXT.air $FIRST.air | head -3 
+	${NPG}/bin/imgreslice $NEXT $NEXT
+	rm $NEWAIR
+	set TOTAIR = $NEXT.air
+	@ i++
+end
+

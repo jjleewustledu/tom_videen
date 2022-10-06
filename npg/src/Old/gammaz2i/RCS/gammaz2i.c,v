@@ -1,0 +1,356 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	94.05.18.21.52.38;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.01.21.20.26.55;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.01.21.20.22.08;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.07.26.22.14.48;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.10.23.22.28.33;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@gammaz2i initial reslease.
+@
+
+
+1.5
+log
+@Changed from (z, x, y) to (x, y, z).
+The output is the same as before with
+the left hand coordinate system.
+@
+text
+@/*$Id: gammaz2i.c,v 1.4 1994/01/21 20:26:55 ty7777 Exp ty7777 $*/
+/*$Log: gammaz2i.c,v $
+ * Revision 1.4  1994/01/21  20:26:55  ty7777
+ * Changed the copyright message.
+ *
+ * Revision 1.3  1994/01/21  20:22:08  ty7777
+ * Added copyright message.
+ *
+ * Revision 1.2  1993/07/26  22:14:48  ty7777
+ * Adding comments fro description.
+ *
+ * Revision 1.1  1992/10/23  22:28:33  ty7777
+ * Initial revision
+ **/
+
+#ifndef lint
+static char sccsid [] = "@@(#)gammaz2i.c	10/23/92  Copyright Neural Pet Group, Washington University 1992";
+#endif
+
+static char rcsid [] = "$Header$";
+
+#include <petutil/petutil.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+/*
+#define	PERMS		0755
+*/
+#define	PERMS		0644
+#define	SARP_CENTER	50.5
+#define	SARP_PIXEL_MM	2
+
+typedef struct {
+	double 	x;		/* Atlas coordinate */
+	double 	y;
+	double 	z;
+	double 	sig;		/* significance */
+	double 	mag;		/* magnitude */
+	double 	z_score;
+} RawGammaZPoint;		/* Point structure as read on the input */
+
+typedef char COMMENT_LINE [MAXLINE];
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	BOOLEAN		sarp	= FALSE;
+	COMMENT_LINE	*comments;
+	FILE		*fp_in;
+	RawGammaZPoint	gammaz_point;
+	char		buffer [MAXLINE];
+	char		desc [MAXLINE];
+	char		*input_filename;
+	char		line [MAXLINE];
+	char		*output_filename;
+	char		path [MAXLINE];
+	int		num_comment_lines;
+	int		fd	= 2;
+	int		i;
+	int		af3d_id;
+	int		num_points;
+	float		max;
+	float		sig;
+	float		x;	
+	float		y;	
+	float		z;	
+	float		zscore;
+	short		desc_len;
+	short		path_len;
+
+	input_filename	= argv [1];
+	sarp		= atoi (argv [2]);
+	output_filename	= argv [3];
+
+	/*
+	 * Generates the copyright message.
+	 */
+	fprintf (stdout, "\nCopyright 1991-1994, Washington University.\n"); 
+	fprintf (stdout, "All rights reserved. Unauthorized reproduction prohibited.\n\n");
+
+	fp_in	= fopen (input_filename, "r");
+	if (fp_in == (FILE *) NULL)
+	{
+		fprintf (stderr, "Error: cann't open data file %s\n", input_filename);
+		exit (FAIL);
+	}
+
+	num_points		= 0;
+	num_comment_lines	= 0;
+	while (fgets (line, MAXLINE, fp_in) != NULL)
+	{
+		if (sscanf (line, "%f %f %f", &x, &y, &z) == 3) 
+			num_points++;
+		else if (strcmp (line, "\n") != 0)
+			num_comment_lines++;
+	}
+
+	if (num_points == 0)
+	{
+		fprintf (stderr, "Error: File %s contains no AF3D points.\n", input_filename); 
+		fclose (fp_in);
+		exit (0);
+	}
+
+	comments	= (COMMENT_LINE *) malloc (num_comment_lines * sizeof (COMMENT_LINE));
+	if (comments == NULL)
+	{
+		fprintf (stderr, "Memory allocation error for comments in gammaz2i.c\n");
+		exit (FAIL);
+	}
+
+	i	= 0;
+	fseek (fp_in, 0L, SEEK_SET);
+	while (fgets (line, MAXLINE, fp_in) != NULL)
+	{
+		if (sscanf (line, "%f %f %f", &x, &y, &z) != 3 && strcmp (line, "\n") != 0) 
+		{
+			strcpy (comments [i], line);
+			i++;
+		}
+	}
+	fclose (fp_in);
+
+	fd	= open (output_filename, O_WRONLY | O_CREAT, PERMS);
+	fp_in	= fopen (input_filename, "r");
+
+	memcpy ((char *) path, "Path is not known", sizeof ("Path is not known"));
+	path_len	= strlen (path);
+	write (fd, &path_len, sizeof (path_len));
+	write (fd, path, path_len);
+
+	desc_len	= num_comment_lines * sizeof (COMMENT_LINE);
+	write (fd, &desc_len, sizeof (desc_len));
+	for (i = 0; i < num_comment_lines; i++)
+	{
+		write (fd, comments [i], sizeof (comments [i]));
+	}
+
+	af3d_id	= 6;
+	write (fd, &af3d_id, sizeof(af3d_id));
+	write (fd, &num_points, sizeof(num_points));
+
+	max	= 0.0;
+	zscore	= 0.0;
+	sig	= 0.0;
+	while (fgets (line, MAXLINE, fp_in) != NULL)
+	{
+		if (sscanf (line, "%f %f %f", &x, &y, &z) == 3 ||
+		sscanf (line, "%f %f %f %s", &x, &y, &z, buffer) == 4) 
+		{
+			if (sarp)
+			{
+				x	= (x - SARP_CENTER) * SARP_PIXEL_MM;
+				y	= - (y - SARP_CENTER) * SARP_PIXEL_MM;
+				z	= (DEFAULT_ZORIGIN - z) * SARP_PIXEL_MM;
+			}
+
+			/*
+			 * The binary output still has left handed system.
+			 */
+			gammaz_point.x		= -x;
+			gammaz_point.y		= y;
+			gammaz_point.z		= z;
+			gammaz_point.sig	= sig;
+			gammaz_point.mag	= max;
+			gammaz_point.z_score	= zscore;
+			write (fd, &gammaz_point.x, sizeof (gammaz_point));
+		}
+	}
+
+	close (fd);
+	free (comments);
+	fclose (fp_in);
+}
+@
+
+
+1.4
+log
+@Changed the copyright message.
+@
+text
+@d1 1
+a1 1
+/*$Id: gammaz2i.c,v 1.3 1994/01/21 20:22:08 ty7777 Exp ty7777 $*/
+d3 3
+d20 1
+a20 1
+static char rcsid [] = "$Id: gammaz2i.c,v 1.3 1994/01/21 20:22:08 ty7777 Exp ty7777 $";
+d26 1
+d28 2
+d93 1
+a93 1
+		if (sscanf (line, "%f %f %f", &z, &x, &y) == 3) 
+d117 1
+a117 1
+		if (sscanf (line, "%f %f %f", &z, &x, &y) != 3 && strcmp (line, "\n") != 0) 
+d149 2
+a150 2
+		if (sscanf (line, "%f %f %f", &z, &x, &y) == 3 ||
+		sscanf (line, "%f %f %f %s", &z, &x, &y, buffer) == 4) 
+d154 1
+a154 1
+				x	= - (x - SARP_CENTER) * SARP_PIXEL_MM;
+d156 1
+a156 1
+				z	= SliceZ (z);
+d159 4
+a162 1
+			gammaz_point.x		= x;
+@
+
+
+1.3
+log
+@Added copyright message.
+@
+text
+@d1 1
+a1 1
+/*$Id: gammaz2i.c,v 1.2 1993/07/26 22:14:48 ty7777 Exp ty7777 $*/
+d3 3
+d17 1
+a17 1
+static char rcsid [] = "$Id: gammaz2i.c,v 1.2 1993/07/26 22:14:48 ty7777 Exp ty7777 $";
+d73 2
+a74 2
+	fprintf (stdout, "Copyright 1991-1994, Washington University.\n"); 
+	fprintf (stdout, "All rights reserved. Unauthorized reproduction prohibited.\n");
+@
+
+
+1.2
+log
+@Adding comments fro description.
+@
+text
+@d1 1
+a1 1
+/*$Id: gammaz2i.c,v 1.1 1992/10/23 22:28:33 ty7777 Exp ty7777 $*/
+d3 3
+d14 1
+a14 1
+static char rcsid [] = "$Id: gammaz2i.c,v 1.1 1992/10/23 22:28:33 ty7777 Exp ty7777 $";
+d66 6
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d11 1
+a11 1
+static char rcsid [] = "$Id$";
+d15 1
+d30 2
+d36 6
+a41 1
+	register	i;
+d43 1
+d45 2
+a46 2
+	BOOLEAN		sarp	= FALSE;
+	FILE		*fp_in;
+d48 5
+a52 2
+	char		line [MAXLINE];
+	char		buffer [MAXLINE];
+a55 1
+	float		max;
+d57 1
+a57 3
+	float		sig;
+	RawGammaZPoint	gammaz_point;
+	int		num_points;
+a58 4
+	char		path [MAXLINE];
+	short		desc_len;
+	char		desc [MAXLINE];
+	int		af3d_id;
+d65 5
+d71 2
+a72 1
+	num_points	= 0;
+d77 2
+a79 1
+	fclose (fp_in);
+d84 1
+d88 19
+d115 1
+a115 3
+	memcpy ((char *) desc, "Description is not available", 
+			sizeof ("Description is not available"));
+	desc_len	= strlen (desc);
+d117 4
+a120 1
+	write (fd, desc, desc_len);
+d141 3
+a143 3
+			gammaz_point.x	= x;
+			gammaz_point.y	= y;
+			gammaz_point.z	= z;
+d152 1
+@

@@ -1,0 +1,293 @@
+/* $Log: cmrglucose.c,v $
+ * Revision 1.2  1999/01/21  21:20:32  tom
+ * fixed: now convolves to average time of frame
+ * computations in ml and sec and converted to 100g and min as last step
+ *
+ * Revision 1.1  1998/04/29  14:48:10  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			cmrglucose.c
+ *	Date:			Apr-98
+ *	Author:			Tom Videen
+ *	Description:	Create an CMRGlucose image from single frame FDG image.
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/cmrglucose/RCS/cmrglucose.c,v 1.2 1999/01/21 21:20:32 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <libimage.h>
+#include <imgutil.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file1;			 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+	FILE           *recfp;
+
+	double          dconex ();
+	int             getdta ();
+	int             cmrgluhdr ();
+
+	char            program[MAXFNAME];
+	char            version[MAXFNAME];
+	char            runstamp[40];
+	char           *scan1;
+	char           *dtafile;
+	char           *outfile;
+	char           *hdrfile;
+	char           *recfile;
+	char           *today;
+	char           *initials;
+	int             model;			 /* 0 = Huang; 1 = Brooks */
+	int             pdim[3];
+	int             i, j, k;
+	int             n;				 /* index to start time */
+	int             np;				 /* number of plasma data points */
+	float           time[1000];		 /* sec: from dta file */
+	float           plasma[1000];	 /* decay-corrected well counts/sec: from dta file */
+	double          f0, f1, f2, beta;
+	double          ri1, ri2;		 /* convolutions */
+	double          k1, k2, k3, k4;	 /* rate constants (1/min) */
+	double          lc;				 /* lumped constant */
+	double          alpha1, alpha2;	 /* macro parameters clearance rates */
+	double          gluc;			 /* glucose concentration in micromoles/ml */
+	double          t0;				 /* scan start (sec) */
+	double          t1;				 /* frame start (sec) */
+	double          tm;				 /* average frame time (sec) */
+	double          framelen; 		 /* from image header */
+	double          pie;			 /* (wellcounts/ml/sec)/(PETcounts/pixel/min) */
+	double          tau = 0.00010529;
+	double          gmax;
+	double          scaler = 1000.;
+	float        ***img1;
+
+/*
+ *	Read command line arguments. Initialize filenames and parameters.
+ */
+
+	if (argc != 23) {
+		printf ("Usage: cmrglucose img dta k1 k2 k3 k4 lc gc pie t1 model out hdr\n");
+		return (ERROR);
+	}
+	scan1 = argv[1];
+	dtafile = argv[2];
+	k1 = (double) atof (argv[3]);
+	k2 = (double) atof (argv[4]);
+	k3 = (double) atof (argv[5]);
+	k4 = (double) atof (argv[6]);
+	lc = (double) atof (argv[7]);
+	gluc = (double) atof (argv[8]);
+	pie = (double) atof (argv[9]);
+	t0 = 0.;
+	t1 = (double) atof (argv[10]);
+	model = atoi (argv[11]);
+	outfile = argv[12];
+	hdrfile = argv[13];
+	recfile = argv[14];
+	n = 14;
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n + 1], argv[n + 2], argv[n + 4], argv[n + 5], argv[n + 7]);
+	today = argv[n + 7];
+	initials = argv[n + 8];
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [cmrglucose]: cannot open %s\n", recfile);
+		return (ERROR);
+	}
+	sscanf (rcsid, "%s %s", program, version);
+	strcat (program, " ");
+	strcat (program, version);
+
+/*	Read FDG image */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file1 = make_imgfile (scan1);
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [cmrglucose]: Cannot open %s\n", scan1);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [cmrglucose]: Cannot get MainHeader from %s\n", scan1);
+		return (ERROR);
+	}
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [cmrglucose]: Cannot read scan %s frame %d\n", scan1, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [cmrglucose]: Cannot read file subheader in %s\n", scan1);
+		return (ERROR);
+	}
+	pdim[0] = file1->sh->dim1;
+	pdim[1] = file1->sh->dim2;
+	pdim[2] = file1->sh->dim3;
+	framelen = file1->sh->duration / 1000.;
+
+	if ((img1 = rdtensor (scan1, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [cmrglucose]: Cannot read %s\n", scan1);
+		return (ERROR);
+	}
+	recout (recfp, scan1);
+	close_imgfile (file1);
+
+/*	Read blood curve */
+
+	if (getdta (dtafile, &np, &time, &plasma) != 0) {
+		fprintf (stderr, "ERROR [cmrglucose]: Reading %s\n", dtafile);
+		return (ERROR);
+	}
+
+/*  Convert rate constants to 1/sec */
+
+	k1 /= 60;
+	k2 /= 60;
+	k3 /= 60;
+	k4 /= 60;
+
+/*	average frame time for decay correction and for integration of blood curve */
+
+/*
+	tm = t1 - (log (0.5 * (1.0 + exp (-tau * framelen)))) / tau;
+*/
+	tm = t1;
+
+/*	Common Computations */
+
+	f0 = sqrt (pow ((k2 + k3 + k4), 2) - 4 * k2 * k4);
+	alpha1 = (k2 + k3 + k4 - f0) / 2;
+	alpha2 = (k2 + k3 + k4 + f0) / 2;
+
+	ri1 = dconex (&time, &plasma, np, t0, tm, alpha1);
+	ri2 = dconex (&time, &plasma, np, t0, tm, alpha2);
+	if (ri1 < 0. || ri2 < 0.) {
+		fprintf (stderr, "ERROR [cmrglucose]: negative value for blood curve convolution\n");
+		return (ERROR);
+	}
+
+/*	Unit Conversions:
+ *		pie:  		cnts/ml/sec -> cnts/ml/min (60)
+ *		ECAT cnts:  cnts/frame -> cnts/sec (1/framelen)
+ *		CMRglu:		uMol/ml/sec -> uMol/100g/min (60*100/1.05)
+ *		CMRglu:		uMol -> mg (0.18016)	[OMIT]
+ */
+
+    f0 = (60 / framelen) * pie * exp (tm * tau);
+
+	printf ("average frame time =%8.2f sec\n", tm);
+	printf ("tau = %8.6f 1/sec\n", tau);
+	printf ("k1  = %f ml/g/min\n", k1 * 60);
+	printf ("k2  = %f 1/min\n", k2 * 60);
+	printf ("k3  = %f 1/min\n", k3 * 60);
+	printf ("k4  = %f 1/min\n", k4 * 60);
+	printf ("LC  = %f\n", lc);
+	printf ("plasma FDG =%7.2f microMoles/ml\n", gluc);
+
+	fprintf (recfp, "tau = %11.9f 1/sec\n", tau);
+	fprintf (recfp, "k1  = %f ml/g/min\n", k1 * 60);
+	fprintf (recfp, "k2  = %f 1/min\n", k2 * 60);
+	fprintf (recfp, "k3  = %f 1/min\n", k3 * 60);
+	fprintf (recfp, "k4  = %f 1/min\n", k4 * 60);
+	fprintf (recfp, "LC  = %f\n", lc);
+	fprintf (recfp, "plasma FDG =%7.2f microMoles/ml\n", gluc);
+	fprintf (recfp, "pie factor =%8.4f\n", pie);
+	gmax = 0;
+
+/*	Using Huang's formula: Am J Physiol 238:E69-E82, 1980.
+ *	Equation 8, p. E71
+					img1[i][j][k] = scaler * f2 * (f0 * img1[i][j][k] - f1);
+ */
+/*	Unit Conversions (incorporated into f2 before entering loop)
+ *		CMRglu:		1/ml/sec -> 1/100g/min (60*100/1.05)
+ *		CMRglu:		uMol/100g/min (60*100/1.05)
+ *		CMRglu:		uMol -> mg (0.18016)	[OMIT]
+ */
+
+	if (model == 0) {
+		fprintf (recfp, "Huang's formula: Am J Physiol 238:E69-E82, 1980\n");
+		f1 = (k1 / (alpha2 - alpha1)) * ((k4 - alpha1) * ri1 + (alpha2 - k4) * ri2);
+		f2 = gluc / (lc * (k2 + k3) * (ri1 - ri2) / (alpha2 - alpha1));
+		f2 = f2 * scaler * 60*100/1.05;
+		for (i = 1; i <= pdim[2]; i++) {
+			for (j = 1; j <= pdim[1]; j++) {
+				for (k = 1; k <= pdim[0]; k++) {
+					img1[i][j][k] = f2 * (f0 * img1[i][j][k] - f1);
+					if (img1[i][j][k] > gmax)
+						gmax = img1[i][j][k];
+				}
+			}
+		}
+
+/*	Using Brooks' formula: J Nucl Med 23:538-539, 1982.
+ *	Equation 10, p. 539
+ */
+
+	} else {
+		fprintf (recfp, "Brooks' formula: J Nucl Med 23:538-539, 1982\n");
+		f1 = k1 * (alpha2 - k3 - k4) * ri2 / (alpha2 - alpha1);
+		f2 = pow ((1 + k4 / (k2 + k3)), 2) - 4 * k2 * k4 / pow (k2 + k3, 2);
+		beta = (1 + (k4 - alpha1) / k3) / sqrt (f2);
+		f2 = gluc / (lc * beta * ri1);
+		f2 = f2 * scaler * 60*100/1.05;
+		for (i = 1; i <= pdim[2]; i++) {
+			for (j = 1; j <= pdim[1]; j++) {
+				for (k = 1; k <= pdim[0]; k++) {
+					img1[i][j][k] = f2 * (f0 * img1[i][j][k] - f1);
+					if (img1[i][j][k] > gmax)
+						gmax = img1[i][j][k];
+				}
+			}
+		}
+	}
+
+	printf ("max CMRglucose =%6.2f mg/min/100g\n", gmax / scaler);
+
+/*	Save image */
+
+	file1->name = outfile;
+	strcpy (file1->mode, "w");
+	indx.frm = 1;
+	printf ("\nComputed and Saved as %s\n", outfile);
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [cmrglucose]: Cannot open %s\n", outfile);
+		exit (ERROR);
+	}
+	save_rcs (file1, rcsid, runstamp);
+	file1->mh->nframe = indx.frm;
+	file1->mh->orientation = 0;
+	if (put_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [cmrglucose] writing %s\n", outfile);
+		exit (ERROR);
+	}
+	if (writetensor (file1, &indx, img1) == ERROR) {
+		fprintf (stderr, "ERROR [cmrglucose] writing %s\n", outfile);
+		exit (ERROR);
+	}
+/*	Write hdr file */
+
+	if (cmrgluhdr (hdrfile, file1, today, initials, tau, pie) == ERROR) {
+		fprintf (stderr, "ERROR [cmrglucose] writing %s\n", hdrfile);
+		exit (ERROR);
+	}
+	close_imgfile (file1);
+	free_f3tensor (img1, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_imgfile (file1);
+	fclose (recfp);
+	return (0);
+}

@@ -1,0 +1,1222 @@
+head	2.5;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+2.5
+date	2008.01.31.20.56.53;	author tom;	state Exp;
+branches;
+next	2.4;
+
+2.4
+date	2006.09.14.18.44.07;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	2005.06.23.20.57.03;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	2005.03.09.17.01.35;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	2004.12.09.21.08.53;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2004.02.03.16.33.49;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	2002.05.17.18.51.41;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	2001.02.13.19.09.12;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	2001.02.09.22.03.30;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2001.02.09.21.08.15;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2001.02.07.19.20.11;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2001.02.06.17.41.41;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2000.10.17.16.52.11;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2000.10.09.19.12.20;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2000.07.19.16.52.55;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.06.05.17.38.54;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.04.21.20.32.05;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.04.18.20.51.03;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.5
+log
+@increase seeds to 20
+@
+text
+@FUNCTION VIDI_SEGMENT_EVENT, ev, s, img
+; Called from the VIDI_SEGMENT event loop.
+; Parameters:
+;	ev = event structure
+;	s = state structure
+;	img = img structure
+
+   COMMON VIDI
+   COMMON IMAGE_UTILS
+
+   s.button = s.button OR ev.press XOR ev.release ; New button state   
+   CASE orient OF
+      0: BEGIN
+         x0 = 0
+         y0 = 1
+      END
+      1: BEGIN
+         x0 = 0
+         y0 = 2
+      END
+      2: BEGIN
+         x0 = 1
+         y0 = 2
+      END
+   ENDCASE
+
+   ydim = img.dim[y0]
+   IF (img.pdim[y0] GT img.pdim[x0]) THEN BEGIN 
+      fact = s.zoom * (img.pdim[y0])/(img.pdim[x0])
+      x = ev.x / s.zoom
+      y = ROUND((ev.y + 1)/ fact) 
+   ENDIF ELSE IF (img.pdim[0] GT img.pdim[y0]) THEN BEGIN 
+      fact = s.zoom * (img.pdim[x0])/(img.pdim[y0])
+      x = ev.x / fact
+      y = ROUND((ev.y + 1)/ s.zoom)
+   ENDIF ELSE BEGIN
+      x = ev.x / s.zoom 
+      y = ROUND(ev.y / s.zoom)
+   ENDELSE
+
+   y = ydim-y
+   y = y > 0
+   y = y < (ydim-1)
+
+   IF ev.press EQ 1 THEN BEGIN
+      pln = img.p - 1
+      CASE orient OF
+         0: seed[*,0] = [x, y, pln] ; transverse
+         1: seed[*,0] = [x, pln, y] ; coronal
+         2: seed[*,0] = [pln, x, y] ; sagittal
+      ENDCASE
+      RETURN, 1
+   ENDIF ELSE IF (ev.press GT 1) THEN BEGIN
+      IF (nseeds LT 20) THEN nseeds = nseeds + 1
+      pln = img.p - 1
+      CASE orient OF
+         0: seed[*,nseeds] = [x, y, pln] ; transverse
+         1: seed[*,nseeds] = [x, pln, y] ; coronal
+         2: seed[*,nseeds] = [pln, x, y] ; sagittal
+      ENDCASE
+      RETURN, 1
+   ENDIF ELSE RETURN, 0
+END   
+
+   
+;+
+; NAME:
+;	VIDI_SEGMENT
+;
+; PURPOSE:
+;	Widget to interactively segment an image.
+; CATEGORY:
+;	Graphics.
+; CALLING SEQUENCE:
+;	Result = VIDI_SEGMENT(uv, inum)
+; RESTRICTIONS:
+;	This is a MODAL widget.  No other widget applications will be
+;	responsive while this widget is in use.
+;
+; MODIFICATION HISTORY:
+;	Tom Videen, March 2000.
+;-
+
+PRO VIDI_SEGMENT, uv, inum
+   COMMON VIDI
+   COMMON IMAGE_UTILS
+   
+   imgnum = inum < 1
+   img = uv.img[imgnum]
+   draw = uv.wid.win[inum]
+   group = uv.wid.base
+   bot = uv.wid.vthresh[0]
+   top = uv.wid.vthresh[1]
+   zoom = dsp[imgnum].zoom
+   frame = img.f - img.ff
+   lp = img.lp
+   imgsize = img.dim[0]*img.dim[1]*img.dim[2]
+   imax = max(*img.data, min=imin)
+   minlim = long(imin-0.9)
+   maxlim = long(imax+0.9)
+   bot = bot > minlim
+   bot = bot < maxlim
+   top = top > minlim
+   top = top < maxlim
+   seed[*,0:20] = 0
+   nseeds = 0
+   
+   base = WIDGET_BASE(title='Segmentation', group_leader=group, /COL)   
+
+   base1 = WIDGET_BASE(base, /ROW)
+   select1 = ['1\Orientation','0\Transverse','0\Coronal','0\Sagittal']
+   orientation = CW_PDMENU(base1, select1, /RETURN_NAME)
+   select2 = ['1\Magnify','0\ 1 ','0\ 2 ','0\ 3 ','0\ 4 ','0\ 5 ','0\ 6 ','0\ 7 ','0\ 8 ', $
+              '0\ 9 ', '0\ 10 ', '0\ 11 ', '0\ 12 ', '0\ 13 ', '0\ 14 ', '0\ 15 ', '0\ 16 ']
+   magnify = CW_PDMENU(base1, select2)
+   up = WIDGET_BUTTON(base1, value='<- Up  ')
+   down = WIDGET_BUTTON(base1, value=' Down ->')
+   exit = WIDGET_BUTTON(base1, value='Exit')
+   temp = WIDGET_LABEL(base1, value='     Final Operations:')
+   remove = WIDGET_BUTTON(base1, value='Remove')
+   removeup = WIDGET_BUTTON(base1, value='<- Remove/Up  ')
+   removedown = WIDGET_BUTTON(base1, value=' Remove/Down ->')
+
+   select3a = ['1\Remove 2D from Planes','0\All Planes','0\All Above','0\All Below']
+   removeall = CW_PDMENU(base1, select3a, /RETURN_NAME)
+
+   base2 = WIDGET_BASE(base, /ROW)
+   msktype = CW_BGROUP(base2, LABEL_TOP='Remove with respect to Thresholds ', $
+                       ['Nothing','Inside','Outside'], /ROW, /EXCLUSIVE, set_value=mask_type)
+   contype = CW_BGROUP(base2, LABEL_TOP=' Connectivity to Seed Pixel             ', $
+                       ['Irrelevant','2D','3D'], /ROW, /EXCLUSIVE, set_value=connect_type)
+   val = CW_FIELD(base2, title='Fill Value', value=uv.wid.editval, $
+                  xsize=6, /INTEGER, /RETURN_EVENTS)
+   base2a = WIDGET_BASE(base2, /COL, /ALIGN_RIGHT)
+   base2b = WIDGET_BASE(base2a, /ROW)
+   condimg = WIDGET_BUTTON(base2b, value='Set Conditional/Mask')
+
+   select3 = ['1\Erode','0\3D Erosion','0\2D Erosion']
+   erode = CW_PDMENU(base2b, select3, /RETURN_NAME)
+
+   select4 = ['1\Dilate','0\3D Dilation','1\2D Dilation',$
+              '0\ 1 ','0\ 2 ','0\ 3 ','0\ 4 ','0\ 5 ','0\ 6 ','0\ 7 ','0\ 8 ', $
+              '0\ 9 ', '0\ 10 ', '0\ 11 ', '0\ 12 ', '0\ 13 ', '0\ 14 ', '0\ 15 ', $
+              '0\ 16 ', '0\ 17 ', '0\ 18 ', '0\ 19 ', '0\ 20 ']
+   dilate = CW_PDMENU(base2b, select4, /RETURN_NAME)
+
+   select5 = ['1\Mask','0\Zero where Mask is Zero','0\Zero where Mask is Non-Zero']
+   mask = CW_PDMENU(base2b, select5, /RETURN_NAME)
+
+   edtype = CW_BGROUP(base2a, LABEL_LEFT='Erosion/Dilation:', /ROW, /EXCLUSIVE,$
+                      ['Unconditional','Conditional'], set_value=erod_type)
+
+   base4 = WIDGET_BASE(base, /ROW)
+
+   base5 = WIDGET_BASE(base4, /COLUMN)
+   base5a = WIDGET_BASE(base5,/ROW)
+   loval = CW_FIELD(base5a, title='Lower Thresh', value=bot, $
+                    xsize=8, /INTEGER, /RETURN_EVENTS)
+   lolimit = WIDGET_SLIDER(base5a, value=bot, min=minlim, max=maxlim, xsize=400)
+
+   base5b = WIDGET_BASE(base5,/ROW)
+   hival = CW_FIELD(base5b, title='Upper Thresh', value=top, $
+                    xsize=8, /INTEGER, /RETURN_EVENTS)
+   hilimit = WIDGET_SLIDER(base5b, value=top, min=minlim, max=maxlim, xsize=400)
+   pos_w = WIDGET_TEXT(base5, YSIZE=1, /FRAME, $
+                       VALUE='"Seed Coordinates:  [0, 0, 0]  [0, 0, 0]  [0, 0, 0]')
+   
+   base6 = WIDGET_BASE(base4, /COL)
+   slice = img.p
+   IF (orient EQ 0) THEN BEGIN
+      fp = img.fp
+      lp = img.lp
+   ENDIF ELSE IF (orient EQ 1) THEN BEGIN
+      fp = 1
+      lp = img.dim[1]
+   ENDIF ELSE BEGIN
+      fp = 1
+      lp = img.dim[0]
+   ENDELSE
+   lmin = fp > 1
+   lmax = lp > (fp + 1)
+   slicer = WIDGET_SLIDER(base6, value=slice, xsize=440, min=lmin, max=lmax, title='Slice')
+   showtype = CW_BGROUP(base6, LABEL_TOP='Image 2 Pixels that Appear in Image 3 will be:', $
+                        ['Spared','Removed'], /ROW, /EXCLUSIVE, set_value=segshow_type)
+
+   msg = WIDGET_TEXT(base, YSIZE=1)
+
+   WIDGET_CONTROL, draw, GET_VALUE=win
+   WSET, win
+   WINDOW, /PIXMAP, /FREE, xs = !d.x_size, ys=!d.y_size ; Save window
+   backing = !d.window
+   DEVICE, copy = [0,0, !d.x_size, !d.y_size, 0, 0, win]
+
+   s = {SEGMENT_STATE, $        ; Structure containing state
+        base: base, $           ; Main base widget
+        win:  win, $            ; draw widget window #
+        pos_w : pos_w, $        ; Position text widget
+        msg : msg, $            ; Message window
+        button: 0, $            ; button state
+        zoom : zoom $           ; zoom factor
+       }
+
+   WIDGET_CONTROL, base, /REALIZE, xoffset=0, yoffset=0
+   WIDGET_CONTROL, s.pos_w, SET_VALUE=string(seed[*,0]+1, nseeds, $
+                                             format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]       Number of Additional Seeds =",i3)')
+   WSHOW, win
+
+   refresh = 1
+   WHILE 1 DO BEGIN             ; Event Loop   
+      IF (refresh) THEN VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 0
+      refresh = 1
+      ev = WIDGET_EVENT([base, draw])
+      IF (connect_type EQ 2) THEN BEGIN
+         refresh = 0
+         IF (ev.id NE remove AND ev.id NE contype AND connect_type EQ 2) THEN BEGIN
+            connect_type = 1
+            WIDGET_CONTROL, contype, SET_VALUE=connect_type
+         ENDIF
+      ENDIF
+
+      CASE ev.id OF
+         msktype:  mask_type = ev.value
+         contype:  connect_type = ev.value
+         edtype:   erod_type = ev.value
+         showtype: segshow_type = ev.value
+         val:      uv.wid.editval = ev.value
+
+         loval:    BEGIN
+            bot = ev.value
+            IF (bot GT top) THEN BEGIN
+               top = bot
+               WIDGET_CONTROL, hilimit, set_value=top
+            ENDIF
+            bot = bot
+            top = top
+            WIDGET_CONTROL, lolimit, SET_VALUE=bot
+            WIDGET_CONTROL, hilimit, SET_VALUE=top
+         ENDCASE
+
+         hival:    BEGIN
+            top = ev.value
+            IF (top LT bot) THEN BEGIN
+               bot = top
+               WIDGET_CONTROL, lolimit, set_value=bot
+            ENDIF
+            bot = bot
+            top = top
+            WIDGET_CONTROL, lolimit, SET_VALUE=bot
+            WIDGET_CONTROL, hilimit, SET_VALUE=top
+         ENDCASE
+
+         condimg: BEGIN
+            maskimg = reform((*img.data)[*,*,*,frame])
+            ;;VIDI_THRESHOLD, s, maskimg, bot, top
+         ENDCASE
+
+         draw: BEGIN
+            refresh = VIDI_SEGMENT_EVENT(ev, s, img)
+            WIDGET_CONTROL, s.pos_w, SET_VALUE=string(seed[*,0]+1, nseeds, $
+                                                      format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+         ENDCASE
+
+         orientation: BEGIN
+            CASE ev.value OF
+               'Transverse': BEGIN
+                  orient = 0
+                  fp = img.fp
+                  lp = img.lp
+               ENDCASE
+               'Coronal': BEGIN
+                  orient = 1
+                  fp = 1
+                  lp = img.dim[1]
+               ENDCASE
+               'Sagittal': BEGIN
+                  orient = 2
+                  fp = 1
+                  lp = img.dim[0]
+               ENDCASE
+            ENDCASE
+            WIDGET_CONTROL, slicer, set_slider_min=fp
+            IF (img.lp GT fp+1) THEN WIDGET_CONTROL, slicer, set_slider_max=lp $
+            ELSE WIDGET_CONTROL, slicer, set_slider_max=fp+1
+            IF (slice GT lp) THEN slice = lp
+            IF (slice LT fp) THEN slice = fp
+            WIDGET_CONTROL, slicer, set_value=slice
+            img.p = slice
+            uv.img[0].p = img.p
+            uv.img[1].p = img.p
+            WIDGET_CONTROL, uv.wid.slider, set_value=img.p
+            seed[*,1:20] = 0
+            nseeds = 0
+            WIDGET_CONTROL, s.pos_w, SET_VALUE=string(seed[*,0]+1, nseeds, $
+                                                      format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+            VIDI_DISPLAY, uv
+         ENDCASE
+
+         magnify: BEGIN
+            dsp[0].zoom = ev.value
+            dsp[1].zoom = ev.value
+            dsp[2].zoom = ev.value
+            s.zoom = ev.value
+            VIDI_DISPLAY, uv
+         ENDCASE
+
+         remove: BEGIN
+            VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 1
+            VIDI_DISPLAY, uv
+         ENDCASE
+
+         removeall: BEGIN
+            tmp_pln = uv.img[imgnum].p
+            CASE ev.value OF
+               'All Planes': BEGIN
+           		 	FOR slice = fp, lp DO BEGIN
+           		    	uv.img[imgnum].p = slice
+           		    	VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 1
+           		    	WIDGET_CONTROL, slicer, set_value=slice
+           		 	ENDFOR
+				ENDCASE
+               'All Above': BEGIN
+           		 	FOR slice = fp, tmp_pln DO BEGIN
+           		    	uv.img[imgnum].p = slice
+           		    	VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 1
+           		    	WIDGET_CONTROL, slicer, set_value=slice
+           		 	ENDFOR
+				ENDCASE
+               'All Below':BEGIN
+           		 	FOR slice = tmp_pln, lp DO BEGIN
+           		    	uv.img[imgnum].p = slice
+           		    	VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 1
+           		    	WIDGET_CONTROL, slicer, set_value=slice
+           		 	ENDFOR
+				ENDCASE
+            ENDCASE
+            uv.img[imgnum].p = tmp_pln
+            VIDI_DISPLAY, uv
+            WIDGET_CONTROL, slicer, set_value=tmp_pln
+         ENDCASE
+
+         erode: BEGIN
+            CASE ev.value OF
+               '3D Erosion': VIDI_MORPH, s, img, erod_type+1
+               '2D Erosion': VIDI_MORPH2D, s, img, erod_type+1, 1
+            ENDCASE
+         ENDCASE
+
+         dilate: BEGIN
+            CASE ev.value OF
+               '3D Dilation': VIDI_MORPH, s, img, erod_type+3
+               ELSE: VIDI_MORPH2D, s, img, erod_type+3, ev.value
+            ENDCASE
+         ENDCASE
+
+         mask: BEGIN
+            CASE ev.value OF
+               'Zero where Mask is Zero': BEGIN
+                  image = reform((*img.data)[*,*,*,frame])
+                  pix = where (maskimg LE 0, count)
+                  print,'mask ',count
+                  IF (count GT 0) THEN image(pix) = 0
+                  (*img.data)[*,*,*,frame] = image
+                  VIDI_DISPLAY, uv
+               ENDCASE
+               'Zero where Mask is Non-Zero': BEGIN
+                  image = reform((*img.data)[*,*,*,frame])
+                  pix = where (maskimg GT 0)
+                  IF (pix[0] GT 0) THEN image(pix) = 0
+                  (*img.data)[*,*,*,frame] = image
+                  VIDI_DISPLAY, uv
+               ENDCASE
+            ENDCASE
+         ENDCASE
+
+         lolimit: BEGIN
+            bot = ev.value
+            IF (bot GT top) THEN BEGIN
+               top = bot
+               WIDGET_CONTROL, hilimit, set_value=top
+            ENDIF
+            bot = bot
+            top = top
+         ENDCASE
+         
+         hilimit: BEGIN
+            top = ev.value
+            IF (top LT bot) THEN BEGIN
+               bot = top
+               WIDGET_CONTROL, lolimit, set_value=bot
+            ENDIF
+            bot = bot
+            top = top
+         ENDCASE
+
+         up: BEGIN
+            IF (slice GT fp) THEN BEGIN
+               slice = slice-1
+               WIDGET_CONTROL, slicer, set_value=slice
+               img.p = slice
+               uv.img[0].p = img.p
+               uv.img[1].p = img.p
+               WIDGET_CONTROL, uv.wid.slider, set_value=img.p
+               seed[*,1:20] = 0
+               nseeds = 0
+               WIDGET_CONTROL, s.pos_w, SET_VALUE=string(seed[*,0]+1, nseeds, $
+                                                         format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+               VIDI_DISPLAY, uv
+            ENDIF
+         ENDCASE
+
+         down: BEGIN
+            IF (slice LT lp) THEN BEGIN
+               slice = slice+1
+               WIDGET_CONTROL, slicer, set_value=slice
+               img.p = slice
+               uv.img[0].p = img.p
+               uv.img[1].p = img.p
+               WIDGET_CONTROL, uv.wid.slider, set_value=img.p
+               seed[*,1:20] = 0
+               nseeds = 0
+               WIDGET_CONTROL, s.pos_w, SET_VALUE=string(seed[*,0]+1, nseeds, $
+                                                         format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+               VIDI_DISPLAY, uv
+            ENDIF
+         ENDCASE
+
+         removeup: BEGIN
+            IF (slice GT fp) THEN BEGIN
+               VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 1
+               slice = slice-1
+               WIDGET_CONTROL, slicer, set_value=slice
+               img.p = slice
+               uv.img[0].p = img.p
+               uv.img[1].p = img.p
+               WIDGET_CONTROL, uv.wid.slider, set_value=img.p
+               VIDI_DISPLAY, uv
+            ENDIF ELSE IF (slice EQ fp) THEN BEGIN
+               VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 1
+               VIDI_DISPLAY, uv
+            ENDIF
+         ENDCASE
+
+         removedown: BEGIN
+            IF (slice LT lp) THEN BEGIN
+               VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 1
+               slice = slice+1
+               WIDGET_CONTROL, slicer, set_value=slice
+               img.p = slice
+               uv.img[0].p = img.p
+               uv.img[1].p = img.p
+               WIDGET_CONTROL, uv.wid.slider, set_value=img.p
+               VIDI_DISPLAY, uv
+            ENDIF ELSE IF (slice EQ lp) THEN BEGIN
+               VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 1
+               VIDI_DISPLAY, uv
+            ENDIF
+         ENDCASE
+
+         slicer: BEGIN
+            WIDGET_CONTROL, slicer, get_value=slice
+            img.p = slice
+            uv.img[0].p = img.p
+            uv.img[1].p = img.p
+            WIDGET_CONTROL, uv.wid.slider, set_value=img.p
+            seed[*,1:20] = 0
+            nseeds = 0
+            WIDGET_CONTROL, s.pos_w, SET_VALUE=string(seed[*,0]+1, nseeds, $
+                                                      format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+            VIDI_DISPLAY, uv
+         ENDCASE
+
+         exit: BEGIN
+            uv.wid.vthresh[0] = bot
+            uv.wid.vthresh[1] = top
+            seed[*,1:20] = 0
+            nseeds = 0
+            IF (connect_type EQ 2) THEN connect_type = 1 ; don't return with 3D-connect on
+            WIDGET_CONTROL, base, /DESTROY
+            RETURN
+         ENDCASE 
+         
+      ENDCASE 
+   ENDWHILE			; End Event Loop
+END   
+@
+
+
+2.4
+log
+@remove 2D planes just above or below current one
+@
+text
+@d54 1
+a54 1
+      IF (nseeds LT 10) THEN nseeds = nseeds + 1
+d105 1
+a105 1
+   seed[*,0:10] = 0
+d291 1
+a291 1
+            seed[*,1:10] = 0
+d403 1
+a403 1
+               seed[*,1:10] = 0
+d419 1
+a419 1
+               seed[*,1:10] = 0
+d465 1
+a465 1
+            seed[*,1:10] = 0
+d475 1
+a475 1
+            seed[*,1:10] = 0
+@
+
+
+2.3
+log
+@*** empty log message ***
+@
+text
+@a122 1
+   removeall = WIDGET_BUTTON(base1, value='Remove 2D from All Planes')
+d124 3
+d313 23
+a335 5
+            FOR slice = fp, lp DO BEGIN
+               uv.img[imgnum].p = slice
+               VIDI_OUTLINE, s, imgnum, uv, bot, top, indx, 1
+               WIDGET_CONTROL, slicer, set_value=slice
+            ENDFOR
+d337 1
+@
+
+
+2.2
+log
+@*** empty log message ***
+@
+text
+@d41 3
+a43 3
+	y = ydim-y
+	y = y > 0
+    y = y < (ydim-1)
+d48 3
+a50 3
+         0: seed[*,0] = [x, y, pln]	; transverse
+         1: seed[*,0] = [x, pln, y]	; coronal
+         2: seed[*,0] = [pln, x, y]	; sagittal
+d54 1
+a54 1
+	  IF (nseeds LT 10) THEN nseeds = nseeds + 1
+d57 3
+a59 3
+         0: seed[*,nseeds] = [x, y, pln]	; transverse
+         1: seed[*,nseeds] = [x, pln, y]	; coronal
+         2: seed[*,nseeds] = [pln, x, y]	; sagittal
+d131 1
+a131 1
+                  xsize=8, /INTEGER, /RETURN_EVENTS)
+d135 13
+a147 3
+   erode = WIDGET_BUTTON(base2b, value='Erode')
+   dilate = WIDGET_BUTTON(base2b, value='Dilate')
+   mask = WIDGET_BUTTON(base2b, value='Apply Mask')
+d203 1
+a203 1
+       format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]       Number of Additional Seeds =",i3)')
+d258 1
+a258 1
+               format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+d292 1
+a292 1
+               format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+d320 6
+a325 1
+         erode: VIDI_MORPH, s, img, erod_type+1
+d327 6
+a332 1
+         dilate: VIDI_MORPH, s, img, erod_type+3
+d335 17
+a351 5
+            image = reform((*img.data)[*,*,*,frame])
+            pix = where (maskimg LE 0)
+            image(pix) = 0
+            (*img.data)[*,*,*,frame] = image
+            VIDI_DISPLAY, uv
+d385 1
+a385 1
+                  format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+d401 1
+a401 1
+                  format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+d447 1
+a447 1
+               format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+@
+
+
+2.1
+log
+@reset seeds to zero when started
+,
+@
+text
+@d171 1
+a171 1
+   showtype = CW_BGROUP(base6, LABEL_TOP='Image 2 Pixels which Appear in Image 3 will be:', $
+@
+
+
+2.0
+log
+@03 Feb 2004
+@
+text
+@d105 2
+@
+
+
+1.12
+log
+@conditional mask added
+apply 2D remove to all planes
+eliminate previous threshold all and mask
+set condional/mask image now uses pixels > 0 instead of pixels above threshold
+@
+text
+@@
+
+
+1.11
+log
+@reorganize menu
+@
+text
+@d121 1
+a121 2
+   threshall = WIDGET_BUTTON(base1, value='Threshold All')
+   maskall = WIDGET_BUTTON(base1, value='Mask All')
+d124 1
+a124 1
+   msktype = CW_BGROUP(base2, LABEL_TOP='Remove with respect to Thresholds', $
+d126 1
+a126 1
+   contype = CW_BGROUP(base2, LABEL_TOP='Connectivity to Seed Pixel             ', $
+d132 1
+a132 1
+   condimg = WIDGET_BUTTON(base2b, value='Set Conditional/Mask Image')
+d135 1
+d240 1
+a240 1
+            VIDI_THRESHOLD, s, maskimg, bot, top
+d297 9
+a305 4
+         threshall: BEGIN
+            image = reform((*img.data)[*,*,*,frame])
+            VIDI_THRESHOLD, s, image, bot, top
+            (*img.data)[*,*,*,frame] = image
+d308 5
+a312 1
+         maskall: BEGIN
+d314 2
+a315 1
+            VIDI_MASK, s, image, bot, top, imgsize
+d317 1
+a319 4
+         erode: VIDI_MORPH, s, img, erod_type+1
+
+         dilate: VIDI_MORPH, s, img, erod_type+3
+
+@
+
+
+1.10
+log
+@add Segment Image 2 in 3, which permits adding seed pixels in the superimposed image
+@
+text
+@d107 1
+a108 1
+
+d117 1
+a117 2
+   temp = WIDGET_LABEL(base1, value='Final Operations:')
+
+d131 6
+a136 7
+
+   base2b = WIDGET_BASE(base2, /COL, /ALIGN_RIGHT)
+   base2c = WIDGET_BASE(base2b, /ROW)
+   condimg = WIDGET_BUTTON(base2c, value='Set Conditional/Mask Image')
+   erode = WIDGET_BUTTON(base2c, value='Erode')
+   dilate = WIDGET_BUTTON(base2c, value='Dilate')
+   edtype = CW_BGROUP(base2b, LABEL_LEFT='Erosion/Dilation:', /ROW, /EXCLUSIVE,$
+d139 5
+a143 4
+   base3 = WIDGET_BASE(base, /ROW)
+   showtype = CW_BGROUP(base3, LABEL_LEFT='Image 2 Pixels Displayed in Image 3 ', $
+                        ['Spared','Removed'], /ROW, /EXCLUSIVE, set_value=segshow_type)
+   loval = CW_FIELD(base3, title='                    Lower Thresh', value=bot, $
+d145 4
+a148 1
+   hival = CW_FIELD(base3, title='Upper Thresh', value=top, $
+d150 5
+a154 3
+
+   base4 = WIDGET_BASE(base, /ROW)
+   base5 = WIDGET_BASE(base4, /COL)
+d168 3
+a170 3
+   slicer = WIDGET_SLIDER(base5, value=slice, xsize=500, min=lmin, max=lmax, title='Slice')
+   pos_w = WIDGET_TEXT(base5, YSIZE=1, /FRAME, $
+       VALUE='"Seed Coordinates:  [0, 0, 0]  [0, 0, 0]  [0, 0, 0]')
+a171 6
+   base6 = WIDGET_BASE(base4, /COL, /ALIGN_RIGHT)
+   lolimit = WIDGET_SLIDER(base6, value=bot, min=minlim, max=maxlim, $
+                           xsize=500, title='Lower Threshold')
+   hilimit = WIDGET_SLIDER(base6, value=top, min=minlim, max=maxlim, $
+                           xsize=500, title='Upper Threshold')
+   
+d191 1
+a191 1
+       format='("Seed Coordinates:  [",i3,",",i4,",",i4,"]    Additional Seeds =",i3)')
+@
+
+
+1.9
+log
+@permit up to 10 seeds
+additional seeds remain during remove_up and remove_down
+but disappear if up, down or touch slider
+@
+text
+@d88 2
+a89 1
+   img = uv.img[inum]
+d94 1
+a94 1
+   zoom = dsp[inum].zoom
+d198 1
+a198 1
+      IF (refresh) THEN VIDI_OUTLINE, s, inum, uv, bot, top, indx, 0
+d287 3
+a289 1
+            dsp[inum].zoom = ev.value
+d295 1
+a295 1
+            VIDI_OUTLINE, s, inum, uv, bot, top, indx, 1
+d369 1
+a369 1
+               VIDI_OUTLINE, s, inum, uv, bot, top, indx, 1
+d378 1
+a378 1
+               VIDI_OUTLINE, s, inum, uv, bot, top, indx, 1
+d385 1
+a385 1
+               VIDI_OUTLINE, s, inum, uv, bot, top, indx, 1
+d394 1
+a394 1
+               VIDI_OUTLINE, s, inum, uv, bot, top, indx, 1
+@
+
+
+1.8
+log
+@minor cleanup
+@
+text
+@d45 1
+a45 1
+   IF ev.press NE 0 THEN BEGIN
+d48 3
+a50 3
+         0: seed = [x, y, pln]	; transverse
+         1: seed = [x, pln, y]	; coronal
+         2: seed = [pln, x, y]	; sagittal
+d53 9
+d164 2
+a165 1
+   pos_w = WIDGET_TEXT(base5, YSIZE=1, /FRAME, VALUE='Seed Coordinates:    0,    0,    0')
+d191 2
+a192 1
+   WIDGET_CONTROL, s.pos_w, SET_VALUE=string(seed+1, format='("Seed Coordinates: ",i,", ",i,", ",i)')
+d246 2
+a247 1
+            WIDGET_CONTROL, s.pos_w, SET_VALUE=string(seed+1, format='("Seed Coordinates: ",i,", ",i,", ",i)')
+d278 4
+d340 4
+d356 4
+d402 4
+d412 2
+@
+
+
+1.7
+log
+@option to show pixels which will be removed or spared
+manually enter thresholds in addition to scroll bar
+@
+text
+@d198 5
+a202 5
+         msktype: mask_type = ev.value
+         contype: BEGIN
+				connect_type = ev.value
+		 ENDCASE
+         val:     uv.wid.editval = ev.value
+a227 7
+         edtype:  erod_type = ev.value
+
+         showtype: BEGIN
+            segshow_type = ev.value
+                                ;VIDI_DISPLAY, uv
+         ENDCASE
+
+@
+
+
+1.6
+log
+@update all slices
+@
+text
+@d88 7
+d117 1
+a117 1
+        ['Nothing','Inside','Outside'], /ROW, /EXCLUSIVE, set_value=mask_type)
+d119 1
+a119 1
+        ['Irrelevant','2D','3D'], /ROW, /EXCLUSIVE, set_value=connect_type)
+d129 1
+a129 1
+   				['Unconditional','Conditional'], set_value=erod_type)
+d132 9
+a140 1
+   base4 = WIDGET_BASE(base3, /COL)
+d152 4
+a155 2
+   slicer = WIDGET_SLIDER(base4, value=slice, xsize=500, min=1, max=lp, title='Slice')
+   pos_w = WIDGET_TEXT(base4, YSIZE=1, /FRAME, VALUE='Seed Coordinates:    0,    0,    0')
+d157 2
+a158 9
+   base5 = WIDGET_BASE(base3, /COL, /ALIGN_RIGHT)
+   imax = max(*img.data, min=imin)
+   minlim = long(imin-0.9)
+   maxlim = long(imax+0.9)
+   bot = bot > minlim
+   bot = bot < maxlim
+   top = top > minlim
+   top = top < maxlim
+   lolimit = WIDGET_SLIDER(base5, value=bot, min=minlim, max=maxlim, $
+d160 1
+a160 1
+   hilimit = WIDGET_SLIDER(base5, value=top, min=minlim, max=maxlim, $
+d186 1
+a186 1
+      IF (refresh) THEN VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 0, uv.wid.editval
+d199 3
+a201 1
+         contype: connect_type = ev.value
+d203 25
+d230 5
+d283 1
+a283 1
+			VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1, uv.wid.editval
+d349 1
+a349 1
+               VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1, uv.wid.editval
+d358 1
+a358 1
+               VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1, uv.wid.editval
+d365 1
+a365 1
+               VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1, uv.wid.editval
+d374 1
+a374 1
+               VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1, uv.wid.editval
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d228 3
+a230 1
+            uv.img[inum].p = slice
+d286 3
+a288 1
+               uv.img[inum].p = slice
+d298 3
+a300 1
+               uv.img[inum].p = slice
+d311 3
+a313 1
+               uv.img[inum].p = slice
+d327 3
+a329 1
+               uv.img[inum].p = slice
+d340 3
+a342 1
+            uv.img[inum].p = slice
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d238 4
+a241 1
+         remove: VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1, uv.wid.editval
+@
+
+
+1.3
+log
+@add fill value
+@
+text
+@d26 2
+d30 2
+a31 2
+      y = (ev.y + 1)/ (fact * s.zoom)
+      x = ev.x / s.zoom + 1
+d34 2
+a35 2
+      x = ev.x / fact + 1
+      y = (ev.y + 1)/ s.zoom 
+d37 2
+a38 2
+      x = ev.x / s.zoom + 1
+      y = ev.y / s.zoom
+a39 1
+   ydim = img.dim[y0]
+d41 4
+d46 1
+a46 1
+      pln = img.p
+d48 3
+a50 3
+         0: seed = [x-1, ydim-y+1, pln-1]	; transverse
+         1: seed = [x-1, pln-1, ydim-y+1]	; coronal
+         2: seed = [pln-1, x-1, ydim-y+1]	; sagittal
+d93 1
+a93 1
+   orientation = cw_pdmenu(base1, select1, /RETURN_NAME)
+d96 3
+a98 3
+   magnify = cw_pdmenu(base1, select2)
+   up = widget_button(base1, value='<- Up  ')
+   down = widget_button(base1, value=' Down ->')
+d103 2
+a104 2
+   removeup = widget_button(base1, value='<- Remove/Up  ')
+   removedown = widget_button(base1, value=' Remove/Down ->')
+d109 1
+a109 1
+   msktype = cw_bgroup(base2, LABEL_TOP='Remove with respect to Thresholds', $
+d111 1
+a111 1
+   contype = cw_bgroup(base2, LABEL_TOP='Connectivity to Seed Pixel             ', $
+d121 1
+a121 1
+   edtype = cw_bgroup(base2b, LABEL_LEFT='Erosion/Dilation:', /ROW, /EXCLUSIVE,$
+d137 1
+a137 1
+   slicer = widget_slider(base4, value=slice, xsize=500, min=1, max=lp, title='Slice')
+d221 3
+a223 3
+            widget_control, slicer, set_slider_min=fp
+            IF (img.lp GT fp+1) THEN widget_control, slicer, set_slider_max=lp $
+            ELSE widget_control, slicer, set_slider_max=fp+1
+d226 1
+a226 1
+            widget_control, slicer, set_value=slice
+d260 1
+a260 1
+               widget_control,hilimit,set_value=top
+d270 1
+a270 1
+               widget_control,lolimit,set_value=bot
+d279 1
+a279 1
+               widget_control, slicer, set_value=slice
+d289 1
+a289 1
+               widget_control, slicer, set_value=slice
+d300 1
+a300 1
+               widget_control, slicer, set_value=slice
+d314 1
+a314 1
+               widget_control, slicer, set_value=slice
+d325 1
+a325 1
+            widget_control, slicer, get_value=slice
+@
+
+
+1.2
+log
+@save a conditional image
+@
+text
+@d108 2
+d171 1
+a171 1
+      IF (refresh) THEN VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 0
+d185 1
+a192 1
+
+d233 1
+a233 1
+         remove: VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1
+d293 1
+a293 1
+               VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1
+d300 1
+a300 1
+               VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1
+d307 1
+a307 1
+               VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1
+d314 1
+a314 1
+               VIDI_OUTLINE, s, inum, uv.img[inum], bot, top, indx, 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d41 1
+a41 1
+      pln = s.img.p
+d80 1
+d82 1
+a88 1
+
+a91 1
+
+a93 3
+   mask = WIDGET_BUTTON(base1, value='Remove')
+   removeup = widget_button(base1, value='<- Remove&Up  ')
+   removedown = widget_button(base1, value=' Remove&Down ->')
+d95 1
+d97 6
+d104 13
+a116 4
+   msktype = cw_bgroup(base2, ['Remove Inside or','Outside Thresholds'],/ROW, /EXCLUSIVE, set_value=mask_type)
+   contype = cw_bgroup(base2, ['Everywhere or','2D-Connected or','3D-Connected Pixels'],$
+                       /ROW, /EXCLUSIVE, set_value=connect_type)
+   
+d133 1
+a133 1
+   base5 = WIDGET_BASE(base3, /COL)
+d160 1
+a160 2
+        zoom : zoom, $          ; zoom factor
+        img : img $             ; pointer to image data
+d169 1
+a169 1
+      IF (refresh) THEN VIDI_OUTLINE, uv, inum, s, bot, top, indx, 0
+d174 1
+a174 1
+         IF (ev.id NE mask AND ev.id NE contype AND connect_type EQ 2) THEN BEGIN
+a180 1
+
+a181 1
+
+d183 1
+d185 6
+d215 1
+a215 1
+            IF (img.lp GT img.fp+1) THEN widget_control, slicer, set_slider_max=lp $
+d220 1
+d231 1
+a231 1
+         mask: VIDI_OUTLINE, uv, inum, s, bot, top, indx, 1
+d233 16
+d273 1
+a273 1
+               s.img.p = slice
+d283 1
+a283 1
+               s.img.p = slice
+d291 1
+a291 1
+               VIDI_OUTLINE, uv, inum, s, bot, top, indx, 1
+d294 1
+a294 1
+               s.img.p = slice
+d298 1
+a298 1
+               VIDI_OUTLINE, uv, inum, s, bot, top, indx, 1
+d305 1
+a305 1
+               VIDI_OUTLINE, uv, inum, s, bot, top, indx, 1
+d308 1
+a308 1
+               s.img.p = slice
+d312 1
+a312 1
+               VIDI_OUTLINE, uv, inum, s, bot, top, indx, 1
+d319 1
+a319 1
+            s.img.p = slice
+@

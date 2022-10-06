@@ -1,0 +1,115 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2002.11.21.20.32.38;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@;+
+; NAME:
+;	CALC_WARP
+;
+; PURPOSE
+;	3D warp of array STUDY based upon the gradient GX,GY of the Reference image.
+;	The dimensions of GX,GY define the (possibly downsampled) arrays upon which
+;	the warp is defined.
+;
+; INPUTS:
+;	REF:	 	Reference or standard				(3D array)
+;	STUDY:	 	Study or reslice					(3D array)
+;	NEW:	 	Current deformed study				(3D array)
+;	GX,GY,GZ:	Gradient							(3D real arrays)
+;	NDX,NDY,NDZ:Total warp vector (all iterations)	(3D real arrays)
+;	F0:	 Cutoff of gaussian filter applied to residual correction
+;	F1:	 Cutoff of gaussian filter applied to total displacement
+;			 (smaller value -> greater smoothing; 0.1)
+;   WFAC:		factor to speed warp (larger wfac -> large warp stepsize)
+;   DXG:		difference x |gradient|
+;   GMIN:		cutoff magnitude of gradient
+;
+; OUTPUT:
+;	NDX,NDY,NDZ: Total warp vector (all iterations)	(3D real arrays)
+;	NEW:	 	 Revised deformed study				(3D array)
+;
+; REVISION HISTORY:
+;	Nov 2002 Tom Videen
+;-
+
+PRO CALC_WARP, REF, STUDY, NEW, GX, GY, GZ, NDX, NDY, NDZ, F0, F1, WFAC, DXG, GMIN
+   COMMON WARP
+
+   on_error, 2
+   nx = (size(ref))[1]          ; original image size
+   ny = (size(ref))[2]
+   nz = (size(ref))[3]
+   mx = (size(gx))[1]           ; resampled image size (for gradient definition and warp)
+   my = (size(gx))[2]
+   mz = (size(gx))[3]
+
+   dx = fltarr(mx,my,mz)
+   dy = fltarr(mx,my,mz)
+   dz = fltarr(mx,my,mz)
+
+   dif = downsample(new-ref,mx,my,mz)
+   ix = where (abs(gx) GE gmin,cntx)
+   iy = where (abs(gy) GE gmin,cnty)
+   iz = where (abs(gz) GE gmin,cntz)
+   IF (cntx LE 0 OR cnty LE 0 OR cntz LE 0) THEN BEGIN
+      new = study
+      return
+   ENDIF
+
+   dx[ix] = wfac*dif[ix]*gx[ix]/(gx[ix]*gx[ix] + dif[ix]*dif[ix])
+   dy[iy] = wfac*dif[iy]*gy[iy]/(gy[iy]*gy[iy] + dif[iy]*dif[iy])
+   dz[iz] = wfac*dif[iz]*gz[iz]/(gz[iz]*gz[iz] + dif[iz]*dif[iz])
+
+   IF (f0 GT 0.0) THEN BEGIN
+      fdx = gauss3d(dx,f0)
+      fdy = gauss3d(dy,f0)
+      fdz = gauss3d(dz,f0)
+   ENDIF ELSE BEGIN
+      fdx = dx
+      fdy = dy
+      fdz = dz
+   ENDELSE
+   dxg = 1000*upsample(sqrt(fdx*fdx + fdy*fdy + fdz*fdz),nx,ny,nz) ; dif * |gradient|
+
+   ndx = ndx + upsample(fdx,nx,ny,nz)
+   ndy = ndy + upsample(fdy,nx,ny,nz)
+   ndz = ndz + upsample(fdz,nx,ny,nz)
+   fdx = gauss3d(ndx,f1)
+   fdy = gauss3d(ndy,f1)
+   fdz = gauss3d(ndz,f1)
+
+   t0 = systime(1)
+   FOR z=0,nz-1 DO BEGIN
+      FOR y=0,ny-1 DO BEGIN
+         FOR x=0,nx-1 DO BEGIN
+            xx = x-fdx[x,y,z]
+            yy = y-fdy[x,y,z]
+            zz = z-fdz[x,y,z]
+            new[x,y,z] = interpolate(study, xx, yy, zz)
+         ENDFOR 
+      ENDFOR 
+   ENDFOR 
+   result = check_math()
+   IF (result NE 32) THEN print,"math error ",result
+   IF debug THEN print,format='("warp intrp",F6.1)',systime(1) - t0
+
+END
+@

@@ -1,0 +1,529 @@
+head	2.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.5
+date	2004.02.16.19.39.57;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	2002.11.27.20.14.04;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	96.10.23.21.28.56;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.10.23.21.27.09;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.10.23.20.51.06;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.06.30.17.05.26;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.01.28.22.26.45;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+2.5
+log
+@Feb 2004
+@
+text
+@C$Log: l1petdim.f,v $
+c Revision 2.3  2002/11/27  20:14:04  tom
+c *** empty log message ***
+c
+c Revision 2.2  1996/10/23  21:28:56  tom
+c NAME
+c
+c Revision 2.1  1996/10/23  21:27:09  tom
+c Solaris
+c
+c Revision 2.0  1996/10/23  20:51:06  tom
+c Solaris
+c
+c Revision 1.2  1995/06/30  17:05:26  tom
+c *** empty log message ***
+c
+c Revision 1.1  1994/01/28  22:26:45  ty7777
+c Initial revision
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   L1PETDIM.FTN
+C
+C  Author:       Kathy Hackman
+C  Date:         13-May-87
+C  Written For:  LOCATES.FTN
+C
+C  Revised 08-May-87 by TOV:
+C     to use consistent logical units;
+C     to center all images at 64.5,64.5 (instead of 50.5,50.5);
+C     to use 128x128 arrays;
+C     to use GETUIMAGE subroutine;
+C  Revised 02-Jun-87 by TOV:
+C     to use use a single 128x128 image array for ITMPLT;
+C  Modified by Tom Yang on 28-Jan-94 to port to the UNIX platform.
+C
+C  Intent:
+C     Finds leftmost, rightmost, topmost, bottommost pixels within
+C     thresholded image and calculates widths, heights, centers, etc.
+C     for each slice.
+C     NOTE:  Assumes that scan is not tilted in any way!!
+C
+C  Common Blocks from LOCATES.INC:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **PETDATA   - tomograph parameters;         (write)
+C
+C  Uses:
+C
+C  Contains Subroutines:
+C     TEMPLATE
+C     THRESH
+C     TRIM
+C
+C  TERMINAL.LIB
+C     GETINT
+C
+C  External Subroutine:
+C     GETUIMAGE
+C
+C  Called by:  L1XSAVE
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC*
+C
+      SUBROUTINE L1PETDIM
+
+      INCLUDE 'locates.inc'
+C
+      INTEGER*2    ITMPLT(128,128)
+      INTEGER*4    ITOPX(14),ITOPY(14),IBOTX(14),IBOTY(14),
+     2             IRIGHTX(14),IRIGHTY(14),ILEFTX(14),ILEFTY(14)
+      REAL*4       RCTRY(14),RHIGH(14)
+      CHARACTER*80 Q
+      CHARACTER*256 NAME, BLANK
+      CHARACTER*256 RCSHEADER
+C
+      RCSHEADER = '$Id: l1petdim.f,v 2.3 2002/11/27 20:14:04 tom Exp tom $'
+C
+      BLANK = ' '
+C
+100   Q = 'File type to template:  1=Transmission, 2=Emission'
+      IDATA = 2
+      CALL GETINT(Q,IDATA,1,2)
+C
+      IF (IDATA.EQ.1) THEN
+        Q = 'Name of Transmission Scan File'
+      ELSE
+        Q = 'Name of Emission Scan File'
+      END IF
+      CALL GTSTRING(Q,NAME)
+      IF (NAME.EQ.BLANK) GO TO 100
+C
+      Q = 'Threshold Level (percent of peak)'
+      IF (IDATA.EQ.1) THEN
+        ITHRESH=80
+      ELSE
+        ITHRESH=40
+      END IF
+      CALL GETINT(Q,ITHRESH,0,100)
+C
+      IF (IDATA.EQ.1) THEN
+        WRITE(USEROUT,*)
+        Q = 'Number of pixels to be trimmed from the template'
+        ITRIM = 2
+        CALL GETINT(Q,ITRIM,0,10)
+      ELSE
+        ITRIM = 0
+      END IF
+C
+C  Find R-L bounds, and center coords per slice at widest span
+C
+      DO 350 K=1,NSLICES
+        CALL TEMPLATE(ITMPLT,NAME,ITHRESH,ITRIM,K)
+        LASTLX = 128
+        LASTLY = 0
+        LASTRX = 0
+        LASTRY = 0
+        LASTTX = 0
+        LASTTY = 0
+        LASTBX = 0
+        LASTBY = 128
+        DO 340 IY=1,128
+          DO 330 IX=1,128
+            IF (ITMPLT(IX,IY).EQ.1) THEN
+              IF (IX.LT.LASTLX) THEN
+                LASTLX = IX
+                LASTLY = IY
+              END IF
+              IF (IX.GT.LASTRX) THEN
+                LASTRX = IX
+                LASTRY = IY
+              END IF
+            END IF
+            IF (ITMPLT(IY,IX).EQ.1) THEN
+              IF (IX.LT.LASTBY) THEN
+                LASTBY = IX
+                LASTBX = IY
+              END IF
+              IF (IX.GT.LASTTY) THEN
+                LASTTY = IX
+                LASTTX = IY
+              END IF
+            END IF
+330       CONTINUE
+340     CONTINUE
+        IF (LASTBY.EQ.128 .OR. LASTLX.EQ.128) THEN
+          WRITE(USEROUT,*) 'SLICE ',K,' IS INDETERMINATE'
+        END IF
+        ILEFTX(K)  = LASTLX
+        ILEFTY(K)  = LASTLY
+        IRIGHTX(K) = LASTRX
+        IRIGHTY(K) = LASTRY
+        RLPETDIM (K) = FLOAT (LASTRX - LASTLX)
+        RHIGH(K) = LASTTY-LASTBY
+        ITOPX(K) = LASTTX
+        ITOPY(K) = LASTTY
+        IBOTX(K) = LASTBX
+        IBOTY(K) = LASTBY
+        RCTRY(K) = ((LASTTY-LASTBY)/2.) + LASTBY
+        RLCTR(K) = ILEFTX(K)+.5*RLPETDIM(K)
+350   CONTINUE
+C
+      APCTR = RCTRY(REFSLICE)
+C
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*)'********************************************'
+      WRITE(USEROUT,*)'**   BE SURE TO VIEW THRESHOLDED SLICES   **'
+      WRITE(USEROUT,*)'**   AND CHECK FOR IRREGULARITIES !       **'
+      WRITE(USEROUT,*)'********************************************'
+      WRITE(USEROUT,*)
+C
+      RETURN
+      END
+
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  TEMPLATE.FTN
+C
+C  Revised 08-May-87 TOV
+C  Revised 02-Jun-87 TOV to process a single slice at a time;
+C
+C  Uses Internal Subroutines:
+C     THRESH
+C     TRIM
+C
+C  External:
+C     GETUIMAGE
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE TEMPLATE(ITMPLT,NAME,ITHRESH,ITRIM,SLC)
+C
+      INCLUDE 'locates.inc'
+C
+      INTEGER*2    ITMPLT(128,128),AR(128,128)
+      INTEGER*4    SLC,ITHRESH,ITRIM,IPEAK
+      CHARACTER*256 NAME
+      LOGICAL*1    ERROR
+C
+8000  FORMAT(1X,'Slice ',I3,': ',I4,'% of peak ',I6,' is ',I6)
+C
+C  Threshold and Trim for each slice
+C
+      CALL GETUIMAGE (AR, NAME, SLC, SLICES, PETTNUM, ERROR)
+C
+C  Find peak value of slice
+C
+      IPEAK = 0
+      DO 200 I=1,128
+        DO 100 J=1,128
+          IF (AR(I,J).GT.IPEAK) IPEAK=AR(I,J)
+100     CONTINUE
+200   CONTINUE
+      ICUTOFF = NINT(0.01*ITHRESH*IPEAK)
+      WRITE(USEROUT,8000) SLC,ITHRESH,IPEAK,ICUTOFF
+C
+      CALL THRESH(AR,ICUTOFF)
+      IF (ITRIM.GT.0) CALL TRIM(AR,ITRIM)
+C
+      DO 400 J=1,128
+        DO 300 I=1,128
+          IF (AR(I,J).EQ.-9999) THEN
+            ITMPLT(I,J) = 0
+          ELSE
+            ITMPLT(I,J) = 1
+          ENDIF
+300     CONTINUE
+400   CONTINUE
+C
+      RETURN
+      END
+
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  THRESH.FTN
+C
+C  For a slice, assigns -9999 to all pixels out of %-of-peak bound.
+C
+C  Revised 08-May-87 TOV: array size 128x128; restructure;
+C
+C  No Subroutines.
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE THRESH(SLTMPLT,ICUTOFF)
+C
+      INTEGER*2  SLTMPLT(128,128)
+      INTEGER*4  ICUTOFF
+C
+      IF (ICUTOFF.EQ.100) THEN
+        DO 200 I=1,128
+          DO 100 J=1,128
+            SLTMPLT(I,J) = 0
+100       CONTINUE
+200     CONTINUE
+        RETURN
+      END IF
+C
+      I1 = 1
+      I2 = 128
+      I3 = 1
+C
+300   DO 500 J=I1,I2,I3
+         NX = 0
+         NY = 0
+         DO 400 I=I1,I2,I3
+            IF (NX.EQ.0) THEN
+              IF (SLTMPLT(I,J).GE.ICUTOFF) THEN
+                NX = 1
+                IF (NY.NE.0) GOTO 500
+              ELSE
+                SLTMPLT(I,J) = -9999
+              END IF
+            END IF
+            IF (NY.EQ.0) THEN
+              IF (SLTMPLT(J,I).GE.ICUTOFF) THEN
+                NY = 1
+                IF (NX.NE.0) GOTO 500
+              ELSE
+                SLTMPLT(J,I) = -9999
+              END IF
+            END IF
+400      CONTINUE
+500   CONTINUE
+C
+      IF (I1.NE.1) RETURN
+      I1 = 128
+      I2 = 1
+      I3 = -1
+      GOTO 300
+C
+      END
+
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  TRIM.FTN
+C
+C  Trims a passed number of pixels from a thresholded array.
+C
+C  Revised 08-May-87 TOV
+C
+C  No Subroutines.
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE TRIM(SLTMPLT,ICUTPIX)
+
+      INTEGER*2  SLTMPLT(128,128)
+      INTEGER*4  ICUTPIX
+C
+      IF (ICUTPIX.EQ.0) RETURN
+C
+      DO 500 ICUT=1,ICUTPIX
+        DO 200 J=1,128
+          DO 100 I=1,128
+            IF (SLTMPLT(I,J).NE.-9999) THEN
+              IF (SLTMPLT(I-1,J).EQ.-9999
+     2          .OR. SLTMPLT(I+1,J).EQ.-9999
+     3          .OR. SLTMPLT(I,J-1).EQ.-9999
+     4          .OR. SLTMPLT(I,J+1).EQ.-9999) THEN
+                SLTMPLT(I,J) = -8888
+              END IF
+            END IF
+100       CONTINUE
+200     CONTINUE
+        DO 400 J=1,128
+          DO 300 I=1,128
+            IF (SLTMPLT(I,J).EQ.-8888) SLTMPLT(I,J)=-9999
+300       CONTINUE
+400     CONTINUE
+500   CONTINUE
+C
+      RETURN
+      END
+@
+
+
+2.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d76 1
+a76 1
+      RCSHEADER = '$Id: l1petdim.f,v 2.2 1996/10/23 21:28:56 tom Exp tom $'
+@
+
+
+2.2
+log
+@NAME
+@
+text
+@d2 3
+d73 1
+a73 1
+      RCSHEADER = '$Id: l1petdim.f,v 2.1 1996/10/23 21:27:09 tom Exp tom $'
+d196 1
+a196 1
+8000  FORMAT(1X,'Slice ',I,': ',I,'% of peak ',I,' is ',I)
+@
+
+
+2.1
+log
+@Solaris
+@
+text
+@d2 3
+d70 1
+a70 1
+      RCSHEADER = '$Id: l1petdim.f,v 2.0 1996/10/23 20:51:06 tom Exp tom $'
+d190 1
+a190 1
+      CHARACTER*80 NAME
+@
+
+
+2.0
+log
+@Solaris
+@
+text
+@d2 3
+d63 2
+a64 1
+      CHARACTER*80 Q, NAME, BLANK
+d67 1
+a67 1
+      RCSHEADER = '$Id: l1petdim.f,v 1.2 1995/06/30 17:05:26 tom Exp tom $'
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@a0 2
+
+C$Id: l1petdim.f,v 1.1 1994/01/28 22:26:45 ty7777 Exp tom $
+d2 3
+a6 1
+c
+d20 1
+a20 1
+C     to use GETIMG and OPENFILE subroutines;
+a43 1
+C     OPENFILE
+a44 3
+C  FORTRAN
+C     SYSIO
+C
+d46 1
+a46 1
+C     GETIMG
+a55 2
+C
+
+d57 1
+a57 1
+      INTEGER*4    ITOPX(14),ITOPY(14),IBOTX(14),IBOTY(14),FSIZE,
+d60 1
+a60 6
+      CHARACTER*3  EXT
+      CHARACTER*4  VOL
+      CHARACTER*6  FTYPE
+      CHARACTER*20 NAME,BLANK
+      CHARACTER*80 Q
+      LOGICAL*1    NEW
+d63 1
+a63 1
+      RCSHEADER = '$Id: l1petdim.f,v 1.1 1994/01/28 22:26:45 ty7777 Exp tom $'
+d76 1
+a76 5
+      EXT = ' '
+      VOL = ' '
+      FTYPE = 'CONTIG'
+      NEW = .FALSE.
+      CALL OPENFILE(Q,IMAGE,NAME,VOL,EXT,NEW,FTYPE,256,FSIZE)
+d173 1
+a173 1
+C     GETIMG
+a178 1
+C
+d181 1
+a181 1
+      INTEGER*2    ITMPLT(128,128),AR(128,128),HEADER(128)
+d183 2
+a184 2
+      CHARACTER*20 NAME
+      LOGICAL*1    HDRONLY,ERROR
+a186 1
+      HDRONLY = .FALSE.
+d190 1
+a190 2
+      CALL GETIMG (AR, HEADER, NAME, SLC, SLICES, PETTNUM, IMAGE,
+     2   USEROUT, HDRONLY, ERROR)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 5
+a6 2
+C$Id$
+C$Log$
+d74 1
+a74 1
+      RCSHEADER = '$Id$'
+a295 1
+      RETURN
+@

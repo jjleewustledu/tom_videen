@@ -1,0 +1,357 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2004.02.16.22.09.08;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.27.16.26.09;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.10.07.21.02.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@/* $Log: mergemasks.c,v $
+ * Revision 1.2  2002/11/27  16:26:09  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1998/10/07  21:02:47  tom
+ * Initial revision
+ * */
+/* =============================================================================
+ *  Module:         mergemasks.c
+ *  Date:           Oct 1998
+ *  Author:         Tom Videen
+ *  Description:    Merge image masks
+ * =============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mergemasks/RCS/mergemasks.c,v 1.2 2002/11/27 16:26:09 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ANALYZE.h>				 /* dsr */
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+
+{
+	struct dsr      hdr1, hdr2;		 /* ANALYZE headers */
+	FILE           *fd;				 /* for io */
+	char          **file;			 /* list of files to merge */
+	char           *fhdr;			 /* Analyze header filename  */
+	char           *fname;			 /* Analyze image filename */
+	char           *outfile;		 /* output filename */
+	short          *img1;			 /* data */
+	short          *img2;			 /* data */
+	long            ndim[4];		 /* array dimensions */
+	long            nsize;
+	long            i, j, k;
+	int             nfiles = 0;		 /* number of files in list */
+
+	if (argc < 4) {
+		fprintf (stderr, "Usage: mergemasks output recfile newfile file1 file2 ...\n");
+		return (-1);
+	}
+/*
+ *	Get list of files to combine
+ */
+
+	file = (char **) malloc (argc * sizeof (char *));
+	fname = (char *) malloc (256 * sizeof (char *));
+	fhdr = (char *) malloc (256 * sizeof (char *));
+	if (file == NULL) return (1);
+	if (fname == NULL) return (1);
+	if (fhdr == NULL) return (1);
+	outfile = argv[1];
+	for (i = 2; i < argc; i++) {
+		if (strcmp (argv[i], "-d")) {
+			file[nfiles] = argv[i];
+			++nfiles;
+		}
+	}
+
+/*
+ * Read hdr of first file
+ */
+	(void) strcpy (fname, file[0]);
+	(void) strcat (fname, ".img");
+	(void) strcpy (fhdr, file[0]);
+	(void) strcat (fhdr, ".hdr");
+
+	if ((fd = fopen (fhdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [mergemasks]: opening: %s\n", fhdr);
+		return (-1);
+	}
+	if ((fread (&hdr1, sizeof (struct dsr), 1, fd)) != 1) {
+		fprintf (stderr, "ERROR [mergemasks]: reading: %s\n", fhdr);
+		return (-1);
+	}
+	if (hdr1.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [mergemasks]: reading: %s\n", fhdr);
+		fprintf (stderr, "Dimensions = %d\n", hdr1.dime.dim[0]);
+		return (-1);
+	}
+	if (hdr1.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [mergemasks]: reading: %s\n", fhdr);
+		fprintf (stderr, "Datatype = %d\n", hdr1.dime.datatype);
+		return (-1);
+	}
+	if (hdr1.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [mergemasks]: reading: %s\n", fhdr);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr1.dime.bitpix);
+		return (-1);
+	}
+	ndim[0] = hdr1.dime.dim[0];
+	ndim[1] = hdr1.dime.dim[1];
+	ndim[2] = hdr1.dime.dim[2];
+	ndim[3] = hdr1.dime.dim[3];
+	nsize = ndim[1] * ndim[2] * ndim[3];
+	(void) fclose (fd);
+
+/*
+ *	Read data from first file
+ */
+
+	if ((fd = fopen (fname, "r")) == 0) {
+		fprintf (stderr, "ERROR [mergemasks]: opening: %s\n", fname);
+		return (-1);
+	}
+	if ((img1 = (short *) calloc (nsize, sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [mergemasks]: calloc img1\n");
+		return (-1);
+	}
+	if ((img2 = (short *) calloc (nsize, sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [mergemasks]: calloc img2\n");
+		return (-1);
+	}
+	printf ("Reading %s\n", fname);
+	if ((fread (img1, nsize * 2, 1, fd)) != 1) {
+		fprintf (stderr, "ERROR [mergemasks]: reading: %s\n", fname);
+		return (-1);
+	}
+	(void) fclose (fd);
+
+/*
+ * Read additional files
+ */
+	for (k = 1; k < nfiles; k++) {
+		(void) strcpy (fname, file[k]);
+		(void) strcat (fname, ".img");
+		(void) strcpy (fhdr, file[k]);
+		(void) strcat (fhdr, ".hdr");
+
+		if ((fd = fopen (fhdr, "r")) == 0) {
+			fprintf (stderr, "ERROR [mergemasks]: opening: %s\n", fhdr);
+			return (-1);
+		}
+		if ((fread (&hdr2, sizeof (struct dsr), 1, fd)) != 1) {
+			fprintf (stderr, "ERROR [mergemasks]: reading: %s\n", fhdr);
+			return (-1);
+		}
+		for (j = 0; j <= 3; j++) {
+			if (hdr2.dime.dim[j] != ndim[j]) {
+				fprintf (stderr, "ERROR [mergemasks]: reading: %s\n", fhdr);
+				fprintf (stderr, "Different image dimensions\n");
+				return (-1);
+			}
+		}
+		if (hdr2.dime.datatype != 4) {
+			fprintf (stderr, "ERROR [mergemasks]: reading: %s\n", fhdr);
+			fprintf (stderr, "Datatype = %d\n", hdr2.dime.datatype);
+			return (-1);
+		}
+		(void) fclose (fd);
+
+		if ((fd = fopen (fname, "r")) == 0) {
+			fprintf (stderr, "ERROR [mergemasks]: opening: %s\n", fname);
+			return (-1);
+		}
+		printf ("Reading %s\n", fname);
+		if ((fread (img2, nsize * 2, 1, fd)) != 1) {
+			fprintf (stderr, "ERROR [mergemasks]: reading: %s\n", fname);
+			return (-1);
+		}
+		(void) fclose (fd);
+
+/*
+ * Set any new 0 pixels to zero
+ */
+		for (i = 1; i <= nsize; i++) {
+			if (img2[i] == 0)
+				img1[i] = 0;
+		}
+	}
+
+/*
+ * Write the output hdr and image
+ */
+
+	(void) strcpy (fname, outfile);
+	(void) strcat (fname, ".img");
+	(void) strcpy (fhdr, outfile);
+	(void) strcat (fhdr, ".hdr");
+
+	if ((fd = fopen (fhdr, "w")) == 0) {
+		printf ("Unable to create ANALYZE header %s\n", fhdr);
+		return (-1);
+	}
+	if ((fwrite (&hdr1, sizeof (struct dsr), 1, fd)) != 1) {
+		printf ("Error writing to: %s\n", fhdr);
+		return (-1);
+	}
+	(void) fclose(fd);
+
+	if ((fd = fopen (fname, "w")) == 0) {
+		printf ("Unable to create ANALYZE image %s\n", fname);
+		return (-1);
+	}
+	if ((fwrite (img1, nsize * 2, 1, fd)) != 1) {
+		printf ("Error writing to: %s\n", fname);
+		return (-1);
+	}
+	(void) fclose(fd);
+	printf ("Merged masks to %s\n", fname);
+	free (img1);
+	free (img2);
+	free (file);
+	free (fhdr);
+	return (0);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *  Date:           Oct-98
+d15 1
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mergemasks/RCS/mergemasks.c,v 1.1 1998/10/07 21:02:47 tom Exp tom $";
+d54 3
+d74 1
+a74 1
+		fprintf (stderr, "ERROR [mergemasks]: Cannot open: %s\n", fhdr);
+d78 1
+a78 1
+		fprintf (stderr, "ERROR [mergemasks]: Reading: %s\n", fhdr);
+d82 1
+a82 1
+		fprintf (stderr, "ERROR [mergemasks]: Reading: %s\n", fhdr);
+d87 1
+a87 1
+		fprintf (stderr, "ERROR [mergemasks]: Reading: %s\n", fhdr);
+d92 1
+a92 1
+		fprintf (stderr, "ERROR [mergemasks]: Reading: %s\n", fhdr);
+d108 1
+a108 1
+		fprintf (stderr, "ERROR [mergemasks]: Cannot open: %s\n", fname);
+d112 1
+a112 1
+		fprintf (stderr, "ERROR [mergemasks]: Cannot calloc img1\n");
+d116 1
+a116 1
+		fprintf (stderr, "ERROR [mergemasks]: Cannot calloc img2\n");
+d121 1
+a121 1
+		fprintf (stderr, "ERROR [mergemasks]: Reading: %s\n", fname);
+d136 1
+a136 1
+			fprintf (stderr, "ERROR [mergemasks]: Cannot open: %s\n", fhdr);
+d140 1
+a140 1
+			fprintf (stderr, "ERROR [mergemasks]: Reading: %s\n", fhdr);
+d145 1
+a145 1
+				fprintf (stderr, "ERROR [mergemasks]: Reading: %s\n", fhdr);
+d151 1
+a151 1
+			fprintf (stderr, "ERROR [mergemasks]: Reading: %s\n", fhdr);
+d158 1
+a158 1
+			fprintf (stderr, "ERROR [mergemasks]: Cannot open: %s\n", fname);
+d163 1
+a163 1
+			fprintf (stderr, "ERROR [mergemasks]: Reading: %s\n", fname);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mergemasks/RCS/mergemasks.c,v 1.1 1998/10/07 20:49:23 tom Exp tom $";
+d17 1
+d61 4
+a64 4
+	strcpy (fname, file[0]);
+	strcat (fname, ".img");
+	strcpy (fhdr, file[0]);
+	strcat (fhdr, ".hdr");
+d94 1
+a94 1
+	fclose (fd);
+d117 1
+a117 1
+	fclose (fd);
+d123 4
+a126 4
+		strcpy (fname, file[k]);
+		strcat (fname, ".img");
+		strcpy (fhdr, file[k]);
+		strcat (fhdr, ".hdr");
+d148 1
+a148 1
+		fclose (fd);
+d159 1
+a159 1
+		fclose (fd);
+d174 4
+a177 4
+	strcpy (fname, outfile);
+	strcat (fname, ".img");
+	strcpy (fhdr, outfile);
+	strcat (fhdr, ".hdr");
+d187 1
+a187 1
+	fclose(fd);
+d197 1
+a197 1
+	fclose(fd);
+@

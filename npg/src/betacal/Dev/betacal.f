@@ -1,0 +1,199 @@
+      PROGRAM BETACAL
+C     AZS 28-JUL-90
+C     CALCULATES BETA PROBE TO WELL COUNTER CONVERSION FACTOR
+C     USES SUBROUTINE POLFIT(X,Y,NPTS,A,ARRAY,NTERM,CHISQR)
+
+C     Modified 12/05/91 to read floating T(I)
+C     29-Apr-93 port to SUN
+C               OUTPUT LISTED ON stdout
+C     31-Oct-94 final conversion factor output format F6.2 = > F10.4
+C     22-Feb-2002 Modified for new blood sampler computer files
+
+      PARAMETER	(NBINMAX=1024)
+      PARAMETER (NTERM=2)
+
+      CHARACTER*20	STR
+      CHARACTER*20	FILSPC
+      CHARACTER*1	ISOTOPE
+      CHARACTER*80	Q, CHARSET
+
+      INTEGER*4   L1, L2
+      INTEGER*4   CRTFILE     ! input CRT file
+      INTEGER*4   USERIN      ! log unit assigned for terminal input
+      INTEGER*4   USEROUT     ! log unit for terminal output!
+
+      REAL*4	T(NBINMAX),Y(NBINMAX)
+      REAL*4	A(NTERM),ARRAY(NTERM,NTERM)
+
+      COMMON /USRIO/ USERIN,USEROUT
+      DATA  CRTFILE /2/
+      DATA  USERIN, USEROUT /5,6/
+
+      FILSPC = ' '
+10    Q = "Beta Probe CRT filename"
+      L2 = INANYR(FILSPC,' ')
+      FILSPC (L2+1:L2+1) = '~'
+      CALL GETSTRNG(Q,FILSPC)
+      L1 = INANYR(FILSPC, ' ')
+      IF (L1 .LE. L2 + 1) FILSPC (L2+1:L2+1) = ' '
+      OPEN (CRTFILE, FILE=FILSPC, STATUS='OLD', ERR=11)
+      GOTO 12
+11    WRITE (USEROUT,8000) FILSPC
+8000  FORMAT (' ERROR Opening ',A20)
+      GOTO 10
+
+12    Q = "Sampling rate (sec/bin)"
+      CALL GETREAL(Q,TIMPBIN,0.1,100.)
+      WRITE (USEROUT,"(A20)") FILSPC
+      READ  (CRTFILE,"(A20)") STR
+      WRITE (USEROUT,"(A20)") STR
+      READ  (CRTFILE,*) NBIN
+      IF(NBIN.GT.NBINMAX) STOP 'NBIN TOO LARGE'
+      DO 20 I = 1,NBIN
+         READ(CRTFILE,*)S,J
+         M = NINT(S)
+         IF (M.NE.I) STOP 'BETACAL FILE READ ERROR'
+         Y(I) = ALOG(FLOAT(J))
+         T(I) = FLOAT(I)*TIMPBIN
+20    CONTINUE
+      CLOSE (CRTFILE)
+
+      CALL POLFIT(T,Y,NBIN,A,ARRAY,NTERM,CHISQR)
+      BETA = EXP(A(1))/TIMPBIN
+      WRITE (USEROUT,8102)A,CHISQR
+      WRITE (USEROUT,8103)BETA
+      WRITE (USEROUT,8104)-ALOG(2.)/A(2)
+8102  FORMAT(' A(1),A(2),CHISQR',3F10.4)
+8103  FORMAT(' COUNTS/SEC EXTRAPOLATED TO TIME 0',F9.0)
+8104  FORMAT(' CALCULATED T1/2 IN SECONDS',F8.2)
+
+      Q = "Radionuclide (O or C)"
+      CHARSET = 'OCoc'
+      CALL GETCHAR(Q,ISOTOPE,CHARSET)
+      IF (ISOTOPE.EQ.'O' .or. ISOTOPE.EQ.'o') THALF = 123.
+      IF (ISOTOPE.EQ.'C' .or. ISOTOPE.EQ.'c') THALF = 1218.
+      WRITE (USEROUT, "('Halflife = ',F6.0,' sec')") THALF
+
+      Q = "Well Counter counting period (sec)"
+      CALL GETREAL(Q,BINLEN,0.1,100.)
+
+      CALL WELLCAL(THALF,BINLEN,WELL)
+      WRITE (USEROUT,8106) WELL/BETA
+8106  FORMAT(' BETA PROBE TO WELL COUNTER CONVERSION FACTOR',F10.4)
+      STOP 'END BETACAL'
+      END
+
+      SUBROUTINE WELLCAL(THALF,BINLEN,RATE)
+C     input THALF = half life of tracer in sec
+C     input BINLEN = counting period of well counter (usually 10 sec)
+C     returns RATE = COUNTS/SEC*GRAM
+C     READS ASCII FILE ON LU 0 WITH WELL COUNTER CALIBRATION DATA
+C     dry, wet, min, sec, counts/bin
+C     EACH DUPLICATE RUN MUST APPEAR ON A SEPARATE LINE
+C     DATA IS READ UNTIL FILE END OR FIRST NONNUMERIC
+C     WELLCAL AVERAGES OVER DUPLICATES
+C     CALCULATION SUMMARY IS SENT TO LU6
+
+      PARAMETER (NMAX=20)
+      REAL*4    DRY(NMAX), WET(NMAX), R(NMAX)
+      INTEGER*4 MINUTE(NMAX), SEC(NMAX), COUNTS(NMAX)
+
+      AKT = ALOG(2.)*BINLEN/THALF
+      BINFAC = AKT/(1.-EXP(-AKT))
+      BINFAC = BINFAC/BINLEN
+      CALL BETAGET(NMAX,DRY,WET,MINUTE,SEC,COUNTS,N)
+      S = 0.
+      V = 0.
+      DO 30 I = 1,N
+         F = 2.**(FLOAT(SEC(I)+60*MINUTE(I))/THALF)
+         R(I) = BINFAC*F*COUNTS(I)/(WET(I)-DRY(I))
+         S = S+R(I)
+         V = V+R(I)**2
+30    CONTINUE
+      S = S/FLOAT(N)
+      RATE = S
+      V = V-FLOAT(N)*S**2
+      V = V/FLOAT(N-1)
+      WRITE (USEROUT,8113) S,SQRT(V),SQRT(V)/S
+      WRITE (USEROUT,8114)
+      DO 40 I = 1,N
+         WRITE (USEROUT,8115) I,DRY(I),WET(I),MINUTE(I),SEC(I),COUNTS(I),R(I)
+40    CONTINUE
+8113  FORMAT (' mean cts/(g*sec)',F10.0,'  s.d.',F10.0,'  s.d./mean',F10.4)
+8114  FORMAT(' LINE     DRY   WET  MIN  SEC  COUNTS cts/(g*sec)')
+8115  FORMAT(I5,F8.3,F6.3,2I5,I8,F12.0)
+      WRITE (USEROUT,8113) S, SQRT(V), SQRT(V)/S
+      RETURN
+      END
+
+      SUBROUTINE BETAGET(NMAX,DRY,WET,MINUTE,SEC,COUNTS,N)
+
+      REAL*4    DRY(NMAX),WET(NMAX)
+      INTEGER*4 MINUTE(NMAX),SEC(NMAX),COUNTS(NMAX)
+      INTEGER*4   CALFILE     ! output CAL file
+      CHARACTER*20 FILSPC
+      CHARACTER*80 STRING
+
+      DATA  CALFILE /3/
+
+      N = 0
+      FILSPC = ' '
+      Q = "Well Counter CAL filename"
+      CALL GETSTRNG(Q,FILSPC)
+      OPEN (CALFILE,FILE=FILSPC,STATUS='OLD',ERR=71)
+      I = 0
+50    CONTINUE
+         I = I+1
+         READ (CALFILE,*,END=55,ERR=55)
+     &      DRY(I), WET(I), MINUTE(I), SEC(I), COUNTS(I)
+         N = I
+         IF (N.LT.NMAX) GOTO 50
+55    CLOSE(CALFILE)
+
+56    WRITE (USEROUT, "(' LINE     DRY   WET  MIN  SEC  COUNTS')")
+      DO 60 I = 1,N
+         WRITE (USEROUT,8123) I, DRY(I), WET(I), MINUTE(I), SEC(I), COUNTS(I)
+60    CONTINUE
+      TYPE "(' EDIT A DATA LINE OR')"
+      TYPE "(' DELETE A LINE BY ENTERING THE LINE NUMBER')"
+      TYPE "(' ADD DATA BY ENTERING LINE ',I2)",N+1
+      TYPE "(/' ENTER line,dry,wet,minutes,seconds,counts')"
+      STRING = ' '
+      ACCEPT "(A80)",STRING
+      L = lnblnk(STRING)
+      IF (L.LE.0) GOTO 75
+      DECODE (L,"(I)",STRING(1:L))I
+      IF (I.GT.N+1)GOTO 56
+      IF (I.EQ.N+1)N = I
+      DECODE (L,8123,STRING(1:L))
+     &   I,DRY(I),WET(I),MINUTE(I),SEC(I),COUNTS(I)
+8123  FORMAT(I5,F8.3,F6.3,2I5,I8)
+      IF (COUNTS(I).EQ.0)THEN
+      DO 70 J = I+1,N
+         DRY(J-1) = DRY(J)
+         WET(J-1) = WET(J)
+         MINUTE(J-1) = MINUTE(J)
+         SEC(J-1) = SEC(J)
+         COUNTS(J-1) = COUNTS(J)
+70    CONTINUE
+      N = N-1
+      ENDIF
+      GOTO 56
+71    WRITE (USEROUT, "(' FILE NOT FOUND')")
+      GOTO 56
+75    WRITE (USEROUT, "(' ENTER WELL COUNTER DATA FILE NAME TO BE SAVED')")
+      FILSPC = ' '
+      ACCEPT "(A20)",FILSPC
+      L = lnblnk(FILSPC)
+      IF (L.LE.0) GOTO 90
+      OPEN (8,FILE=FILSPC, ERR=85)
+      DO 80 I = 1,N
+         WRITE (8,8112) DRY(I),WET(I),MINUTE(I),SEC(I),COUNTS(I)
+80    CONTINUE
+8112  FORMAT(2F7.3, 2I5,I8)
+      CLOSE(8,STATUS='KEEP')
+      WRITE (USEROUT, "(' SAVE WELL COUNTER DATA FILE ',A20)") FILSPC
+      GOTO 90
+85    WRITE (USEROUT, "(' ERROR OPENING',A20)") FILSPC
+90    RETURN
+      END

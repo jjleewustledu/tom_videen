@@ -1,0 +1,302 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2005.10.20.14.37.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Log$ */
+/*	===============================================================================
+ *	Module:			mai_reorient.c
+ *	Date:			Oct 2005
+ *	Author:			Tom Videen
+ *	Description:	Create a transverse Analyze file from coronal Interfile of MaiAtlas
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mai_reorient/RCS/mai_reorient.c,v 2.1 2004/04/12 19:04:22 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+#define MAXSTR 256
+#define TRANSVERSE '\000'
+
+/*	----------------------------
+ *	Function:	mai_reorient
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* header for ANALYZE */
+	FILE           *afh;			 /* ANALYZE hdr file */
+	FILE           *afi;			 /* ANALYZE img file */
+	FILE           *ifh;			 /* Interfile ifh file */
+	FILE           *ifi;			 /* Interfile img file */
+	char           *afhname;		 /* Analyze header filename  */
+	char           *afiname;		 /* Analyze image filename  */
+	char           *ifhname;		 /* Interfile header filename */
+	char           *ifiname;		 /* Interfile image filename */
+	char            str[MAXSTR];
+	char            imagename[MAXSTR] = "";
+	char           *ptr;
+	float           size[3];
+	short        ***img;
+	short          *srow;			 /* single row of input image */
+	long            dim1, dim2, dim3;	 /* dimensions of img */
+	int             dim[3];
+	int             i, j, k;
+	int             ndim = 0;
+	int             ntype = 0;
+	int             nbytes = 0;
+	int             global_max = 0;
+	int             global_min = 0;
+
+	if (argc != 5) {
+		(void) printf ("Usage: mai_reorient ifhname ifiname afhname afiname\n");
+		return (ERROR);
+	}
+	ifhname = argv[1];
+	ifiname = argv[2];
+	afhname = argv[3];
+	afiname = argv[4];
+
+/*
+ * Read Interfile header
+ */
+
+	if ((ifh = fopen (ifhname, "r")) == 0) {
+		(void) printf ("Unable to open Interfile header %s\n", ifhname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), ifh) == NULL) {
+		(void) printf ("ERROR [mai_reorient]: reading %s\n", ifhname);
+		return (ERROR);
+	}
+	if (strstr (str, "INTERFILE") == NULL) {
+		(void) printf ("ERROR [mai_reorient]: %s is not an Interfile header\n", ifhname);
+		return (ERROR);
+	}
+	while (fgets (str, sizeof (str), ifh) != NULL) {
+		ptr = strstr (str, ":=");
+		if (ptr != NULL) {
+			ptr += 2;
+			if (strstr (str, "name of data file") != NULL) {
+				(void) sscanf (ptr, "%s", imagename);
+				continue;
+			}
+			if (strstr (str, "number format") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				if (strstr (ptr, "signed integer") != NULL)
+					ntype = 4;
+				else {
+					(void) printf ("ERROR [mai_reorient]: image is not signed integer\n");
+					return (ERROR);
+				}
+				continue;
+			}
+			if (strstr (str, "number of bytes per pixel") != NULL) {
+				(void) sscanf (ptr, "%d", &nbytes);
+				continue;
+			}
+			if (strstr (str, "number of dimensions") != NULL) {
+				(void) sscanf (ptr, "%d", &ndim);
+				if (ndim != 3) {
+					(void) printf ("ERROR [mai_reorient]: non-standard number of dimensions = %d\n",
+						       ndim);
+					return (ERROR);
+				}
+				continue;
+			}
+			if (strstr (str, "matrix size [1]") != NULL) {
+				(void) sscanf (ptr, "%d", &dim[0]);
+				continue;
+			}
+			if (strstr (str, "matrix size [2]") != NULL) {
+				(void) sscanf (ptr, "%d", &dim[1]);
+				continue;
+			}
+			if (strstr (str, "matrix size [3]") != NULL) {
+				(void) sscanf (ptr, "%d", &dim[2]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [1]") != NULL) {
+				(void) sscanf (ptr, "%f", &size[0]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [2]") != NULL) {
+				(void) sscanf (ptr, "%f", &size[1]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [3]") != NULL) {
+				(void) sscanf (ptr, "%f", &size[2]);
+				continue;
+			}
+			if (strstr (str, "matrix initial element [1]") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				if (strstr (ptr, "left") == NULL) {
+					(void) fprintf (stderr, "ERROR [mai_reorient]: orientation differs from expected\n");
+					(void) fprintf (stderr, "%s\n", str);
+					return (ERROR);
+				}
+				continue;
+			}
+			if (strstr (str, "matrix initial element [2]") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				if (strstr (ptr, "anterior") == NULL) {
+					(void) fprintf (stderr, "ERROR [mai_reorient]: orientation differs from expected\n");
+					(void) fprintf (stderr, "%s\n", str);
+					return (ERROR);
+				}
+				continue;
+			}
+			if (strstr (str, "matrix initial element [3]") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				if (strstr (ptr, "inferior") == NULL) {
+					(void) fprintf (stderr, "ERROR [mai_reorient]: orientation differs from expected\n");
+					(void) fprintf (stderr, "%s\n", str);
+					return (ERROR);
+				}
+				continue;
+			}
+		}
+	}
+	(void) fclose (ifh);
+
+/*
+ *	Read image data and compute min and max
+ */
+
+	if ((ifi = fopen (ifiname, "r")) == 0) {
+		(void) printf ("ERROR [mai_reorient]: Unable to open Interfile image %s\n", ifiname);
+		return (ERROR);
+	}
+	dim1 = dim[0];
+	dim3 = dim[1];
+	dim2 = dim[2];
+	if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		(void) fprintf (stderr, "ERROR [mai_reorient]: malloc img\n");
+		return (ERROR);
+	}
+	if (NULL == (srow = (short *) calloc (dim1, sizeof (short)))) {
+		(void) fprintf (stderr, "ERROR [mai_reorient]: calloc srow\n");
+		return (ERROR);
+	}
+	for (j = 1; j <= dim2; j++) {
+		for (i = dim3; i >= 1; i--) {
+			if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+				(void) fprintf (stderr, "ERROR [mai_reorient]: Reading: %s\n", afiname);
+				return (ERROR);
+			}
+			for (k = 0; k < dim1; k++) {
+				if (srow[k] == -32768)
+					img[i][j][dim1 - k] = 0;
+				else
+					img[i][j][dim1 - k] = srow[k];
+				if ((int) srow[k] > global_max)
+					global_max = (int) srow[k];
+				else if ((int) srow[k] < global_min)
+					global_min = (int) srow[k];
+			}
+		}
+	}
+	(void) fclose (ifi);
+
+/*
+ *	Write Analyze image
+ */
+
+	if (strcmp (ifiname, afiname) != 0) {
+		if ((afi = fopen (afiname, "w")) == 0) {
+			(void) printf ("ERROR [mai_reorient]: Unable to open Analyze image %s\n", afiname);
+			return (ERROR);
+		}
+		for (i = 1; i <= dim3; i++) {
+			for (j = 1; j <= dim2; j++) {
+				for (k = 1; k <= dim1; k++)
+					srow[k - 1] = img[i][j][k];
+				if ((fwrite (srow, sizeof (short), dim1, afi)) != dim1) {
+					(void) fprintf (stderr, "ERROR [mai_reorient]: Writing: %s\n", afiname);
+					return (ERROR);
+				}
+			}
+		}
+		(void) fclose (afi);
+	}
+/*
+ *	Create Analyze hdr file
+ */
+
+	(void) strncpy (hdr.hk.db_name, imagename, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	hdr.hk.extents = 16384;			 /* recommended by developers  */
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.dime.dim[0] = 4;			 /* typically 4 dimensions  */
+	hdr.dime.dim[1] = dim1;			 /* x dimension of atlas   */
+	hdr.dime.dim[2] = dim2;			 /* y dimension of atlas   */
+	hdr.dime.dim[3] = dim3;			 /* number of slices in volume */
+	hdr.dime.dim[4] = 1;			 /* only one volume typically  */
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = ntype;		 /* 4-> 16-bit signed integer; 8-> float */
+	hdr.dime.bitpix = 8 * nbytes;		 /* number of bits/pixel */
+	hdr.dime.pixdim[1] = size[0];		 /* in mm */
+	hdr.dime.pixdim[2] = size[2];		 /* in mm */
+	hdr.dime.pixdim[3] = size[1];		 /* in mm */
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+	(void) strncpy (hdr.hist.descrip, imagename, 79);
+	(void) strcpy (hdr.hist.originator, "mai_reorient");
+	hdr.hist.orient = TRANSVERSE;
+	if ((afh = fopen (afhname, "w")) == 0) {
+		(void) printf ("Unable to create ANALYZE header %s\n", afhname);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, afh)) != 1) {
+		(void) printf ("Error writing to: %s\n", afhname);
+		return (ERROR);
+	}
+	(void) fclose (afh);
+	return (0);
+}
+@

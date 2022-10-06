@@ -1,0 +1,1168 @@
+<PRE><LI><H2>FILE: matrix_extra.c</H2>
+/* @(#)matrix_extra.c	1.13 5/7/93 */
+
+#include	 &lt;<A NAME=4 HREF="stdlib.h.html">stdlib.h</A>&gt; 
+#include	 &lt;<A NAME=5 HREF="fcntl.h.html">fcntl.h</A>&gt; 
+#include	 &lt;<A NAME=6 HREF="string.h.html">string.h</A>&gt; 
+#include	 "<A NAME=7 HREF="interfile.h.html">interfile.h</A>" 
+
+static char sccsid[]="@(#)matrix_extra.c	1.13 5/7/93 Copyright 1991,1992 CTI Pet Systems, Inc.";
+
+#define ERROR   -1
+#define OK 0
+#define TRUE 1
+#define FALSE 0
+
+typedef enum {
+		MAT_OK,
+		MAT_MALLOC_ERR,
+		MAT_MHDREAD_ERR,
+		MAT_ACSDIR_ERR,
+		MAT_ACS_FILE_NOT_FOUND,
+		MAT_NFS_FILE_OPEN_ERR,
+		MAT_INTERFILE_OPEN_ERR,
+		MAT_NFS_CREATE_ERR,
+		MAT_FILE_TYPE_NOT_MATCH,
+		MAT_READ_FROM_NILFPTR,
+		MAT_NOMHD_FILE_OBJECT,
+		MAT_NIL_SHPTR,
+		MAT_NIL_DATA_PTR,
+		MAT_MATRIX_NOT_FOUND,
+		MAT_UNKNOWN_FILE_TYPE,
+		MAT_READ_ACS_SUBHD_ERR,
+		MAT_READ_ACS_DATA_ERR,
+		MAT_ACS_DATA_SIZE_MISMATCH,
+		MAT_NFS_FILE_NOT_FOUND,
+		MAT_ACS_READ_SUBHD_ERR,
+		MAT_NODIRPTR_FILE_OBJECT,
+		MAT_READ_ACS_DIRBLK_ERR,
+		MAT_ACS_CREATE_ERR,
+		MAT_BAD_ATTRIBUTE,
+		MAT_BAD_FILE_ACCESS_MODE,
+		MAT_END_ERRORS
+	}
+<LI><H3><a name="MatrixErrorCode">MatrixErrorCode;</a></H3>
+
+char* matrix_errors[] =
+	{
+		"MAT_NO_ERROR",
+		"MAT_MALLOC_ERR",
+		"MAT_MHDREAD_ERR",
+		"MAT_ACSDIR_ERR",
+		"MAT_ACS_FILE_NOT_FOUND",
+		"MAT_NFS_FILE_OPEN_ERR",
+		"MAT_INTERFILE_OPEN_ERR",
+		"MAT_NFS_CREATE_ERR",
+		"MAT_FILE_TYPE_NOT_MATCH",
+		"MAT_READ_FROM_NILFPTR",
+		"MAT_NOMHD_FILE_OBJECT",
+		"MAT_NIL_SHPTR",
+		"MAT_NIL_DATA_PTR",
+		"MAT_MATRIX_NOT_FOUND",
+		"MAT_UNKNOWN_FILE_TYPE",
+		"MAT_READ_ACS_SUBHD_ERR",
+		"MAT_READ_ACS_DATA_ERR",
+		"MAT_ACS_DATA_SIZE_MISMATCH",
+		"MAT_NFS_FILE_NOT_FOUND",
+		"MAT_ACS_READ_SUBHD_ERR",
+		"MAT_NODIRPTR_FILE_OBJECT",
+		"MAT_READ_ACS_DIRBLK_ERR",
+		"MAT_ACS_CREATE_ERR",
+		"MAT_BAD_ATTRIBUTE",
+		"MAT_BAD_FILE_ACCESS_MODE",
+		"MAT_END_ERRORS"
+	};
+
+<a href="matrix_extra.c.html#MatrixErrorCode">MatrixErrorCode</a> matrix_errno ;
+
+
+<LI><H3><a name="mat_rdirblk">MatDirBlk *mat_rdirblk(file, blknum)</a></H3>
+
+  MatrixFile *file;
+  int	blknum ;
+
+{
+  MatDirBlk *<a href="matrix.h.html#matdirblk">matdirblk</a> ;
+  int	i, j, err, ndirs ;
+  int	dirbufr[MatBLKSIZE/4] ;
+  FILE	*fptr = file-&gt;fptr;
+
+	<a href="matrix.h.html#matdirblk">matdirblk</a> = (MatDirBlk *) malloc(MatBLKSIZE) ;
+	if (<a href="matrix.h.html#matdirblk">matdirblk</a> == NULL) return(NULL) ;
+
+	if (file-&gt;mhptr->sw_version &lt; V7) {
+		if (file-&gt;acs) err = <a href="machine_indep.c.html#read_raw_acs_data">read_raw_acs_data</a>(file->fname,
+			blknum,1,(char*)dirbufr,VAX_Ix4);
+		else err = <a href="machine_indep.c.html#read_matrix_data">read_matrix_data</a>(fptr,blknum,1,(char*)dirbufr,VAX_Ix4);
+	} else {
+		if (file-&gt;acs) err = <a href="machine_indep.c.html#read_raw_acs_data">read_raw_acs_data</a>(file->fname,
+			blknum,1,(char*)dirbufr,SunLong);
+		else err = <a href="machine_indep.c.html#read_matrix_data">read_matrix_data</a>(fptr,blknum,1,(char*)dirbufr,SunLong);
+	}
+	if (err &lt; 0) return(NULL) ;
+
+
+	<a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;nfree = dirbufr[0] ;
+	<a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;nextblk = dirbufr[1] ;
+	<a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;prvblk = dirbufr[2] ;
+	<a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;nused = dirbufr[3] ;
+
+	ndirs = (MatBLKSIZE/4-4)/4 ;
+	for (i=0 ; i&lt;ndirs ; i++)
+	{	
+	   <a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;matdir[i].matnum = 0 ;
+	   <a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;matdir[i].strtblk = 0 ;
+	   <a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;matdir[i].endblk = 0 ;
+	   <a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;matdir[i].matstat = 0 ;
+	}
+
+	for (i=0; i&lt;<a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;nused ; i++)
+	{
+	   j = i+1 ;
+	   <a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;matdir[i].matnum = dirbufr[j*4+0] ;
+	   <a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;matdir[i].strtblk = dirbufr[j*4+1] ;
+	   <a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;matdir[i].endblk = dirbufr[j*4+2] ;
+	   <a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;matdir[i].matstat = dirbufr[j*4+3] ;
+	}
+	return(<a href="matrix.h.html#matdirblk">matdirblk</a>) ;
+}
+
+<LI><H3><a name="mat_read_directory">MatDirList *mat_read_directory(mptr)</a></H3>
+MatrixFile *mptr;
+{
+  struct <a href="matrix.h.html#MatDir">MatDir</a> matdir ;
+  MatDirList	*dirlist ;
+  MatDirBlk	*<a href="matrix.h.html#matdirblk">matdirblk</a>;
+  int		i, blknum ;
+
+	dirlist = (MatDirList *) calloc(1,sizeof(MatDirList)) ;
+	if (dirlist == NULL) return(NULL) ;
+
+	blknum = MatFirstDirBlk ;
+	do
+	{
+	   <a href="matrix.h.html#matdirblk">matdirblk</a> = mat_rdirblk(mptr, blknum) ;
+	   if (<a href="matrix.h.html#matdirblk">matdirblk</a> == NULL) return(NULL) ;
+	   for (i=0 ; i&lt;<a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;nused ; i++)
+	   {
+		<a href="matrix.h.html#matdir">matdir</a>.matnum = 
+		<a href="matrix.h.html#matdir">matdir</a>.strtblk = 
+		<a href="matrix.h.html#matdir">matdir</a>.endblk = 
+		<a href="matrix.h.html#matdir">matdir</a>.matstat = 
+		<a href="matrix_extra.c.html#insert_mdir">insert_mdir</a>(matdir, dirlist) ;
+	   }
+	   blknum = <a href="matrix.h.html#matdirblk">matdirblk</a>-&gt;nextblk ;
+	   free((char *) <a href="matrix.h.html#matdirblk">matdirblk</a>) ;
+	}
+	while (blknum != MatFirstDirBlk) ;
+	return(dirlist) ;
+}
+
+#ifdef __STDC__
+extern char *<a href="analyze.c.html#is_analyze">is_analyze</a>(const char*);
+MatrixFile *<a href="matrix_extra.c.html#matrix_open">matrix_open</a>(const char* fname, int fmode, int mtype)
+#else
+extern char *<a href="analyze.c.html#is_analyze">is_analyze</a>();
+<LI><H3><a name="matrix_open">MatrixFile *matrix_open(fname, fmode, mtype)</a></H3>
+  char	*fname ;
+  int	fmode, mtype ;
+#endif
+{
+  MatrixFile *mptr ;
+  <a href="matrix.h.html#Main_header">Main_header</a> *mhead ;
+  int	status;
+  char *omode;
+
+	omode = "r+";	/* assume READ_WRITE access mode */
+	if (fmode == MAT_READ_ONLY) omode = "r";
+	matrix_errno = OK ;
+
+	/* allocate space for MatrixFile and <a href="make3dfilter.c.html#main">main</a> header data structures */
+	if ( (mptr = (MatrixFile *)calloc(1,sizeof(MatrixFile))) == NULL) {
+		 matrix_errno = MAT_MALLOC_ERR ;
+		 return(NULL) ;
+	}
+
+	if ( (mptr-&gt;mhptr = (<a href="matrix.h.html#Main_header">Main_header</a> *)calloc(1,sizeof(
+		 matrix_errno = MAT_MALLOC_ERR ;
+		 free( mptr);
+		 return(NULL) ;
+	}
+	mptr-&gt;acs = <a href="matrix_extra.c.html#is_acs">is_acs</a>(fname) ;
+	/* read the <a href="make3dfilter.c.html#main">main</a> header from the file */
+	if (mptr-&gt;acs) {				/* located on the ACS filesystem */
+		if ( (status = <a href="rts_cmd.c.html#rts_rmhd">rts_rmhd</a>(fname, mptr-&gt;mhptr)) == ERROR) {
+		  matrix_errno = MAT_ACS_FILE_NOT_FOUND ;
+		  free( mptr-&gt;mhptr);
+		  free( mptr);
+		  return (NULL);
+		}
+	} else	{						/* located on nfs filesystem */
+		if (fmode == MAT_READ_ONLY) { /* check if interfile or analyze format */
+			if ((mptr-&gt;fname=<a href="interfile.c.html#is_interfile">is_interfile</a>(fname)) != NULL) {
+				if (<a href="interfile.c.html#interfile_open">interfile_open</a>(mptr) == ERROR) {
+					matrix_errno = MAT_INTERFILE_OPEN_ERR;
+					<a href="matrix_extra.c.html#matrix_close">matrix_close</a>(mptr);
+					return (NULL);
+				}
+				return mptr;
+			}
+			if ((mptr-&gt;fname=<a href="analyze.c.html#is_analyze">is_analyze</a>(fname)) != NULL) {
+				if (<a href="analyze.c.html#analyze_open">analyze_open</a>(mptr) == ERROR) {
+					matrix_errno = MAT_INTERFILE_OPEN_ERR;
+					<a href="matrix_extra.c.html#matrix_close">matrix_close</a>(mptr);
+					return (NULL);
+				}
+				return mptr;
+			}
+		}
+									/* assume CTI/ECAT format */
+		if ((mptr-&gt;fptr = fopen(fname, omode)) == NULL) {
+	  		matrix_errno = MAT_NFS_FILE_OPEN_ERR ;
+	  		<a href="matrix_extra.c.html#matrix_close">matrix_close</a>(mptr);
+	  		return (NULL);
+		}
+		mptr-&gt;fname = <a href="interfile.c.html#strdup">strdup</a>(fname);
+		if (<a href="matrix.c.html#mat_read_main_header">mat_read_main_header</a>(mptr-&gt;fptr, mptr->mhptr) == ERROR) {
+			matrix_errno = MAT_NOMHD_FILE_OBJECT ;
+			<a href="matrix_extra.c.html#matrix_close">matrix_close</a>(mptr);
+			return(NULL);
+		}
+	}
+
+	/*
+	   if the matrix type doesn't match the requested type, that's
+	   an error. Specify matrix type NoData to open any type.
+	*/
+	if (mtype != NoData && mtype != mptr-&gt;mhptr->file_type) {
+		matrix_errno = MAT_FILE_TYPE_NOT_MATCH ;
+		<a href="matrix_extra.c.html#matrix_close">matrix_close</a>(mptr);
+		return (NULL);
+	}
+
+	/* read and store the matrix file directory.  */
+	mptr-&gt;dirlist = <a href="matrix_extra.c.html#mat_read_directory">mat_read_directory</a>(mptr);
+	if (matrix_errno ==OK) return(mptr) ;
+	<a href="matrix_extra.c.html#matrix_close">matrix_close</a>( mptr);
+	return(NULL) ;
+}
+
+#ifdef __STDC__
+MatrixFile *<a href="matrix_extra.c.html#matrix_create">matrix_create</a>( const char *fname,int fmode,Main_header *proto_mhptr)
+#else
+<LI><H3><a name="matrix_create">MatrixFile *matrix_create( fname, fmode, proto_mhptr)</a></H3>
+  char *fname;
+  int fmode;
+  <a href="matrix.h.html#Main_header">Main_header</a> *proto_mhptr;
+#endif
+{
+	MatrixFile *mptr=NULL;
+	FILE *fptr, *<a href="matpkg2.c.html#mat_create">mat_create</a>();
+
+	matrix_errno = MAT_OK;
+	switch( fmode)
+	{
+	  case MAT_READ_WRITE:
+	  case MAT_OPEN_EXISTING:
+		mptr = <a href="matrix_extra.c.html#matrix_open">matrix_open</a>( fname, MAT_READ_WRITE, proto_mhptr-&gt;file_type);
+		if (mptr) break;
+	/*
+		if (matrix_errno != MAT_NFS_FILE_NOT_FOUND) break;
+	*	if we got an NFS_FILE_NOT_FOUND error, then try to
+	*	create the matrix file.
+	*/
+	  case MAT_CREATE:
+	  case MAT_CREATE_NEW_FILE:
+		matrix_errno = MAT_OK;
+		if (<a href="matrix_extra.c.html#is_acs">is_acs</a>(fname))
+		{
+		  matrix_errno = MAT_ACS_CREATE_ERR;
+		  break;
+		}
+		fptr = <a href="matpkg2.c.html#mat_create">mat_create</a>( fname, proto_mhptr);
+		if (!fptr)
+		{
+		  matrix_errno = MAT_NFS_CREATE_ERR;
+		  break;
+		}
+		mptr = (MatrixFile*) calloc( 1, sizeof(MatrixFile));
+		if (!mptr)
+		{
+		  matrix_errno = MAT_MALLOC_ERR;
+		  break;
+		}
+		mptr-&gt;fptr = fptr;
+		mptr-&gt;fname = (char*) malloc( strlen(fname)+1);
+		strcpy( mptr-&gt;fname, fname);
+		mptr-&gt;mhptr = (<a href="matrix.h.html#Main_header">Main_header</a>*)malloc(sizeof(
+		memcpy(mptr-&gt;mhptr,proto_mhptr,sizeof(<a href="matrix.h.html#Main_header">Main_header</a>));
+		mptr-&gt;dirlist = <a href="matrix_extra.c.html#mat_read_directory">mat_read_directory</a>(mptr);
+		break;
+	  default:
+		matrix_errno = MAT_BAD_FILE_ACCESS_MODE;
+		break;
+	}
+	return mptr;
+}
+
+<LI><H3><a name="matrix_close">matrix_close(mptr)</a></H3>
+
+  MatrixFile *mptr ;
+{
+	if (mptr == NULL) return ;
+	if (mptr-&gt;mhptr != NULL) free(mptr->mhptr) ;
+	if (mptr-&gt;dirlist != NULL) <a href="matrix_extra.c.html#matrix_freelist">matrix_freelist</a>(mptr->dirlist) ;
+	if (mptr-&gt;fptr) fclose(mptr->fptr);
+	if (mptr-&gt;fname) free(mptr->fname);
+	free(mptr) ;
+}
+
+<LI><H3><a name="matrix_read">MatrixData *matrix_read(mptr, matnum, dtype)</a></H3>
+
+  MatrixFile *mptr ;
+  int	matnum, dtype ;
+{
+  int	status ;
+  MatrixData *data ;
+
+	matrix_errno = OK ;
+	if (mptr == NULL) matrix_errno = MAT_READ_FROM_NILFPTR ;
+	else if (mptr-&gt;mhptr == NULL) matrix_errno = MAT_NOMHD_FILE_OBJECT ;
+	if (matrix_errno != OK) return(NULL) ;
+	/* allocate space for MatrixData structure and initialize */
+	data = (MatrixData *) calloc( 1, sizeof(MatrixData)) ;
+	if (data == NULL)
+	{
+	   matrix_errno = MAT_MALLOC_ERR ;
+	   return(NULL) ;
+	}
+
+	/* allocate space for subheader and initialize */
+	data-&gt;shptr = (caddr_t) calloc(2, MatBLKSIZE) ;
+	if (data-&gt;shptr == NULL)
+	{
+	   matrix_errno = MAT_MALLOC_ERR ;
+	   return(NULL) ;
+	}
+
+	if (read_z_data(mptr, matnum, data, dtype) != OK)
+	{
+	   <a href="matrix_extra.c.html#free_matrix_data">free_matrix_data</a>(data) ;
+	   data = NULL ;
+	}
+	else if ( dtype != NoData && data-&gt;data_type != dtype)
+	  <a href="matrix_extra.c.html#matrix_convert_data">matrix_convert_data</a>( data, dtype) ;
+	return(data) ;
+}
+	
+
+<LI><H3><a name="matrix_write">matrix_write(mptr, matnum, data)</a></H3>
+
+  MatrixFile *mptr ;
+  MatrixData *data ;
+  int	matnum;
+{
+  int	status ;
+
+	matrix_errno = OK ;
+	if (mptr == NULL) matrix_errno = MAT_READ_FROM_NILFPTR ;
+	else if (mptr-&gt;mhptr == NULL) matrix_errno = MAT_NOMHD_FILE_OBJECT ;
+	else if (data-&gt;shptr == NULL) matrix_errno = MAT_NIL_SHPTR ;
+	else if (data-&gt;data_ptr == NULL) matrix_errno = MAT_NIL_DATA_PTR ;
+	if (matrix_errno != OK) return (ERROR) ;
+	return  write_z_data(mptr, matnum, data);
+} 
+
+#ifdef __STDC__
+int <a href="matrix_extra.c.html#find_bmax">find_bmax</a>(const u_char *bdata, int nvals)
+#else
+<LI><H3><a name="find_bmax">int find_bmax( bdata, nvals)</a></H3>
+  u_char *bdata;
+  int nvals;
+#endif
+{
+	int i, bmax=bdata[0];
+	for (i=1; i&lt;nvals; i++)
+	  if (bdata[i]&gt;bmax) bmax = bdata[i];
+	return bmax;
+}
+#ifdef __STDC__
+int <a href="matrix_extra.c.html#find_bmin">find_bmin</a>(const u_char *bdata, int nvals)
+#else
+<LI><H3><a name="find_bmin">int find_bmin( bdata, nvals)</a></H3>
+  u_char *bdata;
+  int nvals;
+#endif
+{
+	int i, bmin=bdata[0];
+	for (i=1; i&lt;nvals; i++)
+	  if (bdata[i]&lt;bmin) bmin = bdata[i];
+	return bmin;
+}
+
+#ifdef __STDC__
+int <a href="matrix_extra.c.html#find_smax">find_smax</a>( const short *sdata, int nvals)
+#else
+<LI><H3><a name="find_smax">int find_smax( sdata, nvals)</a></H3>
+  short *sdata;
+  int nvals;
+#endif
+{
+	int i, smax=sdata[0];
+	for (i=1; i&lt;nvals; i++)
+	  if (sdata[i]&gt;smax) smax = sdata[i];
+	return smax;
+}
+#ifdef __STDC__
+int <a href="matrix_extra.c.html#find_smin">find_smin</a>( const short *sdata, int nvals)
+#else
+<LI><H3><a name="find_smin">int find_smin( sdata, nvals)</a></H3>
+  short *sdata;
+  int nvals;
+#endif
+{
+	int i, smin=sdata[0];
+	for (i=1; i&lt;nvals; i++)
+	  if (sdata[i]&lt;smin) smin = sdata[i];
+	return smin;
+}
+
+#ifdef __STDC__
+int <a href="matrix_extra.c.html#find_imax">find_imax</a>( const int *idata, int nvals)
+#else
+<LI><H3><a name="find_imax">int find_imax( idata, nvals)</a></H3>
+  int *idata;
+  int nvals;
+#endif
+{
+	int i, imax=idata[0];
+	for (i=1; i&lt;nvals; i++)
+	  if (idata[i]&gt;imax) imax = idata[i];
+	return imax;
+}
+#ifdef __STDC__
+int <a href="matrix_extra.c.html#find_imin">find_imin</a>( const int *idata, int nvals)
+#else
+<LI><H3><a name="find_imin">int find_imin( idata, nvals)</a></H3>
+  int *idata;
+  int nvals;
+#endif
+{
+	int i, imin=idata[0];
+	for (i=1; i&lt;nvals; i++)
+	  if (idata[i]&lt;imin) imin = idata[i];
+	return imin;
+}
+
+#ifdef __STDC__
+float <a href="matrix_extra.c.html#find_fmin">find_fmin</a>( const float *fdata, int nvals)
+#else
+<LI><H3><a name="find_fmin">float find_fmin( fdata, nvals)</a></H3>
+  float *fdata;
+  int nvals;
+#endif
+{
+	int i;
+	float fmin = fdata[0];
+	for (i=1; i&lt;nvals; i++)
+	  if (fdata[i]&lt;fmin) fmin = fdata[i];
+	return fmin;
+}
+#ifdef __STDC__
+float <a href="matrix_extra.c.html#find_fmax">find_fmax</a>( const float *fdata, int nvals)
+#else
+<LI><H3><a name="find_fmax">float find_fmax( fdata, nvals)</a></H3>
+  float *fdata;
+  int nvals;
+#endif
+{
+	int i;
+	float fmax = fdata[0];
+	for (i=1; i&lt;nvals; i++)
+	  if (fdata[i]&gt;fmax) fmax = fdata[i];
+	return fmax;
+}
+
+<LI><H3><a name="read_host_data">read_host_data(mptr, matnum, data, dtype) </a></H3>
+
+  MatrixFile	*mptr ;
+  MatrixData	*data ;
+  int	matnum , dtype;
+
+ {
+  struct <a href="matrix.h.html#MatDir">MatDir</a> matdir;
+  int	file_pos, slice_blks, nblks, status,data_size ;
+  <a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *scansub ;
+  Scan3D_subheader *scan3Dsub ;
+  <a href="matrix.h.html#Image_subheader">Image_subheader</a> *imagesub ;
+  <a href="matrix.h.html#Attn_subheader">Attn_subheader</a> *attnsub ;
+  <a href="matrix.h.html#Norm_subheader">Norm_subheader</a> *normsub ;
+  Norm3D_subheader *norm3d;
+  int x,y,z,sx,sy,sz;
+  int elem_size= 2, datasize;
+
+	if (mptr-&gt;interfile_header)		 /* read interfile */
+		return <a href="interfile.c.html#interfile_read">interfile_read</a>(mptr, matnum, data, dtype);
+	if (<a href="matrix_extra.c.html#matrix_find">matrix_find</a>(mptr,matnum,&matdir) == ERROR)
+	{
+	   matrix_errno = MAT_MATRIX_NOT_FOUND ;
+	   return(ERROR) ;
+	}
+
+	data-&gt;matnum = matnum;
+	data-&gt;matfile = mptr;
+	data-&gt;mat_type = mptr->mhptr->file_type;
+	nblks = <a href="matrix.h.html#matdir">matdir</a>.endblk - 
+	data_size = data-&gt;data_size = 512*nblks;
+	if (dtype != MAT_SUB_HEADER)
+	{
+	  data-&gt;data_ptr = (caddr_t) calloc(1, data_size) ;
+	  if (data-&gt;data_ptr == NULL)
+	  {
+		 matrix_errno = MAT_MALLOC_ERR ;
+		 return(ERROR) ;
+	  }
+	} 
+	switch(mptr-&gt;mhptr->file_type)
+	{
+	   case Sinogram :
+		scansub = (<a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *) data-&gt;shptr ;
+		<a href="matrix.c.html#mat_read_scan_subheader">mat_read_scan_subheader</a>(mptr, matdir.strtblk, scansub) ;
+		data-&gt;data_type = scansub->data_type ;
+		data-&gt;xdim = scansub->num_r_elements ;
+		data-&gt;ydim = scansub-><a href="convert_64.c.html#num_angles">num_angles</a> ;
+		data-&gt;zdim = scansub->num_z_elements ;
+		data-&gt;scale_factor = scansub->scale_factor ;
+		data-&gt;pixel_size = scansub->x_resolution;
+		data-&gt;data_max = scansub->scan_max * scansub->scale_factor ;
+		if (dtype == MAT_SUB_HEADER) break;
+		if (mptr-&gt;acs) <a href="machine_indep.c.html#read_raw_acs_data">read_raw_acs_data</a>(mptr->fname, matdir.strtblk+1,
+			nblks, data-&gt;data_ptr, scansub->data_type);
+		else <a href="machine_indep.c.html#read_matrix_data">read_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1, nblks,
+		  data-&gt;data_ptr, scansub->data_type) ;
+		break ;
+	   case Short3dSinogram :
+		scan3Dsub = (Scan3D_subheader *) data-&gt;shptr ;
+		mat_read_Scan3D_subheader(mptr, <a href="matrix.h.html#matdir">matdir</a>.strtblk, scan3Dsub) ;
+		data-&gt;data_type = scan3Dsub->data_type ;
+
+		data-&gt;scale_factor = scan3Dsub->scale_factor ;
+		data-&gt;pixel_size = scan3Dsub->x_resolution;
+		data-&gt;data_max = scan3Dsub->scan_max * scan3Dsub->scale_factor ;
+		sx = data-&gt;xdim = scan3Dsub->num_r_elements ;
+		sz = data-&gt;ydim = scan3Dsub-><a href="convert_64.c.html#num_angles">num_angles</a> ;
+		sy = data-&gt;zdim = scan3Dsub->num_z_elements[0] ;
+		if (dtype == MAT_SUB_HEADER) break;
+
+		<a href="machine_indep.c.html#read_matrix_data">read_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+2, nblks,
+		  		data-&gt;data_ptr, scan3Dsub->data_type) ;
+		scan3Dsub-&gt;scan_max = <a href="matrix_extra.c.html#find_smax">find_smax</a>((short*)data->data_ptr,sx*sy*sz);
+		scan3Dsub-&gt;scan_min = <a href="matrix_extra.c.html#find_smin">find_smin</a>((short*)data->data_ptr,sx*sy*sz);
+		data-&gt;data_max = scan3Dsub->scan_max * scan3Dsub->scale_factor;
+		data-&gt;data_min = scan3Dsub->scan_min * scan3Dsub->scale_factor;
+		break ;
+	   case ByteVolume :
+	   case PetImage :
+	   case PetVolume :
+	   case InterfileImage:
+		imagesub = (<a href="matrix.h.html#Image_subheader">Image_subheader</a> *) data-&gt;shptr ;
+		<a href="matrix.c.html#mat_read_image_subheader">mat_read_image_subheader</a>(mptr, matdir.strtblk, imagesub);
+		data-&gt;data_type = imagesub->data_type ;
+		sx = data-&gt;xdim = imagesub->x_dimension ;
+		sy = data-&gt;ydim = imagesub->y_dimension ;
+		data-&gt;scale_factor = imagesub->scale_factor ;
+		if (data-&gt;data_type==ByteData || data->data_type==ColorData) elem_size =1 ;
+		else elem_size = 2;
+		sz = data-&gt;zdim = imagesub->z_dimension ;
+		if (data-&gt;data_size/(sx*sy*elem_size) != sz) { 	/* correct header */
+			imagesub-&gt;z_dimension = data->data_size/(sx*sy*elem_size);
+			sz = data-&gt;zdim = imagesub->z_dimension;
+		}
+		data-&gt;pixel_size = imagesub->x_pixel_size;
+		data-&gt;y_size = imagesub->y_pixel_size;
+				/* if imagesub-&gt;y_pixel_size not filled assume square pixels */
+		if (data-&gt;y_size &lt;= 0) data->y_size = imagesub->x_pixel_size;
+		data-&gt;z_size = imagesub->z_pixel_size;
+				/* if imagesub-&gt;z_pixel_size not filled use palne separation */
+		if (data-&gt;z_size &lt;= 0) data->z_size = mptr->mhptr->plane_separation;
+		data-&gt;data_max = imagesub->image_max * imagesub->scale_factor;
+		if (dtype == MAT_SUB_HEADER) break;
+		<a href="machine_indep.c.html#read_matrix_data">read_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1, nblks,
+		  data-&gt;data_ptr, imagesub->data_type) ;
+		if (imagesub-&gt;data_type == ByteData) {
+			imagesub-&gt;image_max = <a href="matrix_extra.c.html#find_bmax">find_bmax</a>((u_char*)data->data_ptr,sx*sy*sz);
+			imagesub-&gt;image_min = <a href="matrix_extra.c.html#find_bmin">find_bmin</a>((u_char*)data->data_ptr,sx*sy*sz);
+		} else {
+			imagesub-&gt;image_max = <a href="matrix_extra.c.html#find_smax">find_smax</a>((short*)data->data_ptr,sx*sy*sz);
+			imagesub-&gt;image_min = <a href="matrix_extra.c.html#find_smin">find_smin</a>((short*)data->data_ptr,sx*sy*sz);
+		}
+		data-&gt;data_max = imagesub->image_max * imagesub->scale_factor;
+		data-&gt;data_min = imagesub->image_min * imagesub->scale_factor;
+		break ;
+	   case AttenCor :
+		attnsub = (<a href="matrix.h.html#Attn_subheader">Attn_subheader</a> *) data-&gt;shptr ;
+		<a href="matrix.c.html#mat_read_attn_subheader">mat_read_attn_subheader</a>(mptr, matdir.strtblk, attnsub);
+		data-&gt;data_type = attnsub->data_type ;
+		sx = data-&gt;xdim = attnsub->num_r_elements ;
+		sz = data-&gt;ydim = attnsub-><a href="convert_64.c.html#num_angles">num_angles</a> ;
+		sy = data-&gt;zdim = attnsub->z_elements[0] ;
+		data-&gt;scale_factor = attnsub->scale_factor;
+		data-&gt;pixel_size = attnsub->x_resolution;
+		if (dtype == MAT_SUB_HEADER) break;
+		<a href="machine_indep.c.html#read_matrix_data">read_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1, nblks,
+			data-&gt;data_ptr, attnsub->data_type);
+		data-&gt;data_max = <a href="matrix_extra.c.html#find_fmax">find_fmax</a>((float*)data->data_ptr,sx*sy*sz);
+		break ;
+	   case Normalization :
+		normsub = (<a href="matrix.h.html#Norm_subheader">Norm_subheader</a> *) data-&gt;shptr ;
+		<a href="matrix.c.html#mat_read_norm_subheader">mat_read_norm_subheader</a>(mptr, matdir.strtblk, normsub) ;
+		data-&gt;data_type = normsub->data_type ;
+		data-&gt;xdim = normsub->num_r_elements ;
+		data-&gt;ydim = normsub-><a href="convert_64.c.html#num_angles">num_angles</a> ;
+		data-&gt;zdim = normsub->num_z_elements ;
+		data-&gt;scale_factor = normsub->scale_factor ;
+		if (dtype == MAT_SUB_HEADER) break;
+		<a href="machine_indep.c.html#read_matrix_data">read_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1, nblks,
+		  data-&gt;data_ptr, normsub->data_type) ;
+		data-&gt;data_max = data->scale_factor * 
+		  <a href="matrix_extra.c.html#find_fmax">find_fmax</a>((float*)data-&gt;data_ptr, data->xdim * data->ydim);
+		break ;
+	   case Norm3d :
+		norm3d = (Norm3D_subheader *) data-&gt;shptr ;
+		mat_read_norm3d_subheader(mptr, <a href="matrix.h.html#matdir">matdir</a>.strtblk, norm3d) ;
+		data-&gt;data_type = norm3d->data_type ;
+		data-&gt;xdim = norm3d->num_r_elements;	/* 336 */
+		data-&gt;ydim = norm3d->crystals_per_ring;	/* 784 */
+		data-&gt;zdim = norm3d->num_crystal_rings;	/* 24 */
+		data-&gt;scale_factor = 1;
+		if (dtype == MAT_SUB_HEADER) break;
+		datasize = norm3d-&gt;num_r_elements *
+			(norm3d-&gt;num_geo_corr_planes + norm3d->num_transaxial_crystals) +
+			norm3d-&gt;num_crystal_rings * norm3d->crystals_per_ring;
+/*
+		336*(1+7) + 24*784
+		336*(1+7) =
+		radial elements (plane geometry + Crystal Interference) Corrections
+		24*784 = cristals efficiencies
+*/
+		data-&gt;data_ptr = malloc(datasize*sizeof(float));
+		<a href="machine_indep.c.html#read_matrix_data">read_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1, nblks,
+		  data-&gt;data_ptr, norm3d->data_type) ;
+		break ;
+	   default :
+		matrix_errno = MAT_UNKNOWN_FILE_TYPE ;
+		return(ERROR) ;
+		break ;
+	}
+	return(OK) ;
+}
+
+<LI><H3><a name="write_host_data">write_host_data(mptr, matnum, data)</a></H3>
+
+  MatrixFile *mptr ;
+  MatrixData *data ;
+  int	matnum ;
+{
+  struct <a href="matrix.h.html#MatDir">MatDir</a> matdir, dir_entry ;
+  <a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *scansub ;
+  <a href="matrix.h.html#Image_subheader">Image_subheader</a> *imagesub ;
+  <a href="matrix.h.html#Attn_subheader">Attn_subheader</a> *attnsub ;
+  <a href="matrix.h.html#Norm_subheader">Norm_subheader</a> *normsub ;
+  int	status, blkno, nblks ;
+	
+	status = OK ;
+	nblks = (data-&gt;data_size+511)/512;
+	if (<a href="matrix_extra.c.html#matrix_find">matrix_find</a>(mptr, matnum, &matdir) == ERROR)
+	{
+	   blkno = <a href="matrix.c.html#mat_enter">mat_enter</a>(mptr, matnum, nblks) ;
+	   dir_entry.matnum = matnum ;
+	   dir_entry.strtblk = blkno ;
+	   dir_entry.endblk = dir_entry.strtblk + nblks - 1 ;
+	   dir_entry.matstat = 1 ;
+	   <a href="matrix_extra.c.html#insert_mdir">insert_mdir</a>(dir_entry, mptr-&gt;dirlist) ;
+	   <a href="matrix.h.html#matdir">matdir</a> = dir_entry ;
+	}
+
+	switch(mptr-&gt;mhptr->file_type)
+	{
+	   case Sinogram :
+		  scansub = (<a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *) data-&gt;shptr ;
+		  <a href="matrix.c.html#mat_write_scan_subheader">mat_write_scan_subheader</a>(mptr, matdir.strtblk, data-&gt;shptr);
+		  status = <a href="machine_indep.c.html#write_matrix_data">write_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1,
+			nblks, data-&gt;data_ptr, scansub->data_type) ;
+		  break ;
+	   case ByteVolume :
+	   case PetImage :
+	   case PetVolume :
+		  imagesub = (<a href="matrix.h.html#Image_subheader">Image_subheader</a> *) data-&gt;shptr ;
+		  <a href="matrix.c.html#mat_write_image_subheader">mat_write_image_subheader</a>(mptr,matdir.strtblk,data-&gt;shptr);
+		  status = <a href="machine_indep.c.html#write_matrix_data">write_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1,
+			nblks, data-&gt;data_ptr, imagesub->data_type) ;
+		  break ;
+	   case InterfileImage:
+			imagesub = (<a href="matrix.h.html#Image_subheader">Image_subheader</a> *) calloc(2, MatBLKSIZE) ;
+			imagesub-&gt;x_pixel_size = data->pixel_size;
+			imagesub-&gt;y_pixel_size = data->y_size;
+			imagesub-&gt;z_pixel_size = data->z_size;
+			imagesub-&gt;num_dimensions = 3;
+			imagesub-&gt;x_dimension = data->xdim;
+			imagesub-&gt;y_dimension = data->ydim;
+			imagesub-&gt;z_dimension = data->zdim;
+			imagesub-&gt;image_max = (int)(data->data_max/data->scale_factor);
+			imagesub-&gt;image_min = (int)(data->data_min/data->scale_factor);
+			imagesub-&gt;scale_factor = data->scale_factor;
+			imagesub-&gt;data_type = data->data_type;
+		  	<a href="matrix.c.html#mat_write_image_subheader">mat_write_image_subheader</a>(mptr,matdir.strtblk,imagesub);
+		  	status = <a href="machine_indep.c.html#write_matrix_data">write_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1,
+				nblks, data-&gt;data_ptr, imagesub->data_type) ;
+			free(imagesub);
+			break;
+	   case AttenCor :
+		  attnsub = (<a href="matrix.h.html#Attn_subheader">Attn_subheader</a> *) data-&gt;shptr ;
+		  <a href="matrix.c.html#mat_write_attn_subheader">mat_write_attn_subheader</a>(mptr, matdir.strtblk, data-&gt;shptr);
+		  status = <a href="machine_indep.c.html#write_matrix_data">write_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1,
+			nblks, data-&gt;data_ptr, attnsub->data_type) ;
+		  break ;
+	   case Normalization :
+		  normsub = (<a href="matrix.h.html#Norm_subheader">Norm_subheader</a> *) data-&gt;shptr ;
+		  <a href="matrix.c.html#mat_write_norm_subheader">mat_write_norm_subheader</a>(mptr, matdir.strtblk, data-&gt;shptr);
+		  status = <a href="machine_indep.c.html#write_matrix_data">write_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1,
+			nblks, data-&gt;data_ptr, normsub->data_type) ;
+		  break ;
+	   default :	/* default treated as sinogram */
+		  scansub = (<a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *) data-&gt;shptr ;
+		  <a href="matrix.c.html#mat_write_scan_subheader">mat_write_scan_subheader</a>(mptr, matdir.strtblk, data-&gt;shptr);
+		  status = <a href="machine_indep.c.html#write_matrix_data">write_matrix_data</a>(mptr-&gt;fptr, matdir.strtblk+1,
+			nblks, data-&gt;data_ptr, scansub->data_type) ;
+		  break ;
+	}
+	return(status) ;
+}
+
+<LI><H3><a name="matrix_find">int matrix_find( matfile, matnum, matdir)</a></H3>
+  MatrixFile *matfile ;
+  int	matnum ;
+  struct <a href="matrix.h.html#MatDir">MatDir</a> *matdir;
+{
+  MatDirNode	*node ;
+
+	if (matfile == NULL) return(ERROR) ;
+	if (matfile-&gt;dirlist == NULL) return(ERROR) ;	
+	node = matfile-&gt;dirlist->first ;
+	while (node != NULL)
+	{
+	   if (node-&gt;matnum == matnum)
+	   {
+		<a href="matrix.h.html#matdir">matdir</a>-&gt;matnum = node->matnum ;
+		<a href="matrix.h.html#matdir">matdir</a>-&gt;strtblk = node->strtblk ;
+		<a href="matrix.h.html#matdir">matdir</a>-&gt;endblk = node->endblk ;
+		<a href="matrix.h.html#matdir">matdir</a>-&gt;matstat = node->matstat ;
+		break ;
+	   }
+	   node = node-&gt;next ;
+	}
+	if (node != NULL) return(OK) ;
+	else return(ERROR) ;
+}
+	
+
+<LI><H3><a name="matrix_freelist">matrix_freelist(matdirlist)</a></H3>
+
+  MatDirList	*<a href="matrix.h.html#matdirlist">matdirlist</a> ;
+
+{
+  MatDirNode	*node, *next ;
+
+	if (<a href="matrix.h.html#matdirlist">matdirlist</a> == NULL) return ;
+	if (<a href="matrix.h.html#matdirlist">matdirlist</a>-&gt;first != NULL)
+	{
+	  node = <a href="matrix.h.html#matdirlist">matdirlist</a>-&gt;first ;
+	  do
+	  {
+		next = node-&gt;next ;
+		free(node) ;
+		node = next ;
+	  }
+	  while(next != NULL) ;
+	}
+	free(<a href="matrix.h.html#matdirlist">matdirlist</a>) ;
+}
+
+<LI><H3><a name="insert_mdir">insert_mdir(matdir, dirlist)</a></H3>
+
+  MatDirList	*dirlist ;
+  struct <a href="matrix.h.html#MatDir">MatDir</a>	matdir ;
+
+{
+  MatDirNode	*node ;
+ 
+	if (dirlist == NULL)
+	{
+		dirlist = (MatDirList *) malloc(sizeof(MatDirList)) ;
+		if (dirlist == NULL) return(ERROR) ;
+		dirlist-&gt;nmats = 0 ;
+		dirlist-&gt;first = NULL ;
+		dirlist-&gt;last = NULL ;
+	}
+	node = (MatDirNode *) malloc(sizeof(MatDirNode)) ;
+	if (node == NULL) return(ERROR) ;
+
+	node-&gt;matnum = <a href="matrix.h.html#matdir">matdir</a>.matnum ;
+	node-&gt;strtblk = <a href="matrix.h.html#matdir">matdir</a>.strtblk ;
+	node-&gt;endblk = <a href="matrix.h.html#matdir">matdir</a>.endblk ;
+	node-&gt;matstat = <a href="matrix.h.html#matdir">matdir</a>.matstat;
+	node-&gt;next = NULL ;
+
+	if (dirlist-&gt;first == NULL)	/* if list was empty, add first node */
+	{
+	   dirlist-&gt;first = node ;
+	   dirlist-&gt;last = node ;
+	   dirlist-&gt;nmats = 1 ;
+	}
+	else
+	{
+	   (dirlist-&gt;last)->next = node ;
+	   dirlist-&gt;last = node ;
+	   ++(dirlist-&gt;nmats) ;
+	}
+}
+
+<LI><H3><a name="free_matrix_data">void free_matrix_data(data)</a></H3>
+
+  MatrixData	*data ;
+
+{
+	if (data != NULL)
+	{
+	   if (data-&gt;data_ptr != NULL) free(data->data_ptr) ;
+	   if (data-&gt;shptr != NULL) free(data->shptr) ;
+	   free(data) ;
+	}
+
+}
+
+
+<LI><H3><a name="matrix_convert_data">matrix_convert_data()</a></H3>
+{
+	return OK ;	/* dummy for now */
+}
+
+
+#include	 &lt;<A NAME=851 HREF="sys/types.h.html">sys/types.h</A>&gt; 
+#include	 &lt;<A NAME=852 HREF="sys/stat.h.html">sys/stat.h</A>&gt; 
+
+<LI><H3><a name="file_exists">file_exists(filename)	/* subroutine to see if file exists or not */</a></H3>
+
+  char *filename ;
+
+{
+  struct stat stbuf ;
+  int	status ;
+  <a href="matrix.h.html#Main_header">Main_header</a> mhead ;
+
+	if (!<a href="matrix_extra.c.html#is_acs">is_acs</a>(filename))
+	{
+	   if (stat(filename, &stbuf) == -1) return(FALSE) ;
+	   return(TRUE) ;
+	}
+	else
+	{
+	   status  = <a href="rts_cmd.c.html#rts_rmhd">rts_rmhd</a>(filename, &mhead) ;
+	   if (status == OK) return(TRUE) ;
+	   else return(FALSE) ;
+	}
+}
+
+<LI><H3><a name="is_acs">is_acs(fname)</a></H3>
+
+  char	*fname ;
+
+{
+ 	if (<a href="matrix_extra.c.html#strindex">strindex</a>(fname, "/sd") == 0)
+		return(TRUE) ; 
+	else
+	   return(FALSE) ;
+}
+
+/* subroutine to return starting position of substring within string */
+/* return index of t in s, -1 if none */
+
+<LI><H3><a name="strindex">strindex(s, t)</a></H3>
+
+  char	s[], t[] ;
+
+{
+  int	i, j, k ;
+
+	for (i=0 ; s[i] !='\0' ; i++)
+	{
+	   for (j=i, k=0 ; t[k] != '\0' && s[j]==t[k] ; j++, k++) ;
+	   if (k &gt; 0 && t[k] == '\0') return i ;
+	}
+	return -1 ;
+}
+
+#ifdef __STDC__
+void <a href="matrix_extra.c.html#matrix_perror">matrix_perror</a>( const char* s)
+#else
+<LI><H3><a name="matrix_perror">void matrix_perror( s)</a></H3>
+  char *s;
+#endif
+{
+	fprintf( stderr, "%s: %s\n", s, matrix_errors[matrix_errno]);
+	exit(-1);
+}
+
+#include  &lt;<A NAME=916 HREF="varargs.h.html">varargs.h</A>&gt; 
+
+static int item_size[]={ 0, 1, 2, 4, 4, 4, 2, 4 };
+
+<LI><H3><a name="matrix_object_create">MatrixData *matrix_object_create( va_alist)</a></H3>
+va_dcl
+{
+
+	va_list arp;
+	MatrixData *object, *proto_object=NULL;
+	<a href="matrix.h.html#MatrixObjectAttribute">MatrixObjectAttribute</a> attrib;
+	int nitems;
+	<a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *ssh;
+	<a href="matrix.h.html#Image_subheader">Image_subheader</a> *ish;
+	<a href="matrix.h.html#Attn_subheader">Attn_subheader</a> *ash;
+	<a href="matrix.h.html#Norm_subheader">Norm_subheader</a> *nsh;
+
+	object = (MatrixData*) calloc( 1, sizeof(MatrixData));
+	if (!object)
+	{
+	  matrix_errno = MAT_MALLOC_ERR;
+	  return NULL;
+	}
+	va_start( arp);
+	object-&gt;mat_type = va_arg( arp, int);
+	while (attrib = va_arg( arp, <a href="matrix.h.html#MatrixObjectAttribute">MatrixObjectAttribute</a>))
+	  switch( attrib)
+	  {
+		case MAT_XDIM:
+			object-&gt;xdim = va_arg( arp, int);
+			break;
+		case MAT_YDIM:
+			object-&gt;ydim = va_arg( arp, int);
+			break;
+		case MAT_ZDIM:
+			object-&gt;zdim = va_arg( arp, int);
+			break;
+		case MAT_DATA_TYPE:
+			object-&gt;data_type = va_arg( arp, int);
+			break;
+		case MAT_SCALE_FACTOR:
+			object-&gt;scale_factor = va_arg( arp, double);
+			break;
+		case MAT_PIXEL_SIZE:
+			object-&gt;pixel_size = va_arg( arp, double);
+			break;
+		case MAT_Y_SIZE:
+			object-&gt;y_size = va_arg( arp, double);
+			break;
+		case MAT_Z_SIZE:
+			object-&gt;z_size = va_arg( arp, double);
+			break;
+		case MAT_DATA_MAX:
+			object-&gt;data_max = va_arg( arp, double);
+			break;
+		case MAT_DATA_MIN:
+			object-&gt;data_min = va_arg( arp, double);
+			break;
+		case MAT_PROTO:
+			proto_object = va_arg( arp, MatrixData*);
+			<a href="matrix_extra.c.html#copy_proto_object">copy_proto_object</a>( object, proto_object);
+			break;
+		default:
+			matrix_errno = MAT_BAD_ATTRIBUTE;
+			return NULL;
+	  }
+	nitems = object-&gt;xdim*object->ydim;
+	if (object-&gt;zdim>0) nitems *= object->zdim;
+	object-&gt;data_size = item_size[(int)object->data_type]*nitems;
+	object-&gt;data_ptr = (caddr_t) calloc( 1, object->data_size);
+	if (!object-&gt;data_ptr)
+	{
+		matrix_errno = MAT_MALLOC_ERR;
+		return NULL;
+	}
+	if (!object-&gt;shptr) switch( object->mat_type)
+	{
+	  case Sinogram:
+		object-&gt;shptr = calloc( 1, sizeof(<a href="matrix.h.html#Scan_subheader">Scan_subheader</a>));
+		ssh = (<a href="matrix.h.html#Scan_subheader">Scan_subheader</a>*)(object-&gt;shptr);
+		ssh-&gt;data_type = object->data_type;
+		ssh-&gt;num_r_elements = object->xdim;
+		ssh-&gt;<a href="convert_64.c.html#num_angles">num_angles</a> = object->ydim;
+		ssh-&gt;x_resolution = object->pixel_size;
+		ssh-&gt;scale_factor = object->scale_factor;
+		break;
+	  case PetVolume:
+		object-&gt;shptr = calloc( 1, sizeof(<a href="matrix.h.html#Image_subheader">Image_subheader</a>));
+		ish = (<a href="matrix.h.html#Image_subheader">Image_subheader</a>*)(object-&gt;shptr);
+		ish-&gt;data_type = object->data_type;
+		ish-&gt;num_dimensions = 2;
+		ish-&gt;x_dimension = object->xdim;
+		ish-&gt;y_dimension = object->ydim;
+		ish-&gt;x_pixel_size = ish->y_pixel_size = object->pixel_size;
+		ish-&gt;scale_factor = object->scale_factor;
+		break;
+	  case AttenCor:
+		object-&gt;shptr = calloc( 1, sizeof(<a href="matrix.h.html#Attn_subheader">Attn_subheader</a>));
+		ash = (<a href="matrix.h.html#Attn_subheader">Attn_subheader</a>*)(object-&gt;shptr);
+		ash-&gt;data_type = object->data_type;
+		ash-&gt;num_r_elements = object->xdim;
+		ash-&gt;<a href="convert_64.c.html#num_angles">num_angles</a> = object->ydim;
+		ash-&gt;x_resolution = object->pixel_size;
+		ash-&gt;scale_factor = object->scale_factor;
+		break;
+	  case Normalization:
+		object-&gt;shptr = calloc( 1, sizeof(<a href="matrix.h.html#Norm_subheader">Norm_subheader</a>));
+		nsh =  (<a href="matrix.h.html#Norm_subheader">Norm_subheader</a>*)(object-&gt;shptr);
+		nsh-&gt;data_type = object->data_type;
+		nsh-&gt;num_r_elements = object->xdim;
+		nsh-&gt;<a href="convert_64.c.html#num_angles">num_angles</a> = object->ydim;
+		nsh-&gt;scale_factor = object->scale_factor;
+		break;
+	  default:
+		matrix_errno = MAT_UNKNOWN_FILE_TYPE;
+		return NULL;
+	}
+	return object;
+}
+
+<LI><H3><a name="copy_proto_object">copy_proto_object( new, old)</a></H3>
+  MatrixData *new, *old;
+{
+	int sh_size;
+
+	if (new-&gt;mat_type == old->mat_type)
+	{
+	  switch (new-&gt;mat_type)
+	  {
+		case Sinogram:
+			sh_size = sizeof(<a href="matrix.h.html#Scan_subheader">Scan_subheader</a>);
+			break;
+		case PetVolume:
+			sh_size = sizeof(<a href="matrix.h.html#Image_subheader">Image_subheader</a>);
+			break;
+		case AttenCor:
+			sh_size = sizeof(<a href="matrix.h.html#Attn_subheader">Attn_subheader</a>);
+			break;
+		case Normalization:
+			sh_size = sizeof(<a href="matrix.h.html#Norm_subheader">Norm_subheader</a>);
+			break;
+	  }
+	  new-&gt;shptr = (caddr_t) malloc( sh_size);
+	  memcpy(new-&gt;shptr, old->shptr, sh_size);
+	}
+	new-&gt;xdim = old->xdim;
+	new-&gt;ydim = old->ydim;
+	new-&gt;zdim = old->zdim;
+	new-&gt;data_type = old->data_type;
+	new-&gt;scale_factor = old->scale_factor;
+	new-&gt;pixel_size = old->pixel_size;
+	new-&gt;y_size = old->y_size;
+	new-&gt;z_size = old->z_size;
+	new-&gt;data_min = old->data_min;
+	new-&gt;data_max = old->data_max;
+}
+
+<LI><H3><a name="matrix_init_main_header">Main_header *matrix_init_main_header( fname, ftype, mh_proto)</a></H3>
+  char *fname;
+  <a href="matrix.h.html#DataSetType">DataSetType</a> ftype;
+  <a href="matrix.h.html#Main_header">Main_header</a> *mh_proto;
+{
+	<a href="matrix.h.html#Main_header">Main_header</a> *mhptr;
+
+	mhptr = (<a href="matrix.h.html#Main_header">Main_header</a>*) calloc( 1, sizeof(
+	if (mh_proto)
+	  memcpy(mhptr, mh_proto, sizeof(<a href="matrix.h.html#Main_header">Main_header</a>));
+	mhptr-&gt;file_type = ftype;
+	strncpy( mhptr-&gt;original_file_name, fname, 20);
+	return mhptr;
+}
+
+<LI><H3><a name="matrix_free">matrix_free( matrix)</a></H3>
+  MatrixData *matrix;
+{
+	if (matrix-&gt;shptr) free( matrix->shptr);
+	if (matrix-&gt;data_ptr) free( matrix->data_ptr);
+	free( matrix);
+}
+
+<LI><H3><a name="convert_float_scan">convert_float_scan( scan, fdata)</a></H3>
+  MatrixData *<a href="d_read.html#scan">scan</a>;
+  float *fdata;
+{
+	int i, nvals, tot;
+	float fmax, <a href="matpkg.c.html#scale">scale</a>;
+	short int *sdata;
+	<a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *ssh;
+
+	if (<a href="d_read.html#scan">scan</a>-&gt;data_ptr)
+	  free(<a href="d_read.html#scan">scan</a>-&gt;data_ptr);
+	nvals = <a href="d_read.html#scan">scan</a>-&gt;xdim*
+	sdata = (short int*) malloc( nvals*sizeof(short int));
+	<a href="d_read.html#scan">scan</a>-&gt;data_ptr = (caddr_t) sdata;
+	<a href="d_read.html#scan">scan</a>-&gt;data_size = nvals*sizeof(short int);
+	fmax = *fdata;
+	for (i=0; i&lt;nvals; i++)
+	  if (fdata[i] &gt; fmax) fmax = fdata[i];
+	<a href="matpkg.c.html#scale">scale</a> = 1.0;
+	if (fmax &gt; 0.0) <a href="matpkg.c.html#scale">scale</a> = 32767./fmax;
+	tot = 0;
+	for (i=0; i&lt;nvals; i++)
+	{
+	  sdata[i] = <a href="matpkg.c.html#scale">scale</a>*fdata[i];
+	  tot += sdata[i];
+	}
+	<a href="d_read.html#scan">scan</a>-&gt;scale_factor = 1.0/scale;
+	ssh = (<a href="matrix.h.html#Scan_subheader">Scan_subheader</a>*) scan-&gt;shptr;
+	ssh-&gt;scan_min = 0;
+	ssh-&gt;scan_max = fmax*<a href="matpkg.c.html#scale">scale</a>;
+	ssh-&gt;num_r_elements = <a href="d_read.html#scan">scan</a>->xdim;
+	ssh-&gt;<a href="convert_64.c.html#num_angles">num_angles</a> = scan->ydim;
+	ssh-&gt;net_trues = tot;
+	ssh-&gt;<a href="matpkg.c.html#scale">scale</a>_factor = 1.0/
+		ssh-&gt;x_resolution = <a href="d_read.html#scan">scan</a>->pixel_size;
+}
+
+<LI><H3><a name="convert_long_scan">convert_long_scan( scan, ldata)</a></H3>
+  MatrixData *<a href="d_read.html#scan">scan</a>;
+  int *ldata;
+{
+	int i, nvals, tot, lmax;
+	float <a href="matpkg.c.html#scale">scale</a>;
+	short int *sdata;
+	<a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *ssh;
+
+	if (<a href="d_read.html#scan">scan</a>-&gt;data_ptr)
+	  free(<a href="d_read.html#scan">scan</a>-&gt;data_ptr);
+	nvals = <a href="d_read.html#scan">scan</a>-&gt;xdim*
+	sdata = (short int*) malloc( nvals*sizeof(short int));
+	<a href="d_read.html#scan">scan</a>-&gt;data_ptr = (caddr_t) sdata;
+	<a href="d_read.html#scan">scan</a>-&gt;data_size = nvals*sizeof(short int);
+	lmax = *ldata;
+	for (i=0; i&lt;nvals; i++)
+	  if (ldata[i] &gt; lmax) lmax = ldata[i];
+	<a href="matpkg.c.html#scale">scale</a> = 1.0;
+	if (lmax &gt; 0) <a href="matpkg.c.html#scale">scale</a> = 32767./lmax;
+	tot = 0;
+	for (i=0; i&lt;nvals; i++)
+	{
+	  sdata[i] = <a href="matpkg.c.html#scale">scale</a>*ldata[i];
+	  tot += sdata[i];
+	}
+	<a href="d_read.html#scan">scan</a>-&gt;scale_factor = 1.0/scale;
+	ssh = (<a href="matrix.h.html#Scan_subheader">Scan_subheader</a>*) scan-&gt;shptr;
+	ssh-&gt;scan_min = 0;
+	ssh-&gt;scan_max = lmax*<a href="matpkg.c.html#scale">scale</a>;
+	ssh-&gt;num_r_elements = <a href="d_read.html#scan">scan</a>->xdim;
+	ssh-&gt;<a href="convert_64.c.html#num_angles">num_angles</a> = scan->ydim;
+	ssh-&gt;net_trues = tot;
+	ssh-&gt;<a href="matpkg.c.html#scale">scale</a>_factor = 1.0/
+	ssh-&gt;x_resolution = <a href="d_read.html#scan">scan</a>->pixel_size;
+}

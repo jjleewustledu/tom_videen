@@ -1,0 +1,455 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.02.17.18.43.30;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.06.09.21.53.00;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.11.11.16.40.28;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@C     $Id: d2raw.f,v 1.7 2002/12/02 21:26:52 tom Exp tom $
+C     $Log: d2raw.f,v $
+c Revision 1.7  2002/12/02  21:26:52  tom
+c format changes plus fixes for g77
+c
+c     Revision 1.6  1999/02/17  18:43:30  tom
+c     add 8x6 and 3x2 displays for PC uinsg 1024x768 screen resolution
+c     
+c     Revision 1.5  1994/06/09  21:53:00  ty7777
+c     Use the PCFLAG.
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   D2RAW.FTN
+C     Author:       Tom O. Videen
+C     Date:         25-Mar-87
+C     Intent:
+C     .  This routine writes one image plane to the Ramtek Display Monitor.
+C     .  The image is magnified MAG x ZFACTOR times.
+C     .  The image is magnified without interpolation.
+C     .  (i.e., the screen image represents actual data points)
+C     .  The image must be scaled for appropriate color scale before
+C     .  this routine is called.
+C     
+C     .  NOTE: to display the entire image with MAG=1 or 2,
+C     .     XLOW and YLOW should be 15 (instead of 1).
+C     
+C     .  The subroutine D2SCALER must have been called previous to
+C     .  D2RAW.  D2SCALER scales the image and stores the result
+C     .  in the common array IARRAY.
+C     
+C     History:
+C     .  Modified by Tom Yang 26-Sep-91 to port to the UNIX and X
+C     .	windows environment.
+C     
+C     Common Blocks from SPIDERAM.INC:
+C     .  **IMAGEDAT - image arrays                   (read & write)
+C     .  **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .  **DISPLAY  - display parameters             (read only)
+C     
+C     Local Variables:
+C     .  XST,YST = location to write to on the Ramtek;
+C     .  LINE = represents a single line of the
+C     .     displayed image (lines of screen pixels);
+C     .     (used for sending data to the Ramtek one row at a time)
+C     .  ELEMENTS = number of elements in each row and column
+C     .     of the image array to send to the Ramtek for display;
+C     .         ELEMENTS =  SIZE/ZFACTOR
+C     .  XDIM,YDIM = x- and y-dimensions of array sent to RAMIMG;
+C     .  SCAN,TYPE = variables sent to RAMIMG to determine the
+C     .     order in which to fill the region on the Ramtek screen
+C     .     with the array of values (see Ramtek manual);
+C     
+C     Uses:
+C     .  RAMIMG    - write an image to the Ramtek;
+C     
+C     Called by:  D2DISPLA, D2ZOOM
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: d2raw.f,v 1.7 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE D2RAW
+
+      INTEGER*4 XST,YST,XDIM,YDIM,SCAN,TYPE,ELEMENTS,I,J,K,N
+      INTEGER*4 LMAG
+
+      INCLUDE 'spideram.inc'
+
+      DATA SCAN,TYPE,YDIM /0,0,1/
+
+      XST = XORG
+      YST = YORG
+
+C     Set up the parameters used to display the image in the
+C     appropriate location on the Ramtek Display Monitor.
+C     The number of elements in each row and column sent to the
+C     display depends on ZFACTOR.
+
+      ELEMENTS = SIZE/ZFACTOR
+      IF (MAG.LE.7) THEN
+         LMAG = MAG
+      ELSE IF (MAG.EQ.8) THEN
+         LMAG = 1
+      ELSE IF (MAG.EQ.9) THEN
+         LMAG = 2
+      ENDIF
+
+      XDIM = LMAG*SIZE
+      LASTLINE = SIZE
+      YFIRST = YST
+
+C     The starting point in the image array to send is XLOW,YLOW.
+C     If the image is to be zoomed, ZFACTOR > 1.
+
+      DO 300 J=YLOW,YLOW+ELEMENTS-1
+         N = 1
+         DO 220 I=XLOW,XLOW+ELEMENTS-1
+            DO 200 K=1,LMAG*ZFACTOR
+               LINE(N,1) = IARRAY(I,J)
+               N = N+1
+ 200        CONTINUE
+ 220     CONTINUE
+ 230     IF (N.LE.XDIM) THEN
+            LINE(N,1) = 0
+            N = N+1
+            GO TO 230
+         END IF
+         DO 250 K=1,LMAG*ZFACTOR
+            CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+            YST = YST+1
+ 250     CONTINUE
+ 300  CONTINUE
+
+C     If LMAG*LASTLINE lines have not been written to the screen,
+C     then write blank lines to complete the image array.
+
+      IF ((YST-YFIRST).LT.LMAG*LASTLINE) THEN
+         DO 1100 I=1,XDIM
+            LINE(I,1) = 0
+ 1100    CONTINUE
+ 1200    DO 1300 K=1,LMAG*ZFACTOR
+            CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+            YST = YST+1
+ 1300    CONTINUE
+         IF ((YST-YFIRST).LT.LMAG*LASTLINE) GO TO 1200
+      END IF
+
+      RETURN
+      END
+@
+
+
+1.7
+log
+@format changes plus fixes for g77
+@
+text
+@d1 1
+a1 1
+C     $Id: d2raw.f,v 1.6 1999/02/17 18:43:30 tom Exp tom $
+d3 3
+d60 1
+a60 1
+C     rcsheader = "$Id: d2raw.f,v 1.6 1999/02/17 18:43:30 tom Exp tom $"
+@
+
+
+1.6
+log
+@add 8x6 and 3x2 displays for PC uinsg 1024x768 screen resolution
+@
+text
+@d1 8
+a8 5
+C$Id: d2raw.f,v 1.5 1994/06/09 21:53:00 ty7777 Exp tom $
+C$Log: d2raw.f,v $
+c Revision 1.5  1994/06/09  21:53:00  ty7777
+c Use the PCFLAG.
+C
+d10 46
+a55 49
+C
+C  Subroutine:   D2RAW.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         25-Mar-87
+C  Written For:  SPIDERAM Super PET Image Display Program
+C
+C  History:
+C     Modified by Tom Yang 26-Sep-91 to port to the UNIX and X
+C	windows environment.
+C
+C  Intent:
+C     This routine writes one image plane to the Ramtek Display Monitor.
+C     The image is magnified MAG x ZFACTOR times.
+C     The image is magnified without interpolation.
+C     (i.e., the screen image represents actual data points)
+C     The image must be scaled for appropriate color scale before
+C     this routine is called.
+C
+C     NOTE: to display the entire image with MAG=1 or 2,
+C        XLOW and YLOW should be 15 (instead of 1).
+C
+C     The subroutine D2SCALER must have been called previous to
+C     D2RAW.  D2SCALER scales the image and stores the result
+C     in the common array IARRAY.
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (read & write)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (read only)
+C
+C  Local Variables:
+C     XST,YST = location to write to on the Ramtek;
+C     LINE = represents a single line of the
+C        displayed image (lines of screen pixels);
+C        (used for sending data to the Ramtek one row at a time)
+C     ELEMENTS = number of elements in each row and column
+C        of the image array to send to the Ramtek for display;
+C            ELEMENTS =  SIZE/ZFACTOR
+C     XDIM,YDIM = x- and y-dimensions of array sent to RAMIMG;
+C     SCAN,TYPE = variables sent to RAMIMG to determine the
+C        order in which to fill the region on the Ramtek screen
+C        with the array of values (see Ramtek manual);
+C
+C   Uses:
+C     RAMIMG    - write an image to the Ramtek;
+C
+C  Called by:  D2DISPLA, D2ZOOM
+C
+d57 1
+a62 1
+      character*256 rcsheader
+a64 1
+      rcsheader = "$Id: d2raw.f,v 1.5 1994/06/09 21:53:00 ty7777 Exp tom $"
+d71 1
+a71 1
+C  Set up the parameters used to display the image in the
+d73 1
+a73 1
+C  The number of elements in each row and column sent to the
+d78 1
+a78 1
+        LMAG = MAG
+d80 1
+a80 1
+        LMAG = 1
+d82 1
+a82 1
+        LMAG = 2
+d89 2
+a90 2
+C  The starting point in the image array to send is XLOW,YLOW.
+C  If the image is to be zoomed, ZFACTOR > 1.
+d93 9
+a101 4
+        N = 1
+        DO 220 I=XLOW,XLOW+ELEMENTS-1
+          DO 200 K=1,LMAG*ZFACTOR
+            LINE(N,1) = IARRAY(I,J)
+d103 7
+a109 12
+200       CONTINUE
+220     CONTINUE
+230     IF (N.LE.XDIM) THEN
+          LINE(N,1) = 0
+          N = N+1
+          GO TO 230
+        END IF
+        DO 250 K=1,LMAG*ZFACTOR
+          CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+          YST = YST+1
+250     CONTINUE
+300   CONTINUE
+d111 2
+a112 2
+C  If LMAG*LASTLINE lines have not been written to the screen,
+C  then write blank lines to complete the image array.
+d115 8
+a122 8
+        DO 1100 I=1,XDIM
+          LINE(I,1) = 0
+1100    CONTINUE
+1200    DO 1300 K=1,LMAG*ZFACTOR
+          CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+          YST = YST+1
+1300    CONTINUE
+        IF ((YST-YFIRST).LT.LMAG*LASTLINE) GO TO 1200
+@
+
+
+1.5
+log
+@Use the PCFLAG.
+@
+text
+@d1 4
+a4 2
+C$Id$
+C$Log$
+d19 1
+a19 1
+C     This routine writes an image to the Ramtek Display Monitor.
+d57 1
+a57 1
+C
+d59 1
+a59 1
+C
+d61 1
+d63 1
+a63 1
+C
+d65 1
+a65 1
+      rcsheader = "$Id: d2raw.f,v 1.4 1993/11/11 16:40:28 ty7777 Exp ty7777 $"
+d68 1
+a68 1
+C
+d71 1
+a71 1
+C
+d76 1
+a76 1
+C
+d78 9
+a86 1
+      XDIM = MAG*SIZE
+d89 1
+a89 1
+C
+d92 1
+a92 1
+C
+d96 1
+a96 1
+          DO 200 K=1,MAG*ZFACTOR
+d106 1
+a106 1
+        DO 250 K=1,MAG*ZFACTOR
+d111 2
+a112 2
+C
+C  If MAG*LASTLINE lines have not been written to the screen,
+d114 2
+a115 2
+C
+      IF ((YST-YFIRST).LT.MAG*LASTLINE) THEN
+d119 1
+a119 1
+1200    DO 1300 K=1,MAG*ZFACTOR
+d123 1
+a123 1
+        IF ((YST-YFIRST).LT.MAG*LASTLINE) GO TO 1200
+d125 1
+a125 1
+C
+@
+
+
+1.4
+log
+@Added ABSSCALE to RAMIMG.
+@
+text
+@d1 5
+a5 2
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+d13 2
+a14 1
+C     Modified by TOV 26-Sep-91 for XSPIDERAM.
+d62 1
+a62 1
+      rcsheader = "$Id: d2raw.f,v 1.3 1993/10/04 21:55:32 tom Exp ty7777 $"
+d96 1
+a96 1
+          CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, RMD, ABSSCALE)
+d109 1
+a109 1
+          CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, RMD, ABSSCALE)
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d58 1
+a58 1
+      rcsheader = "$Id$"
+d92 1
+a92 1
+          CALL RAMIMG(LINE(1,1),XDIM,YDIM,XST,YST,SCAN,TYPE,RMD)
+d105 1
+a105 1
+          CALL RAMIMG(LINE(1,1),XDIM,YDIM,XST,YST,SCAN,TYPE,RMD)
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d55 1
+d58 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

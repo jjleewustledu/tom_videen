@@ -1,0 +1,288 @@
+head	1.1;
+access;
+symbols;
+locks
+	tom:1.1; strict;
+comment	@# @;
+
+
+1.1
+date	2009.03.25.16.06.04;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@; $Id: fiducial_transform_to_thal.pro,v 1.3 2009/03/17 13:55:44 tom Exp $
+;
+;+
+; NAME:
+;	FIDUCIAL_TRANSFORM_TO_THAL
+;
+; PURPOSE:
+;	Compute transformation matrix to map a fiducial image into a standard atlas image.
+;	Write this matrix to an AIR file.
+;
+;	Dimensions and voxels sizes of the standard and reslice images are read from Analyze hdr files.
+;
+;	Four fiducial points are required to create a matrix that can be inverted:
+;		1) AC
+;		2) PC
+;		3) Point along vertical midline corresponding to depth of OX: (xv, yv, zv)
+;		   The vertical midline is defined by the AC and IPF.
+;		4) Point in AC-PC plane perpendicular to midline and 60 mm to the left of AC: (xl, yl, zl)
+;
+;	The matrix stored in the AIR file performs as follows:
+;		[AIRMAT] * [SCALE] * [STDMAT] = [RESMAT]
+;	where:
+;		AIRMAT = Air Matrix
+;		SCALE  = scales to cubic voxels with minimum standard file voxel size
+;		STDMAT = internal coords in standard image (not interpolated to cubic voxels)
+;		RESMAT = internal coords in reslice image (not interpolated to cubic voxels)
+;		internal coords = coordinates indexed from 0 in order of image array
+;			e.g., vidi [100, 120, 50] in a 256x256x128 image will have
+;			int coords = [256-100, 256-120, 128-50] = [156, 136, 78] due to Analyze ordering
+;
+; MODIFICATION HISTORY:
+;	Rewrite of fiducial_transform to use the smaller MaiThalamus.img instead of MaiAtlas.img.
+;		Uses IPF to define midline.
+;		Requires 14 points in the input file (but only 4 are used: AC, PC, OC, IPF).
+;-
+
+PRO FIDUCIAL_TRANSFORM_TO_THAL
+
+	on_error,2
+	fidptsfile = getenv('FIDPTS')
+	resfile = getenv('FIDFILE')
+	stdfile = getenv('STDFILE')
+	airfile = getenv('AIRFILE')
+
+	print, 'Standard file: ', stdfile
+	print, 'Reslice file:  ', resfile
+
+	a = {air}
+	h = {analyzehdr}
+	str = ''
+	str1 = ''
+	x = 0.
+	y = 0.
+	z = 0.
+	std = fltarr(4, 3)
+	fidpts = fltarr(14, 3)
+
+	;; VOXEL SIZES and ARRAY DIMENSIONS
+	;; Read standard image hdr file and set AIR dimensions and voxel sizes
+	;; ------------------------------------------------------------------
+	openr,lu,stdfile,/get_lun
+	readu,lu,h
+	close,lu
+	free_lun,lu
+	a.std.bits = 16
+	a.std.x_dim = h.dime.dim[1]
+	a.std.y_dim = h.dime.dim[2]
+	a.std.z_dim = h.dime.dim[3]
+	a.std.x_size = h.dime.pixdim[1]
+	a.std.y_size = h.dime.pixdim[2]
+	a.std.z_size = h.dime.pixdim[3]
+
+	;; Read reslice image hdr file and set AIR dimensions and voxel sizes
+	;; ------------------------------------------------------------------
+	openr,lu,resfile,/get_lun
+	readu,lu,h
+	close,lu
+	free_lun,lu
+
+	a.res.bits = 16
+	a.res.x_dim = h.dime.dim[1]
+	a.res.y_dim = h.dime.dim[2]
+	a.res.z_dim = h.dime.dim[3]
+	a.res.x_size = h.dime.pixdim[1]
+	a.res.y_size = h.dime.pixdim[2]
+	a.res.z_size = h.dime.pixdim[3]
+
+	;; STANDARD or REFERENCE POINTS in MaiThalamus.img
+	;; -----------------------------------------------------
+	std[0,0] = 232.0			; AC
+	std[0,1] = 16.0
+	std[0,2] = 165.0
+
+	std[1,0] = 232.0			; PC
+	std[1,1] = 37.5
+	std[1,2] = 165.0
+
+	std[2,0] = 232.0			; OC depth 
+	std[2,1] = 16.0				; projected to directly below AC
+	std[2,2] = 268.0
+
+	std[3,0] = (232.0	+ 60 / a.std.x_size)	; fixed point 60 mm to left
+	std[3,1] = 16.0	
+	std[3,2] = 165.0
+
+	x = a.std.x_dim
+	y = a.std.y_dim
+	z = a.std.z_dim
+	STDMAT = [[x-std[0,0],x-std[1,0],x-std[2,0],x-std[3,0]], $
+			  [y-std[0,1],y-std[1,1],y-std[2,1],y-std[3,1]], $
+			  [z-std[0,2],z-std[1,2],z-std[2,2],z-std[3,2]], $
+			  [1,1,1,1]]
+	print,'Standard Points'
+	print,STDMAT
+
+	;; FIDUCIAL POINTS
+	;; Read reslice image fiducial points
+	;; ----------------------------------
+	openr,lu,fidptsfile,/get_lun
+	readf,lu,format='(A)',str1
+	readf,lu,format='(A)',str
+	x = 0.
+	y = 0.
+	z = 0.
+	for i=0,13 do begin
+		readf,lu,format='(A3,3F8)',str,x,y,z
+		fidpts[i,0] = x
+		fidpts[i,1] = y
+		fidpts[i,2] = z
+	endfor
+	close,lu
+	free_lun,lu
+
+	;; AC = (xac, yac, zac)	anterior commissure
+	xac = fidpts[0,0]
+	yac = fidpts[0,1]
+	zac = fidpts[0,2]
+
+	;; PC = (xpc, ypc, zpc)	posterior commissure
+	xpc = fidpts[1,0]
+	ypc = fidpts[1,1]
+	zpc = fidpts[1,2]
+
+	;; OC	optic chiasm (depth only)
+	xoc = fidpts[2,0]
+	yoc = fidpts[2,1]
+	zoc = fidpts[2,2]
+
+	;; IPF = (xif, yif, zif)	interpeduncular fissure
+	xif = fidpts[13,0]
+	yif = fidpts[13,1]
+	zif = fidpts[13,2]
+
+	;; Assume ang_z = 0 (no yaw)
+	;; Compute remaining 2 angles of rotation (ang_x = pitch; ang_y = roll)
+	;; ----------------------------------------------------------------------
+	dxc = xpc - xac
+	dyc = ypc - yac
+	dzc = zpc - zac
+
+	dyo = yac - yoc
+	dzo = zoc - zac
+
+	;; Should xac differ from xpc, weight the location (on the ACPC line) as follows:
+	wp = (yif-yac)/(ypc-yac)
+	wa = (ypc-yif)/(ypc-yac)
+	dxi = xif - (wa*xac + wp*xpc)
+	dzi = zif - (wa*zac + wp*zpc)
+
+	ang_x = ATAN(dzc/dyc)
+	ang_y = ATAN(dxi/dzi)
+	ang_z = ATAN(dxc/dyc)
+
+    Rad_to_Deg = 180./3.14159
+    print
+    print, format='("PC-AC:",F7.1,F7.1,F7.1," mm")', dxc, dyc, dzc
+    print, format='("OC-AC:",A7,F7.1,F7.1," mm")',"----",dyo, dzo
+    print, format='("IF-AC:",F7.1,A7,F7.1," mm")', dxi,"----",dzi
+    print, format='("Angle:",F7.1,F7.1,F7.1," deg")', ang_x*Rad_to_Deg, ang_y*Rad_to_Deg, ang_z*Rad_to_Deg
+
+	;; Compute location of Optic Chiasm at a depth projected directly vertically below AC (xv, yv, zv)
+	;; -------------------------------------------------------------------
+	x = a.res.x_dim
+	y = a.res.y_dim
+	z = a.res.z_dim
+
+	R = dyo * TAN(ang_x)
+	B = (dzo + R) * COS(ang_x)
+
+	xv = xac + B * dxi/dzi
+	yv = yac - B * SIN(ang_x)
+	zv = zac + B * COS(ang_x)
+
+    print, format='("AC:   ",F7.1, F7.1, F7.1)', xac, yac, zac
+    print, format='("PC:   ",F7.1, F7.1, F7.1)', xpc, ypc, zpc
+    print, format='("Vert: ",F7.1, F7.1, F7.1)', xv, yv, zv
+
+	;; Compute location of fixed point 60 mm lateral from AC
+	;; -------------------------------------------------------------------
+	K = 60.0 
+	xl = xac + K*COS(ang_y)
+	yl = yac
+	zl = zac - K*SIN(ang_y)
+
+    print, format='("Lat:  ",F7.1, F7.1, F7.1)', xl, yl, zl
+    print
+
+	;; Matrix is in voxel coordinates
+	RESMAT = [[x-xac, x-xpc, x-xv, x-xl], $
+			  [y-yac, y-ypc, y-yv, y-yl], $
+			  [z-zac, z-zpc, z-zv, z-zl], $
+			  [1, 1, 1, 1]]
+	print,str1
+	print,RESMAT
+
+	;; Create AIR file structure
+	;; -------------------------
+	len = strlen(stdfile)
+	for i=0,len do a.std_file[i] = byte(strmid(stdfile,i,1))
+	len = strlen(resfile)
+	for i=0,len do a.res_file[i] = byte(strmid(resfile,i,1))
+
+	str = 'fiducial_transform_to_thal from '+fidptsfile+' to '+stdfile
+	len = strlen(str)
+	for i=0,len do a.comment[i] = byte(strmid(str,i,1))
+
+	;; Scale matrix used in AIR (image sized to smallest voxel dimension)
+	;; ------------------------------------------------------------------
+	minvox = MIN([a.std.x_size, a.std.y_size, a.std.z_size])
+	sxoom = a.std.x_size/minvox
+	syoom = a.std.y_size/minvox
+	szoom = a.std.z_size/minvox
+	SCALE = [[sxoom,0,0,0], $
+		 	 [0,syoom,0,0], $
+			 [0,0,szoom,0], $
+			 [0,0,0,1]]
+
+	;; Compute Transformation Matrix, AIRMAT, where:
+	;;		[AIRMAT] * [SCALE] * [STDMAT] = [RESMAT]
+	;;		AIRMAT ## SCALE ## STDMAT = RESMAT	(with arrays in conventional AIR ordering)
+	;;		AIRMAT ## (SCALE ## STDMAT) = RESMAT
+	;;		AIRMAT = RESMAT ## invert(SCALE ## STDMAT)
+	;; ------------------------------------------------------------------
+	AIRMAT = RESMAT ## invert(SCALE ## STDMAT)
+	AIRMAT = AIRMAT / AIRMAT[3,3]
+
+	print,'Computed RESMAT'
+	print, AIRMAT ## SCALE ## STDMAT
+
+	;; Air Matrix is rotated prior to saving in AIR file
+	a.e = ROTATE(AIRMAT, 4)
+	print,'Transform'
+	print,ROTATE(a.e, 4)
+
+	;; Write the AIR file
+	;; ----------------------
+	openw,lu,airfile,/get_lun
+	writeu,lu,a
+	close,lu
+	free_lun,lu
+	print, 'AIR file: ', airfile
+	print, 'Comment:  ', string(a.comment)
+
+END
+@

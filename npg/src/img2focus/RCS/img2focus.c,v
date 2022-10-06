@@ -1,0 +1,360 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2008.10.27.19.07.19;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2006.04.28.16.03.01;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2006.04.28.15.57.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@flip image when converting (x-reversal)
+@
+text
+@/*	$Log: img2focus.c,v $
+ * Revision 1.2  2006/04/28  16:03:01  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2006/04/28  15:57:47  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			img2focus.c
+ *	Date:			Apr 2006
+ *	Author:			Tom Videen
+ *	Description:	Convert ECAT image to FOCUS format
+ *	Notes:
+ *		Copy header; output is Intel float
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2focus/RCS/img2focus.c,v 1.2 2006/04/28 16:03:01 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+
+int             main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	ImageFile      *file;
+	Index           indx;
+	FILE           *fd;
+	FILE           *hdr;
+	FILE           *ffh;
+	char           *ecatimg;
+	char           *hdrname;
+	char           *ffiname;
+	char           *ffhname;
+	char           *ptr;
+	char            str[256];
+	long            dim[4];
+	int             i, j, k;
+	long            ndim1, ndim2, ndim3;
+	long            itmp, itmp0;
+	long            nbytes;
+	float           ftmp;
+	float           scl_factor;
+	float        ***image;
+	short          *simg;
+	short          *rsimg;
+	float           val;
+	float           global_max = 0;
+	float           global_min = 0;
+	int             ftype = 0;
+
+	union {
+		unsigned short  s[2];
+		float           f;
+	}               conv;
+
+	if (argc != 5) {
+		(void) printf ("Usage: img2focus ecat.v focus.img in.hdr out.hdr\n");
+		return (ERROR);
+	}
+	ecatimg = argv[1];
+	ffiname = argv[2];
+	hdrname = argv[3];
+	ffhname = argv[4];
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ * Read ECAT image
+ */
+
+	file = make_imgfile (ecatimg);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [img2analyze]: opening %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [img2analyze]: reading MainHeader from %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (indx.frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR) {
+					fprintf (stderr, "ERROR [img2analyze]: cannot find %s frame 1, 2 or 3\n", file->name);
+					return (ERROR);
+				}
+			}
+		} else {
+			fprintf (stderr, "ERROR [img2analyze]: cannot find %s frame %d\n",
+				 file->name, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [img2analyze]: reading subheader from %s\n", ecatimg);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	if ((image = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	free_imgfile (file);
+
+/*
+ *	Read Focus header
+ */
+
+	if ((ffh = fopen (ffhname, "w")) == 0) {
+		(void) printf ("ERROR [img2focus]: opening output header %s\n", ffhname);
+		return (ERROR);
+	}
+	if ((hdr = fopen (hdrname, "r")) == 0) {
+		(void) printf ("ERROR [img2focus]: opening input header %s\n", hdrname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), hdr) == NULL) {
+		(void) printf ("ERROR [img2focus]: Reading %s\n", hdrname);
+		return (ERROR);
+	}
+	if (strncmp (str, "#", 1) != 0) {
+		(void) printf ("%s\n", str);
+		(void) printf ("ERROR [img2focus]: %s is not in FOCUS format\n", hdrname);
+		return (ERROR);
+	}
+	if (fputs (str, ffh) == NULL) {
+		(void) printf ("ERROR [img2focus]: writing %s\n", ffhname);
+		return (ERROR);
+	}
+	while (strncmp (str, "# Header file", 13) != 0) {
+		if (fgets (str, sizeof (str), hdr) == NULL) {
+			(void) printf ("ERROR [img2focus]: reading %s\n", hdrname);
+			return (ERROR);
+		}
+		if (fputs (str, ffh) == NULL) {
+			(void) printf ("ERROR [img2focus]: writing %s\n", ffhname);
+			return (ERROR);
+		}
+	}
+	while (fgets (str, sizeof (str), hdr) != NULL) {
+		if (strncmp (str, "#", 1) != 0) {
+			if (strstr (str, "end_of_header") != NULL)
+				break;
+			ptr = strstr (str, " ");
+			if (ptr != NULL) {
+				ptr++;
+				if (strstr (str, "data_type") != NULL) {
+					(void) strcpy (ptr, "4\n");	/* 4-byte Intel float */
+				}
+				if (strstr (str, "total_frames") != NULL) {
+					(void) sscanf (ptr, "%ld", &itmp);
+					if (itmp > 1) {
+						(void) printf ("ERROR [img2focus]: supports single-frame images only\n");
+						return (ERROR);
+					}
+				}
+				if (strstr (str, "file_type") != NULL) {
+					(void) sscanf (ptr, "%d", &ftype);
+					if (ftype != 5 && ftype != 8) {
+						(void) printf ("ERROR [img2focus]: supports file_type 5 and 8 only\n");
+						return (ERROR);
+					}
+				}
+				if (strstr (str, "data_order") != NULL) {
+					(void) sscanf (ptr, "%ld", &itmp);
+					if (itmp != 1) {
+						(void) printf ("ERROR [img2focus]: data_order must be 1 for images and not %ld\n", itmp);
+						return (ERROR);
+					}
+				}
+			}
+		}
+		if (fputs (str, ffh) == NULL) {
+			(void) printf ("ERROR [img2focus]: writing %s\n", ffhname);
+			return (ERROR);
+		}
+	}
+	if (fputs (str, ffh) == NULL) {
+		(void) printf ("ERROR [img2focus]: writing %s\n", ffhname);
+		return (ERROR);
+	}
+
+/* Read Frame Data */
+
+	while (fgets (str, sizeof (str), hdr) != NULL) {
+		if (strncmp (str, "#", 1) != 0) {
+			ptr = strstr (str, " ");
+			if (ptr != NULL) {
+				ptr++;
+				if (strstr (str, "data_file_pointer") != NULL) {
+					(void) sscanf (ptr, "%ld %ld", &itmp0, &itmp);
+				}
+				if (strstr (str, "scale_factor") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					scl_factor = ftmp;
+				}
+				if (strstr (str, "end_of_header") != NULL) {
+					break;
+				}
+			}
+		}
+		if (fputs (str, ffh) == NULL) {
+			(void) printf ("ERROR [img2focus]: writing %s\n", ffhname);
+			return (ERROR);
+		}
+	}
+	(void) fclose (ffh);
+	(void) fclose (hdr);
+
+/*
+ *	Write output image (Intel float)
+ *	Flip image from right to left (Oct 2008)
+ */
+
+	if ((fd = fopen (ffiname, "w")) == 0) {
+		(void) printf ("ERROR [img2focus]: opening FOCUS image %s\n", ffiname);
+		return (ERROR);
+	}
+	nbytes = dim[0] * sizeof (long);
+	simg = (short *) calloc (2 * nbytes, sizeof (short));
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [img2focus]: calloc simg\n");
+		return (ERROR);
+	}
+	rsimg = (short *) calloc (2 * nbytes, sizeof (short));
+	if (rsimg == NULL) {
+		fprintf (stderr, "ERROR [img2focus]: calloc rsimg\n");
+		return (ERROR);
+	}
+	for (i = 1; i <= dim[2]; i++) {
+		for (j = 1; j <= dim[1]; j++) {
+			for (k = 1; k <= dim[0]; k++) {
+				val = image[i][j][k] / scl_factor;
+				if (val > global_max)
+					global_max = val;
+				else if (val < global_min)
+					global_min = val;
+				conv.f = val;
+				simg[2*dim[0]-(2*k-2)] = conv.s[0];
+				simg[2*dim[0]-(2*k-1)] = conv.s[1];
+			}
+			swap_byte ((char *) simg, nbytes);
+			swap_word (simg, nbytes / 2);
+			(void) fwrite (simg, 1, nbytes, fd);
+		}
+	}
+	(void) fclose (fd);
+	free_f3tensor (image, 1, ndim3, 1, ndim2, 1, ndim1);
+	free (simg);
+	free (rsimg);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d14 1
+a14 1
+ *		Copy header; output is Intel float 
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2focus/RCS/img2focus.c,v 1.1 2006/04/28 15:57:47 tom Exp tom $";
+d31 1
+a31 1
+main (argc, argv)
+a52 1
+	float           frm_duration;
+d56 1
+a209 4
+				if (strstr (str, "frame_duration") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					frm_duration = 1000 * ftmp;
+				}
+d229 1
+d242 5
+d256 2
+a257 2
+				simg[2 * k - 2] = conv.s[0];
+				simg[2 * k - 1] = conv.s[1];
+d267 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 4
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2focus/RCS/img2focus.c,v 1.6 2005/09/08 19:42:43 tom Exp $";
+a51 1
+	float           scaler;
+a53 1
+	float          *row;
+d167 1
+a167 1
+						(void) printf ("ERROR: img2focus supports single-frame images only\n");
+d174 1
+a174 1
+						(void) printf ("ERROR img2focus supports file_type 5 and 8 only\n");
+d196 1
+@

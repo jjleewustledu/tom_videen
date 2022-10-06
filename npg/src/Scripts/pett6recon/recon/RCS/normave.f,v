@@ -1,0 +1,138 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.13.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      NORMAVE.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         03-Jun-88
+C  Written For:  PETT VI Image Reconstruction
+C
+C  History/Revisions:
+C     Original RANNORM written for PETT VI 3/23/81 by Mark Mintun.
+C     Completely rewritten 12-Apr-88 by TOV with
+C        randoms correction removed (and put in SLICESEP).
+C        The profile data is NOT altered in this subroutine.
+C     Modified 03-Jun-88 by TOV to read input file of REALs.
+C        Data type changed to 320 in header.
+C     Modified 06-Sep-88 by TOV to write file type number 320 to header.
+C
+C  Intent:
+C     Compute mean coincidences per profile point across all 7 slices
+C     and write in the file header to a 1-record file, NORMHEAD.
+C     This value serves as a scaler in CORSCAN in the reconstruction
+C     of emission scans and in CORATTEN in the reconstruction of
+C     transmission scans.
+C
+C     The program alters the following values in the file header
+C     before writing it to NORMHEAD:
+C       (38) file type changed to 320;
+C       (50) corrected mean counts/profile point (average for all 7 slices)
+C
+C     Input File:  see PETT6SLC.FIL
+C     Output File: see PETT6NRM.FIL
+C
+C  Logical Units:
+C     0 = User output (USEROUT);
+C     1 = Binned raw NORM data (input file) (NSORTS);
+C     2 = NORM header file (output file) (NORMHEAD);
+C
+C  Uses Subroutines:
+C     SYSIO
+C
+C  Instructions for Compiling/Linking:  LINK7 NORMAVE
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM NORMAVE
+C
+      INTEGER*2  HEADER(128)   ! file header
+      INTEGER*2  MEAN          ! mean counts across all slices
+C
+      INTEGER*4  NSORTS        ! logical unit for profile input file
+      INTEGER*4  NORMHEAD      ! logical unit for NORM header output file
+      INTEGER*4  USEROUT       ! logical unit for output to user
+      INTEGER*4  IOREAD        ! SYSIO read sequential binary wait
+      INTEGER*4  IOWRITE       ! SYSIO write sequential binary wait
+      INTEGER*4  PB(6)         ! parameter block in SYSIO
+      INTEGER*4  ABYTES        ! bytes per slice for profile data
+      INTEGER*4  HBYTES        ! bytes in header record
+      INTEGER*4  I,N           ! local integers for incrementing in DO loops
+C
+C     REAL*4     ARRAY(7776,7) ! array of all profile data
+      REAL*4     ARRAY(7808,7) ! array of all profile data
+      REAL*4     SUM           ! total counts (summed across 7 slices)
+C
+      CHARACTER*1 BELL         ! used to ring terminal bell
+C
+      CHARACTER*20 NSORTSNAME,NORMHEADNAME
+      DATA USEROUT,NSORTS,NORMHEAD /6,1,2/
+      DATA IOREAD,IOWRITE /88,56/
+      DATA HBYTES  /256/
+      DATA ABYTES  /31232/
+
+      WRITE(USEROUT,*) '*** NORMAVE  Sep-97  {normal average}'
+      CALL GETARG (1, NSORTSNAME)
+      CALL GETARG (2, NORMHEADNAME)
+C
+C  72 profiles * 108 points/profile * 4 bytes/datum = ABYTES
+C
+      OPEN(NSORTS,FILE=NSORTSNAME)
+      OPEN(NORMHEAD,FILE=NORMHEADNAME)
+C
+C  Read in all data and sum slices
+C
+      BELL = CHAR(7)
+      PB(6) = 0
+      SUM = 0.0
+      DO 200 I=1,7
+        CALL SYSIO(PB,IOREAD,NSORTS,HEADER,HBYTES,0)
+        IF (I.EQ.1 .AND. HEADER(38).NE.120) THEN
+          WRITE(USEROUT,*) '*******************************************'
+          WRITE(USEROUT,*) '*  Input file is of wrong type.'
+          WRITE(USEROUT,*) '*  It must be a file processed by BINPROF.'
+          WRITE(USEROUT,*) '*******************************************'
+          STOP
+        END IF
+        CALL SYSIO(PB,IOREAD,NSORTS,ARRAY(1,I),ABYTES,0)
+        DO 100 N=1,7776
+          SUM = SUM + ARRAY(N,I)
+100     CONTINUE
+200   CONTINUE
+C
+C  Compute mean across 7 slices and 7776 profiles using explicit rounding
+C
+      MEAN = NINT(SUM/(7.*7776.))
+      WRITE(USEROUT,8100) MEAN
+8100  FORMAT(1X,'Mean Counts = ',I)
+C
+C  Insert mean counts into header and write to NORMHEAD file
+C
+      HEADER(38) = 320
+      HEADER(50) = MEAN
+      CALL SYSIO(PB,IOWRITE,NORMHEAD,HEADER,HBYTES,0)
+C
+      STOP
+      END
+
+@

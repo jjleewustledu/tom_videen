@@ -1,0 +1,338 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	2006.04.20.16.33.04;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2006.04.20.14.28.33;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@new tests
+@
+text
+@/*	$Log: rnsearch.c,v $
+ * Revision 1.1  2006/04/20  14:28:33  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:	rnsearch.c
+ *	Date:	Apr 2006
+ *	Author:	Tom Videen
+ *	Intent:	Locate RN density center in an MR image
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/rnsearch/RCS/rnsearch.c,v 1.1 2006/04/20 14:28:33 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <pettable.h>
+#include <ANALYZE.h>				 /* dsr */
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* header for ANALYZE */
+	FILE           *fd;
+	char           *fname1;			 /* tra image name */
+	char           *fname2;			 /* cor image name */
+	char           *hdr1;
+	char           *hdr2;
+	short        ***img;			 /* tra image */
+	short        ***smg;			 /* cor image */
+	short          *srow;
+	char           *fid;
+	char           *pid;
+	float           vox[3];			 /* pixel dimensions in mm */
+	int             nx, ny, nz;
+	int             x, y, z;		 /* array indices */
+	int             x0, y0, z0;		 /* array indices */
+	int             x1, y1, z1;		 /* int seed */
+	float           x1f, y1f, z1f;	 /* seed */
+	int             mx1, my1, mz1;	 /* minima point */
+	int             mx2, my2, mz2;	 /* minima point */
+	int             mx3, my3, mz3;	 /* minima point */
+	float           mean1, mean2, mean3;
+	float           min1, min2, min3;
+	long            sum1, sum2, vol;
+	float           rsqr;
+	float           d;
+	float           v;
+	int             i, j, k;
+	int             new = 1;
+	int             np = 1;		 /* search increment (+/- pixels)	*/
+	int             rd = 3;		 /* sphere radius (mm) */
+
+	hdr1 = argv[1];
+	fname1 = argv[2];
+	hdr2 = argv[3];
+	fname2 = argv[4];
+	fid = argv[5];
+	x1f = atof (argv[6]);
+	y1f = atof (argv[7]);
+	z1f = atof (argv[8]);
+	pid = argv[9];
+
+	x1 = x1f;
+	y1 = y1f;
+	z1 = z1f;
+	rsqr = rd * rd;
+
+/*
+ * Check headers of both files
+ */
+
+	if ((fd = fopen (hdr1, "r")) == NULL) {
+		fprintf (stderr, "ERROR [rnsearch]: opening: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd)) != 1) {
+		fprintf (stderr, "ERROR [rnsearch]: reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	(void) fclose (fd);
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [rnsearch]: reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [rnsearch]: filetype: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	nx = hdr.dime.dim[1];
+	ny = hdr.dime.dim[2];
+	nz = hdr.dime.dim[3];
+	if (nx != 256 || ny != 256 || nz != 128) {
+		fprintf (stderr, "ERROR [rnsearch]: dimensions: %d %d %d\n", nx, ny, nz);
+		return (ERROR);
+	}
+	vox[0] = hdr.dime.pixdim[1];
+	vox[1] = hdr.dime.pixdim[2];
+	vox[2] = hdr.dime.pixdim[3];
+	if (vox[0] != 1 || vox[2] != 1 || vox[2] != 1) {
+		fprintf (stderr, "ERROR [rnsearch]: voxel size: %f %f %f\n", vox[0], vox[1], vox[2]);
+		return (ERROR);
+	}
+	if ((fd = fopen (hdr2, "r")) == NULL) {
+		fprintf (stderr, "ERROR [rnsearch]: opening: %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd)) != 1) {
+		fprintf (stderr, "ERROR [rnsearch]: reading: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fd);
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [rnsearch]: reading: %s\n", hdr2);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [rnsearch]: filetype: %s\n", hdr2);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	nx = hdr.dime.dim[1];
+	ny = hdr.dime.dim[2];
+	nz = hdr.dime.dim[3];
+	if (nx != 256 || ny != 256 || nz != 128) {
+		fprintf (stderr, "ERROR [rnsearch]: dimensions: %d %d %d\n", nx, ny, nz);
+		return (ERROR);
+	}
+	vox[0] = hdr.dime.pixdim[1];
+	vox[1] = hdr.dime.pixdim[2];
+	vox[2] = hdr.dime.pixdim[3];
+	if (vox[0] != 1 || vox[2] != 1 || vox[2] != 1) {
+		fprintf (stderr, "ERROR [rnsearch]: voxel size: %f %f %f\n", vox[0], vox[1], vox[2]);
+		return (ERROR);
+	}
+/*
+ *  Read both images and flip X, Y & Z from Analyze convention
+ */
+
+	if ((fd = fopen (fname1, "r")) == NULL) {
+		fprintf (stderr, "ERROR [rnsearch]: opening: %s\n", fname1);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, nz, 1, ny, 1, nx)) == NULL) {
+		fprintf (stderr, "ERROR [rnsearch]: malloc img\n");
+		return (ERROR);
+	}
+	if (NULL == (srow = (short *) calloc (nx, sizeof (short)))) {
+		fprintf (stderr, "ERROR [rnsearch]: malloc srow\n");
+		return (ERROR);
+	}
+	fprintf (stdout, "Reading: %s\n", fname1);
+	for (i = nz; i > 0; i--) {
+		for (j = ny; j > 0; j--) {
+			if ((fread (srow, sizeof (short), nx, fd)) != nx) {
+				fprintf (stderr, "ERROR [rnsearch]: Reading: %s\n", fname1);
+				return (ERROR);
+			}
+			for (k = 1; k <= nx; k++)
+				img[i][j][nx - (k - 1)] = srow[k - 1];
+		}
+	}
+	(void) fclose (fd);
+
+	if ((fd = fopen (fname2, "r")) == NULL) {
+		fprintf (stderr, "ERROR [rnsearch]: opening: %s\n", fname2);
+		return (ERROR);
+	}
+	if ((smg = s3tensor (1, nz, 1, ny, 1, nx)) == NULL) {
+		fprintf (stderr, "ERROR [rnsearch]: malloc smg\n");
+		return (ERROR);
+	}
+	fprintf (stdout, "Reading: %s\n", fname2);
+	for (i = nz; i > 0; i--) {
+		for (j = ny; j > 0; j--) {
+			if ((fread (srow, sizeof (short), nx, fd)) != nx) {
+				fprintf (stderr, "ERROR [rnsearch]: Reading: %s\n", fname2);
+				return (ERROR);
+			}
+			for (k = 1; k <= nx; k++)
+				smg[i][j][nx - (k - 1)] = srow[k - 1];
+		}
+	}
+	(void) fclose (fd);
+
+/*  Initialize arrays of indices to include in the sphere */
+
+	while (new > 0) {
+		new = 0;
+		mx1 = 0;
+		my1 = 0;
+		mz1 = 0;
+		min1 = 4095;
+		mx2 = 0;
+		my2 = 0;
+		mz2 = 0;
+		min2 = 4095;
+		mx3 = 0;
+		my3 = 0;
+		mz3 = 0;
+		min3 = 4095;
+		for (z0 = z1 - np; z0 <= z1 + np; z0++) {
+			for (y0 = y1 - np; y0 <= y1 + np; y0++) {
+				for (x0 = x1 - np; x0 <= x1 + np; x0++) {
+					vol = 0;
+					sum1 = 0;
+					sum2 = 0;
+					for (z = z0 - rd; z <= z0 + rd; z++) {
+						for (y = y0 - rd; y <= y0 + rd; y++) {
+							for (x = x0 - rd; x <= x0 + rd; x++) {
+								d = (x - x0) * (x - x0) + (y - y0) * (y - y0) + (z - z0) * (z - z0);
+								if (d <= rsqr) {
+									sum1 = sum1 + (long) img[z][y][x];
+									sum2 = sum2 + (long) smg[z][y][x];
+									vol = vol + 1;
+								}
+							}
+						}
+					}
+					mean1 = (float) sum1 / (float) vol;
+					mean2 = (float) sum2 / (float) vol;
+					mean3 = mean1 + mean2;
+
+					if (mean1 < min1) {
+						min1 = mean1;
+						mx1 = x0;
+						my1 = y0;
+						mz1 = z0;
+					}
+					if (mean2 < min2) {
+						min2 = mean2;
+						mx2 = x0;
+						my2 = y0;
+						mz2 = z0;
+					}
+					if (mean3 < min3) {
+						min3 = mean3;
+						mx3 = x0;
+						my3 = y0;
+						mz3 = z0;
+					}
+				}
+			}
+		}
+		fprintf (stdout, "Search %3d %3d %3d %7.1f  %.3f\n", mx3, my3, mz3, min3, 0.001 * vol);
+		if (mx3 != x1 || my3 != y1 || mz3 != z1) {
+			x1 = mx3;
+			y1 = my3;
+			z1 = mz3;
+			new = 1;
+		}
+	}
+/*
+	v = (0.004 * M_PI * rd * rd * rd) / 3.;
+	fprintf (stdout, "\n%s  %5.1f %5.1f %5.1f   %.3f cc (%.3f)  Range +/- %d\n", fid, x1f, y1f, z1f, 0.001*vol, v, np);
+	fprintf (stdout, "Tra  %3d %3d %3d %7.1f\n", mx1, my1, mz1, min1);
+	fprintf (stdout, "Cor  %3d %3d %3d %7.1f\n", mx2, my2, mz2, min2);
+	fprintf (stdout, "Min  %3d %3d %3d %7.1f\n", mx3, my3, mz3, min3);
+*/
+	fprintf (stdout, "\n%s %s %5.1f %5.1f %5.1f %3d %3d %3d %.1f\n", pid, fid, x1f, y1f, z1f, mx3, my3, mz3, min3);
+	free_s3tensor (img, 1, nz, 1, ny, 1, nx);
+	free_s3tensor (smg, 1, nz, 1, ny, 1, nx);
+	free (srow);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/rnsearch/RCS/rnsearch.c,v 1.6 2006/01/31 14:05:40 tom Exp $";
+d58 2
+a59 2
+	int             n = 1;
+	int             r = 3;		 /* sphere radius (mm) */
+d74 1
+a74 1
+	rsqr = r * r;
+d212 3
+a214 3
+		for (z0 = z1 - n; z0 <= z1 + n; z0++) {
+			for (y0 = y1 - n; y0 <= y1 + n; y0++) {
+				for (x0 = x1 - n; x0 <= x1 + n; x0++) {
+d218 3
+a220 3
+					for (z = z0 - r; z <= z0 + r; z++) {
+						for (y = y0 - r; y <= y0 + r; y++) {
+							for (x = x0 - r; x <= x0 + r; x++) {
+d264 2
+a265 2
+	v = (0.004 * M_PI * r * r * r) / 3.;
+	fprintf (stdout, "\n%s  %5.1f %5.1f %5.1f   %.3f cc (%.3f)  Range +/- %d\n", fid, x1f, y1f, z1f, 0.001*vol, v, n);
+@

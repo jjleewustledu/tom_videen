@@ -1,0 +1,114 @@
+#!/bin/csh
+# Name:		recon3d
+# Author:	Tom Videen
+# Date:		Sept 2004
+# Intent:	simplified call to recon3d_scat
+#
+# Required files: (examples)
+#	Emis:		p2992nmb1.scn
+#	Trans:		p2992tr2.scn	(used to compute 3D scatter)
+#	LogTrans:	p2992tr2l.scn	(used to compute 3D attenuation)
+#	Blank:		040726bl1.scn
+#	GeoFactors: wu_953b_PostJan96_geo.scn
+#	Norm:		normal3d_80x80_040714.nrm
+#		or
+#	Eff3D:		plane_eff_3d_040714.scn
+#
+# Temp files:
+#	EFF2D is 2D projection of EFF3D 
+#	UNIT is sino set to 1 throughout
+#	ITRAN is inverse unit transmission
+#	ATTN2D created from LogTrans and used to create ATTN3D
+
+setenv TABLES /usr/local/lib/tables
+setenv NRMDIR /data/recon/norm
+
+if ($#argv != 7) then
+	echo "Usage: recon3d emis trans blank nrmdate pixsize firstfrm lastfrm"
+	echo "e.g.,  recon3d m900fd1  m900tr1  040909bl1 040902 1.956 1 3"
+	echo "  or,  recon3d p2900fd1 p2900tr1 040909bl1 040902 2.086 1 44"
+	echo 
+	echo "Always scatter corrects and uses current path for raw and image files."
+	echo "Use the following pixel sizes:"
+	echo "	Monkey = 1.956"
+	echo "	Human  = 2.086 (hdr shows 0.208555 cm)"
+	exit 1
+endif
+
+set DPATH   = $cwd
+set EMIS    = $1
+set TRAN    = $2
+set BLANK   = $3
+set ndate   = $4
+set PIXSIZ  = $5
+set firstfrm = $6
+set lastfrm  = $7
+
+set LOGTR   = ${TRAN}l
+set NRM     = normal3d_80x80_{$ndate}
+set NORM    = $NRMDIR/$NRM
+set GEO     = $TABLES/wu_953b_PostJan96_geo.scn
+set UNIT    = unit_cti953b.scn
+set EFF3D   = plane_eff_3d_${ndate}
+set EFF2D   = plane_eff_3d_${ndate}_2d.scn
+set ITRAN   = plane_eff_3d_${ndate}_2d_tr.scn
+set SCAT    = plane_eff_3d_${ndate}_scat.scat
+set SCATHDR = plane_eff_3d_${ndate}_scat.ifh
+set ATTN2D  = ${TRAN}_f3datn.img
+set ATTN3D  = ${TRAN}_rdmax5.scn
+
+set EFILES = "$EMIS.scn $TRAN.scn $LOGTR.scn $BLANK.scn $GEO"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR: $i does not exist"
+		set STATUS = 1
+	endif
+end
+if ($STATUS != 0) exit 1
+if ($firstfrm > $lastfrm) then
+	echo "ERROR [recon3d]: $firstfrm > $lastfrm"
+	exit 1
+endif
+if (-e ${EMIS}.img) then
+	echo "Replacing existing file ${EMIS}.img"
+	rm -f ${EMIS}.img
+endif
+if (-e ${EMIS}.rec) rm -f ${EMIS}.rec
+
+if (! -e $NORM.nrm && ! -e $NRM.nrm) then
+	if (! -e $EFF3D) then
+		echo "ERROR: $EFF3D does not exist to create $NRM.nrm"
+		exit 1
+	endif
+	sino_2d_extract_cti953b $EFF3D.scn
+	make_eff_tr_cti953b $EFF2D
+	set ARGS = "$EFF3D.scn -BLANK $UNIT -geo $GEO -scat $SCAT -iter 4 -scatdim 2 -nf $NRM.nrm"
+	makenorm_cti953b $ARGS
+	mv $NRM.nrm $NORM.nrm
+	ualias rm
+	rm $EFF2D $ITRAN $UNIT $SCAT $SCATHDR scatnorm_tmp.csh
+	rm scat_80x80_96_psi13_psiatt25_h0.20_mult.*
+endif
+
+# Determine number of frames to reconstruct
+
+set frames = `cti_getparam ${EMIS}.scn -nframe`
+if ($lastfrm > $frames) set lastfrm = $frames
+set frames = `expr $lastfrm - $firstfrm + 1`
+
+set ifrm = $firstfrm
+set ofrm = 1
+while ($ifrm <= $lastfrm)
+	echo "--------------------------------------------------------------"
+	echo Reconstructing Frame $ifrm
+ 	rec3dscat $DPATH $EMIS $NORM $TRAN $BLANK -f $ifrm -fo $ofrm -scat -if 2 -num_frames $frames -p $PIXSIZ
+	@ ofrm++
+	@ ifrm++
+end
+
+unalias rm
+rm scat_80x80_96_psi13_psiatt25_h0.20_mult.*
+rm ${EMIS}_scat.*
+rm $ATTN2D
+

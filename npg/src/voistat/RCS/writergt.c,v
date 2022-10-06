@@ -1,0 +1,635 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.20.16.23.04;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	2003.04.03.21.46.38;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	2001.08.20.19.10.26;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2001.05.31.19.34.52;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2000.08.09.20.04.12;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.12.17.14.53.08;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.07.15.15.45.25;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.07.15.13.34.39;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.04.26.21.10.35;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.04.26.15.52.53;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.04.25.20.49.32;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.25.16.16.01;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial release
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: writergt.c,v $
+ * Revision 1.11  2003/04/03  21:46:38  tom
+ * *** empty log message ***
+ *
+ * Revision 1.10  2001/08/20  19:10:26  tom
+ * add precision (3 decimals)
+ *
+ * Revision 1.9  2001/05/31  19:34:52  tom
+ * read version number correctly
+ *
+ * Revision 1.8  2000/08/09  20:04:12  tom
+ * change to write 3 decimal places for counts
+ *
+ * Revision 1.7  1999/12/17  14:53:08  tom
+ * lint cleaning
+ *
+ * Revision 1.6  1999/07/15  15:45:25  tom
+ * old and new sphere options
+ *
+ * Revision 1.5  1999/07/15  13:34:39  tom
+ * change format for volume
+ *
+ * Revision 1.4  1996/04/26  21:10:35  tom
+ * writes last frame of multiframe image
+ *
+ * Revision 1.3  1996/04/26  15:52:53  tom
+ * changed structure of rgtlist
+ *
+ * Revision 1.2  1996/04/25  20:49:32  tom
+ * determine multiple_frames from actual number in file
+ *
+ * Revision 1.1  1996/04/25  16:16:01  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			writergt.c
+ *	Date:			Apr 1996
+ *	Author:			Tom Videen
+ *	Description:	Write rgt data to a file.
+ *	History:
+ *		Apr 1996	Modification of writergt
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/writergt.c,v 1.11 2003/04/03 21:46:38 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <string.h>
+#include <imgutil.h>
+#include <voistat.h>
+
+int      writergt (rgtfile, prm, version, nvoi, voilist, firstfrm, nsub, rgtlist, date, 
+	        uid, voifile, prmfile, nvoxels, adim, save_sd)
+	char           *rgtfile;		/* output filename */
+	PARAMETER_DATA  prm;			/* parameter data structure */
+	char           *version;		/* program version number */
+	int             nvoi;			/* number of VOIs */
+	VOIDATA        *voilist;		/* list of VOIs */
+	int				firstfrm;		/* number of first frame (indexed from 1) */
+	int             nsub;			/* number of subjects */
+	RGTDATA        *rgtlist;		/* RGTDATA */
+	char           *date;			/* current date */
+	char           *uid;			/* user id */
+	char           *voifile;		/* region filename */
+	char           *prmfile;		/* parameter file name */
+	int             nvoxels;		/* number of voxels in VOI */
+	float   	   *adim;			/* voxel dimension (mm) */
+	int		        save_sd;		/* true -> output file is standard deviations */
+{
+	FILE           *rgtfp;
+	FILE           *fp;
+	char			line [MAXLINE];
+	char			item [MAXLINE];
+	char           *extension;
+	char           *fname;
+	int             nframes;
+	int				f0;				/* number of first frame (indexed from 0) */
+	int             s, f, v;		/* indices to subject#, frame#, voi# */
+	int             total_frames = 0;
+	int		        free_format = 0;
+	int		        multiple_frames = 0;
+	char   *proc_names[] = {
+		"none",
+		"cbf",
+		"cbv",
+		"oef",
+		"cmro2",
+		"decay_corrected_tissue_activity",
+		"uncorrected_tissue_activity"};
+
+	if ((rgtfp = fopen (rgtfile, "w")) == NULL) {
+		fprintf (stderr, "ERROR [writergt]: Cannot open file %s\n", rgtfile);
+		return (ERROR);
+	}
+	fprintf (rgtfp, "  %3d   %s\n", VOI_FILETYPE, proc_names[prm.processing]);
+
+/*	Determine total numver of frames and whether this is a multi-frame study */
+
+	f0 = firstfrm - 1;
+	for (s = 0; s < nsub; s++) {
+		nframes = rgtlist[s].nframe - f0;
+		total_frames += nframes;
+		if (nframes > 1)
+			multiple_frames = 1;
+	}
+
+	if (multiple_frames == 1)
+		fprintf (rgtfp, "  %4d   %4d  ", total_frames, nvoi + 2);
+	else {
+		if (prm.rgt_format == REGIONROW)
+			fprintf (rgtfp, "  %4d   %4d  ", nvoi, nsub);
+		else
+			fprintf (rgtfp, "  %4d   %4d  ", nsub, nvoi);
+	}
+
+	if (prm.rgt_format == REGIONCOL && multiple_frames == 0) {
+		for (v = 0; v < nvoi; v++)
+			fprintf (rgtfp, "%10s", voilist[v].voiname);
+		fprintf (rgtfp, "\n");
+		for (s = 0; s < nsub; s++) {
+			extension = strrchr (rgtlist[s].fname, '/');
+			if (extension != NULL && strncmp (extension, "/", 1) == 0)
+				fname = extension + 1;
+			else
+				fname = rgtlist[s].fname;
+			if (save_sd)
+				for (v = 0; v < rgtlist[s].nvoi; v++)
+					fprintf (rgtfp, "   %10.2f", rgtlist[s].sd[firstfrm][v]);
+			else
+				for (v = 0; v < rgtlist[s].nvoi; v++)
+					fprintf (rgtfp, "   %10.2f", rgtlist[s].mean[firstfrm][v]);
+			if (strlen (fname) >= 10)
+				fprintf (rgtfp, "   %s\n", fname);
+			else
+				fprintf (rgtfp, "   %10s\n", fname);
+		}
+	} else if (prm.rgt_format == REGIONROW && multiple_frames == 0) {
+		for (s = 0; s < nsub; s++) {
+			extension = strrchr (rgtlist[s].fname, '/');
+			if (extension != NULL && strncmp (extension, "/", 1) == 0)
+				fname = extension + 1;
+			else
+				fname = rgtlist[s].fname;
+			if (strlen (fname) >= 10)
+				fprintf (rgtfp, "%s ", fname);
+			else
+				fprintf (rgtfp, "%10s", fname);
+		}
+		fprintf (rgtfp, "\n");
+
+		for (v = 0; v < rgtlist[0].nvoi; v++) {
+			if (save_sd) 
+				for (s = 0; s < nsub; s++)
+					fprintf (rgtfp, "   %10.2f", rgtlist[s].sd[firstfrm][v]);
+			else
+				for (s = 0; s < nsub; s++)
+					fprintf (rgtfp, "   %10.2f", rgtlist[s].mean[firstfrm][v]);
+			fprintf (rgtfp, "%10s\n", voilist[v].voiname);
+		}
+	} else {
+		fprintf (rgtfp, "%12s%12s", "Start_Time", "Duration ");
+		free_format = 0;
+		for (v = 0; v < nvoi; v++)
+			if (strlen(voilist[v].voiname) >= 10)
+				free_format = 1;
+		for (v = 0; v < nvoi; v++) {
+			if (free_format == 1)
+				fprintf (rgtfp, "%s ", voilist[v].voiname);
+			else
+				fprintf (rgtfp, "%10s", voilist[v].voiname);
+		}
+		fprintf (rgtfp, "\n");
+		for (s = 0; s < nsub; s++) {
+			fname = rgtlist[s].fname;
+			for (f = firstfrm; f <= rgtlist[s].nframe; f++) {
+				fprintf (rgtfp, "%12.3f%12.3f", rgtlist[s].time[f], rgtlist[s].duration[f]);
+				if (save_sd)
+					for (v = 0; v < rgtlist[s].nvoi; v++) 
+						fprintf (rgtfp, "%14.3f", rgtlist[s].sd[f][v]);
+				else 
+					for (v = 0; v < rgtlist[s].nvoi; v++)
+						fprintf (rgtfp, "%14.3f", rgtlist[s].mean[f][v]);
+				if (f == firstfrm)
+					fprintf (rgtfp, "   %s\n", fname);
+				else
+					fprintf (rgtfp, "\n");
+			}
+		}
+		fprintf (rgtfp, "%s\n%d\n", voilist[0].voiname, nvoxels);
+	}
+	fprintf (rgtfp, "\n");
+	fprintf (rgtfp, "%s   %s   %s   %s\n", version, date, uid, voifile);
+	if (prm.voi_shape == VOI_CUBE)
+		fprintf (rgtfp, "voi: cube %.2f %.2f %.2f mm, ", prm.voi_xdim, prm.voi_ydim, prm.voi_zdim);
+	else if (prm.voi_shape == VOI_OLD_SPHERE)
+		fprintf (rgtfp, "voi: old_sphere %.2f mm, ", prm.voi_xdim);
+	else if (prm.voi_shape == VOI_NEW_SPHERE)
+		fprintf (rgtfp, "voi: new_sphere %.2f mm, ", prm.voi_xdim);
+	fprintf (rgtfp, "%.3f cc, %d %s in VOI\n", 
+		 nvoxels * adim[0] * adim[1] * adim[2] / 1000.,
+		 nvoxels, (nvoxels > 1) ? "voxels" : "voxel");
+	fprintf (rgtfp, "\n");
+
+
+/* Put the parameter file at the end of the data file */
+
+	fprintf (rgtfp, "prm\n");
+	fp = fopen (prmfile, "r");
+	if (fp == NULL)
+		return (ERROR);
+    while (fgets (line, MAXLINE, fp) != NULL)
+        if (sscanf (line, "%s", item) == 1)
+                fprintf (rgtfp, "%s", line);
+	fprintf (rgtfp, "endprm\n");
+	(void) fclose (rgtfp);
+	(void) fclose (fp);
+	return (OK);
+}
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d37 1
+a37 1
+ *	Date:			Apr-96
+d41 1
+a41 1
+ *		Apr-96	Modification of writergt (Tom Yang 03/03/94)
+d44 1
+d46 1
+a46 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/writergt.c,v 1.10 2001/08/20 19:10:26 tom Exp tom $";
+d82 2
+a83 2
+	int		        free_format;
+	int		        multiple_frames = FALSE;
+d106 1
+a106 1
+			multiple_frames = TRUE;
+d109 1
+a109 1
+	if (multiple_frames)
+d118 1
+a118 1
+	if (prm.rgt_format == REGIONCOL && !multiple_frames) {
+d139 1
+a139 1
+	} else if (prm.rgt_format == REGIONROW && !multiple_frames) {
+d164 1
+a164 1
+		free_format = FALSE;
+d167 1
+a167 1
+				free_format = TRUE;
+d169 1
+a169 1
+			if (free_format)
+d202 1
+a202 1
+		 nvoxels * adim[0] * adim[1] * adim[2] / 1000,
+d211 2
+@
+
+
+1.10
+log
+@add precision (3 decimals)
+@
+text
+@d2 3
+d42 1
+a42 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/writergt.c,v 1.9 2001/05/31 19:34:52 tom Exp tom $";
+d211 2
+a212 2
+	fclose (rgtfp);
+	fclose (fp);
+@
+
+
+1.9
+log
+@read version number correctly
+@
+text
+@d2 3
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/writergt.c,v 1.8 2000/08/09 20:04:12 tom Exp tom $";
+d171 1
+a171 1
+				fprintf (rgtfp, "%12.1f%12.1f", rgtlist[s].time[f], rgtlist[s].duration[f]);
+@
+
+
+1.8
+log
+@change to write 3 decimal places for counts
+@
+text
+@d2 3
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/writergt.c,v 1.7 1999/12/17 14:53:08 tom Exp tom $";
+d184 1
+a184 1
+	fprintf (rgtfp, "  %s   %s   %s   %s\n", version, date, uid, voifile);
+@
+
+
+1.7
+log
+@lint cleaning
+@
+text
+@d2 3
+d33 1
+a33 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/writergt.c,v 1.6 1999/07/15 15:45:25 tom Exp tom $";
+d168 1
+a168 1
+						fprintf (rgtfp, "%14.2f", rgtlist[s].sd[f][v]);
+d171 1
+a171 1
+						fprintf (rgtfp, "%14.2f", rgtlist[s].mean[f][v]);
+@
+
+
+1.6
+log
+@old and new sphere options
+@
+text
+@d2 3
+d30 1
+a30 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/writergt.c,v 1.5 1999/07/15 13:34:39 tom Exp tom $";
+d54 1
+a54 1
+	BOOLEAN         save_sd;		/* true -> output file is standard deviations */
+d66 2
+a67 2
+	BOOLEAN         free_format;
+	BOOLEAN         multiple_frames = FALSE;
+d150 1
+a150 1
+			if (strlen (voilist[v].voiname) >= 10)
+@
+
+
+1.5
+log
+@change format for volume
+@
+text
+@d2 3
+d27 1
+a27 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/writergt.c,v 1.4 1996/04/26 21:10:35 tom Exp tom $";
+a30 1
+#include <stdlib.h>
+a33 2
+#include <image.h>
+#include <libimage.h>
+a34 9
+char   *proc_names[] = {
+	"none",
+	"cbf",
+	"cbv",
+	"oef",
+	"cmro2",
+	"decay_corrected_tissue_activity",
+	"uncorrected_tissue_activity"};
+
+d65 8
+d178 4
+a181 2
+	else if (prm.voi_shape == VOI_SPHERE)
+		fprintf (rgtfp, "voi: sphere %.2f mm, ", prm.voi_xdim);
+d187 3
+a189 3
+/*
+ * Put the parameter file at the end of the data file.
+ */
+d197 1
+a197 1
+	close (fp);
+@
+
+
+1.4
+log
+@writes last frame of multiframe image
+@
+text
+@d2 3
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/voistat/RCS/writergt.c,v 1.3 1996/04/26 15:52:53 tom Exp tom $";
+d178 1
+a178 1
+		fprintf (rgtfp, "voi: cube %f %f %f in mm, ", prm.voi_xdim, prm.voi_ydim, prm.voi_zdim);
+d180 2
+a181 2
+		fprintf (rgtfp, "voi: sphere %f in mm, ", prm.voi_xdim);
+	fprintf (rgtfp, "%f cc, %d %s in VOI\n", 
+@
+
+
+1.3
+log
+@changed structure of rgtlist
+@
+text
+@d2 3
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/voistat/RCS/writergt.c,v 1.2 1996/04/25 20:49:32 tom Exp tom $";
+d156 1
+a156 1
+			for (f = firstfrm; f < rgtlist[s].nframe; f++) {
+@
+
+
+1.2
+log
+@determine multiple_frames from actual number in file
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/voistat/RCS/writergt.c,v 1.1 1996/04/25 16:16:01 tom Exp tom $";
+d54 1
+a54 1
+	BOOLEAN         save_sd;	
+a55 2
+	BOOLEAN         free_format;
+	BOOLEAN         multiple_frames;
+a61 1
+	int             total_frames;
+d63 5
+a67 2
+	int				j0;				/* number of first frame (indexed from 0) */
+	int             i, j, k;
+d74 6
+a79 5
+	multiple_frames = FALSE;
+	total_frames = 0;
+	j0 = firstfrm - 1;
+	for (i = 0; i < nsub; i++) {
+		nframes = rgtlist[i].nframe - j0;
+d95 2
+a96 2
+		for (i = 0; i < nvoi; i++)
+			fprintf (rgtfp, "%10s", voilist[i].voiname);
+d98 2
+a99 2
+		for (i = 0; i < nsub; i++) {
+			extension = strrchr (rgtlist[i].fname, '/');
+d103 1
+a103 1
+				fname = rgtlist[i].fname;
+d105 2
+a106 2
+				for (j = j0; j <= rgtlist[i].nvoi; j++)
+					fprintf (rgtfp, "   %10.2f", rgtlist[i].sd[j]);
+d108 2
+a109 2
+				for (j = j0; j <= rgtlist[i].nvoi; j++)
+					fprintf (rgtfp, "   %10.2f", rgtlist[i].mean[j]);
+d116 2
+a117 2
+		for (i = 0; i < nsub; i++) {
+			extension = strrchr (rgtlist[i].fname, '/');
+d121 1
+a121 1
+				fname = rgtlist[i].fname;
+d129 1
+a129 1
+		for (i = 0; i < rgtlist[0].nvoi; i++) {
+d131 2
+a132 2
+				for (j = j0; j <= nsub; j++)
+					fprintf (rgtfp, "   %10.2f", rgtlist[j].sd[i]);
+d134 3
+a136 3
+				for (j = j0; j <= nsub; j++)
+					fprintf (rgtfp, "   %10.2f", rgtlist[j].mean[i]);
+			fprintf (rgtfp, "%10s\n", voilist[i].voiname);
+d141 2
+a142 2
+		for (i = 0; i < nvoi; i++)
+			if (strlen (voilist[i].voiname) >= 10)
+d144 1
+a144 1
+		for (i = 0; i < nvoi; i++) {
+d146 1
+a146 1
+				fprintf (rgtfp, "%s ", voilist[i].voiname);
+d148 1
+a148 1
+				fprintf (rgtfp, "%10s", voilist[i].voiname);
+d151 4
+a154 4
+		for (i = 0; i < nsub; i++) {
+			fname = rgtlist[i].fname;
+			for (j = j0; j < rgtlist[i].nframe; j++) {
+				fprintf (rgtfp, "%12.1f%12.1f", rgtlist[i].time[j], rgtlist[i].duration[j]);
+d156 2
+a157 2
+					for (k = 0; k < rgtlist[i].nvoi; k++) 
+						fprintf (rgtfp, "%14.2f", rgtlist[i].sd[j * rgtlist[i].nvoi + k]);
+d159 3
+a161 3
+					for (k = 0; k < rgtlist[i].nvoi; k++)
+						fprintf (rgtfp, "%14.2f", rgtlist[i].mean[j * rgtlist[i].nvoi + k]);
+				if (j == j0)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/gauss/RCS/gauss.c,v 2.4 1996/02/22 15:34:38 tom Exp tom $";
+d62 1
+d75 3
+a77 2
+		total_frames += rgtlist[i].nframe - j0;
+		if (rgtlist[i].nframe > 1 && !multiple_frames)
+d101 1
+a101 1
+				for (j = j0; j < rgtlist[i].nvoi; j++)
+d104 1
+a104 1
+				for (j = j0; j < rgtlist[i].nvoi; j++)
+d127 1
+a127 1
+				for (j = j0; j < nsub; j++)
+d130 1
+a130 1
+				for (j = j0; j < nsub; j++)
+@

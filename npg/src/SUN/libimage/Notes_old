@@ -1,0 +1,180 @@
+ECAT Ver 7 image files:  (31-Jul-96)
+----------------------
+
+Definitions:
+	cpf		= non-decay-corrected counts/pixel/frame
+	dcps	= decay-corrected counts/pixel/sec
+	value	= raw pixel value in image array
+	mh->calibration_factor	= ECAT calibration factor
+	sh->scale_factor	= subheader scale factor
+	sh->decay_corr_fctr	= decay correction factor
+	sh->frame_duration	= frame duration (msec) (0 for attenuation image)
+	ATNSCALER	= 10000.0
+	REV7SCALER	= 0.000001
+	REV7SCALER1	= 20.0
+
+CTI programs display:
+	dcps = value * mh->calibration_factor * sh->scale_factor
+	approximately in units of Bq/cc
+
+
+With the 7.0 release software:
+	mh->calibration_factor = 1.0 
+unless both scatter-correction and decay-correction were used during reconstruction.
+
+
+With 7.0 beta (before May 1996):
+	mh->calibration_factor was approx 15000000.
+when there was no scatter-correction or decay-correction.
+
+
+Attenuation images have sh->frame_duration = 0
+
+
+
+Our programs use:
+	cpf = dcps * sh->frame_duration * SCALER / sh->decay_corr_fctr
+or:
+	cpf = value * mh->calibration_factor * sh->scale_factor * sh->frame_duration
+			* SCALER / sh->decay_corr_fctr
+
+For images in which mh->calibration_factor = 1.0 AND
+	sh->filter_scatter_fraction > 0 AND sh->filter_scatter_slope > 0
+then:
+	SCALER = 20.0  (REV7SCALER1)
+otherwise:
+	SCALER = 0.000001 (REV7SCALER)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Library Functions for reading/writing images:
+--------------------------------------------
+
+libimage.a
+----------
+rdimg6
+	matrix_read
+	scaler = 1.
+	sh6->quant_scale > 0 
+		scaler *= sh6->quant_scale
+	sh6->ecat_calibration_fctr > 0
+		scaler *= sh6->ecat_calibration_fctr
+	img[i] = scaler * simg[i]
+
+rdimg7 
+	fread
+	img[i] = mh->calibration_factor * sh->scale_factor * simg[i]
+
+wrimg6
+	if (max > -min)
+		scaler = MAXSCL / max
+	else
+		scaler = -MAXSCL / min
+	sh6->quant_scale = 1. / (scaler * sh6->ecat_calibration_fctr)
+	simg[i] = (short) (scaler * img[i])
+	matrix_write
+
+wrimg7
+	if (max > -min)
+		scaler = MAXSCL / max
+	else
+		scaler = -MAXSCL / min
+	sh7->scale_factor = 1.0 / (scaler * mh7->calibration_factor)
+	simg[i] = scaler * img[i]
+	wrtrec
+
+libnrimg.a
+----------
+readtensor
+	rdimg
+	MATRIX_REV7
+		sh->frame_duration == 0
+			scaler = ATNSCALER
+		mh->data_units == "1/cm"
+			scaler = ATNSCALER
+		else
+			scaler = REV7SCALER * (float) file->sh->duration
+	MATRIX_REV6
+		sh->frame_duration == 0
+			scaler = ATNSCALER
+		else
+			scaler = (float) file->sh->duration
+	image[pln][j][i] = scaler * img[ix]
+
+rdtensor
+	rdimg
+	MATRIX_REV7
+		sh->frame_duration == 0
+			scaler = ATNSCALER
+		mh->data_units == "1/cm"
+			scaler = ATNSCALER
+		else
+			scaler = REV7SCALER * (float) file->sh->duration
+	MATRIX_REV6
+		sh->frame_duration == 0
+			scaler = ATNSCALER
+		else
+			scaler = (float) file->sh->duration
+	image[pln][j][i] = scaler * img[ix]
+
+wrtensor
+	sh->frame_duration == 0
+		scaler = 1. / ATNSCALER
+	mh->data_units == "1/cm"
+		scaler = 1. / ATNSCALER
+	else
+		scaler = 1. / (REV7SCALER * (float) file->sh->duration)
+	img[ix] = scaler * image[pln][j][i]
+	wrimg7
+
+writetensor
+	MATRIX_REV7
+		sh->frame_duration == 0
+			scaler = 1./ATNSCALER
+		mh->data_units == "1/cm"
+			scaler = 1./ATNSCALER
+		else
+			scaler = 1./(REV7SCALER * (float) file->sh->duration)
+		img[ix] = scaler * image[pln][j][i]
+		wrimg7
+
+	MATRIX_REV6
+		sh->frame_duration == 0
+			scaler = 1./ATNSCALER
+		else
+			scaler = 1./((float) file->sh->duration)
+		img[ix] = scaler * image[pln][j][i]
+		wrimg6
+
+
+spideram.f
+----------
+getimage 
+	rdimg
+	MATRIX_REV7
+		sh->frame_duration == 0
+			scaler = 10000.  (ATNSCALER)
+		mh->data_units == "1/cm"
+			scaler = 10000.  (ATNSCALER)
+		else
+			scaler = REV7SCALER * (float) file->sh->duration / sh->decay_corr_fctr
+	MATRIX_REV6
+		sh->frame_duration == 0
+			scaler = 10000.  (ATNSCALER)
+		else
+			scaler = (float) file->sh->duration 

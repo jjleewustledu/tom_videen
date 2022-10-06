@@ -1,0 +1,329 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2004.02.16.21.22.35;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.27.16.07.35;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.02.01.20.26.58;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.01.12.15.44.41;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@/*	$Log: maskull.c,v $
+ * Revision 1.3  2002/11/27  16:07:35  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1999/02/01  20:26:58  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/01/12  15:44:41  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			maskull.c
+ *	Date:			Jan 1998
+ *	Author:			Tom Videen
+ *	Description:	Remove all connected pixels which are <= min OR >= max.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskull/RCS/maskull.c,v 1.3 2002/11/27 16:07:35 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			maskull
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	void			maskskull ();
+/*@@unused@@*/
+	void			strippix ();
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	int             fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;		 /* input file */
+	char           *img2, *hdr2;		 /* output file */
+	long            ndim1, ndim2, ndim3;	 /* dimensions of image */
+	int             min, max, med;		 /* include all <= or >= these pixel values */
+	long            x, y, z;
+	long            i, j, k;
+	long            pln;
+	int             xmin, xmax, ymin, ymax;
+	short        ***img;			 /* image */
+	short        ***set;			 /* pixels set if in skull */
+	short          *row;			 /* single row of input image */
+	long            npixels = 0;
+	short           val = 0;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 10) {
+		printf ("Usage: maskull img1 hdr1 img2 hdr2\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	min = atoi (argv[5]);
+	max = atoi (argv[6]);
+	x = atoi (argv[7]);
+	y = atoi (argv[8]);
+	z = atoi (argv[9]);
+	med = (max+min)/2;
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [maskull]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [maskull]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [maskull]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [maskull]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [maskull]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	ndim1 = hdr.dime.dim[1];
+	ndim2 = hdr.dime.dim[2];
+	ndim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+	if (x > ndim1 || y > ndim2 || z > ndim3 || x < 1 || y < 1 || z < 1) {
+		fprintf (stderr, "ERROR [maskull]: seed point not in image: [%ld %ld %ld]\n", x, y, z);
+		return (ERROR);
+	}
+/*
+ *	Read img
+ */
+
+	if ((fd_img = open (img1, O_RDONLY, 0444)) < 0) {
+		fprintf (stderr, "ERROR [maskull]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, ndim3, 1, ndim2, 1, ndim1)) == NULL) {
+		fprintf (stderr, "ERROR [maskull]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if (NULL == (row = (short *) calloc (ndim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [maskull]: Cannot malloc memory for row\n");
+		return (ERROR);
+	}
+	for (i = ndim3; i > 0; i--) {
+		for (j = ndim2; j > 0; j--) {
+			(void) read (fd_img, row, ndim1 * 2);
+			for (k = 1; k <= ndim1; k++)
+				img[i][j][ndim1 - (k - 1)] = row[k - 1];
+		}
+	}
+
+	(void) close (fd_img);
+
+	if (img[z][y][x] > min && img[z][y][x] < max) {
+		fprintf (stderr, "ERROR [maskull]: seed value (%i) is not outside the specified range [%i : %i]\n",
+			 img[z][y][x], min, max);
+		return (ERROR);
+	}
+	if ((set = s3tensor (1, ndim3, 1, ndim2, 1, ndim1)) == NULL) {
+		fprintf (stderr, "ERROR [maskull]: Cannot calloc set\n");
+		return (ERROR);
+	}
+/*
+ *	Mask skull
+ */
+
+	pln = 1;
+	set[z][y][x] = 1;
+	xmin = x;
+	xmax = x;
+	ymin = y;
+	ymax = y;
+	maskskull (img, set, val, min, max, ndim1, ndim2, ndim3, pln, &xmin, &xmax, &ymin, &ymax, &npixels);
+	printf ("NPIX = %li\n",npixels);
+
+/*
+	strippix (img, set, med, ndim1, ndim2, ndim3, &xmin, &xmax, &ymin, &ymax, &npixels);
+	printf ("NPIX = %i\n",npixels);
+*/
+
+/*
+ * Write to output file
+ */
+
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [img2analyze]: Unable to create ANALYZE header %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fd_img = open (img2, O_CREAT | O_RDWR, 0666)) == 0) {
+		fprintf (stderr, "ERROR [img2analyze]: Unable to create ANALYZE image %s\n", img2);
+		return (ERROR);
+	}
+	for (i = ndim3; i > 0; i--) {
+		for (j = ndim2; j > 0; j--) {
+			for (k = 1; k <= ndim1; k++)
+				row[k - 1] = img[i][j][ndim1 - (k - 1)];
+			(void) write (fd_img, (char *) row, ndim1 * 2);
+		}
+	}
+/*
+	for (i = 1; i <= ndim3; i++) {
+		for (j = 1; j <= ndim2; j++) {
+			for (k = 1; k <= ndim1; k++)
+				row[k] = (short) img[i][j][k];
+			(void) write (fd_img, (char *) row, ndim1 * 2);
+		}
+	}
+*/
+
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [maskull]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+/*
+ *	Free & Exit
+ */
+
+	printf ("Converted: %s to %s\n", img1, img2);
+	free_s3tensor (img, 1, ndim3, 1, ndim2, 1, ndim1);
+	free_s3tensor (set, 1, ndim3, 1, ndim2, 1, ndim1);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d13 1
+a13 1
+ *	Date:			Jan-98
+d18 1
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskull/RCS/maskull.c,v 1.2 1999/02/01 20:26:58 tom Exp tom $";
+d43 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskull/RCS/maskull.c,v 1.1 1999/01/12 15:44:41 tom Exp tom $";
+d20 2
+a21 1
+#include <string.h>
+a23 1
+#include <libimage.h>
+a25 1
+#include <matrixlib.h>
+d54 1
+d105 1
+a105 1
+	fclose (fd_hdr);
+d108 1
+a108 1
+		fprintf (stderr, "ERROR [maskull]: seed point not in image: [%d %d %d]\n", x, y, z);
+d129 1
+a129 1
+			read (fd_img, row, ndim1 * 2);
+d135 1
+a135 1
+	close (fd_img);
+d156 2
+a157 2
+	maskskull (img, set, min, max, ndim1, ndim2, ndim3, pln, &xmin, &xmax, &ymin, &ymax, &npixels);
+	printf ("NPIX = %i\n",npixels);
+d180 1
+a180 1
+			write (fd_img, (char *) row, ndim1 * 2);
+d188 1
+a188 1
+			write (fd_img, (char *) row, ndim1 * 2);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskull/RCS/maskull.c,v 2.9 1998/10/12 21:32:42 tom Exp $";
+d37 1
+d43 1
+a43 1
+	int             min, max;		 /* include all <= or >= these pixel values */
+d70 1
+d155 1
+d157 5
+@

@@ -1,0 +1,369 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: rotate_wedge.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $*/
+/*$Log: rotate_wedge.c,v $
+ * Revision 3.1  1998/03/24  23:43:10  jmo
+ * ..
+ *
+ * Revision 3.0  1997/10/29  19:26:43  jmo
+ * Support Exact HR.
+ *
+ * Revision 2.5  1996/09/05  14:22:38  jmo
+ * *** empty log message ***
+ *
+ * Revision 2.4  1996/06/19  11:20:43  jmo
+ *
+ * Revision 2.3  1996/04/23  15:02:05  jmo
+ * Version released April 23, 1996
+ *
+ * Revision 2.0  1996/01/27  13:46:15  jmo
+ * Version installed at Neuro-imaging group, January 1996
+ *
+ * Revision 1.2  1996/01/18  16:10:11  jmo
+ * Modified file formats, Interfile and Matrix Rev 7.0 support.
+ *
+ * Revision 1.1  1996/01/12  18:09:26  jmo
+ * Initial revision
+ *
+ * Revision 1.2  1995/03/03  16:26:29  jmo
+ * Modified for cti951
+ *
+ * Revision 1.1  95/01/19  22:40:20  ty7777
+ * Initial revision
+ * */
+
+/*---------------------------------------------------------------
+
+Subroutine: rotate_wedge
+
+Purpose: Integrate over the intersection of a wedge and a cylinder of
+	finite extent.  We assume a curved detector geometry, such that
+ 	the z-coordinate of the intersection of each ray with the cylinder
+	depends on the lateral position of the ray.  Therefore, the output
+	does not correspond to a plane, since there are step discontinuites in the
+	ranges of integration over z.  For this reason, we use a nearest
+	neighbor approach to the rotation in theta, (interpolation is
+	invalid, because adjacent rays represent differect z-positions).
+	Better methods can be developed, but computational complexity is
+	a hindrance.
+
+Coordinate system: This routine assumes that the pixel represented
+	by volume[0][0][0] in "C" lies at the upper left corner 
+	in the rear of the volume. 
+
+By: John Ollinger
+
+Date: July 29, 1992
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+----------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+
+#include <matrix.h>
+#include <imagio.h>
+#include <scatter.h>
+
+#define ERROR 	-1
+#define PAD 1
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/rotate_wedge.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+/* CUB_WR(filnam,image,xdim,ydim,type,id)*/
+#define CUB_WR(A,B,C,D,E) PutCubePlaneZero(A,B,C,D,E,A);
+
+/****************************************************************************/
+void rotate_wedge(
+/****************************************************************************/
+
+float	theta,		/* Rotation about z axis.		*/
+float	psi,		/* Oblique angle of output plane.	*/
+float	delpsi,		/* Increment of psi.			*/
+float	*volume[], /* Images in lab coordinates.	*/
+float	rotpln[],	/* Rotated image.			*/
+int	plnmin,		/* Minimum plane number.		*/
+int	plnmax,		/* Maximum plane number.		*/
+int	plane,		/* Transverse plane which intersects detector ring.*/
+ScatterTable *sc,
+float	delpsi_max)	/* Maximum increment for psi.		*/
+
+
+
+{
+
+static int 
+	first = TRUE,imgdimm1=0,
+	planem1 = -1,
+	*imin,			/* Starting pixel of circle.		*/
+	*imax,			/* Ending pixel of circle.		*/
+        *imax_wdg,              /* Ending pixel of wedge.               */
+	*kmin,			/* Smallest z-offset as fcn of psi. 	*/
+	 kmax,			/* Largest z-offset as fcn of psi. 	*/
+	*klen,
+	physpln;
+
+static float 
+	*wedge,			/* Integral along z-axis through wedge. */
+	xmax,zmaxmax,
+	*tab,
+	**zcoff,		/* Coefficient for each z at psi.	*/
+	cpsi,
+	slc_pix_ratio,
+	radius,*tpsimin,*tpsimax;
+
+static double	psim1 = 1.e20;
+	
+int	i,j,k,ki,ioff,joff,ix,iy,radsq,jpsi,ray;
+
+float	xcord,cdsq,zmax,sum,
+	ctht,stht,
+	tpsimin1,tpsimax1,
+	x,y,dx,dy,dxdy,zmin,
+	x_cnst,y_cnst,tmpimg[IMGSQ];
+
+if(first == TRUE) {
+    /* Compute boundaries of plane region to be rotated.*/
+    first = FALSE;
+    if(NULL==(imin =(int *)malloc((unsigned)(IMGDIM*sizeof(int))))) {
+        printf("Could not malloc memory for imin, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    if(NULL==(imax =(int *)malloc((unsigned)(IMGDIM*sizeof(int))))) {
+        printf("Could not malloc memory for imax, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    if(NULL==(tpsimin =(float *)malloc((unsigned)(IMGDIM*sizeof(float))))) {
+        printf("Could not malloc memory for tpsimin, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    if(NULL==(tpsimax =(float *)malloc((unsigned)(IMGDIM*sizeof(float))))) {
+        printf("Could not malloc memory for tpsimax, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    if(NULL==(imax_wdg =(int *)malloc((unsigned)(IMGDIM*sizeof(int))))) {
+        printf("Could not malloc memory for imax_wdg, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    for(i=0;i<sc->imgdim;i++) imax_wdg[i] = sc->imgdim;
+    if(NULL==(tab =(float *)malloc((unsigned)(2*IMGDIM*sizeof(float))))) {
+        printf("Could not malloc memory for tab, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    tab += IMGDIM;
+    if(NULL==(kmin =(int *)malloc((unsigned)((IMGSQ)*sizeof(int))))) {
+        printf("Could not malloc memory for zmin, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    if(NULL==(klen =(int *)malloc((unsigned)((IMGSQ)*sizeof(int))))) {
+        printf("Could not malloc memory for klen, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    if(NULL==(zcoff =(float **)malloc((unsigned)((IMGSQ)*sizeof(float))))) {
+        printf("Could not malloc memory for zcoff, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    /* Allocate memory for coefficient table assuming largest axial
+       extent at each pixel. */
+    xmax = RADIUS_DET + .5*IMGDIM*PIXSIZ/COS_MAXPSI;
+    zmaxmax = 2.*xmax*(float)tan((double)delpsi_max);
+    kmax = zmaxmax/SLCTHK + 2;
+    if(NULL==(zcoff[0]=(float *)malloc((unsigned)(IMGSQ*kmax*sizeof(float))))) {
+    	printf("Could not malloc memory for zcoff, \"rotate_wedge\"\n");
+    	exit(ERROR);
+    	}
+    for(j=0;j<IMGSQ*kmax;j++)
+        zcoff[0][j] = 0.;
+    for(i=1;i<IMGSQ;i++)
+	zcoff[i] = zcoff[i-1] + kmax;
+
+    if(NULL==(wedge =(float *)
+	malloc((unsigned)((sc->imgsq)*sizeof(float))))) {
+        printf("Could not malloc memory for wedge, \"rotate_wedge\".\n");
+        exit(ERROR);
+        }
+    for(i=0;i<sc->imgsq;i++) wedge[i] = 0.;
+    /* Initialize coefficient table length outside of region being rotated.*/
+    for(i=0;i<IMGSQ;i++) {
+	kmin[i] = plane;
+	klen[i] = 0;
+	}
+    }
+
+/* Recompute sampled region if new value of psi. */
+if((psi != psim1) | (plane != planem1) | (sc->imgdim != imgdimm1)) {
+    /* Recompute region of image to be sampled. */
+    jpsi = (int)((psi - PSI_MIN)*PSI_RATE + .5);
+    cpsi = (float)cos((double)psi);
+    tpsimin1 = (float)tan((double)(psi - .5*delpsi));
+    tpsimax1 = (float)tan((double)(psi + .5*delpsi));
+    slc_pix_ratio = SLCTHK/sc->pixsiz;
+    radius = (float)(sc->imgdim-1)/2.;
+    radsq = radius*radius;
+    physpln = sc->physpln[plane];
+    for(j=0,ray=0;j<sc->imgdim;j++,ray+=sc->ray_step) {
+	/* Model effect of end-shields. */
+        tpsimin[j] = tpsimin1; 
+        tpsimax[j] = tpsimax1; 
+	if((psi+.5*delpsi) < sc->psi_shldmin[physpln][j]) {
+	    /* Entire wedge blocked. */
+	    tpsimin[j] = 0.; tpsimax[j] = 0.; 
+	    }
+        else if((psi-.5*delpsi) < sc->psi_shldmin[physpln][j])
+	    tpsimin[j] = (float)tan((double)(sc->psi_shldmin[physpln][j]));
+
+	if((psi-.5*delpsi) > sc->psi_shldmax[physpln][j]) {
+	    tpsimin[j] = 0.; tpsimax[j] = 0.;
+	    }
+        else if((psi+.5*delpsi) > sc->psi_shldmax[physpln][j])
+	    tpsimax[j] = (float)tan((double)(sc->psi_shldmax[physpln][j]));
+
+        cdsq = (float)j - radius;
+        cdsq = radsq - cdsq*cdsq;
+        /* Find coordinates of ellipse defined by intersection of plane
+           of interest with conical volume. */
+        if(cdsq > 0) 
+            xcord = (float)sqrt((float)cdsq);
+        else
+            xcord = 0;
+        imin[j] = (int)(radius - xcord) + PAD; 
+        imax[j] = (int)(radius + xcord) - PAD;
+        imax_wdg[j] = imax[j];
+	/* Ensure two-pixel pad around region being rotated. */
+	if(j < PAD | j > sc->imgdim-PAD-1) {
+	    imin[j] = 1;
+	    imax[j] = 0;
+            imax_wdg[j] = 0;
+	    }
+        }
+    /* Compute float table of integer to real indices. */
+    for(i=-IMGDIM;i<IMGDIM;i++)
+        tab[i] = (float)i;
+
+    /* Compute bounds and coefficients for integration along z-axis at
+       this oblique angle. */
+    for(i=0,ray=0,joff=0;i<sc->imgdim;i++,joff+=sc->imgdim,ray+=sc->ray_step) {
+	zmin = x*cpsi*tpsimin[i]/SLCTHK + plane;
+	zmax = x*cpsi*tpsimax[i]/SLCTHK + plane;
+	for(j=sc->lmin[ray],x=sc->xl10[jpsi][ray];j<sc->lmax[ray];
+							j++,x+=sc->pixsiz) {
+	    kmin[j+joff] = (int)(zmin + IMGDIM) - IMGDIM;
+	    kmax         = (int)(zmax + IMGDIM) - IMGDIM;
+	    if(kmin[j+joff] < plnmin) {
+		kmin[j+joff] = plnmin;
+		zmin = (float)plnmin;
+		}
+	    if(kmax > plnmax) {
+		kmax = plnmax;
+		zmax = (float)plnmax + 1;
+		}
+	    klen[j+joff] = kmax - kmin[j+joff] + 1;
+	    if(klen[j+joff] > 1) {
+	        zcoff[j+joff][0] = (float)kmin[j+joff] - zmin + 1;
+	        zcoff[j+joff][klen[j+joff]-1] = zmax-(float)kmax;
+	        for(k=1;k<klen[j+joff]-1;k++) 
+		    zcoff[j+joff][k] = 1.;
+	        }
+	    else if(klen[j+joff] == 1 ) {
+		/* Only one output point, equal to fraction of slice. */
+		klen[j+joff] = 1;
+		zcoff[j+joff][0] = zmax - zmin;
+		}
+	    else {
+		if(imax[i] > j) imax_wdg[i] = j;
+	        klen[j+joff] = 0;
+		kmin[j+joff] = plnmax;
+		zcoff[j+joff][0] = 0.;
+		}
+	    }
+	}
+/*sum = 0.;
+for(j=0,ioff=0;j<sc->imgdim;j++,ioff+=sc->imgdim) {
+    for(i=0;i<sc->imgdim;i++)
+	for(k=0;k<klen[i+ioff];k++)
+	    sum += zcoff[i+ioff][k]*volume[k+kmin[i+ioff]][i+ioff];
+    }
+printf("*** Unrotated wedge sums to %f at init ***\n",sum/1.e6);*/
+    psim1 = psi;
+    planem1 = plane;
+    imgdimm1 = sc->imgdim;
+    }
+
+ctht = (float)cos((double)theta);
+stht = (float)sin((double)theta);
+
+/* First integrate axially over the wedges.  Use nearest-neighbor
+   rule for finding appropriate axial integration factors. */
+x_cnst = radius*(1. - ctht + stht);
+y_cnst = radius*(1. - ctht - stht);
+for(i=0;i<sc->imgsq;i++) wedge[i] = 0.;
+for(j=0,ioff=0;j<sc->imgdim;j++,ioff+=sc->imgdim) {
+    x =  (float)imin[j]*ctht + x_cnst;
+    y =  (float)imin[j]*stht + y_cnst;
+    for(i=imin[j];i<imax[j];i++) {
+	ix = (int)(x + .5);
+	iy = (int)(y + .5);
+	ki = ix + iy*sc->imgdim;
+	wedge[i+ioff] = 0.;
+	for(k=0;k<klen[ki];k++)
+	    wedge[i+ioff] += zcoff[ki][k]*volume[k+kmin[ki]][i+ioff];
+	x += ctht;
+        y += stht;
+	}
+    x_cnst -= stht;
+    y_cnst += ctht;
+    }
+/*for(i=0,sum=0;i<sc->imgsq;i++) sum += wedge[i];
+printf("Wedge sums to %f,",sum/1.e6);*/
+
+/* Now use the integrated wedges to rotate in theta. */
+for(i=0;i<sc->imgsq;i++) rotpln[i] = 0.;
+x_cnst = radius*(1. - ctht - stht);
+y_cnst = radius*(1. + stht - ctht);
+for(j=0,ioff=0;j<sc->imgdim;j++,ioff+=sc->imgdim) {
+    x =  (float)imin[j]*ctht + x_cnst;
+    y = -(float)imin[j]*stht + y_cnst;
+    for(i=imin[j];i<imax_wdg[j];i++) {
+	ix = (int)x;
+	iy = (int)y;
+	ki = ix + iy*sc->imgdim;
+	dx = x - tab[ix];
+	dy = y - tab[iy];
+	dxdy = dx*dy;
+	rotpln[i+ioff]  = 
+    	  (1. - dx - dy + dxdy)*wedge[ki]
+	+ (     dx      - dxdy)*wedge[ki + 1]  
+	+ (          dy - dxdy)*wedge[ki + sc->imgdim]
+	+ (               dxdy)*wedge[ki + sc->imgdim+1];
+	x += ctht;
+        y -= stht;
+	}
+    x_cnst += stht;
+    y_cnst += ctht;
+    }
+/*for(i=0,sum=0;i<sc->imgsq;i++) sum += rotpln[i];
+printf(" rotpln sums to %f\n",sum/1.e6);*/
+}
+@

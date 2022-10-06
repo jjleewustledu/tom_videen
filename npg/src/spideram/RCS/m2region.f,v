@@ -1,0 +1,1396 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.06.04.19.15.38;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.10.23.21.48.08;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.05.25.20.14.56;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@C     $Id: m2region.f,v 1.7 2002/12/02 21:26:52 tom Exp tom $
+C     $Log: m2region.f,v $
+c Revision 1.7  2002/12/02  21:26:52  tom
+c format changes plus fixes for g77
+c
+c     Revision 1.6  1997/06/04  19:15:38  tom
+c     add fill option 'Q' to m2region
+c     change LEN in p2point
+c     
+c     Revision 1.5  1996/10/23  21:48:08  tom
+c     eliminate protection for display of ROIs
+c     
+c     Revision 1.4  1994/05/25  20:14:56  ty7777
+c     Modified to display the information only on the current slice.
+c     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   M2REGION.FTN
+C     Author:       Tom O. Videen
+C     Date:         04-Jun-87
+C     Intent:
+C     .  This subroutine is used for creating regions of interest,
+C     .  moving them, enlarging or reducing them,
+C     .  reading or writing regions lists from or to disk files,
+C     .  and displaying the current regions list.
+C     .  The options list is displayed in two columns.
+C     .  Full screen editing techniques are used.
+C     History:
+C     .  Modified by Tom Yang 26-Sep-91 for xspideram.
+C     .  Modified by Tom Yang 26-May-94 for reading reg file generated
+C     .    from the program locate.
+C     
+C     Common Blocks from SPIDERAM:
+C     .  **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .  **DISPLAY  - display parameters             (read only)
+C     .  **FILES    - scan file list                 (read only)
+C     .  **REGION   - region analysis parameters     (write)
+C     
+C     Local Variables:
+C     .  TITLE - title of this menu;
+C     .  WARNLINE - line on which warnings will be written;
+C     .  MENU - menu options;
+C     .  MENUSET - set of characters allowed for menu options;
+C     .  CH - input character for selecting a menu option;
+C     .  ROWCH,COLCH - location of the field for entering CH;
+C     .  NEXT - logical variables required by some function calls but
+C     .     which is not used in this calling program;
+C     .  Q,A - question and answer;
+C     .  HOME,CLEAR - values passed to TCONTROL to home the cursor and
+C     .     clear the terminal screen;
+C     .  RNUM = current region number;
+C     .  NEXTNUM = next region number (used by 'N' option);
+C     .  ZERO = 0 passed to R2MOVE as I*2;
+C     
+C     Uses Subroutines:
+C     .  R2ALTER  - change the size of a region;
+C     .  R2CREATE - create a region;
+C     .  R2FLIP   - flip a region;
+C     .  R2GET    - get a new regions list from a disk file;
+C     .  R2LIST   - display/alter the regions list;
+C     .  R2MOVE   - move a region;
+C     .  R2PURGE  - purge the regions list;
+C     .  R2SAVE   - save regions list in a disk file;
+C     .  R2STATS  - get statistics on a region;
+C     
+C     .  P2CORLIN - display the coronal line;
+C     .  P2ERSCOR - erase the coronal line;
+C     .  P2ERSMID - erase the midline;
+C     .  P2IRREG  - draw an irregular region;
+C     .  P2MIDLIN - display the midline;
+C     .  P2MOVCOR - move the coronal line;
+C     .  P2MOVMID - move the midline;
+C     .  P2NOCIRC - erase a circular region;
+C     .  P2NOIRRG - erase an irregular region;
+C     .  P2NORECT - erase a rectangular region;
+C     .  P2RECT   - draw a rectangular region;
+C     
+C     .  FIELDS.LIB - terminal I/O routines using fields:
+C     .  CHFIELD  - get a character from terminal;
+C     .  WRTFIELD - write a character string to a field;
+C     .  ERSFIELD - erase a field;
+C     .  INTFIELD - get an integer from a field;
+C     .  QUERY    - write a question and get a Y or N response;
+C     
+C     Called by:  SPIDERAM
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Header: /home/npggw/tom/src/spideram/RCS/m2region.f,v 1.7 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE M2REGION
+
+      INTEGER*4    WARNLINE,ROWCH,COLCH,HOME,CLEAR,RNUM,XLAST,YLAST,NEXTNUM,L,I
+      INTEGER*4    X0,Y0,THRESH
+      INTEGER*2    ZERO
+      CHARACTER*1  CH,BELL
+      CHARACTER*20 TITLE,DASH
+      CHARACTER*80 Q,MENU(16),MENUSET,STR
+      LOGICAL*1    A,NEXT,ERRFLAG
+
+      INCLUDE 'spideram.inc'
+
+      DATA HOME,CLEAR,ZERO /1,2,0/
+      DATA TITLE /'Regions of Interest:'/
+      DATA DASH  /'------------------- '/
+      DATA MENU(1)(1:39)  /'C = Create'/
+      DATA MENU(2)(1:39)  /'D = Display one region'/
+      DATA MENU(3)(1:39)  /'N = Display Next region on slice'/
+      DATA MENU(4)(1:39)  /'A = Display All regions on slice'/
+      DATA MENU(5)(1:39)  /'H = Hold region on display'/
+      DATA MENU(6)(1:39)  /'O = Flip region to Opposite Side'/
+      DATA MENU(7)(1:39)  /'B = Blank (erase) a region'/
+      DATA MENU(8)(1:39)  /'W = Withdraw (erase) all regions'/
+      DATA MENU(9)(1:39)  /'L = List all stored regions'/
+      DATA MENU(10)(1:39) /'F = File regions list on disk'/
+      DATA MENU(11)(1:39) /'G = Get new list from a disk file'/
+      DATA MENU(12)(1:39) /'P = Purge regions list'/
+      DATA MENU(13)(1:39) /'T = Type Statistics on a region'/
+      DATA MENU(14)(1:39) /'Q = Fill area in image'/
+      DATA MENU(15)(1:39) /'M = Exit to Main Menu'/
+      DATA MENU(16)(1:39) /'                                 '/
+
+      DATA MENU(1)(40:80) /'S = Select Region to Alter:'/
+      DATA MENU(2)(40:80) /'I = Increment for Alterations:'/
+      DATA MENU(3)(40:80) /'X = X-dimension only with E or R'/
+      DATA MENU(4)(40:80) /'Y = Y-dimension only with E or R'/
+      DATA MENU(5)(40:80) /'Z = Both dimensions with E or R'/
+      DATA MENU(6)(40:80) /'E = Expand'/
+      DATA MENU(7)(40:80) /'R = Reduce'/
+      DATA MENU(8)(40:80) /'1-9 = Move region'/
+      DATA MENU(9)(40:80)  /'V = Display the midline'/
+      DATA MENU(10)(40:80) /'U = Erase the midline'/
+      DATA MENU(11)(40:80) /'< = Move midline to the left'/
+      DATA MENU(12)(40:80) /'> = Move midline to the right'/
+      DATA MENU(13)(40:80) /'K = Display coronal line'/
+      DATA MENU(14)(40:80) /'J = Erase coronal line'/
+      DATA MENU(15)(40:80) /'+ = Move coronal line up'/
+      DATA MENU(16)(40:80) /'- = Move coronal line down'/
+      DATA ROWCH,COLCH,WARNLINE /21,1,23/
+      MENUSET ='CDNAHOBWLFGPTMSIXYZERVU<>KJQ+_'//
+     &     'cdnahobwlfgptmsixyzervu,.kjq=-12346789'
+      BELL = CHAR(7)
+      RNUM = LASTREGN
+      NEXTNUM = 0
+      ERRFLAG = .FALSE.
+
+C     ===================================================================
+
+C     Clear the screen and write the menu in two columns
+
+ 8010 FORMAT (A20)
+ 8020 FORMAT (A20)
+ 8030 FORMAT (I2)
+ 8080 FORMAT (A80)
+
+ 100  CALL TCONTROL(HOME,0,0)
+      CALL TCONTROL(CLEAR,0,0)
+      WRITE (USEROUT,8010) TITLE
+      WRITE (USEROUT,8020) DASH
+      WRITE (USEROUT,*)
+      DO 120 I=1,16
+         WRITE (USEROUT,8080) MENU(I)
+ 120  CONTINUE
+
+C     Indicate the region number selected for alterations,
+C     the increment size, and the dimensions altered by Expand/Reduce
+
+      CALL WRITEINT(RNUM,3,4,68)
+      CALL WRITEINT(INT(INC),3,5,71)
+      STR = '*'
+      IF (ALTERX.AND..NOT.ALTERY) THEN
+         CALL WRTFIELD(STR,1,6,39)
+      ELSE IF (ALTERY.AND..NOT.ALTERX) THEN
+         CALL WRTFIELD(STR,1,7,39)
+      ELSE
+         ALTERX = .TRUE.
+         ALTERY = .TRUE.
+         CALL WRTFIELD(STR,1,8,39)
+      END IF
+
+C     ===================================================================
+
+C     Get the options selected by the user and execute it
+
+ 200  CALL CHFIELD(CH,MENUSET,ROWCH,COLCH,0)
+
+C     ----------------------------------------------------
+C     Eliminate this protection (23-Oct-96)
+C     Regions can only be displayed on images of the same type
+C     (same orientation and same PETT scanner)
+C     IF (ERRFLAG) THEN
+C     CALL ERSFIELD(73,WARNLINE,1)
+C     ERRFLAG = .FALSE.
+C     END IF
+C     IF ((ORIENT.NE.RORIENT .OR. PETTNUM.NE.RSCANNER) .AND.
+C     &  (RORIENT.NE.' ' .AND. RSCANNER.NE.0)) THEN
+C     L = IANYL('LFGPMlfgpm',CH)
+C     IF (L.EQ.0) THEN
+C     STR = 'Region list was created on a different type of '//
+C     &       'image (options: L,F,G,P,M)'//BELL
+C     CALL WRTFIELD(STR,75,WARNLINE,1)
+C     ERRFLAG = .TRUE.
+C     GO TO 200
+C     END IF
+C     END IF
+C     
+C     ----------------------------------------------------
+C     #1 = Create a Region
+
+      IF (CH.EQ.'C' .OR. CH.EQ.'c') THEN
+         Q = 'Create Region Number'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+         RNUM = LASTREGN+1
+         CALL INTFIELD(RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         IF (RNUM.NE.0) THEN
+            CALL R2CREATE(RNUM)
+            LASTREGN = RNUM
+            GO TO 100
+         END IF
+
+C     ----------------------------------------------------
+C     #2 = Display a region
+
+      ELSE IF (CH.EQ.'D' .OR. CH.EQ.'d') THEN
+         Q = 'Display Region Number'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+         CALL INTFIELD(RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         IF (RNUM.NE.0) THEN
+            IF (REGTYPE(RNUM).EQ.'R') THEN
+               CALL P2RECT(RNUM,REGPLANE)
+            ELSE IF (REGTYPE(RNUM).EQ.'I') THEN
+               CALL P2IRREG(RNUM,REGPLANE)
+            END IF
+         END IF
+
+C     ----------------------------------------------------
+C     #3 = Display the next region on the current slice
+
+      ELSE IF (CH.EQ.'N' .OR. CH.EQ.'n') THEN
+         IF (NEXTNUM.EQ.100) NEXTNUM=0
+ 1030    IF (NEXTNUM.LT.100) THEN
+            NEXTNUM = NEXTNUM+1
+            IF ((REGTYPE(NEXTNUM).EQ.' ') .OR.
+     &           (SLICE(NEXTNUM).NE.DSECTION)) THEN
+               GO TO 1030
+            ELSE IF (REGTYPE(NEXTNUM).EQ.'R') THEN
+               CALL P2RECT(NEXTNUM,REGPLANE)
+            ELSE IF (REGTYPE(NEXTNUM).EQ.'I') THEN
+               CALL P2IRREG(NEXTNUM,REGPLANE)
+            END IF
+            RNUM = NEXTNUM
+         ELSE
+            STR = 'End of region list'//BELL
+            CALL WRTFIELD(STR,20,WARNLINE,1)
+            ERRFLAG = .TRUE.
+            RNUM = LASTREGN
+         END IF
+
+C     ----------------------------------------------------
+C     #4 = Display ALL regions on the current slice
+
+      ELSE IF (CH .EQ. 'A' .OR. CH .EQ. 'a') THEN
+         DO 1040 I = 1, 100
+            IF (SLICE (I) .EQ. DSECTION) THEN
+               IF (REGTYPE (I) .EQ. 'R') THEN
+                  CALL P2RECT (I, REGPLANE)
+               ELSE IF (REGTYPE (I) .EQ. 'I') THEN
+                  CALL P2IRREG (I, REGPLANE)
+               END IF
+               LASTREGN = RNUM
+            END IF
+ 1040    CONTINUE
+         LASTREGN = RNUM
+
+C     ----------------------------------------------------
+C     #5 = Hold a region on the display (draw border in FIXPLANE)
+
+      ELSE IF (CH .EQ. 'H' .OR. CH .EQ. 'h') THEN
+         Q = 'Hold Region Number'
+         L = INANYR (Q, ' ')
+         CALL WRTFIELD (Q, L, ROWCH, COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+         CALL INTFIELD (RNUM, 0,100,2,ROWCH,COLCH+L+2, WARNLINE, NEXT)
+         IF (RNUM .GT. 0) THEN
+            IF (SLICE (RNUM) .EQ. DSECTION) THEN
+               IF (REGTYPE (RNUM) .EQ. 'R') THEN
+                  CALL P2RECT (RNUM, FIXPLANE)
+               ELSE IF (REGTYPE (RNUM) .EQ. 'I') THEN
+                  CALL P2IRREG (RNUM, FIXPLANE)
+               END IF
+            ELSE
+               STR (1:8) = 'Region '
+               WRITE (STR (9:10), 8030) RNUM
+               STR (11:48) = '  is not defined on the current slice.'
+               STR (49:70) = '                     '              
+               CALL WRTFIELD (STR, 70, ROWCH + 1, COLCH + 4)
+               STR (1:40) = '                                        '
+               STR (41:70) = '                              '
+               CALL WRTFIELD (STR, 70, ROWCH + 2, COLCH + 4)
+            ENDIF
+         END IF
+
+C     ----------------------------------------------------
+C     #6 = Flip region to opposite side of slice
+
+      ELSE IF (CH.EQ.'O' .OR. CH.EQ.'o') THEN
+         Q = 'Flip Region Number'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+         CALL INTFIELD(RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         IF (RNUM.NE.0) THEN
+            CALL P2MIDLIN(TEMPLANE)
+            CALL R2FLIP(RNUM)
+         END IF
+
+C     ----------------------------------------------------
+C     #7 = Erase one region (from REGPLANE)
+
+      ELSE IF (CH .EQ. 'B' .OR. CH .EQ. 'b') THEN
+         Q = 'Erase Region Number'
+         L = INANYR (Q, ' ')
+         CALL WRTFIELD (Q, L, ROWCH, COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+         CALL INTFIELD (RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         IF (RNUM .NE. 0) THEN
+            IF (REGTYPE (RNUM) .EQ. 'R') THEN
+               CALL P2NORECT (RNUM, REGPLANE)
+            ELSE IF (REGTYPE (RNUM) .EQ. 'I') THEN
+               CALL P2NOIRRG (RNUM, REGPLANE)
+            END IF
+         END IF
+
+C     ----------------------------------------------------
+C     #8 = Erase all regions on current slice (REGPLANE & TEMPLANE)
+
+      ELSE IF (CH .EQ. 'W' .OR. CH .EQ. 'w') THEN
+         Q = 'Erase all regions from current slice'
+         CALL QUERY (Q, A, ROWCH, COLCH)
+         IF (A) THEN
+            IF (MAG .LE. 2) THEN
+               XLAST = XORG + MAG * 128
+               YLAST = YORG + MAG * 128
+            ELSE
+               XLAST = XORG + MAG * AMAX
+               YLAST = YORG + MAG * AMAX
+            END IF
+            DO 1080 I = 1, 100
+               IF (REGTYPE (I) .EQ. 'R') THEN
+                  CALL P2NORECT (I, REGPLANE)
+               ELSE IF (REGTYPE (I) .EQ. 'I') THEN
+                  CALL P2NOIRRG (I, REGPLANE)
+               END IF
+ 1080       CONTINUE
+         END IF
+
+C     ----------------------------------------------------
+C     #9 = Display the regions list
+
+      ELSE IF (CH.EQ.'L' .OR. CH.EQ.'l') THEN
+         CALL R2LIST
+         GO TO 100
+
+C     ----------------------------------------------------
+C     #10 = Save current regions list in a disk file
+
+      ELSE IF (CH.EQ.'F' .OR. CH.EQ.'f') THEN
+         CALL R2SAVE
+         GO TO 100
+
+C     ----------------------------------------------------
+C     #11 = Get a new regions list from a disk file
+
+      ELSE IF (CH.EQ.'G' .OR. CH.EQ.'g') THEN
+         CALL R2GET(ERRFLAG)
+         GO TO 100
+
+C     ----------------------------------------------------
+C     #12  = Purge the regions list
+
+      ELSE IF (CH.EQ.'P' .OR. CH.EQ.'p') THEN
+         Q = 'Purge all regions from the current list'
+         CALL QUERY(Q,A,ROWCH,COLCH)
+         IF (A) CALL R2PURGE
+
+C     ----------------------------------------------------
+C     #13 = Type statistics on a reagion
+
+      ELSE IF (CH .EQ. 'T' .OR. CH .EQ. 't') THEN
+         Q = 'Statistics on Region Number'
+         L = INANYR (Q, ' ')
+         CALL WRTFIELD (Q, L, ROWCH, COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+         CALL INTFIELD (RNUM, 0, 100, 2, ROWCH, COLCH+L+2,WARNLINE,NEXT)
+         IF (RNUM .GT. 0) THEN
+            IF (SLICE (RNUM) .EQ. DSECTION) THEN
+               CALL R2STATS (RNUM)
+            ELSE
+               STR (1:8) = 'Region '
+               WRITE (STR (9:10), 8030) RNUM
+               STR (11:48) = '  is not defined on the current slice.'
+               STR (49:70) = '                     '              
+               CALL WRTFIELD (STR, 70, ROWCH + 1, COLCH + 4)
+               STR (1:40) = '                                        '
+               STR (41:70) = '                              '
+               CALL WRTFIELD (STR, 70, ROWCH + 2, COLCH + 4)
+            ENDIF
+         ENDIF
+
+C     ----------------------------------------------------
+C     Fill an area
+
+      ELSE IF (CH.EQ.'Q' .OR. CH.EQ.'q') THEN
+         Q = 'X coordinate'
+         CALL GETINT(Q,X0,XLOW,XHIGH)
+         Q = 'Y coordinate'
+         CALL GETINT(Q,Y0,YLOW,YHIGH)
+         Q = 'Threshold'
+         CALL GETREAL(Q,THRESH,-32767.,32767.)
+         CALL R2FILL (X0, Y0, THRESH)
+         GO TO 100
+
+C     ----------------------------------------------------
+C     #14 = Exit to Main Menu
+
+      ELSE IF (CH.EQ.'M' .OR. CH.EQ.'m') THEN
+         GO TO 9000
+
+C     ----------------------------------------------------
+C     #15 = Select region to alter
+
+      ELSE IF (CH.EQ.'S' .OR. CH.EQ.'s') THEN
+         Q = 'Region Number to Alter'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+         CALL INTFIELD(RNUM,0,100,3,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         IF (RNUM.NE.0) THEN
+            LASTREGN = RNUM
+            CALL WRITEINT(RNUM,3,4,68)
+         END IF
+
+C     ----------------------------------------------------
+C     #16 = Set the increment size for expand, reduce, and shift
+
+      ELSE IF (CH.EQ.'I' .OR. CH.EQ.'i') THEN
+         Q = 'Increment Size'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         I = INT(INC)
+         CALL INTFIELD(I,1,100,3,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         INC = INT(I)
+         CALL WRITEINT(I,3,5,71)
+
+C     ----------------------------------------------------
+C     #17 = Expand/Reduce only the Width (x-dimension)
+
+      ELSE IF (CH.EQ.'X' .OR. CH.EQ.'x') THEN
+         ALTERX = .TRUE.
+         ALTERY = .FALSE.
+         STR = '*'
+         CALL WRTFIELD(STR,1,6,39)
+         CALL ERSFIELD(1,7,39)
+         CALL ERSFIELD(1,8,39)
+
+C     ----------------------------------------------------
+C     #18 = Expand/Reduce only the Height (y-dimension)
+
+      ELSE IF (CH.EQ.'Y' .OR. CH.EQ.'y') THEN
+         ALTERX = .FALSE.
+         ALTERY = .TRUE.
+         CALL ERSFIELD(1,6,39)
+         STR = '*'
+         CALL WRTFIELD(STR,1,7,39)
+         CALL ERSFIELD(1,8,39)
+
+C     ----------------------------------------------------
+C     #19 = Expand/Reduce Width & Height
+
+      ELSE IF (CH.EQ.'Z' .OR. CH.EQ.'z') THEN
+         ALTERX = .TRUE.
+         ALTERY = .TRUE.
+         CALL ERSFIELD(1,6,39)
+         CALL ERSFIELD(1,7,39)
+         STR = '*'
+         CALL WRTFIELD(STR,1,8,39)
+
+C     ----------------------------------------------------
+C     #20 = Expand a region
+
+      ELSE IF (CH.EQ.'E' .OR. CH.EQ.'e') THEN
+         IF (RNUM.NE.0) CALL R2ALTER(RNUM,+INC,+INC)
+
+C     ----------------------------------------------------
+C     #21 = Reduce a region
+
+      ELSE IF (CH.EQ.'R' .OR. CH.EQ.'r') THEN
+         IF (RNUM.NE.0) CALL R2ALTER(RNUM,-INC,-INC)
+
+C     ----------------------------------------------------
+C     #22 = Move a region
+
+      ELSE IF (CH.EQ.'1') THEN
+         CALL R2MOVE(RNUM,-INC,+INC)
+      ELSE IF (CH.EQ.'2') THEN
+         CALL R2MOVE(RNUM,ZERO,+INC)
+      ELSE IF (CH.EQ.'3') THEN
+         CALL R2MOVE(RNUM,+INC,+INC)
+      ELSE IF (CH.EQ.'4') THEN
+         CALL R2MOVE(RNUM,-INC,ZERO)
+      ELSE IF (CH.EQ.'6') THEN
+         CALL R2MOVE(RNUM,+INC,ZERO)
+      ELSE IF (CH.EQ.'7') THEN
+         CALL R2MOVE(RNUM,-INC,-INC)
+      ELSE IF (CH.EQ.'8') THEN
+         CALL R2MOVE(RNUM,ZERO,-INC)
+      ELSE IF (CH.EQ.'9') THEN
+         CALL R2MOVE(RNUM,+INC,-INC)
+
+C     ----------------------------------------------------
+C     #23 = Display the midline
+
+      ELSE IF (CH.EQ.'V' .OR. CH.EQ.'v') THEN
+         CALL P2MIDLIN(TEMPLANE)
+
+C     ----------------------------------------------------
+C     #24 = Erase the midline
+
+      ELSE IF (CH.EQ.'U' .OR. CH.EQ.'u') THEN
+         CALL P2ERSMID(TEMPLANE)
+
+C     ----------------------------------------------------
+C     #25 = Move the midline to the left
+
+      ELSE IF (CH.EQ.'<' .OR. CH.EQ.',') THEN
+         CALL P2MOVMID(-INC,TEMPLANE)
+
+C     ----------------------------------------------------
+C     #26 = Move the midline to the right
+
+      ELSE IF (CH.EQ.'>' .OR. CH.EQ.'.') THEN
+         CALL P2MOVMID(+INC,TEMPLANE)
+
+C     ----------------------------------------------------
+C     #27 = Display a coronal line
+
+      ELSE IF (CH.EQ.'K' .OR. CH.EQ.'k') THEN
+         IF (YCORLINE.GT.YHIGH) YCORLINE=YHIGH
+         CALL P2CORLIN(TEMPLANE)
+
+C     ----------------------------------------------------
+C     #28 = Erase coronal line
+
+      ELSE IF (CH.EQ.'J' .OR. CH.EQ.'j') THEN
+         CALL P2ERSCOR(TEMPLANE)
+
+C     ----------------------------------------------------
+C     #29 = Move coronal line up
+
+      ELSE IF (CH.EQ.'+' .OR. CH.EQ.'=') THEN
+         CALL P2MOVCOR(-INC,TEMPLANE)
+
+C     ----------------------------------------------------
+C     #30 = Move coronal line down
+
+      ELSE IF (CH.EQ.'-' .OR. CH.EQ.'_') THEN
+         CALL P2MOVCOR(+INC,TEMPLANE)
+      END IF
+
+      CALL ERSFIELD(80,ROWCH,COLCH)
+      GO TO 200
+C     ----------------------------------------------------
+C     
+ 9000 RETURN
+      END
+@
+
+
+1.7
+log
+@format changes plus fixes for g77
+@
+text
+@d1 1
+a1 1
+C     $Id: m2region.f,v 1.6 1997/06/04 19:15:38 tom Exp tom $
+d3 3
+d88 1
+a88 1
+C     rcsheader = "$Header$"
+@
+
+
+1.6
+log
+@add fill option 'Q' to m2region
+change LEN in p2point
+@
+text
+@d1 12
+a12 9
+C$Id: m2region.f,v 1.5 1996/10/23 21:48:08 tom Exp tom $
+C$Log: m2region.f,v $
+c Revision 1.5  1996/10/23  21:48:08  tom
+c eliminate protection for display of ROIs
+c
+c Revision 1.4  1994/05/25  20:14:56  ty7777
+c Modified to display the information only on the current slice.
+c
+C
+d14 70
+a83 76
+C
+C  Subroutine:   M2REGION.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         04-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified by Tom Yang 26-Sep-91 for xspideram.
+C     Modified by Tom Yang 26-May-94 for reading reg file generated
+C       from the program locate.
+C
+C  Intent:
+C     This subroutine is used for creating regions of interest,
+C     moving them, enlarging or reducing them,
+C     reading or writing regions lists from or to disk files,
+C     and displaying the current regions list.
+C     The options list is displayed in two columns.
+C     Full screen editing techniques are used.
+C
+C  Common Blocks from SPIDERAM:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (read only)
+C     **FILES    - scan file list                 (read only)
+C     **REGION   - region analysis parameters     (write)
+C
+C  Local Variables:
+C     TITLE - title of this menu;
+C     WARNLINE - line on which warnings will be written;
+C     MENU - menu options;
+C     MENUSET - set of characters allowed for menu options;
+C     CH - input character for selecting a menu option;
+C     ROWCH,COLCH - location of the field for entering CH;
+C     NEXT - logical variables required by some function calls but
+C        which is not used in this calling program;
+C     Q,A - question and answer;
+C     HOME,CLEAR - values passed to TCONTROL to home the cursor and
+C        clear the terminal screen;
+C     RNUM = current region number;
+C     NEXTNUM = next region number (used by 'N' option);
+C     ZERO = 0 passed to R2MOVE as I*2;
+C
+C  Uses Subroutines:
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     R2ALTER  - change the size of a region;
+C     R2CREATE - create a region;
+C     R2FLIP   - flip a region;
+C     R2GET    - get a new regions list from a disk file;
+C     R2LIST   - display/alter the regions list;
+C     R2MOVE   - move a region;
+C     R2PURGE  - purge the regions list;
+C     R2SAVE   - save regions list in a disk file;
+C     R2STATS  - get statistics on a region;
+C
+C     P2CORLIN - display the coronal line;
+C     P2ERSCOR - erase the coronal line;
+C     P2ERSMID - erase the midline;
+C     P2IRREG  - draw an irregular region;
+C     P2MIDLIN - display the midline;
+C     P2MOVCOR - move the coronal line;
+C     P2MOVMID - move the midline;
+C     P2NOCIRC - erase a circular region;
+C     P2NOIRRG - erase an irregular region;
+C     P2NORECT - erase a rectangular region;
+C     P2RECT   - draw a rectangular region;
+C
+C  FIELDS.LIB - terminal I/O routines using fields:
+C     CHFIELD  - get a character from terminal;
+C     WRTFIELD - write a character string to a field;
+C     ERSFIELD - erase a field;
+C     INTFIELD - get an integer from a field;
+C     QUERY    - write a question and get a Y or N response;
+C
+C  Called by:  SPIDERAM
+C
+d85 2
+a86 1
+C
+d88 2
+a89 3
+C
+      INTEGER*4    WARNLINE,ROWCH,COLCH,HOME,CLEAR,RNUM,XLAST,YLAST,
+     &             NEXTNUM,L,I
+d96 1
+a96 2
+      character*256 rcsheader
+C
+a97 1
+      rcsheader = "$Headser$"
+d118 1
+a118 1
+C
+d137 1
+a137 1
+     &         'cdnahobwlfgptmsixyzervu,.kjq=-12346789'
+d142 11
+a152 11
+C
+C ===================================================================
+C
+C  Clear the screen and write the menu in two columns
+C
+8010  FORMAT (A20)
+8020  FORMAT (A20)
+8030  FORMAT (I2)
+8080  FORMAT (A80)
+C
+100   CALL TCONTROL(HOME,0,0)
+d158 6
+a163 6
+        WRITE (USEROUT,8080) MENU(I)
+120   CONTINUE
+C
+C  Indicate the region number selected for alterations,
+C  the increment size, and the dimensions altered by Expand/Reduce
+C
+d168 1
+a168 1
+        CALL WRTFIELD(STR,1,6,39)
+d170 1
+a170 1
+        CALL WRTFIELD(STR,1,7,39)
+d172 3
+a174 3
+        ALTERX = .TRUE.
+        ALTERY = .TRUE.
+        CALL WRTFIELD(STR,1,8,39)
+d176 11
+a186 12
+C
+C ===================================================================
+C
+C  Get the options selected by the user and execute it
+C
+200   CALL CHFIELD(CH,MENUSET,ROWCH,COLCH,0)
+C
+C ----------------------------------------------------
+C  Eliminate this protection (23-Oct-96)
+C  Regions can only be displayed on images of the same type
+C    (same orientation and same PETT scanner)
+C
+d188 2
+a189 2
+C       CALL ERSFIELD(73,WARNLINE,1)
+C       ERRFLAG = .FALSE.
+d192 8
+a199 9
+C    &  (RORIENT.NE.' ' .AND. RSCANNER.NE.0)) THEN
+C       L = IANYL('LFGPMlfgpm',CH)
+C       IF (L.EQ.0) THEN
+C         STR = 'Region list was created on a different type of '//
+C    &       'image (options: L,F,G,P,M)'//BELL
+C         CALL WRTFIELD(STR,75,WARNLINE,1)
+C         ERRFLAG = .TRUE.
+C         GO TO 200
+C       END IF
+d201 5
+a205 4
+C
+C ----------------------------------------------------
+C  #1 = Create a Region
+C
+d207 16
+a222 16
+        Q = 'Create Region Number'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        RNUM = LASTREGN+1
+        CALL INTFIELD(RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (RNUM.NE.0) THEN
+          CALL R2CREATE(RNUM)
+          LASTREGN = RNUM
+          GO TO 100
+        END IF
+C
+C ----------------------------------------------------
+C  #2 = Display a region
+C
+d224 17
+a240 17
+        Q = 'Display Region Number'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        CALL INTFIELD(RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (RNUM.NE.0) THEN
+          IF (REGTYPE(RNUM).EQ.'R') THEN
+            CALL P2RECT(RNUM,REGPLANE)
+          ELSE IF (REGTYPE(RNUM).EQ.'I') THEN
+            CALL P2IRREG(RNUM,REGPLANE)
+          END IF
+        END IF
+C
+C ----------------------------------------------------
+C  #3 = Display the next region on the current slice
+C
+d242 22
+a263 22
+        IF (NEXTNUM.EQ.100) NEXTNUM=0
+1030    IF (NEXTNUM.LT.100) THEN
+          NEXTNUM = NEXTNUM+1
+          IF ((REGTYPE(NEXTNUM).EQ.' ') .OR.
+     &        (SLICE(NEXTNUM).NE.DSECTION)) THEN
+            GO TO 1030
+          ELSE IF (REGTYPE(NEXTNUM).EQ.'R') THEN
+            CALL P2RECT(NEXTNUM,REGPLANE)
+          ELSE IF (REGTYPE(NEXTNUM).EQ.'I') THEN
+            CALL P2IRREG(NEXTNUM,REGPLANE)
+          END IF
+          RNUM = NEXTNUM
+        ELSE
+          STR = 'End of region list'//BELL
+          CALL WRTFIELD(STR,20,WARNLINE,1)
+          ERRFLAG = .TRUE.
+          RNUM = LASTREGN
+        END IF
+C
+C ----------------------------------------------------
+C  #4 = Display ALL regions on the current slice
+C
+d265 8
+a272 6
+        DO 1040 I = 1, 100
+          IF (SLICE (I) .EQ. DSECTION) THEN
+            IF (REGTYPE (I) .EQ. 'R') THEN
+              CALL P2RECT (I, REGPLANE)
+            ELSE IF (REGTYPE (I) .EQ. 'I') THEN
+              CALL P2IRREG (I, REGPLANE)
+d274 6
+a279 8
+            LASTREGN = RNUM
+          END IF
+1040    CONTINUE
+        LASTREGN = RNUM
+C
+C ----------------------------------------------------
+C  #5 = Hold a region on the display (draw border in FIXPLANE)
+C
+d281 51
+a331 8
+        Q = 'Hold Region Number'
+        L = INANYR (Q, ' ')
+        CALL WRTFIELD (Q, L, ROWCH, COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+        CALL INTFIELD (RNUM, 0, 100, 2, ROWCH, COLCH + L + 2, WARNLINE, NEXT)
+        IF (RNUM .GT. 0) THEN
+          IF (SLICE (RNUM) .EQ. DSECTION) THEN
+d333 1
+a333 1
+              CALL P2RECT (RNUM, FIXPLANE)
+d335 1
+a335 1
+              CALL P2IRREG (RNUM, FIXPLANE)
+d337 5
+a341 48
+	  ELSE
+	    STR (1:8)	= 'Region '
+            WRITE (STR (9:10), 8030) RNUM
+            STR (11:48)	= '  is not defined on the current slice.'
+            STR (49:70)	= '                     '              
+            CALL WRTFIELD (STR, 70, ROWCH + 1, COLCH + 4)
+            STR (1:40)	= '                                        '
+            STR (41:70)	= '                              '
+            CALL WRTFIELD (STR, 70, ROWCH + 2, COLCH + 4)
+	  ENDIF
+        END IF
+C
+C ----------------------------------------------------
+C  #6 = Flip region to opposite side of slice
+C
+      ELSE IF (CH.EQ.'O' .OR. CH.EQ.'o') THEN
+        Q = 'Flip Region Number'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        CALL INTFIELD(RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (RNUM.NE.0) THEN
+          CALL P2MIDLIN(TEMPLANE)
+          CALL R2FLIP(RNUM)
+        END IF
+C
+C ----------------------------------------------------
+C  #7 = Erase one region (from REGPLANE)
+C
+      ELSE IF (CH .EQ. 'B' .OR. CH .EQ. 'b') THEN
+        Q = 'Erase Region Number'
+        L = INANYR (Q, ' ')
+        CALL WRTFIELD (Q, L, ROWCH, COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+        CALL INTFIELD (RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (RNUM .NE. 0) THEN
+          IF (REGTYPE (RNUM) .EQ. 'R') THEN
+            CALL P2NORECT (RNUM, REGPLANE)
+          ELSE IF (REGTYPE (RNUM) .EQ. 'I') THEN
+            CALL P2NOIRRG (RNUM, REGPLANE)
+          END IF
+        END IF
+C
+C ----------------------------------------------------
+C  #8 = Erase all regions on current slice (REGPLANE & TEMPLANE)
+C
+d343 9
+a351 15
+        Q = 'Erase all regions from current slice'
+        CALL QUERY (Q, A, ROWCH, COLCH)
+        IF (A) THEN
+          IF (MAG .LE. 2) THEN
+            XLAST = XORG + MAG * 128
+            YLAST = YORG + MAG * 128
+          ELSE
+            XLAST = XORG + MAG * AMAX
+            YLAST = YORG + MAG * AMAX
+          END IF
+          DO 1080 I = 1, 100
+            IF (REGTYPE (I) .EQ. 'R') THEN
+              CALL P2NORECT (I, REGPLANE)
+            ELSE IF (REGTYPE (I) .EQ. 'I') THEN
+              CALL P2NOIRRG (I, REGPLANE)
+d353 12
+a364 6
+1080      CONTINUE
+        END IF
+C
+C ----------------------------------------------------
+C  #9 = Display the regions list
+C
+d366 6
+a371 6
+        CALL R2LIST
+        GO TO 100
+C
+C ----------------------------------------------------
+C  #10 = Save current regions list in a disk file
+C
+d373 6
+a378 6
+        CALL R2SAVE
+        GO TO 100
+C
+C ----------------------------------------------------
+C  #11 = Get a new regions list from a disk file
+C
+d380 6
+a385 6
+        CALL R2GET(ERRFLAG)
+        GO TO 100
+C
+C ----------------------------------------------------
+C  #12  = Purge the regions list
+C
+d387 7
+a393 7
+        Q = 'Purge all regions from the current list'
+        CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) CALL R2PURGE
+C
+C ----------------------------------------------------
+C  #13 = Type statistics on a reagion
+C
+d395 24
+a418 24
+        Q = 'Statistics on Region Number'
+        L = INANYR (Q, ' ')
+        CALL WRTFIELD (Q, L, ROWCH, COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+        CALL INTFIELD (RNUM, 0, 100, 2, ROWCH, COLCH + L + 2, WARNLINE, NEXT)
+        IF (RNUM .GT. 0) THEN
+          IF (SLICE (RNUM) .EQ. DSECTION) THEN
+	    CALL R2STATS (RNUM)
+	  ELSE
+	    STR (1:8)	= 'Region '
+            WRITE (STR (9:10), 8030) RNUM
+            STR (11:48)	= '  is not defined on the current slice.'
+            STR (49:70)	= '                     '              
+            CALL WRTFIELD (STR, 70, ROWCH + 1, COLCH + 4)
+            STR (1:40)	= '                                        '
+            STR (41:70)	= '                              '
+            CALL WRTFIELD (STR, 70, ROWCH + 2, COLCH + 4)
+	  ENDIF
+        ENDIF
+C
+C ----------------------------------------------------
+C  Fill an area
+C
+d420 12
+a431 12
+        Q = 'X coordinate'
+        CALL GETINT(Q,X0,XLOW,XHIGH)
+        Q = 'Y coordinate'
+        CALL GETINT(Q,Y0,YLOW,YHIGH)
+        Q = 'Threshold'
+        CALL GETREAL(Q,THRESH,-32767.,32767.)
+		CALL R2FILL (X0, Y0, THRESH)
+        GO TO 100
+C
+C ----------------------------------------------------
+C  #14 = Exit to Main Menu
+C
+d433 5
+a437 5
+        GO TO 9000
+C
+C ----------------------------------------------------
+C  #15 = Select region to alter
+C
+d439 14
+a452 14
+        Q = 'Region Number to Alter'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        CALL INTFIELD(RNUM,0,100,3,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (RNUM.NE.0) THEN
+          LASTREGN = RNUM
+          CALL WRITEINT(RNUM,3,4,68)
+        END IF
+C
+C ----------------------------------------------------
+C  #16 = Set the increment size for expand, reduce, and shift
+C
+d454 11
+a464 11
+        Q = 'Increment Size'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        I = INT(INC)
+        CALL INTFIELD(I,1,100,3,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        INC = INT(I)
+        CALL WRITEINT(I,3,5,71)
+C
+C ----------------------------------------------------
+C  #17 = Expand/Reduce only the Width (x-dimension)
+C
+d466 10
+a475 10
+        ALTERX = .TRUE.
+        ALTERY = .FALSE.
+        STR = '*'
+        CALL WRTFIELD(STR,1,6,39)
+        CALL ERSFIELD(1,7,39)
+        CALL ERSFIELD(1,8,39)
+C
+C ----------------------------------------------------
+C  #18 = Expand/Reduce only the Height (y-dimension)
+C
+d477 10
+a486 10
+        ALTERX = .FALSE.
+        ALTERY = .TRUE.
+        CALL ERSFIELD(1,6,39)
+        STR = '*'
+        CALL WRTFIELD(STR,1,7,39)
+        CALL ERSFIELD(1,8,39)
+C
+C ----------------------------------------------------
+C  #19 = Expand/Reduce Width & Height
+C
+d488 10
+a497 10
+        ALTERX = .TRUE.
+        ALTERY = .TRUE.
+        CALL ERSFIELD(1,6,39)
+        CALL ERSFIELD(1,7,39)
+        STR = '*'
+        CALL WRTFIELD(STR,1,8,39)
+C
+C ----------------------------------------------------
+C  #20 = Expand a region
+C
+d499 5
+a503 5
+        IF (RNUM.NE.0) CALL R2ALTER(RNUM,+INC,+INC)
+C
+C ----------------------------------------------------
+C  #21 = Reduce a region
+C
+d505 5
+a509 5
+        IF (RNUM.NE.0) CALL R2ALTER(RNUM,-INC,-INC)
+C
+C ----------------------------------------------------
+C  #22 = Move a region
+C
+d511 1
+a511 1
+        CALL R2MOVE(RNUM,-INC,+INC)
+d513 1
+a513 1
+        CALL R2MOVE(RNUM,ZERO,+INC)
+d515 1
+a515 1
+        CALL R2MOVE(RNUM,+INC,+INC)
+d517 1
+a517 1
+        CALL R2MOVE(RNUM,-INC,ZERO)
+d519 1
+a519 1
+        CALL R2MOVE(RNUM,+INC,ZERO)
+d521 1
+a521 1
+        CALL R2MOVE(RNUM,-INC,-INC)
+d523 1
+a523 1
+        CALL R2MOVE(RNUM,ZERO,-INC)
+d525 5
+a529 5
+        CALL R2MOVE(RNUM,+INC,-INC)
+C
+C ----------------------------------------------------
+C  #23 = Display the midline
+C
+d531 5
+a535 5
+        CALL P2MIDLIN(TEMPLANE)
+C
+C ----------------------------------------------------
+C  #24 = Erase the midline
+C
+d537 5
+a541 5
+        CALL P2ERSMID(TEMPLANE)
+C
+C ----------------------------------------------------
+C  #25 = Move the midline to the left
+C
+d543 5
+a547 5
+        CALL P2MOVMID(-INC,TEMPLANE)
+C
+C ----------------------------------------------------
+C  #26 = Move the midline to the right
+C
+d549 5
+a553 5
+        CALL P2MOVMID(+INC,TEMPLANE)
+C
+C ----------------------------------------------------
+C  #27 = Display a coronal line
+C
+d555 6
+a560 6
+        IF (YCORLINE.GT.YHIGH) YCORLINE=YHIGH
+        CALL P2CORLIN(TEMPLANE)
+C
+C ----------------------------------------------------
+C  #28 = Erase coronal line
+C
+d562 5
+a566 5
+        CALL P2ERSCOR(TEMPLANE)
+C
+C ----------------------------------------------------
+C  #29 = Move coronal line up
+C
+d568 5
+a572 5
+        CALL P2MOVCOR(-INC,TEMPLANE)
+C
+C ----------------------------------------------------
+C  #30 = Move coronal line down
+C
+d574 1
+a574 1
+        CALL P2MOVCOR(+INC,TEMPLANE)
+d576 1
+a576 1
+C
+d579 3
+a581 3
+C ----------------------------------------------------
+C
+9000  RETURN
+@
+
+
+1.5
+log
+@eliminate protection for display of ROIs
+@
+text
+@d1 1
+a1 1
+C$Id: m2region.f,v 1.4 1994/05/25 20:14:56 ty7777 Exp tom $
+d3 3
+d93 1
+d120 2
+a121 2
+      DATA MENU(14)(1:39) /'M = Exit to Main Menu'/
+      DATA MENU(15)(1:39) /'                                 '/
+d141 2
+a142 2
+      MENUSET ='CDNAHOBWLFGPTMSIXYZERVU<>KJ+_'//
+     &         'cdnahobwlfgptmsixyzervu,.kj=-12346789'
+d423 13
+d444 1
+a444 1
+      ELSE IF (CH.EQ.'S' .OR. CH.EQ.'s') THEN
+@
+
+
+1.4
+log
+@Modified to display the information only on the current slice.
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d185 1
+d189 15
+a203 15
+      IF (ERRFLAG) THEN
+        CALL ERSFIELD(73,WARNLINE,1)
+        ERRFLAG = .FALSE.
+      END IF
+      IF ((ORIENT.NE.RORIENT .OR. PETTNUM.NE.RSCANNER) .AND.
+     &  (RORIENT.NE.' ' .AND. RSCANNER.NE.0)) THEN
+        L = IANYL('LFGPMlfgpm',CH)
+        IF (L.EQ.0) THEN
+          STR = 'Region list was created on a different type of '//
+     &       'image (options: L,F,G,P,M)'//BELL
+          CALL WRTFIELD(STR,75,WARNLINE,1)
+          ERRFLAG = .TRUE.
+          GO TO 200
+        END IF
+      END IF
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d1 5
+a5 2
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+d13 3
+a15 1
+C     Modified by TOV 26-Sep-91 for XSPIDERAM.
+d95 1
+a95 1
+      rcsheader = "$Id$"
+d145 4
+a148 3
+8010  FORMAT(A20)
+8020  FORMAT(A20)
+8080  FORMAT(A80)
+d262 7
+a268 7
+      ELSE IF (CH.EQ.'A' .OR. CH.EQ.'a') THEN
+        DO 1040 I=1,100
+          IF (SLICE(I).EQ.DSECTION) THEN
+            IF (REGTYPE(I).EQ.'R') THEN
+              CALL P2RECT(I,REGPLANE)
+            ELSE IF (REGTYPE(I).EQ.'I') THEN
+              CALL P2IRREG(I,REGPLANE)
+d278 1
+a278 1
+      ELSE IF (CH.EQ.'H' .OR. CH.EQ.'h') THEN
+d280 2
+a281 2
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+d283 19
+a301 8
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        CALL INTFIELD(RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (RNUM.NE.0) THEN
+          IF (REGTYPE(RNUM).EQ.'R') THEN
+            CALL P2RECT(RNUM,FIXPLANE)
+          ELSE IF (REGTYPE(RNUM).EQ.'I') THEN
+            CALL P2IRREG(RNUM,FIXPLANE)
+          END IF
+d392 1
+a392 1
+      ELSE IF (CH.EQ.'T' .OR. CH.EQ.'t') THEN
+d394 2
+a395 2
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+d397 16
+a412 3
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        CALL INTFIELD(RNUM,0,100,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (RNUM.NE.0) CALL R2STATS(RNUM)
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d87 1
+d90 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

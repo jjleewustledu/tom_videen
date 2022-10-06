@@ -1,0 +1,251 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	93.10.08.19.58.36;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.08.19.52.32;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.10.08.19.10.28;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.07.22.22.08.03;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@header6 Release Version 1.0.
+@
+
+
+1.4
+log
+@Added rcsid.
+@
+text
+@/*$Id: header6.c,v 1.3 1993/10/08 19:52:32 ty7777 Exp ty7777 $*/
+/*$Log: header6.c,v $
+ * Revision 1.3  1993/10/08  19:52:32  ty7777
+ * Strick checking.
+ **/
+
+/*___________________________________________________________________________________
+ *
+ *	File Name:		header6.c
+ *	Function Name:		main
+ *	Description:		Read the header of any PETT VI data file and display 
+ *				scan and metabolic processing information.
+ *	Function Called:	pe2ieee ()
+ *	Author(s):		Tom Yang and Tom O. Videen
+ *	Date:			04/07/1992
+ *
+___________________________________________________________________________________*/
+
+#include <stdio.h>
+#include <string.h>
+#include <petutil/petutil.h>
+
+static char rcsid [] = "$Id: header6.c,v 1.3 1993/10/08 19:52:32 ty7777 Exp ty7777 $";
+
+main (argc, argv)
+int	argc;
+char	*argv [];
+{
+	ENCODEDHDR	*encoded_header;
+	FILE		*imgfp;
+	FILE		*tblfp;
+	PETT6HDR	*pett6_header;
+	char		*tmp_data_type;
+	char		data_type [MAXLINE];
+	char		data_type_start [MAXLINE];
+	char		filter [PETT6_FILTER_LEN + 1];
+	char		*header;
+	char		line [MAXLINE];
+	int		number;
+
+	if (argc != 2) 
+	{
+		printf ("Usage:	header6 <pett6_image_file>\n");
+		exit (0);
+	}
+
+	if ((imgfp = fopen (argv [1], "rb")) == (FILE *) NULL) 
+	{
+		printf (" Error: Image file \"%s\" does not exist.\n", argv[1]);
+		exit (0);
+	}
+
+	header	= (char *) malloc (HEADER_SIZE);
+
+	fread (header, HEADER_SIZE, 1, imgfp); 
+
+	encoded_header	= (ENCODEDHDR *) header;
+
+	/*
+	 * If the input file is encoded, read the second record.
+	 */
+	if (strncmp (encoded_header->fileform, 
+		"ENCODED   ", ENCODED_FILE_FORM_LEN) == 0)
+	{
+		fread (header, HEADER_SIZE, 1, imgfp); 
+	}
+	fclose (imgfp);
+
+	pett6_header	= (PETT6HDR *) header;
+
+	/*
+	 * Find data type.
+	 */
+	if ((tblfp = fopen ("/usr/local/lib/header.tbl", "r")) == (FILE *) NULL) 
+	{
+		printf (" Error: Table \"%s\" does not exist.\n", 
+			"/usr/local/lib/header.tbl");
+		exit (0);
+	}
+
+	while (fgets (line, MAXLINE, tblfp) != NULL)
+	{
+		if (strncmp (line, "END", 3) == 0) 
+		{
+			strcpy (data_type, "Unknown Data Type");
+			break;
+		}
+		else	
+		{
+			sscanf (line, "%d %s", &number, data_type_start);
+			tmp_data_type	= strstr (line, data_type_start);
+			strcpy (data_type, tmp_data_type);
+			if (number == pett6_header->file_type)
+				break;
+		}
+	} 
+	fclose (tblfp);
+
+	if (pett6_header->file_type == 1010 || pett6_header->file_type == 1020)
+		strncpy (filter, pett6_header->filter, PETT6_FILTER_LEN);	
+	else
+		strcpy (filter, " ");	
+
+	/*
+	 * Write to output file.
+	 */
+	printf (" Subject ID = %.8s     DATE = %.2s/%.2s/%.2s\n",
+		pett6_header->subject_id, pett6_header->date,
+		pett6_header->date + 2, pett6_header->date + 4);
+	printf (" Run Name = %.6s     Scan Time = %d seconds\n", 
+		pett6_header->run_name, pett6_header->scan_time);
+	if (pett6_header->time_per_frame != 0)
+		printf (" Dynamic Acquisition: %d frames of %d seconds\n",
+			pett6_header->scan_time / pett6_header->time_per_frame,
+			pett6_header->time_per_frame);
+	if (pett6_header->resolution == 0)
+		printf (" Low Resolution       %.12s\n", filter);
+	else
+		printf (" High Resolution      %.12s\n", filter);
+	printf (" Data Type = %d     %s", pett6_header->file_type, data_type);
+	printf (" Number of Image Slices in File = %d\n", pett6_header->number_of_slices);
+	printf (" Compound = %.10s    Decay Constant = %e\n",
+		pett6_header->compound, pe2ieee (pett6_header->decay_constant));
+	if (pett6_header->rotation == 0)
+		printf (" No Rotation\n");
+	else if (pett6_header->rotation_increment == 0)
+		printf (" Rotation = 1/4 ANGLE\n");
+	else 
+		printf (" Rotation = 1/2 ANGLE\n");
+	printf (" Total Counts (in Slice #1) = %d\n", pett6_header->total_counts);
+	if (pett6_header->norm_average != 0 && pett6_header->norm_run_time != 0)
+		printf (" Norm Average = %5d     Norm Mean Counts/Bin/Min = %7.2f\n",
+			pett6_header->norm_average, 
+			(60.0 * pett6_header->norm_average) / pett6_header->norm_run_time);
+	printf (" PETT %d     MODEL = %d\n", pett6_header->pett_number, pett6_header->model_number);	
+
+	if (pett6_header->file_type == ECAT_FILE_TYPE && pett6_header->ecat_orientation == 0)
+		printf (" Orientation: Right-on-Left\n");
+	else 
+		printf (" Orientation: Right-on-Right\n");
+
+	free (header);
+}
+@
+
+
+1.3
+log
+@Strick checking.
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d23 1
+a23 1
+static char [] = "$Id$$";
+d137 1
+a137 1
+	if (pett6_header->ecat_orientation == 0)
+d139 1
+a139 1
+	else if (pett6_header->file_type == ECAT_FILE_TYPE & pett6_header->ecat_orientation == 1)
+a140 3
+	else
+		printf (" Error: unrecongnizabel ecat_orientation value %d\n",
+			pett6_header->ecat_orientation);
+@
+
+
+1.2
+log
+@Added ecat_orientation information.
+@
+text
+@d1 3
+d20 2
+d134 1
+a134 1
+	if (pett6_header->file_type == ECAT_FILE_TYPE & pett6_header->ecat_orientation == 0)
+d136 2
+d139 2
+a140 1
+		printf (" Orientation: Right-on-Right\n");
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d21 1
+d23 6
+d30 1
+a30 6
+	ENCODEDHDR	*encoded_header;
+	PETT6HDR	*pett6_header;
+	FILE		*tblfp;
+	char		*line [41];
+	char		*data_type_start [40];
+	char		*data_type;
+a31 1
+	char		filter[PETT6_FILTER_LEN + 1];
+d77 1
+a77 1
+			data_type	= "Unknown Data Type\n";
+d83 2
+a84 1
+			data_type	= strstr (line, data_type_start);
+d128 5
+@

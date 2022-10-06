@@ -1,0 +1,181 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.5
+date	2004.02.20.14.38.59;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.09.15.14.28.30;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.09.14.21.23.25;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   R2GET.FTN
+C  Author:       Tom O. Videen
+C  Date:         Sept 2000
+C  Intent:		Read a spideram regions file.
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+      SUBROUTINE R2GET (FNAME, ERROR)
+
+      CHARACTER*256 FNAME			! region file name
+      CHARACTER*10  RNAME
+      CHARACTER*80  STR
+      CHARACTER*1   CH
+      CHARACTER*256 RCSHEADER
+      INTEGER*4     FIRST, I, J, K, L
+      INTEGER*4     A, B			!  to read AVAL, BVAL
+      REAL          RS, RX, RY		! used to read SLICE, XLOC, YLOC
+      LOGICAL*1     ERROR
+
+      INCLUDE 'spidreg.inc'
+
+      RCSHEADER = "$Id: r2get.f,v 1.2 2000/09/15 14:28:30 tom Exp tom $"
+
+      ERROR = .TRUE.
+
+      OPEN (DISK, FILE = FNAME, STATUS = 'OLD', ERR = 100)
+      GO TO 110
+100   WRITE (USEROUT, *) 'ERROR: cannot open file ', FNAME
+      RETURN
+
+C  Zero the regions list
+
+110   CALL R2PURGE
+      DO 200 I = 1, 20000
+         BOUNDARY (1, I) = 0
+         BOUNDARY (2, I) = 0
+200   CONTINUE
+
+C  Read file type information, atlas and header
+
+8100  FORMAT (A80)
+
+      READ (DISK, 8100) STR
+      READ (DISK, 8100) STR
+      READ (DISK, 8100) STR
+
+C     Read region information
+C     Requirements for region parameters:
+C     Rectangles:  AVAL,BVAL must have integral values;
+C                  AVAL odd, then XLOC has integral value;
+C                  AVAL even, then XLOC has half-integral value;
+C                  (similar for BVAL and YLOC)
+
+8300  FORMAT (I3, 3X, A10, 5X, A1, F9.2, F8.2, F8.2, 3X, I4, 3X, I4)
+300   READ (DISK, 8300) I, RNAME, CH, RS, RX, RY, A, B
+      IF (I .GT. 0) THEN
+        REGNAME (I) = RNAME
+        REGTYPE (I) = CH
+        SLICE (I) = NINT (RS)
+        AVAL (I) = A
+        IF (CH .EQ. 'R') THEN
+          BVAL(I) = B
+          IF (MOD (A, 2) .EQ. 0) THEN
+            XLOC (I) = FLOAT (INT (RX)) + 0.5
+          ELSE
+            XLOC(I) = FLOAT (NINT (RX))
+          END IF
+          IF (MOD (B, 2) .EQ. 0) THEN
+            YLOC (I) = FLOAT (INT (RY)) + 0.5
+          ELSE
+            YLOC (I) = FLOAT (NINT (RY))
+          END IF
+        ELSE IF (REGTYPE (I) .EQ. 'I') THEN
+          XLOC (I) = FLOAT (NINT (RX))
+          YLOC (I) = FLOAT (NINT (RY))
+          FIRST = TOP + 1
+          BVAL (I) = FIRST
+          TOP  = TOP + A
+          READ (DISK, 8400) ((BOUNDARY (J, K), J = 1, 2), K = FIRST, TOP)
+8400      FORMAT (40Z2.2)
+        END IF
+        GO TO 300
+      ELSE
+        NREGS  = B
+        LASTREGN = NREGS
+      END IF
+      CLOSE (DISK)
+
+C  Get x, y values which enclose the region
+
+      DO 600 I = 1, NREGS
+        IF (REGTYPE (I) .EQ. 'R') THEN
+          XMIN (I) = NINT (XLOC (I) - FLOAT (AVAL(I)) / 2. + 0.5)
+          XMAX (I) = XMIN (I) + AVAL (I) - 1
+          YMIN (I) = NINT (YLOC (I) - FLOAT (BVAL (I)) / 2. + 0.5)
+          YMAX (I) = YMIN (I) + BVAL (I) - 1
+        ELSE IF (REGTYPE (I) .EQ. 'I') THEN
+          K  = BVAL (I)
+          XMIN (I) = BOUNDARY (1, K)
+          XMAX (I) = BOUNDARY (1, K)
+          YMIN (I) = BOUNDARY (2, K)
+          YMAX (I) = BOUNDARY (2, K)
+          DO 500 J = K, K + AVAL (I) - 1
+            IF (BOUNDARY (1, J) .LT. XMIN (I)) THEN
+              XMIN (I) = BOUNDARY (1, J)
+            ELSE IF (BOUNDARY (1, J) .GT. XMAX (I)) THEN
+              XMAX (I) = BOUNDARY (1, J)
+            END IF
+            IF (BOUNDARY (2, J) .LT. YMIN (I)) THEN
+              YMIN (I) = BOUNDARY (2, J)
+            ELSE IF (BOUNDARY (2, J) .GT. YMAX (I)) THEN
+              YMAX (I) = BOUNDARY (2, J)
+            END IF
+500       CONTINUE
+        END IF
+600   CONTINUE
+
+      ERROR = .FALSE.
+      L = IANYL(FNAME,' ') - 1
+
+      RETURN
+      END
+@
+
+
+1.2
+log
+@process multiple images
+@
+text
+@d24 1
+a24 1
+      RCSHEADER = "$Id: r2get.f,v 1.1 2000/09/14 21:23:25 tom Exp tom $"
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d24 1
+a24 1
+      RCSHEADER = "$Id$"
+a45 1
+      WRITE (USEROUT, 8100) STR
+@

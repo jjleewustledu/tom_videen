@@ -1,0 +1,180 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2003.04.24.22.00.21;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/bin/csh
+#   Name:   sumdynact
+#   Author: Tom Videen
+#   Date:   Apr 2003
+#   Intent: View time-activity curve and determine frames to sum for 40-sec scan
+#   Creates:
+#		summed 40-sec image
+#		filtered, summed 40-sec image
+#		.rgt file (starttime, duration, counts)
+#		.r file (headcurve format)
+#		.cnt file (counts)
+
+if ($#argv != 9) then
+	echo "Usage:  sumdynact path prefix subject tracer scan ext X Y Z"
+	echo " e.g.    sumdynact .. p 5660 oo 1 v 65 60 24"
+	exit 1
+endif
+
+set DATAPATH = $1
+set PREFIX = $2
+set ID     = $3
+set TRACER = $4
+set NUM    = $5
+set EXT    = $6
+set X      = $7
+set Y      = $8
+set Z      = $9
+
+set DIAMETER = 80
+set NFRAMES  = 20
+set COB  = _center_of_brain
+set FIL  = _g3
+set PID  = $PREFIX$ID
+set SCAN = $TRACER$NUM
+set NAME = $PID$SCAN
+set IN   = $DATAPATH/$NAME.$EXT
+set FIN  = $NAME$FIL.$EXT
+set LST  = $NAME.lst
+set PRM  = $NAME.prm
+set REG  = $NAME.reg
+set RGT  = $NAME.rgt
+set PLT  = $NAME.cnt
+set STRT = $NAME.start
+set LEN  = $NAME.len
+set CNTS = $NAME.cnts
+set HCRV = $NAME.r
+
+if (! -e $IN) then
+	echo "ERROR [sumdynact] file not found: $IN"
+	exit 1
+endif
+
+unalias rm
+imgfrms $IN | cut -c1-3 >! junk
+set FIRST = `head -5 junk | tail -1`
+set LAST  = `tail -1 junk`
+rm junk
+set NFRMS = `echo $LAST - $FIRST + 1 | bc`
+set MISSING = `echo $FIRST - 1 | bc`
+echo "$IN    Frames $FIRST to $LAST"
+
+# Create lst, prm, and reg files:
+
+echo "$ID $NUM" >! $LST
+
+echo "datapath:   $DATAPATH"     >! $PRM
+echo "species:    $PREFIX"       >> $PRM
+echo "tracer:     $TRACER"       >> $PRM
+echo "extension:  $EXT"          >> $PRM
+echo "imgfilter:  none"          >> $PRM
+echo "voi:        new_sphere $DIAMETER" >> $PRM
+
+echo "30  voifile"                  >! $REG
+echo "center of brain for $PID"     >> $REG
+echo "1"                            >> $REG
+echo "center_of_brain   $X  $Y  $Z" >> $REG
+
+voistat $PRM $LST $RGT $REG -start >! /tmp/voistat.tmp
+set ZEROTIME = `tail -1 /tmp/voistat.tmp | cut -f2 -d=`
+echo "zero time = "$ZEROTIME
+rm /tmp/voistat.tmp
+
+set SIZE = `wc -l $RGT | cut -f1 -d$PREFIX`
+set NN = `echo $SIZE - 2 | bc`
+tail -$NN $RGT | head -$NFRMS | cut -c2-12 >! $STRT
+tail -$NN $RGT | head -$NFRMS | cut -c14-24 >! $LEN
+tail -$NN $RGT | head -$NFRMS | cut -c28-40 >! $CNTS
+set START = `cat $STRT`
+set INTERVAL = `cat $LEN`
+set COUNTS = `cat $CNTS`
+set FRMTIME = $ZEROTIME
+set STRING = 'time    prompt  delayed p_rate  d_rate  dtime   frame   singles'
+echo $STRING >! $HCRV
+set i = $FIRST
+set STRING = "$FRMTIME 0 0 0 0 0 $i 0"
+echo $STRING >> $HCRV
+while ($i <= $NFRMS)
+	set SEC = `echo $INTERVAL[$i] | bc -l`
+	set MSEC = `echo 1000 \* $SEC | bc -l`
+	set FRMTIME = `echo $FRMTIME + $MSEC | bc -l | cut -f1 -d.`
+	set CNTRATE = `echo 1000 \* $COUNTS[$i] / $SEC | bc -l | cut -f1 -d.`
+	set FRM = `echo $FIRST + $i -1 | bc`
+	echo $FRMTIME 0 0 $CNTRATE 0 0 $FRM 0 >> $HCRV
+	@@ i++
+end
+tail -$NFRMS $HCRV | cut -f4 -d' ' >! $PLT
+
+set STRING = "$DIAMETER-mm sphere at $X,$Y,$Z"
+plotcol $PLT $FIRST $LAST $NAME.$EXT $STRING
+
+echo "$IN    Frames $FIRST to $LAST"
+set STR = 'y'
+prompt1:
+echo "================================================================="
+echo "First frame of 40-sec integration?"
+set FIRST = `line`
+if ($STR == 'n' || $STR == 'N') then
+	echo "Last frame number?"
+	set END = `line`
+else 
+	set END = `echo $FIRST + $NFRAMES - 1 | bc`
+endif
+prompt2:
+while ($END > $LAST)
+	imgfrms $IN
+	echo "Last frame number? (max=$LAST)"
+	set END = `line`
+end
+
+set IDX1 = `echo $FIRST - $MISSING | bc`
+set IDX2 = `echo $END - $MISSING | bc`
+set T1 = $START[$IDX1]
+set T2 = $START[$IDX2]
+set T3 = $INTERVAL[$IDX2]
+
+set TOT = `echo $T2 - $T1 + $T3 | bc -l`
+echo "Integration time for frames $FIRST-$END = $TOT sec"
+echo "Use this range? <y/n>"
+set STR = `line`
+if ($STR == 'n' || $STR == 'N') goto prompt1
+
+set OUT  = $PID${SCAN}_f${FIRST}to${END}.$EXT
+echo "Summing frames $FIRST to $END --> $OUT"
+sumimgframes $IN $OUT $FIRST $END
+gauss $OUT $FIN 0.3
+
+if (-e idl.ps) rm idl.ps
+rm $LST
+rm $PRM
+rm $REG
+rm $RGT
+rm $STRT
+rm $LEN
+rm $CNTS
+rm $OUT.rec
+rm $FIN.rec
+
+@

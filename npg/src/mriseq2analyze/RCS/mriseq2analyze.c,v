@@ -1,0 +1,799 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	2004.02.17.14.46.45;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.11.27.16.52.40;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.08.23.18.57.39;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.02.08.21.47.13;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.02.08.21.26.10;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Feb 2004
+@
+text
+@/*$Id: mriseq2analyze.c,v 1.4 2002/11/27 16:52:40 tom Exp tom $*/
+/*$Log: mriseq2analyze.c,v $
+ * Revision 1.4  2002/11/27  16:52:40  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  1996/08/23  18:57:39  tom
+ * new include path
+ *
+ * Revision 1.2  1995/02/08  21:47:13  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1995/02/08  21:26:10  tom
+ * Initial revision
+ *
+ */
+/*  ===============================================================================
+ *  Module:         mriseq2analyze.c
+ *  Date:           08-Feb-95
+ *  Author:         Tom Videen
+ *  Description:    Transform a series of Siemens MRI images into Analyze format.
+ *      Output images will be displayed by Analyze with left brain on the left
+ *      and with the lower slices first.  This allows the 3D volume rendered
+ *      brains to appear upright.
+ *		An Interfile Format header file is created.
+ *	Notes:
+ *		Checked for proper orientation for View_HEAD only.
+ *  ===============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <lib3_file_transform.h>		 /* Numaris 3 User's Library */
+#include <ANALYZE.h>			 /* dsr */
+
+#define U_LONG unsigned long
+#define U_SHORT unsigned short
+#define BytesPerPixelShort 2
+#define BytesPerPixelLong 4
+#define U3_isStatusError(s,e) (((s)^(e)) == 0)
+#define MAXSTR 256
+#define PERMS  0666
+#define TRANSVERSE '\000'
+#define CORONAL    '\001'
+#define SAGITTAL   '\002'
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mriseq2analyze/RCS/mriseq2analyze.c,v 1.4 2002/11/27 16:52:40 tom Exp tom $";
+
+/*  ----------------------------
+ *  Function:   mriseq2analyze
+ *  ----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	FILE           *FileInp_p;		 /* input file pointer */
+	char            InFile[60];		 /* input file name */
+	long            Status;			 /* shows an actual status */
+	U3_header_type_t HeadType;
+	U3_data_type_t  DataType;
+	U3_size_type_t  DataSize;
+	header_t       *HeadBuffer;		 /* header buffer */
+	U_SHORT        *DataBuffer;		 /* pixel data buffer */
+	long unsigned   NumPixels_ul, NumRows_ul, NumColumns_ul, StartOffset_ul;
+
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* output ANALYZE image  */
+	FILE           *fd_if;			 /* file for Interfile Format header */
+	struct dsr      hdr;			 /* header for ANALYZE */
+	char           *subject;
+	char           *ptr;
+	char            ANALYZE_hdr[MAXSTR];	 /* output Analyze header filename */
+	char            ANALYZE_img[MAXSTR];	 /* output Analyze image filename */
+	char            IF_hdr[MAXSTR];		 /* output Interfile Format header filename */
+	char            view[6][10];
+	char            num[12];
+	char            version[5];
+	char            program_date[12];
+	char            study_date[12];
+	char            institution[MAXSTR];
+	char            model[MAXSTR];
+	char            subject_id[MAXSTR];
+	char            ParameterFileName[MAXSTR];
+	char            SequenceFileName[MAXSTR];
+	char            SequenceDescription[MAXSTR];
+	char            order[4];
+
+	int             bitsperpix=0;
+	int             orientation=0;
+	int             first, last;
+	short           datum;
+	int             global_max;		 /* global maximum */
+	int             global_min;		 /* global minimum */
+	int             ser;
+	int             series;
+	int             image;
+	int             increment;		 /* increment image number by this (1 or 2) */
+	int             i, j, k, n;
+
+	short        ***img;			 /* output Analyze image */
+	short           nframes;		 /* number of frames in MRI */
+	short           xdim=0;			 /* image dimensions */
+	short           ydim=0;
+	float           xpix=0;			 /* pixel sizes (mm) */
+	float           ypix=0;
+	float           zpix=0;
+
+	strcpy (view[1], "View_FEET");
+	strcpy (view[2], "View_HEAD");
+	strcpy (view[3], "View_AtoP");
+	strcpy (view[4], "View_LtoR");
+	strcpy (view[5], "View_PtoA");
+	strcpy (view[6], "View_RtoL");
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	strncpy (version, ptr, 4);
+	ptr = strstr (ptr, " ");
+	ptr++;
+	strncpy (program_date, ptr, 10);
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+
+/*
+ *  Get command line arguments and initialize filenames:
+ *  ---------------------------------------------------
+ */
+
+	if (argc != 7) {
+		printf ("Usage: mriseq2analyze <subject#> <series#> <image#> <number_of_frames> %s\n",
+			"<images_per_series> <output_root>");
+		return (1);
+	}
+	subject = argv[1];
+	series = atoi (argv[2]);
+	image = atoi (argv[3]);
+	nframes = atoi (argv[4]);
+	increment = atoi (argv[5]);
+	first = series;
+	last = first + nframes - 1;
+	strcpy (ANALYZE_img, argv[6]);
+	strcat (ANALYZE_img, ".img");
+	strcpy (ANALYZE_hdr, argv[6]);
+	strcat (ANALYZE_hdr, ".hdr");
+	strcpy (IF_hdr, argv[6]);
+	strcat (IF_hdr, ".ifh");
+
+	if ((fd_hdr = fopen (ANALYZE_hdr, "w")) == 0) {
+		printf ("Unable to create ANALYZE header %s\n", ANALYZE_hdr);
+		return (1);
+	}
+	if ((fd_img = fopen (ANALYZE_img, "w")) == 0) {
+		printf ("Unable to create ANALYZE image %s\n", ANALYZE_img);
+		return (1);
+	}
+	if ((fd_if = fopen (IF_hdr, "w")) == 0) {
+		printf ("Unable to create Interfile Format header %s\n", IF_hdr);
+		return (1);
+	}
+	global_max = 0;
+	global_min = 32000;
+
+/*	Loop for all input images */
+
+	for (ser = first; ser <= last; ser++) {
+		strcpy (InFile, subject);
+		sprintf (num, "%d", ser);
+		strcat (InFile, "-");
+		strcat (InFile, num);
+		sprintf (num, "%d", image);
+		strcat (InFile, "-");
+		strcat (InFile, num);
+		strcat (InFile, ".ima");
+		image += increment;
+
+/* open file and check for success */
+
+		Status = U3Open (&FileInp_p, InFile, "r");
+		if (Status == 0) {
+			printf ("mriseq2analyze : reading %s ", InFile);
+		} else if (U3_isStatusError (Status, U3_NO_PERMISSION)) {
+			printf ("\nerror: mriseq2analyze : inadequate permission on data file %s\n", InFile);
+			return (1);
+		} else if (U3_isStatusError (Status, U3_INVLD_FILE_PATH)) {
+			printf ("\nerror: mriseq2analyze : invalid file path for %s\n", InFile);
+			return (1);
+		} else if (U3_isStatusError (Status, U3_UNKNOWN_HEADER)) {
+			printf ("\nerror: mriseq2analyze : file %s is not a valid image file\n", InFile);
+			return (1);
+		} else
+			return (1);
+
+/* determine header type */
+
+		if ((Status = U3GetHeaderType (FileInp_p, &HeadType)) != 0) {
+			printf ("\nerror: mriseq2analyze : unknown header type.\n");
+			return (1);
+		}
+		switch (HeadType) {
+		case U3_internal_head_type:
+			printf (" (Numaris 3 format");
+			break;
+
+		case U3_nema_head_type:
+			printf (" (ACR-NEMA format");
+			break;
+
+		case U3_numaris1_head_type:
+			printf (" (Numaris 1 format");
+			break;
+
+		case U3_numaris2_head_type:
+			printf (" (Numaris 2 format");
+			break;
+
+		default:
+			printf ("\nThe data file format is unknown.\n");
+			return (1);
+		}
+
+/* check data type and data size */
+
+		if ((Status = U3GetDataType (FileInp_p, &DataType, &DataSize)) != 0) {
+			printf ("\nerror: mriseq2analyze : unknown data type.\n");
+			return (1);
+		}
+/* make sure it is an Image file */
+
+		if (DataType == U3_image_data_type) {
+			printf ("--image file)\n");
+		} else {
+			printf ("\nerror: mriseq2analyze : Data file is not an image file.\n");
+			return (1);
+		}
+
+
+/* allocate memory space for the header buffer */
+
+		if ((HeadBuffer = (header_t *) malloc (sizeof (header_t))) == 0) {
+			printf ("\nerror : mriseq2analyze : unable to allocate memory.\n");
+			return (1);
+		}
+/* get the header buffer */
+
+		if ((Status = U3GetHeader (FileInp_p, HeadBuffer)) != 0) {
+			free (HeadBuffer);
+			printf ("\nerror: mriseq2analyze : unable to get the header.\n");
+			return (1);
+		}
+/* allocate memory space for the  data buffer */
+
+		/* calculate the number of bytes per pixel */
+		NumRows_ul = HeadBuffer->G28.Pre.Rows;
+		NumColumns_ul = HeadBuffer->G28.Pre.Columns;
+		NumPixels_ul = NumRows_ul * NumColumns_ul;
+
+		/* set the offset to start reading the data */
+		StartOffset_ul = 0;
+
+		/* allocate memory space according to the data size */
+		switch (DataSize) {
+		case U3_set_m_short:
+			if ((DataBuffer = (U_SHORT *) malloc (NumPixels_ul * BytesPerPixelShort)) == 0) {
+				printf ("\nerror : unable to allocate memory space for the data.");
+				return (1);
+			}
+			break;
+
+		case U3_set_m_long:
+			printf ("\nerror : long integer format not acceptable.");
+			return (1);
+
+		default:
+			printf ("\nerror: mriseq2analyze : Incompatible data type.\n");
+			return (1);
+		}
+
+/* read the pixel data into the buffer */
+
+		if ((Status = U3ReadPixData (FileInp_p, StartOffset_ul,
+					     NumPixels_ul, &DataSize, DataBuffer)) != 0) {
+			free (HeadBuffer);
+			free (DataBuffer);
+			printf ("\nerror: unable to read the pixel data.\n");
+			return (1);
+		}
+/*
+ *	Get image header information and orientation
+ */
+		if (ser == first) {
+			strcpy (institution, HeadBuffer->G08.Ide.InstitutionID);
+			strcpy (model, HeadBuffer->G08.Ide.ManufacturerModel);
+			strcpy (subject_id, HeadBuffer->G10.Pat.PatientId);
+			sprintf (num, "%ld", HeadBuffer->G08.Ide.StudyDate.Year);
+			strcpy (study_date, num);
+			strcat (study_date, ":");
+			sprintf (num, "%ld", HeadBuffer->G08.Ide.StudyDate.Month);
+			strcat (study_date, num);
+			strcat (study_date, ":");
+			sprintf (num, "%ld", HeadBuffer->G08.Ide.StudyDate.Day);
+			strcat (study_date, num);
+			strcpy (ParameterFileName, HeadBuffer->G19.Acq4.CM.ParameterFileName);
+			strcpy (SequenceFileName, HeadBuffer->G19.Acq4.CM.SequenceFileName);
+			strcpy (SequenceDescription, HeadBuffer->G19.Acq4.CM.SequenceDescription);
+			bitsperpix = HeadBuffer->G28.Pre.BitsAllocated;
+			strncpy (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.X, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Y, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Z, 1);
+
+			orientation = HeadBuffer->G21.Rel1.CM.ViewDirection;
+			if (orientation < 1 && orientation > 6) {
+				printf ("\nerror: mriseq2analyze: Incompatible View Direction.\n");
+				return (1);
+			}
+			printf ("%s  (%s)\n", view[orientation], order);
+
+			switch (orientation) {
+
+			case 1:		 /* View_FEET */
+			case 2:		 /* View_HEAD */
+			case 3:		 /* View_AtoP */
+			case 5:		 /* View_PtoA */
+				xdim = HeadBuffer->G28.Pre.Columns;
+				ydim = HeadBuffer->G28.Pre.Rows;
+				xpix = HeadBuffer->G28.Pre.PixelSize.Row;
+				ypix = HeadBuffer->G28.Pre.PixelSize.Row;
+				zpix = HeadBuffer->G18.Acq.SliceThickness;
+				break;
+
+			case 4:		 /* View_LtoR */
+			case 6:		 /* View_RtoL */
+				xdim = HeadBuffer->G28.Pre.Rows;
+				ydim = HeadBuffer->G28.Pre.Columns;
+				xpix = HeadBuffer->G28.Pre.PixelSize.Row;
+				ypix = HeadBuffer->G28.Pre.PixelSize.Row;
+				zpix = HeadBuffer->G18.Acq.SliceThickness;
+				break;
+
+			default:
+				printf ("\nerror: mriseq2analyze: Incompatible View Direction.\n");
+				return (1);
+			}
+
+			printf ("x = %d (%f mm)  y = %d (%f mm)  frames = %d (%f mm)\n",
+				xdim, xpix, ydim, ypix, nframes, zpix);
+
+			if (NULL == (img = (short ***) malloc ((short) (nframes * sizeof (short **))))) {
+				printf ("\nCould not malloc memory for ***img\n");
+				return (1);
+			}
+			for (i = 0; i < nframes; i++) {
+				if (NULL == (img[i] = (short **) malloc ((short) (ydim * sizeof (short *))))) {
+					printf ("\nCould not malloc memory for **img\n");
+					return (1);
+				}
+				for (j = 0; j < ydim; j++) {
+					if (NULL == (img[i][j] = (short *) malloc ((short) (xdim * sizeof (short))))) {
+						printf ("\nCould not malloc memory for *img\n");
+						return (1);
+					}
+				}
+			}
+		}
+		if (strncmp (order, "L", 1) == 0) {	/* View_FEET or View_PtoA */
+			n = 0;
+			k = ser - first;
+			for (j = ydim - 1; j >= 0; j--) {
+				for (i = xdim - 1; i >= 0; i--) {
+					datum = DataBuffer[n];
+					img[k][j][i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+			}
+
+		} else if (strncmp (order, "R", 1) == 0) {	/* View_HEAD or View_AtoP */
+			n = 0;
+			k = ser - first;
+			for (j = ydim - 1; j >= 0; j--) {
+				for (i = 0; i < xdim; i++) {
+					datum = DataBuffer[n];
+					img[k][j][i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+			}
+
+		} else if (strncmp (order, "A", 1) == 0) {	/* View_LtoR */
+			n = 0;
+			k = ser - first;
+			for (j = ydim - 1; j >= 0; j--) {
+				for (i = 0; i < xdim; i++) {
+					datum = DataBuffer[n];
+					img[k][j][i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+			}
+
+		} else if (strncmp (order, "P", 1) == 0) {	/* View_RtoL */
+			n = 0;
+			k = ser - first;
+			for (j = ydim - 1; j >= 0; j--) {
+				for (i = xdim - 1; i >= 0; i--) {
+					datum = DataBuffer[n];
+					img[k][j][i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+			}
+
+		} else {
+			printf ("\nerror: mriseq2analyze: Incompatible Order:  %s\n", order);
+			return (1);
+		}
+
+		free (HeadBuffer);
+		free (DataBuffer);
+		Status = U3Close (FileInp_p);
+	}
+
+/*
+ * Write to output file
+ */
+
+	for (k = 0; k < nframes; k++) {
+		for (j = 0; j < ydim; j++) {
+			if ((fwrite (img[k][j], sizeof (short), xdim, fd_img)) != xdim) {
+				printf ("Error writing to: %s\n", ANALYZE_img);
+				return (1);
+			}
+		}
+	}
+
+/*
+ * Create Analyze hdr file
+ */
+
+	strncpy (hdr.hk.db_name, InFile, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	hdr.hk.extents = 16384;			 /* recommended by developers  */
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.dime.dim[0] = 4;			 /* 4 dimensions  */
+	hdr.dime.dim[1] = xdim;
+	hdr.dime.dim[2] = ydim;
+	hdr.dime.dim[3] = 1;
+	hdr.dime.dim[4] = nframes;
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 4;			 /* 16 bit signed integer  */
+	hdr.dime.bitpix = bitsperpix;
+	hdr.dime.pixdim[1] = xpix;
+	hdr.dime.pixdim[2] = ypix;
+	hdr.dime.pixdim[3] = zpix;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+	strncpy (hdr.hist.descrip, InFile, 79);
+	strcpy (hdr.hist.originator, "mri2analy");
+	strncpy (hdr.hist.patient_id, version, 4);
+
+	switch (orientation) {
+	case 1:				 /* View_FEET */
+	case 2:				 /* View_HEAD */
+		hdr.hist.orient = TRANSVERSE;
+		break;
+	case 3:				 /* View_AtoP */
+	case 5:				 /* View_PtoA */
+		hdr.hist.orient = SAGITTAL;
+		break;
+	case 4:				 /* View_LtoR */
+	case 6:				 /* View_RtoL */
+		hdr.hist.orient = CORONAL;
+		break;
+	}
+
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		printf ("Error writing to: %s\n", ANALYZE_hdr);
+		return (1);
+	}
+/*
+ * Create Interfile Format header file
+ */
+
+	fprintf (fd_if, "INTERFILE :=\n");
+	fprintf (fd_if, "version of keys	:= 3.3\n");
+	fprintf (fd_if, "image modality	:= mri\n");
+	fprintf (fd_if, "originating system	:= %s\n", model);
+	fprintf (fd_if, "conversion program	:= mriseq2analyze\n");
+	fprintf (fd_if, "program version	:= %s\n", version);
+	fprintf (fd_if, "program date	:= %s\n", program_date);
+	fprintf (fd_if, "original institution	:= %s\n", institution);
+	fprintf (fd_if, "name of data file	:= %s\n", ANALYZE_img);
+	fprintf (fd_if, "subject ID := %s\n", subject_id);
+	fprintf (fd_if, "study date	:= %s\n", study_date);
+
+	fprintf (fd_if, "number format	:= signed integer\n");
+	fprintf (fd_if, "number of bytes per pixel	:= %d\n", bitsperpix / 8);
+	fprintf (fd_if, "number of dimensions	:= 3\n");
+	fprintf (fd_if, "matrix size [1]	:= %d\n", xdim);
+	fprintf (fd_if, "matrix size [2]	:= %d\n", ydim);
+	fprintf (fd_if, "matrix size [3]	:= %d\n", nframes);
+	fprintf (fd_if, "scaling factor (mm/pixel) [1]	:= %f\n", xpix);
+	fprintf (fd_if, "scaling factor (mm/pixel) [2]	:= %f\n", ypix);
+	fprintf (fd_if, "scaling factor (mm/pixel) [3]	:= %f\n", zpix);
+
+	switch (orientation) {
+	case 1:				 /* View_FEET */
+	case 2:				 /* View_HEAD */
+		fprintf (fd_if, "matrix initial element [1]	:= right\n");
+		fprintf (fd_if, "matrix initial element [2]	:= posterior\n");
+		fprintf (fd_if, "matrix initial element [3]	:= time=0\n");
+		break;
+	case 3:				 /* View_AtoP */
+	case 5:				 /* View_PtoA */
+		fprintf (fd_if, "matrix initial element [1]	:= right\n");
+		fprintf (fd_if, "matrix initial element [2]	:= inferior\n");
+		fprintf (fd_if, "matrix initial element [3]	:= time=0\n");
+		break;
+	case 4:				 /* View_LtoR */
+	case 6:				 /* View_RtoL */
+		fprintf (fd_if, "matrix initial element [1]	:= anterior\n");
+		fprintf (fd_if, "matrix initial element [2]	:= inferior\n");
+		fprintf (fd_if, "matrix initial element [3]	:= time=0\n");
+		break;
+	}
+
+	fprintf (fd_if, "mri parameter file name	:= %s\n", ParameterFileName);
+	fprintf (fd_if, "mri sequence file name	:= %s\n", SequenceFileName);
+	fprintf (fd_if, "mri sequence description	:= %s\n", SequenceDescription);
+
+/* free all buffers and return */
+
+	printf ("\nmriseq2analyze completed successfully.  %s created.\n", ANALYZE_img);
+	(void) fclose (fd_hdr);
+	(void) fclose (fd_img);
+	(void) fclose (fd_if);
+	return (0);
+}
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*$Id: mriseq2analyze.c,v 1.3 1996/08/23 18:57:39 tom Exp tom $*/
+d3 3
+d48 1
+a48 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mriseq2analyze/RCS/mriseq2analyze.c,v 1.3 1996/08/23 18:57:39 tom Exp tom $";
+@
+
+
+1.3
+log
+@new include path
+@
+text
+@d1 1
+a1 1
+/*$Id: mriseq2analyze.c,v 1.2 1995/02/08 21:47:13 tom Exp tom $*/
+d3 3
+d28 2
+a30 1
+#include <fcntl.h>
+d45 1
+a45 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mriseq2analyze/RCS/mriseq2analyze.c,v 1.2 1995/02/08 21:47:13 tom Exp tom $";
+d64 1
+a64 1
+	long unsigned   NumPixels_ul, NumBytes_ul, NumRows_ul, NumColumns_ul, StartOffset_ul;
+a76 1
+	char            inum[12];
+d88 2
+a89 2
+	int             bitsperpix;
+	int             orientation;
+d102 5
+a106 2
+	short           xdim, ydim;		 /* image dimensions */
+	float           xpix, ypix, zpix;	 /* pixel sizes (mm) */
+d133 1
+a133 1
+		exit (1);
+d151 1
+a151 1
+		exit (1);
+d155 1
+a155 1
+		exit (1);
+d159 1
+a159 1
+		exit (1);
+d184 1
+a184 1
+			exit (1);
+d187 1
+a187 1
+			exit (1);
+d190 1
+a190 1
+			exit (1);
+d192 1
+a192 1
+			exit (1);
+d198 1
+a198 1
+			exit (1);
+d219 1
+a219 1
+			exit (1);
+d226 1
+a226 1
+			exit (1);
+d234 1
+a234 1
+			exit (1);
+d242 1
+a242 1
+			exit (1);
+d249 1
+a249 1
+			exit (1);
+d266 1
+a266 1
+				exit (1);
+d272 1
+a272 1
+			exit (1);
+d276 1
+a276 1
+			exit (1);
+d286 1
+a286 1
+			exit (1);
+d295 1
+a295 1
+			sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Year);
+d298 1
+a298 1
+			sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Month);
+d301 1
+a301 1
+			sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Day);
+d314 1
+a314 1
+				exit (1);
+d342 1
+a342 1
+				exit (1);
+d350 1
+a350 1
+				exit (1);
+d355 1
+a355 1
+					exit (1);
+d360 1
+a360 1
+						exit (1);
+d427 1
+a427 1
+			exit (1);
+d443 1
+a443 1
+				exit (1);
+d502 1
+a502 1
+		exit (1);
+d555 1
+a555 1
+/* free all buffers and exit */
+d558 4
+a561 4
+	close (fd_hdr);
+	close (fd_img);
+	close (fd_if);
+	exit (0);
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*$Id: mriseq2analyze.c,v 1.1 1995/02/08 21:26:10 tom Exp tom $*/
+d3 3
+d28 1
+a28 1
+#include <petutil/ANALYZE.h>			 /* dsr */
+d41 1
+a41 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mriseq2analyze/RCS/mriseq2analyze.c,v 1.1 1995/02/08 21:26:10 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$
+d38 1
+a38 1
+static char     rcsid[] = "$Header$";
+d122 2
+a123 2
+		printf ("Usage: mriseq2analyze <subject#> <series#> <image#> <number_of_frames> ",
+			"<number_of_series> <output_root> [number_of_series]\n");
+d130 1
+d133 1
+a133 1
+	strcpy (ANALYZE_img, argv[5]);
+d135 1
+a135 1
+	strcpy (ANALYZE_hdr, argv[5]);
+d137 1
+a137 1
+	strcpy (IF_hdr, argv[5]);
+a138 1
+	increment = atoi (argv[6]);
+@

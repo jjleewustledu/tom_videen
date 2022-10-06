@@ -1,0 +1,287 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2004.02.13.15.56.15;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2004.01.05.14.54.19;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.12.16.17.42.22;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@lint cleaning
+@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@/*  $Log: airdif_ana2d.c,v $
+ * Revision 1.2  2004/01/05  14:54:19  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/12/16  17:42:22  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *  Module:         airdif_ana2d.c
+ *  Date:           Feb 1999
+ *  Author:         Tom Videen
+ *	Description:	Compare change in 2-D alignment using and AIR file
+ * ===============================================================================
+ */
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airdif_ana2d/RCS/airdif_ana2d.c,v 1.2 2004/01/05 14:54:19 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>				 /* struct dsr */
+#include "air.h"					 /* struct air2 */
+
+#define RADTODEG 180./M_PI
+
+int             read_air ();
+float           ptdist_2d ();
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	struct air2     air;
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *airfile1, *airfile2;
+	char           *hdr1, *img1;
+	float         **mat1, **mat2, **dmat;
+	int             i, j, k;
+	float          *rscale;				 /* reslice image mm/pixel */
+	float           dist, sumdist;
+	float          *dif;
+	float           xsum, ysum;
+	float          *pt0, *pt1, *pt2;
+	long            nx, ny, nz, num;
+	int             sumpts;
+	int             sumx, sumy;
+	short          *img;
+	short        ***image;
+	float           dang;
+
+/* Initializations */
+
+	if (argc != 5) {
+		(void) fprintf (stderr, "Usage: airdif_ana2d a.air b.air mask.hdr mask.img\n");
+		return (1);
+	}
+	airfile1 = argv[1];
+	airfile2 = argv[2];
+	hdr1 = argv[3];
+	img1 = argv[4];
+	mat1 = matrix (1, 4, 1, 4);
+	mat2 = matrix (1, 4, 1, 4);
+	dmat = matrix (1, 4, 1, 4);
+
+/* Read AIR matrices (transform pixels-to-pixels)*/
+
+	if (read_air (airfile1, &air, mat1) != 0) {
+		(void) fprintf (stderr, "ERROR [airdif_ana2d]: cannot read %s\n", airfile1);
+		return (1);
+	}
+	if (read_air (airfile2, &air, mat2) != 0) {
+		(void) fprintf (stderr, "ERROR [airdif_ana2d]: cannot read %s\n", airfile2);
+		return (1);
+	}
+	rscale = vector (1, 2);
+	rscale[1] = (float) air.res.xsize;
+	rscale[2] = (float) air.res.ysize;
+
+	matrix_sub (mat1, mat2, dmat, 4, 4, 4);
+	dmat[4][4] = 1;
+	printf ("%s - %s\n", airfile1, airfile2);
+	matrix_print (dmat, 4, 4);
+	dang = (acos(dmat[1][1]) + acos(dmat[2][2]) + asin(dmat[1][2]) - asin(dmat[2][1]))/4.;
+
+/*	Read the coordinates of all points-in-the-mask */
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	nx = hdr.dime.dim[1];
+	ny = hdr.dime.dim[2];
+	nz = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+	if (nz != 1) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: %s is not a single-plane image\n", hdr1);
+		return (ERROR);
+	}
+	num = nx * ny;
+
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((image = s3tensor (1, nz, 1, ny, 1, nx)) == NULL) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: Cannot malloc image for %s\n", img1);
+		return (NULL);
+	}
+	img = (short *) calloc (num, sizeof (short));
+	if (img == NULL) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if ((fread (img, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [anadif_ana2d]: Reading: %s\n", img1);
+		return (ERROR);
+	}
+	for (i = 1; i <= ny; i++) {
+		for (j = 1; j <= nx; j++) {
+			image[1][i][j] = *img;
+			img++;
+		}
+	}
+	(void) fclose (fd_img);
+
+/*
+ *	Compute mean distance between points-in-the-mask after
+ *	misaligned by transformation with the difference matrix.
+ */
+
+	pt0 = vector (1, 4);
+	pt1 = vector (1, 4);
+	pt2 = vector (1, 4);
+	dif = vector (1, 3);
+	for (i = 1; i < 4; i++)
+		pt0[i] = 0.0;
+	pt0[4] = 1.0;
+	pt1[4] = 1.0;
+
+	sumpts = 0;
+	sumx = 0;
+	sumy = 0;
+	sumdist = 0.0;
+	xsum = 0.0;
+	ysum = 0.0;
+
+	for (j = 1; j <= ny; j++) {
+		for (k = 1; k <= nx; k++) {
+			if (image[1][j][k] > 0) {
+				sumpts++;
+				sumx += k;
+				sumy += j;
+				pt0[1] = (float) k;
+				pt0[2] = (float) j;
+				vector_mult (mat1, pt0, pt1, 4, 4, 1);
+				vector_mult (mat2, pt0, pt2, 4, 4, 1);
+				dist = ptdist_2d (pt1, pt2, dif, rscale);
+				sumdist += dist;
+				xsum += dif[1];
+				ysum += dif[2];
+			}
+		}
+	}
+	(void) fprintf (stdout, "Difference of pixels within mask %s:\n", img1);
+	(void) fprintf (stdout, "   Mean     X      Y    (mm)\n");
+	(void) fprintf (stdout, "%7.1f %6.1f %6.1f   %s\n", sumdist / ((float) sumpts),
+		xsum / ((float) sumpts), ysum / ((float) sumpts), airfile2);
+	(void) fprintf (stdout, "   Ang  = %6.1f deg\n\n", RADTODEG*dang);
+
+	free_vector (pt0, 1, 4);
+	free_vector (pt1, 1, 4);
+	free_vector (pt2, 1, 4);
+	free_vector (rscale, 1, 2);
+	free_s3tensor (image, 1, nz, 1, ny, 1, nx);
+	free_matrix (mat1, 1, 4, 1, 4);
+	free_matrix (mat2, 1, 4, 1, 4);
+	free_matrix (dmat, 1, 4, 1, 4);
+	free (img);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *  Date:           Feb-99
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airdif_ana2d/RCS/airdif_ana2d.c,v 1.1 1999/12/16 17:42:22 tom Exp tom $";
+d62 1
+a62 1
+		exit (1);
+d76 1
+a76 1
+		exit (1);
+d80 1
+a80 1
+		exit (1);
+d120 1
+a120 1
+	fclose (fd_hdr);
+d150 1
+a150 1
+	fclose (fd_img);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*  $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airdif_ana/RCS/airdif_ana.c,v 1.2 1996/08/22 22:11:02 tom Exp $";
+d129 1
+a129 1
+		fprintf (stderr, "ERROR [rdtensor]: Cannot malloc image for %s\n", img1);
+@

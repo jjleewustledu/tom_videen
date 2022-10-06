@@ -1,0 +1,720 @@
+head	2.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+2.1
+date	2010.03.03.21.28.02;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2008.10.14.17.05.54;	author tom;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	2008.10.09.21.10.07;	author tom;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	2008.10.09.19.41.47;	author tom;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	2008.09.06.15.20.11;	author tom;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	2008.08.11.16.11.33;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	2008.08.06.16.36.54;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	2005.08.31.20.43.44;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	2004.11.17.20.08.30;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2004.06.10.14.40.18;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2004.01.15.17.47.46;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2002.10.08.18.08.49;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2002.04.01.17.26.37;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2000.09.22.16.20.18;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2000.09.22.16.06.35;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.02.22.22.13.17;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.02.04.15.14.46;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.02.03.19.42.45;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.1
+log
+@changed some output column headers
+pie is now multiplied when isotope = none
+@
+text
+@PRO VSTAT
+@@IMAGE_UTILS.h
+
+   on_error, 2
+   infile = ''
+   outfile = ''
+   voifile = ''
+   name = ''
+   isotope = ''
+   msg = ''
+   pie = 0.0
+
+   infile = getenv('INFILE')
+   outfile = getenv('OUTFILE')
+   voifile = getenv('VOIFILE')
+   name = getenv('VOINAME')
+   isotope = getenv('ISOTOPE')
+   pie = getenv('PIESLOPE')
+
+   CASE isotope OF
+      'F18':  tau = 0.00010529D
+      'f18':  tau = 0.00010529D
+      'GA68': tau = 0.0001691D
+      'ga68': tau = 0.0001691D
+      'C11':  tau = 0.0005668D
+      'c11':  tau = 0.0005668D
+      'O15':  tau = 0.005668D
+      'o15':  tau = 0.005668D
+      'none':  tau = 0.D
+      'test':  tau = 0.D
+      ELSE: BEGIN
+         PRINT, 'ERROR [vstat]: unrecognized isotope; use f18, c11, o15, ga68 or none'
+         RETURN
+      ENDELSE
+   ENDCASE
+
+   voi = ptr_new({VOI})
+   (*voi).id = 'VOI'
+   IF (VOI_READ(voi, voifile, msg) NE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: reading ',voifile
+      RETURN
+   ENDIF
+   roi = VOI_LOCATE(voi, name)
+   IF (NOT ptr_valid(roi)) THEN BEGIN
+      PRINT,'ERROR [vstat]: cannot locate ',name,' in ',voifile
+      RETURN
+   ENDIF
+   IF ((*roi).num LE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: reading ',name,' in ',voifile
+      RETURN
+   ENDIF
+
+   img = {VIMAGE}
+   img.fname = infile
+   img.ff = 1
+   img.lf = 1
+   img.fp = 1
+   img.lp = 1
+
+   IF (getnumframes(img, msg) NE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: reading ',infile
+      RETURN
+   ENDIF
+   ff = img.ff
+   lf = img.lf
+   nfrm = lf-ff+1
+   nidx = lf+1
+
+   img.ff = ff
+   img.lf = ff
+   img.fp = 1
+   img.lp = 1
+   IF (getsingleframe(img, msg) NE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: reading ',infile
+      RETURN
+   ENDIF
+
+   IF (pie EQ 0 AND nfrm GT 1) THEN BEGIN 
+      isotope = 'none'
+      tau = 0.D
+   ENDIF
+
+   pixels = VOI_COORDS(voi, name, img.dim, msg)
+   IF ((size(pixels))[2] LE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: VOI ',roi,' has no defined pixels'
+      RETURN
+   ENDIF
+   pixels = pixels[sort(pixels)]
+   pixels = pixels[uniq(pixels)]
+   n = n_elements(pixels)
+   IF (n LE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: VOI ',roi,' has no defined pixels'
+      RETURN
+   ENDIF
+
+   zerotime = float(img.start[ff])/1000.
+   print, format = '("First image frame (#",I1,") began at ",F9.3," sec")', ff, zerotime
+   read,zerotime,prompt='Delay (sec) of first frame from injection?  '
+   start0 = zerotime - float(img.start[ff])/1000. 
+
+   print, '---------------------------------------------'
+   print, 'vstat 2008:08:05  ',systime(0)
+   print, format = '("Image File:  ",A,3X,I0,"x",I0,"x",I0,"   ",I0," frames")', infile, img.dim[0],img.dim[1],img.dim[2],nfrm
+   IF (isotope NE 'none') THEN BEGIN 
+      print, format = '("Isotope:     ",A,"   decay constant =",F11.8," sec")', isotope, tau
+      print, format = '("Pieslope:  ",F8.4)', pie
+   ENDIF
+   print, format = '("VOI:  ",A,3X,I0," voxels  (",A,")")', name, n, voifile
+
+   openw,lu1, outfile, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: Cannot open ',outfile
+      RETURN
+   ENDIF
+   IF (isotope EQ 'test') THEN BEGIN 
+      printf, lu1, format = '(A8,A14,A13,A15)', 'Filename','Start','Duration','PETcnts/frame'
+   ENDIF ELSE IF (pie EQ 0) THEN BEGIN 
+      printf, lu1, format = '("30  no decay correction   VOI: ",A," (",A,")")', name, infile
+      printf, lu1, format = '("1 3   Start  Duration        Mean")'
+   ENDIF ELSE IF (isotope EQ 'none') THEN BEGIN 
+      printf, lu1, format = '("30  no decay correction   VOI: ",A," (",A,")")', name, infile
+      printf, lu1, 'vstat 2008:08:11  ',systime(0)
+      printf, lu1, format = '("Image File:  ",A,3X,I0,"x",I0,"x",I0,"   ",I0," frames")', infile, img.dim[0:2],nfrm
+      printf, lu1, format = '("Isotope:     ",A,"     decay constant =",F11.8," sec")', isotope, tau
+      printf, lu1, format = '("Pieslope: ",F9.4,"  no decay correction")', pie
+      printf, lu1, format = '("VOI:  ",A,3X,I0," voxels  (",A,")")', name, n, voifile
+      IF (pie EQ 1) THEN BEGIN
+         printf, lu1, format = '(A9,A20,A9,A11,A17)', 'Mid_Time','PETcnts/sec','Start','Duration','Decay_Cor_Factor'
+      ENDIF ELSE BEGIN
+         printf, lu1, format = '(A9,A15,A14,A11,A17)', 'Mid_Time','Wellcnts','Start','Duration','Decay_Cor_Factor'
+      ENDELSE
+   ENDIF ELSE BEGIN
+      printf, lu1, 'vstat 2008:08:11  ',systime(0)
+      printf, lu1, format = '("Image File:  ",A,3X,I0,"x",I0,"x",I0,"   ",I0," frames")', infile, img.dim[0:2],nfrm
+      printf, lu1, format = '("Isotope:     ",A,"     decay constant =",F11.8," sec")', isotope, tau
+      printf, lu1, format = '("Pieslope: ",F9.4,"  decay-corrected")', pie
+      printf, lu1, format = '("VOI:  ",A,3X,I0," voxels  (",A,")")', name, n, voifile
+      printf, lu1, format = '(A9,A15,A14,A11,A13)', 'Mean_Time','Wellcnts','Start','Duration','Mean_Decay'
+   ENDELSE
+   t0 = fltarr(nidx)
+   tm = fltarr(nidx)
+   cnts = fltarr(nidx)
+   mean = fltarr(nidx)
+   print, format = '("frm   decay_cor")'
+
+   ;; getsingleframe reads decay-corrected counts/frame from Matrix 6 and Matrix 7 files
+   ;; for uncorrected counts, multiply by EXP(-tau*len) -- if isotope is specified
+
+   FOR k = ff, lf DO BEGIN 
+      img.ff = k
+      img.lf = k
+
+      IF (getsingleframe(img, msg) NE 0) THEN BEGIN
+         PRINT,'ERROR [vstat]: reading ',infile,' frame ',k
+         RETURN
+      ENDIF
+      IF (img.itype EQ MATRIX_REV7) THEN decay_cor = img.h.sh7.decay_corr_fctr $
+      ELSE IF (img.itype EQ MATRIX_REV6) THEN decay_cor = img.h.sh6.decay_corr_fctr
+      print, format = '(I2, F12.4)', k, decay_cor
+
+      t0[k] = float(img.start[k])/1000. + start0
+      len = float(img.len[k])/1000.
+      val = (*img.data)[pixels]
+      IF (len GT 0) THEN BEGIN
+         IF (isotope EQ 'test') THEN BEGIN 
+            tm[k] = t0[k] + len/2.
+            mean[k] = (moment(val))[0]
+            printf, lu1, format = '(A10, F12.0,F10.0,F18.10)', infile, t0[k], len, mean[k]
+         ENDIF ELSE IF (pie EQ 0) THEN BEGIN
+            cnts[k] = (moment(val))[0]
+            printf, lu1, format = '(F12.0,F10.0,F18.6)', t0[k], len, cnts[k]
+         ENDIF ELSE IF (isotope EQ 'none') THEN BEGIN
+         	scl = 1/len
+            tm[k] = t0[k] + len/2.
+            cnts[k] = (moment(val))[0]
+            mean[k] = scl * cnts[k] * pie
+            printf, lu1, format = '(F9.2,F17.6,F12.0,F10.0,F12.4)', tm[k], mean[k], t0[k], len, decay_cor
+         ENDIF ELSE BEGIN
+			;; Note: all units are per pixel
+			;; pie = (wellcnts/cc/sec)/(PETcnts/min) 
+			;; let: WELLcnts = (wellcnts/cc/sec)
+			;; then: pie = WELLcnts*min/PETcnts
+			;; from image: meanPET = PETcnts/frame
+			;; using: len=sec/frame;  60=sec/min
+			;; want WELLcnts = wellcnts/cc/sec 
+			;; therefore: WELLcnts = (PETcnts/frame)*(pie)*(sec/min)/(sec/frame)
+			;;   = (PETcnts/frame)*(WELLcnts*min/PETcnts)*(sec/min)*(frame/sec)= meanPET*60*pie/len
+         	scl = 60*pie/len
+            tmid = (-1.0/tau)*ALOG(0.5*(EXP(-tau*len)+1.0))
+            tm[k] = t0[k] + tmid
+            cnts[k] = (moment(val))[0]
+            mean[k] = scl * cnts[k] * EXP(tau*tm[k])
+            printf, lu1, format = '(F9.2,F17.6,F12.0,F10.0,F12.4)', tm[k], mean[k], t0[k], len, EXP(tau*tm[k])
+         ENDELSE
+      ENDIF
+   ENDFOR 
+   close,lu1
+   free_lun,lu1
+   IF (nfrm EQ 1) THEN RETURN
+   IF (pie LE 0) THEN RETURN
+
+   ymin = min(mean)
+   ymax = max(mean)
+   xlabel = 'Time (sec)'
+   IF (isotope EQ 'none') THEN ylabel = 'Uncorrected Well Cnts/cc/sec' $
+   ELSE ylabel = 'Decay-Corrected Counts/Sec'
+
+   plot, tm[ff:lf], mean[ff:lf], charsize=1.4,charthick=1,xthick=2,ythick=2, $
+      xtitle=xlabel, ytitle=ylabel, yrange=[ymin,ymax]
+   a = ''
+   read,a,prompt='Continue '
+
+END 
+@
+
+
+2.0
+log
+@*** empty log message ***
+@
+text
+@d116 1
+d128 1
+a128 1
+         printf, lu1, format = '(A9,A20,A9,A11,A15)', 'Mid_Time','PETcnts/sec','Start','Duration','Decay_Cor_Factor'
+d130 1
+a130 1
+         printf, lu1, format = '(A9,A20,A9,A11,A15)', 'Mid_Time','Wellcnts/cc/sec','Start','Duration','Decay_Cor_Factor'
+d138 1
+a138 5
+      IF (pie EQ 1) THEN BEGIN
+         printf, lu1, format = '(A9,A20,A9,A11,A13)', 'Mean_Time','PETcnts/sec','Start','Duration','Mean_Decay'
+      ENDIF ELSE BEGIN
+         printf, lu1, format = '(A9,A20,A9,A11,A13)', 'Mean_Time','Wellcnts/cc/sec','Start','Duration','Mean_Decay'
+      ENDELSE
+d176 1
+a176 1
+            mean[k] = scl * cnts[k]
+@
+
+
+1.16
+log
+@fixed start0 time in output files
+@
+text
+@d117 1
+a117 1
+      printf, lu1, format = '("30  decay corrected    VOI: ",A," (",A,")")', name, infile
+d120 1
+a120 2
+      ;printf, lu1, format = '("30  decay corrected    VOI: ",A," (",A,")")', name, infile
+      ;printf, lu1, format = '(I3,"  3  Start  Duration    PETcnts/sec     decay_corr_fctr")', nfrm
+d124 1
+a124 1
+      printf, lu1, format = '("Pieslope: ",F9.4,"  decay-corrected")', pie
+d126 5
+a130 1
+      printf, lu1, format = '(A9,A20,A9,A11,A13)', 'Mid_Time','PETcnts/sec','Start','Duration','Decay_Cor'
+d135 1
+a135 1
+      printf, lu1, format = '("Pieslope: ",F9.4,"  no decay correction")', pie
+d137 5
+a141 1
+      printf, lu1, format = '(A9,A20,A9,A11,A13)', 'Mean_Time','Wellcnts/cc/sec','Start','Duration','Mean_Decay'
+@
+
+
+1.15
+log
+@fix bug in decay-corrected values (with isotope)
+@
+text
+@d96 2
+a97 2
+   zerotime = float(img.start[1])/1000.
+   print, format = '("First image frame began at ",F9.3," sec")', zerotime
+d99 1
+a99 1
+   start0 = zerotime - float(img.start[1])/1000. 
+@
+
+
+1.14
+log
+@fix first frame error
+@
+text
+@d169 1
+a169 1
+         	scl = pie/len
+d175 9
+d188 2
+a189 2
+            mean[k] = scl * cnts[k] * EXP(-tau*tm[k])
+            printf, lu1, format = '(F9.2,F17.6,F12.0,F10.0,F12.4)', tm[k], mean[k], t0[k], len, EXP(-tau*tm[k])
+d201 2
+a202 2
+   IF (isotope EQ 'none') THEN ylabel = 'Decay-Corrected Counts/Sec' $
+   ELSE ylabel = 'Uncorrected Well Cnts/cc/sec'
+@
+
+
+1.13
+log
+@same output with decay-correction as without
+@
+text
+@a58 4
+   IF (getsingleframe(img, msg) NE 0) THEN BEGIN
+      PRINT,'ERROR [vstat]: reading ',infile
+      RETURN
+   ENDIF
+d67 1
+d69 9
+d136 4
+a139 4
+   t0 = fltarr(nfrm+1)
+   tm = fltarr(nfrm+1)
+   cnts = fltarr(nfrm+1)
+   mean = fltarr(nfrm+1)
+d195 1
+a195 1
+   plot, tm[1:nfrm], mean[1:nfrm], charsize=1.4,charthick=1,xthick=2,ythick=2, $
+@
+
+
+1.12
+log
+@fix decay correction
+getsingleframe
+@
+text
+@d114 8
+a121 2
+      printf, lu1, format = '("30  decay corrected    VOI: ",A," (",A,")")', name, infile
+      printf, lu1, format = '(I3,"  3  Start  Duration    PETcnts/sec     decay_corr_fctr")', nfrm
+d123 1
+a123 1
+      printf, lu1, 'vstat 2000:02:04  ',systime(0)
+d167 1
+a167 1
+            printf, lu1, format = '(F12.0,F10.0,F16.6,F15.4)', t0[k], len, mean[k], decay_cor
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d25 4
+a28 4
+      'C11':  tau = 0.0005669D
+      'c11':  tau = 0.0005669D
+      'O15':  tau = 0.005592D
+      'o15':  tau = 0.005592D
+d56 1
+a56 1
+   img.lf = 256
+d58 2
+a59 2
+   img.lp = 256
+   IF (getframe(img, msg) NE 0) THEN BEGIN
+a62 1
+   frmsize =  long(img.dim[0])*long(img.dim[1])*long(img.dim[2])
+d64 13
+d90 4
+a93 2
+   zerotime = 0
+   read,zerotime,prompt='Delay (sec) of first frame from injection [usually 0]?  '
+d96 3
+a98 3
+   print, 'vstat 2000:02:04  ',systime(0)
+   print, format = '("Image File:  ",A,3X,I0,"x",I0,"x",I0,"   ",I0," frames")', infile, img.dim
+   IF (pie NE 0) THEN BEGIN 
+d100 1
+a100 1
+      print, format = '("Pieslope:  ",F9.4)', pie
+d109 4
+a112 3
+   IF (pie EQ 0) THEN BEGIN 
+      printf, lu1, format = '("30   none")'
+      printf, lu1, format = '(I3," 1   ",A,"  (",A,")")', img.dim[3], name, infile
+d114 2
+a115 3
+      printf, lu1, format = '("30   none")'
+      printf, lu1, format = '(I3,"  3  Start  Duration   ",A,"  (",A,")")', img.dim[3], name, infile
+   ENDIF ELSE IF (isotope EQ 'test') THEN BEGIN 
+d118 3
+a120 3
+      printf, lu1, format = '("Image File:  ",A,3X,I0,"x",I0,"x",I0,"   ",I0," frames")', infile, img.dim
+      printf, lu1, format = '("Isotope:     ",A,"   decay constant =",F11.8," sec")', isotope, tau
+      printf, lu1, format = '("Pieslope:  ",F9.4)', pie
+d122 1
+a122 1
+      printf, lu1, format = '(A9,A14,A12,A10,A14)', 'Mean_Time','Corrected','Start','Duration','Counts/Frame'
+d124 22
+a145 10
+   k0 = img.ff
+   k1 = img.lf
+   t0 = fltarr(k1+1)
+   tm = fltarr(k1+1)
+   cnts = fltarr(k1+1)
+   mean = fltarr(k1+1)
+   FOR k = k0, k1 DO BEGIN 
+      pix = pixels + long(k-k0)*frmsize
+      val = (*img.data)[pix]
+      t0[k] = float(img.start[k])/1000. + zerotime
+d147 1
+d149 1
+a149 2
+         IF (isotope EQ 'none') THEN BEGIN
+            piefactor = pie*60.0/len
+d151 3
+d155 3
+a157 4
+            IF (pie GT 0) THEN mean[k] = piefactor * cnts[k] $
+            ELSE mean[k] = cnts[k]
+            printf, lu1, format = '(F12.0,F10.0,F18.3)', t0[k], len, mean[k]
+         ENDIF ELSE IF (isotope EQ 'test') THEN BEGIN 
+d159 3
+a161 2
+            mean[k] = (moment(val))[0]
+            printf, lu1, format = '(A10, F12.0,F10.0,F18.10)', infile, t0[k], len, mean[k]
+d163 1
+a163 1
+            piefactor = pie*60.0/len
+d167 2
+a168 2
+            mean[k] = cnts[k] * piefactor * EXP(tau*tm[k])
+            printf, lu1, format = '(F9.2,F14.3,F12.0,F10.0,F14.3)', tm[k], mean[k], t0[k], len, cnts[k]
+a169 3
+      ENDIF ELSE IF (pie EQ 0 OR img.dim[3] EQ 1) THEN BEGIN
+         mean[k] = (moment(val))[0]
+         printf, lu1, format = '(F12.3)', mean[k]
+d174 2
+a175 2
+   IF (pie EQ 0) THEN RETURN
+   IF (img.dim[3] EQ 1) THEN RETURN
+d180 2
+a181 2
+   IF (isotope EQ 'none') THEN ylabel = 'Counts' $
+   ELSE ylabel = 'Decay-Corrected Well Counts/Sec'
+d183 1
+a183 1
+   plot, tm[1:k1], mean[1:k1], charsize=1.4,charthick=1,xthick=2,ythick=2, $
+@
+
+
+1.10
+log
+@add test isotope for 10 decimal places
+@
+text
+@d122 2
+a123 1
+         IF (isotope EQ 'none') THEN BEGIN 
+d125 3
+a127 1
+            mean[k] = (moment(val))[0]
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d30 1
+d101 1
+d126 4
+@
+
+
+1.8
+log
+@increase field for real nos
+@
+text
+@d106 1
+a106 1
+      printf, lu1, format = '(A9,A12,A12,A10,A14)', 'Mean_Time','Corrected','Start','Duration','Counts/Frame'
+d130 1
+a130 1
+            printf, lu1, format = '(F9.2,F12.3,F12.0,F10.0,F12.3)', tm[k], mean[k], t0[k], len, cnts[k]
+@
+
+
+1.7
+log
+@add prompt for zerotime
+@
+text
+@d123 1
+a123 1
+            printf, lu1, format = '(F12.0,F10.0,F12.3)', t0[k], len, mean[k]
+@
+
+
+1.6
+log
+@fix bug in piefactor
+@
+text
+@d77 3
+d117 1
+a117 1
+      t0[k] = float(img.start[k])/1000.
+d148 1
+a148 1
+   PLOT, tm, mean, charsize=1.4,charthick=1,xthick=2,ythick=2, $
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d122 1
+a122 1
+            piefactor = pie*60/len
+@
+
+
+1.4
+log
+@process single-frame images
+@
+text
+@d116 1
+a116 4
+      IF (pie EQ 0) THEN BEGIN
+         mean[k] = (moment(val))[0]
+         printf, lu1, format = '(F12.3)', mean[k]
+      ENDIF ELSE IF (len GT 0) THEN BEGIN
+d129 4
+a132 1
+      ENDIF 
+d137 1
+@
+
+
+1.3
+log
+@processing with isotope = none
+output in rgt file format
+@
+text
+@d80 4
+a83 2
+   print, format = '("Isotope:     ",A,"   decay constant =",F11.8," sec")', isotope, tau
+   print, format = '("Pieslope:  ",F9.4)', pie
+d91 1
+a91 1
+   IF (isotope EQ 'none') THEN BEGIN 
+d93 3
+d116 4
+a119 1
+      IF (len GT 0) THEN BEGIN
+d136 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d29 1
+d31 1
+a31 1
+         PRINT, 'ERROR [vstat]: unrecognized isotope; use f18, c11, o15 or ga68'
+d89 11
+a99 6
+   printf, lu1, 'vstat 2000:02:04  ',systime(0)
+   printf, lu1, format = '("Image File:  ",A,3X,I0,"x",I0,"x",I0,"   ",I0," frames")', infile, img.dim
+   printf, lu1, format = '("Isotope:     ",A,"   decay constant =",F11.8," sec")', isotope, tau
+   printf, lu1, format = '("Pieslope:  ",F9.4)', pie
+   printf, lu1, format = '("VOI:  ",A,3X,I0," voxels  (",A,")")', name, n, voifile
+   printf, lu1, format = '(A9,A12,A12,A10,A14)', 'Mean_Time','Corrected','Start','Duration','Counts/Frame'
+d112 12
+a123 6
+         piefactor = pie*60/len
+         tmid = (-1.0/tau)*ALOG(0.5*(EXP(-tau*len)+1.0))
+         tm[k] = t0[k] + tmid
+         cnts[k] = (moment(val))[0]
+         mean[k] = cnts[k] * piefactor * EXP(tau*tm[k])
+         printf, lu1, format = '(F9.2,F12.3,F12.0,F10.0,F12.3)', tm[k], mean[k], t0[k], len, cnts[k]
+d132 3
+a134 1
+   ylabel = 'Decay-Corrected Well Counts/Sec'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d76 18
+a93 4
+   PRINT, format = '("Image File:  ",A,3X,I0,"x",I0,"x",I0,"x",I0," frames")', infile, img.dim
+   PRINT, format = '("Isotope:  ",A,"   decay constant =",F11.8," sec")', isotope, tau
+   PRINT, format = '("VOI:  ",A,3X,I0," voxels  (",A,")")', name, n, voifile
+   PRINT, format = '(A9,A12,A12,A10,A14)', 'Mean_Time','Corrected','Start','Duration','Counts/Frame'
+d111 1
+a111 1
+         PRINT, format = '(F9.2,F12.3,F12.0,F10.0,F12.3)', tm[k], mean[k], t0[k], len, cnts[k]
+d114 3
+@

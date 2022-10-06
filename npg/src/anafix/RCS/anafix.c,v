@@ -1,0 +1,917 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.17.14.19;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2001.11.02.21.17.56;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2000.10.10.14.35.30;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2000.10.04.19.22.30;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.12.09.15.57.15;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.08.09.20.53.18;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.08.09.19.44.25;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.08.09.16.04.44;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.08.06.15.06.33;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@This version fills in missing data on plane 41 of a 50 plane image
+after shifting the lower half of the plane posterior (p5381ct_n.img)
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: anafix.c,v $
+ * Revision 1.8  2001/11/02  21:17:56  tom
+ * generalize for all 5-mm + 8-mm ER scans
+ *
+ * Revision 1.7  2000/10/10  14:35:30  tom
+ * This version interpolates planes for p5778 (which has 5 and 8-mm steps)
+ *
+ * Revision 1.6  2000/10/04  19:22:30  tom
+ * This version interpolates planes 11-16 (from 11-20) to
+ * correct for a different bed step (p5827ct) which had 5 and 8 mm steps (ER standard)
+ *
+ * Revision 1.5  1999/12/09  15:57:15  tom
+ * This version interpolates planes 13-19 (of 19 planes) to
+ * correct for a different bed step (p5287ct) which had 5 and 8 mm steps
+ *
+ * Revision 1.4  1999/08/09  20:53:18  tom
+ * Fixed bug in version 1.3
+ *
+ * Revision 1.3  1999/08/09  19:44:25  tom
+ * This version interpolates planes 18-29 (of 29 planes) to
+ * correct for a different bed step (p5432ct_n.img)
+ * and interpolates within these planes to correct for a different pixel size
+ *
+ * Revision 1.2  1999/08/09  16:04:44  tom
+ * This version shifts planes 18-29 (of 29 planes) 56 pixels to
+ * correct for a FOV offset between planes 17 and 18 (p5432ct_n.img)
+ *
+ * Revision 1.1  1999/08/06  15:06:33  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			anafix.c
+ *	Date:			Aug 1999
+ *	Author:			Tom Videen
+ *	Description:	Fix an Analyze image
+ *	Input parameters:
+ *		botimg	- input image of bottom of brain (5-mm planes); interpolated
+ *		bothdr	- input image header of bottom of brain
+ *		topimg	- input image of top of brain (8-mm planes); copied to output
+ *		tophdr	- input image header of top of brain
+ *		outimg	- output image (8-mm planes)
+ *		outhdr	- output image header
+ *		zdimo	- output number of slices
+ *	Notes:
+ *		Botimg has been aligned to topimg with a 2D match of corresponding
+ *			planes (top plane of botimg and bottom plane of topimg);
+ *		Analyze files are organized so that first plane is the bottommost.
+ *	Version:
+ *		Ver 1.7 - interpolates planes (13-19) to 8 mm intervals
+ *		to match upper planes (1-12) scanned at 8 mm intervals (p5287ct_n.img)
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anafix/RCS/anafix.c,v 1.8 2001/11/02 21:17:56 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *botimg, *bothdr; /* input files */
+	char           *topimg, *tophdr; /* input files */
+	char           *outimg, *outhdr; /* output file */
+	long            xdim, ydim;		 /* dimensions of input images */
+	long            zdimb, zdimt;	 /* z-dimensions of input images */
+	long            zdimo;			 /* z-dimenstion of output image */
+	long            zinterp;		 /* interpolated planes of bottom image */
+	long            pln, i, z;
+	long            num;			 /* input number of pixels */
+	long            numb;			 /* output number of pixels */
+	long            z0, z1, z2;		 /* indices to planes for interpolation */
+	long            cnt;
+	long            zdx[10];
+	float           findx[10];
+	float           f1, f2;
+	short          *img;			 /* input image */
+	short          *imgb;			 /* output interpolated image */
+
+	if (argc != 7) {
+		(void) fprintf (stderr, "Usage: anafix bothdr botimg tophdr topimg outhdr outimg\n");
+		return (ERROR);
+	}
+	bothdr = argv[1];
+	botimg = argv[2];
+	tophdr = argv[3];
+	topimg = argv[4];
+	outhdr = argv[5];
+	outimg = argv[6];
+
+/*	Read top input image header */
+
+	if ((fd_hdr = fopen (tophdr, "r")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Cannot open: %s\n", tophdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", tophdr);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", tophdr);
+		(void) fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", tophdr);
+		(void) fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", tophdr);
+		(void) fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	if (hdr.dime.pixdim[3] != 8.0) {
+		(void) fprintf (stderr, "ERROR [anafix]: slice spacing of top image is %d\n",
+				(int) hdr.dime.pixdim[3]);
+		return (ERROR);
+	}
+	xdim = hdr.dime.dim[1];
+	ydim = hdr.dime.dim[2];
+	zdimt = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+/*	Read bottom input image header */
+
+	if ((fd_hdr = fopen (bothdr, "r")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Cannot open: %s\n", bothdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", bothdr);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", bothdr);
+		(void) fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", bothdr);
+		(void) fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", bothdr);
+		(void) fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	if (xdim != hdr.dime.dim[1]) {
+		(void) fprintf (stderr, "ERROR [anafix]: x-dimensions differ: %d %d\n",
+				(int) xdim, hdr.dime.dim[1]);
+		return (ERROR);
+	}
+	if (ydim != hdr.dime.dim[2]) {
+		(void) fprintf (stderr, "ERROR [anafix]: y-dimensions differ: %d %d\n",
+				(int) ydim, hdr.dime.dim[2]);
+		return (ERROR);
+	}
+	zdimb = hdr.dime.dim[3];
+	if (hdr.dime.pixdim[3] != 5.0) {
+		(void) fprintf (stderr, "ERROR [anafix]: slice spacing of bottom image is %.2f\n",
+				hdr.dime.pixdim[3]);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+
+/*	Read bottom image data */
+
+	num = xdim * ydim * zdimb;
+	pln = xdim * ydim;
+	img = (short *) calloc (num, sizeof (short));
+	if (img == NULL) {
+		(void) fprintf (stderr, "ERROR [anafix]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (botimg, "r")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Cannot open: %s\n", botimg);
+		return (ERROR);
+	}
+	if ((fread (img, sizeof (short), num, fd_img)) != num) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", botimg);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	(void) fprintf (stdout, "Read %s\n", botimg);
+
+/*	Perform Correction (All pixel ordering is reversed) */
+
+	zinterp = ((zdimb - 1) * 5) / 8;
+	zdimo = zdimt + zinterp;
+	numb = xdim * ydim * zdimo;
+	imgb = (short *) calloc (numb, sizeof (short));
+	if (imgb == NULL) {
+		(void) fprintf (stderr, "ERROR [anafix]: Cannot calloc imgb\n");
+		return (ERROR);
+	}
+	hdr.dime.dim[3] = zdimo;
+	hdr.dime.pixdim[3] = 8.0;
+
+/*	Interpolate, starting from the top of the bottom image */
+
+	zdx[0] = 1;
+	zdx[1] = 3;
+	zdx[2] = 4;
+	zdx[3] = 6;
+	zdx[4] = 8;
+	zdx[5] = zdx[0] + 8;
+	zdx[6] = zdx[1] + 8;
+	zdx[7] = zdx[2] + 8;
+	zdx[8] = zdx[3] + 8;
+	zdx[9] = zdx[4] + 8;
+
+	findx[0] = 0.4;
+	findx[1] = 0.8;
+	findx[2] = 0.2;
+	findx[3] = 0.6;
+	findx[4] = 1.0;
+	findx[5] = findx[0];
+	findx[6] = findx[1];
+	findx[7] = findx[2];
+	findx[8] = findx[3];
+	findx[9] = findx[4];
+
+	cnt = 0;
+	for (z = zinterp - 1; z >= 0; z--) {
+		z0 = z * pln;
+		z1 = (zdimb - zdx[cnt]) * pln;
+		z2 = z1 - pln;
+		f1 = findx[cnt];
+		f2 = 1 - f1;
+		if (f2 > 0)
+			for (i = 0; i < pln; i++)
+				imgb[z0 + i] = f1 * img[z1 + i] + f2 * img[z2 + i];
+		else
+			for (i = 0; i < pln; i++)
+				imgb[z0 + i] = img[z1 + i];
+		cnt++;
+	}
+	free (img);
+
+/*	Read top image data */
+
+	num = xdim * ydim * zdimt;
+	pln = xdim * ydim;
+	img = (short *) calloc (num, sizeof (short));
+	if (img == NULL) {
+		(void) fprintf (stderr, "ERROR [anafix]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (topimg, "r")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Cannot open: %s\n", topimg);
+		return (ERROR);
+	}
+	if ((fread (img, sizeof (short), num, fd_img)) != num) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", topimg);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	(void) fprintf (stdout, "Read %s\n", topimg);
+
+	for (z = 0; z < zdimt; z++) {
+		z0 = (z + zinterp) * pln;
+		z1 = z* pln;
+		for (i = 0; i < pln; i++)
+			imgb[z0 + i] = img[z1 + i];
+	}
+
+/*	Write corrected image */
+
+	if ((fd_img = fopen (outimg, "w")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Unable to open %s\n", outimg);
+		return (ERROR);
+	}
+	if ((fwrite (imgb, sizeof (short), numb, fd_img)) != numb) {
+		(void) fprintf (stderr, "ERROR [anafix]: Error writing to: %s\n", outimg);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+
+	if ((fd_hdr = fopen (outhdr, "w")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Unable to open %s\n", outhdr);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		(void) fprintf (stderr, "ERROR [anafix]: Error writing to: %s\n", outhdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+
+	free (img);
+	free (imgb);
+	return (OK);
+}
+@
+
+
+1.8
+log
+@generalize for all 5-mm + 8-mm ER scans
+@
+text
+@d2 3
+d33 1
+a33 1
+ *	Date:			Aug-99
+d53 1
+d55 1
+a55 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anafix/RCS/anafix.c,v 1.7 2000/10/10 14:35:30 tom Exp tom $";
+d203 4
+@
+
+
+1.7
+log
+@This version interpolates planes for p5778 (which has 5 and 8-mm steps)
+@
+text
+@d2 3
+d33 12
+d46 1
+a46 1
+ *		This version interpolates planes (13-19) to 8 mm intervals
+d51 1
+a51 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anafix/RCS/anafix.c,v 1.6 2000/10/04 19:22:30 tom Exp tom $";
+d66 7
+a72 3
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	long            dim1, dim2, dim3; /* dimensions of input image */
+d76 7
+a82 4
+	long            dim3b;			 /* output number of slices */
+	long            z0, z1, z2;
+	short          *img;			/* input image */
+	short          *imgb;			/* output interpolated image */
+d84 2
+a85 2
+	if (argc != 5) {
+		(void) fprintf (stderr, "Usage: anafix img1 hdr1 img2 hdr2\n");
+d88 6
+a93 4
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+d95 1
+a95 1
+/*	Read image */
+d97 2
+a98 2
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Cannot open: %s\n", hdr1);
+d102 1
+a102 1
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", hdr1);
+d106 1
+a106 1
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", hdr1);
+d111 1
+a111 1
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", hdr1);
+d116 1
+a116 1
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", hdr1);
+d120 8
+a127 3
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+a128 2
+	num = dim1*dim2*dim3;
+	pln = dim1*dim2;
+d130 48
+a177 1
+	img = (short*) calloc (num, sizeof (short));
+d182 2
+a183 2
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Cannot open: %s\n", img1);
+d186 2
+a187 2
+	if ((fread (img, sizeof(short), num, fd_img)) != num) {
+		(void) fprintf (stderr, "ERROR [anafix]: Reading: %s\n", img1);
+d191 1
+a191 1
+	(void) fprintf (stdout,"Read %s\n", img1);
+d195 5
+a199 4
+	dim3b = 16;
+	numb = dim1*dim2*dim3b;
+	imgb = (short*) calloc (numb, sizeof (short));
+	hdr.dime.dim[3] = dim3b;
+d202 1
+a202 40
+    /* BP = 203 */
+    z0 = 0;
+    z1 = 0;
+    for (i = 0; i < pln; i++)
+        imgb[z0+i] = img[z1+i];
+ 
+    /* BP = 195 */
+    z0 = 1 * pln;
+    z1 = 1 * pln;
+    z2 = 2 * pln;
+    for (i = 0; i < pln; i++)
+        imgb[z0+i] = (2./5.)*img[z1+i] + (3./5.) * img[z2+i];
+ 
+    /* BP = 187 */
+    z0 = 2 * pln;
+    z1 = 3 * pln;
+    z2 = 4 * pln;
+    for (i = 0; i < pln; i++)
+        imgb[z0+i] = (4./5.)*img[z1+i] + (1./5.) * img[z2+i];
+ 
+    /* BP = 179 */
+    z0 = 3 * pln;
+    z1 = 4 * pln;
+    z2 = 5 * pln;
+    for (i = 0; i < pln; i++)
+        imgb[z0+i] = (1./5.)*img[z1+i] + (4./5.) * img[z2+i];
+ 
+    /* BP = 171 */
+    z0 = 4 * pln;
+    z1 = 6 * pln;
+    z2 = 7 * pln;
+    for (i = 0; i < pln; i++)
+        imgb[z0+i] = (3./5.)*img[z1+i] + (2./5.) * img[z2+i];
+ 
+    for (z = 5; z < dim3b; z++) {
+        z0 = z * pln;
+        z1 = (z+3) * pln;
+        for (i = 0; i < pln; i++)
+            imgb[z0+i] = img[z1+i];
+    }
+d204 66
+d272 2
+a273 2
+	if ((fd_img = fopen (img2, "w")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Unable to open %s\n", img2);
+d277 1
+a277 1
+		(void) fprintf (stderr, "ERROR [anafix]: Error writing to: %s\n", img2);
+d282 2
+a283 2
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		(void) fprintf (stderr, "ERROR [anafix]: Unable to open %s\n", hdr2);
+d287 1
+a287 1
+		(void) fprintf (stderr, "ERROR [anafix]: Error writing to: %s\n", hdr2);
+@
+
+
+1.6
+log
+@This version interpolates planes 11-16 (from 11-20) to
+correct for a different bed step (p5827ct) which had 5 and 8 mm steps (ER standard)
+@
+text
+@d2 4
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anafix/RCS/anafix.c,v 1.5 1999/12/09 15:57:15 tom Exp tom $";
+d127 1
+a127 1
+    /* BP = 238.5 */
+a129 1
+    z2 = 1 * pln;
+d131 1
+a131 1
+        imgb[z0+i] = (3.0/5.0)*img[z1+i] + (2.0/5.0) * img[z2+i];
+d133 1
+a133 1
+    /* BP = 230.5 */
+d135 2
+a136 1
+    z1 = 2 * pln;
+d138 1
+a138 1
+        imgb[z0+i] = img[z1+i];
+d140 1
+a140 1
+    /* BP = 222.5 */
+d145 1
+a145 1
+        imgb[z0+i] = (2.0/5.0)*img[z1+i] + (3.0/5.0) * img[z2+i];
+d147 1
+a147 1
+    /* BP = 214.5 */
+d149 2
+a150 2
+    z1 = 5 * pln;
+    z2 = 6 * pln;
+d152 1
+a152 1
+        imgb[z0+i] = (4.0/5.0)*img[z1+i] + (1.0/5.0) * img[z2+i];
+d154 1
+a154 1
+    /* BP = 206.5 */
+d159 1
+a159 1
+        imgb[z0+i] = (1.0/5.0)*img[z1+i] + (4.0/5.0) * img[z2+i];
+d161 1
+a161 8
+    /* BP = 198.5 */
+    z0 = 5 * pln;
+    z1 = 8 * pln;
+    z2 = 9 * pln;
+    for (i = 0; i < pln; i++)
+        imgb[z0+i] = (3.0/5.0)*img[z1+i] + (2.0/5.0) * img[z2+i];
+ 
+    for (z = 6; z < dim3b; z++) {
+d163 1
+a163 1
+        z1 = (z+4) * pln;
+@
+
+
+1.5
+log
+@This version interpolates planes 13-19 (of 19 planes) to
+correct for a different bed step (p5287ct) which had 5 and 8 mm steps
+@
+text
+@d2 4
+d32 1
+a32 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anafix/RCS/anafix.c,v 1.4 1999/08/09 20:53:18 tom Exp tom $";
+d123 1
+a123 1
+    /* BP = 279 */
+d128 1
+a128 1
+        imgb[z0+i] = (2.0/5.0)*img[z1+i] + (3.0/5.0) * img[z2+i];
+d130 1
+a130 1
+    /* BP = 287 */
+a132 1
+    z2 = 3 * pln;
+d134 1
+a134 1
+        imgb[z0+i] = (4.0/5.0)*img[z1+i] + (1.0/5.0) * img[z2+i];
+d136 1
+a136 1
+    /* BP = 295 */
+d141 1
+a141 1
+        imgb[z0+i] = (1.0/5.0)*img[z1+i] + (4.0/5.0) * img[z2+i];
+d143 1
+a143 1
+    /* BP = 303 */
+d148 14
+d164 1
+a164 1
+    for (z = 4; z < dim3b; z++) {
+d166 1
+a166 1
+        z1 = (z+3) * pln;
+@
+
+
+1.4
+log
+@Fixed bug in version 1.3
+@
+text
+@d2 3
+d23 2
+a24 3
+ *		This version interpolates planes 18-29 (of 29 planes) to 
+ *	 	correct for a different bed step (p5432ct_n.img)
+ *		and interpolates within these planes to correct for a different pixel size.
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anafix/RCS/anafix.c,v 1.3 1999/08/09 19:44:25 tom Exp tom $";
+d32 1
+a32 1
+#include <string.h>
+d45 8
+a52 8
+	long            dim1, dim2, dim3; /* dimensions of image */
+	long            num, pln, i, j, k, l, m, n, p, z, mm, pp;
+	long            dim3b, numb;
+	long            y0, y1, y2, gap, mid;
+	long            z0, z1, z2, top, bot;
+	float			a, b, c, d, f, x, y, xx, yy, t, u;
+	short          *img, *imgb;		 /* image */
+	short          **imx;
+d55 1
+a55 1
+		printf ("Usage: anafix img1 hdr1 img2 hdr2\n");
+d66 1
+a66 1
+		fprintf (stderr, "ERROR [anafix]: Cannot open: %s\n", hdr1);
+d70 1
+a70 1
+		fprintf (stderr, "ERROR [anafix]: Reading: %s\n", hdr1);
+d74 2
+a75 2
+		fprintf (stderr, "ERROR [anafix]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+d79 2
+a80 2
+		fprintf (stderr, "ERROR [anafix]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+d84 2
+a85 2
+		fprintf (stderr, "ERROR [anafix]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+d91 1
+a91 1
+	fclose (fd_hdr);
+d97 1
+a97 1
+		fprintf (stderr, "ERROR [anafix]: Cannot calloc img\n");
+d101 1
+a101 1
+		fprintf (stderr, "ERROR [anafix]: Cannot open: %s\n", img1);
+d105 1
+a105 1
+		fprintf (stderr, "ERROR [anafix]: Reading: %s\n", img1);
+d108 2
+a109 2
+	fclose (fd_img);
+	fprintf (stdout,"Read %s\n", img1);
+a111 1
+/*	Shift head anterior in slices 18-29 */
+d113 1
+a113 5
+	imx = (short **) calloc (dim1, sizeof (short *));
+	for (i = 0; i < dim1; i++)
+		imx[i] = (short *) calloc (dim1, sizeof (short));
+
+	dim3b = 23;
+d117 1
+a117 1
+	hdr.dime.pixdim[3] = 6.0;
+d119 1
+a119 1
+    /* BP = 212 */
+d121 2
+a122 2
+    z1 = 1 * pln;
+    z2 = 2 * pln;
+d124 1
+a124 1
+        imgb[z0+i] = (3.0/3.7)*img[z1+i] + (0.7/3.7) * img[z2+i];
+d126 1
+a126 1
+    /* BP = 206 */
+d131 1
+a131 1
+        imgb[z0+i] = (0.8/3.8)*img[z1+i] + (3.0/3.8) * img[z2+i];
+d133 1
+a133 1
+    /* BP = 200 */
+d138 1
+a138 1
+        imgb[z0+i] = (2.3/3.8)*img[z1+i] + (1.5/3.8) * img[z2+i];
+d140 1
+a140 1
+    /* BP = 194 */
+d142 2
+a143 1
+    z1 = 6 * pln;
+d145 1
+a145 1
+        imgb[z0+i] = img[z1+i];
+d147 1
+a147 47
+    /* BP = 188 */
+    z0 = 4 * pln;
+    z1 = 7 * pln;
+    z2 = 8 * pln;
+    for (i = 0; i < pln; i++)
+        imgb[z0+i] = (1.5/3.7)*img[z1+i] + (2.2/3.7) * img[z2+i];
+ 
+    /* BP = 182 */
+    z0 = 5 * pln;
+    z1 = 9 * pln;
+    z2 = 10 * pln;
+    for (i = 0; i < pln; i++)
+        imgb[z0+i] = (3.0/3.7)*img[z1+i] + (0.7/3.7) * img[z2+i];
+ 
+	mid = dim1/2;
+	f = 3.906250/3.769531;
+	for (z = 0; z < 6; z++) {
+		n = z * pln;
+		for (i = 0; i < dim1; i++) {
+			for (j = 0; j < dim2; j++) {
+				imx[i][j] = imgb[n];
+				n++;
+			}
+		}
+		n = z * pln;
+		for (i = 0; i < dim1; i++) {
+			y = (float)mid + f*(i-mid);
+			m = (long) y;
+			mm = m+1;
+			for (j = 0; j < dim2; j++) {
+				x = mid + f*(j-mid);
+				p = (long) x;
+				pp = p+1;
+				if (mm < 0 || mm >= dim1 || pp < 0 || pp >= dim2) {
+					imgb[n] = 0;
+				} else {
+					t = y - m;
+					u = x - p;
+					imgb[n] = (1-t)*(1-u)*imx[m][p] + t*(1-u)*imx[mm][p] +
+						t*u*imx[m][pp] + (1-t)*u*imx[mm][pp];
+				}
+				n++;
+			}
+		}
+	}
+
+    for (z = 6; z < dim3b; z++) {
+d149 1
+a149 1
+        z1 = (z+6) * pln;
+d157 1
+a157 1
+		fprintf (stderr, "ERROR [anafix]: Unable to open %s\n", img2);
+d161 1
+a161 1
+		fprintf (stderr, "ERROR [anafix]: Error writing to: %s\n", img2);
+d164 1
+a164 1
+	fclose (fd_img);
+d167 1
+a167 1
+		fprintf (stderr, "ERROR [anafix]: Unable to open %s\n", hdr2);
+d171 1
+a171 1
+		fprintf (stderr, "ERROR [anafix]: Error writing to: %s\n", hdr2);
+d174 1
+a174 1
+	fclose (fd_hdr);
+@
+
+
+1.3
+log
+@This version interpolates planes 18-29 (of 29 planes) to
+correct for a different bed step (p5432ct_n.img)
+and interpolates within these planes to correct for a different pixel size
+@
+text
+@d2 5
+d26 1
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anafix/RCS/anafix.c,v 1.2 1999/08/09 16:04:44 tom Exp tom $";
+d169 1
+a169 1
+				imx[i][j] = img[n];
+@
+
+
+1.2
+log
+@This version shifts planes 18-29 (of 29 planes) 56 pixels to
+correct for a FOV offset between planes 17 and 18 (p5432ct_n.img)
+@
+text
+@d2 4
+d15 3
+a17 2
+ *		This version shifts planes 18-29 (of 29 planes) 56 pixels to 
+ *	 	correct for a FOV offset between planes 17 and 18 (p5432ct_n.img)
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anafix/RCS/anafix.c,v 1.1 1999/08/06 15:06:33 tom Exp tom $";
+d39 5
+a43 4
+	long            dim2b;
+	long            num, numb, pln, i, z;
+	long            y0, y1, y2, gap;
+	long            z0, z1, top, bot;
+d45 1
+d107 81
+a187 11
+	imgb = (short*) calloc (pln, sizeof (short));
+	for (z = 0; z < 12; z++) {
+		z0 = z * pln;
+		gap = 56 * dim1;
+		y1 = pln - gap;
+		for (i = 0; i < gap; i++)
+			imgb[i] = 0;
+		for (i = gap; i < pln; i++)
+			imgb[i] = img[z0-gap+i];
+		for (i = 0; i < pln; i++)
+			img[z0+i] = imgb[i];
+d190 7
+d203 1
+a203 1
+	if ((fwrite (img, sizeof (short), num, fd_img)) != num) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d11 2
+a12 2
+ *		This version fills in missing data on plane 41 of a 50 plane image
+ *		after shifting the lower half of the plane posterior (p5381ct_n.img)
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anafix/RCS/anafix.c,v 1.1 1999/02/11 17:36:28 tom Exp $";
+d34 2
+a35 1
+	long            num, pln, i;
+d37 1
+a37 1
+	long            z0, top, bot;
+d98 1
+d101 10
+a110 11
+	z0 = 9 * pln;
+	y0 = 256 * dim1;
+	gap = 32 * dim1;
+	y1 = y0 + gap;
+	y2 = y1 - dim1;
+	for (i = 0; i < y0; i++)
+		imgb[i] = img[z0+gap+i];
+	for (i = y0; i < y1; i++) {
+		top = z0 + y1 + (i - dim1 * (i / dim1));
+		bot = z0 + y2 + (i - dim1 * (i / dim1));
+		imgb[i] = (img[top]+img[bot])/2;
+a111 2
+	for (i = y0+gap; i < pln; i++)
+		imgb[i] = img[z0+i];
+a112 3
+	for (i = 0; i < pln; i++)
+		img[z0+i] = imgb[i];
+
+@

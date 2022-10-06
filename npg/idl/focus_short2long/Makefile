@@ -1,0 +1,37 @@
+PRGNAME = focus_short2long
+# Author:	Tom Videen
+# Date:		Jul 2009
+# Expects:	set environmental variables in
+#		source ~/.idlrc
+
+SCRIPTS	= ${PRGNAME}
+PRO		= ${PRGNAME}.pro 
+COMP	= compile.pro
+SAV		= ${PRGNAME}.sav
+VPATH	= ${NPG_DIR}
+ 
+${SAV}: ${PRO} 
+	idl_compile ${PRGNAME}.pro
+ 
+checkin:
+	ci ${PRO} ${COMP} ${SCRIPTS} 
+
+checkout:
+	co ${PRO} ${COMP} ${SCRIPTS} 
+
+lock:
+	co -l ${PRO} ${COMP} ${SCRIPTS} 
+
+release: ${SAV}
+	mv ${SAV} ${NPG_DIR}
+	@ cd ${NPG_DIR}; chmod 644 $?; chgrp videen $?
+
+script: ${SCRIPTS}
+	cp ${SCRIPTS} ${BINPATH}
+	@ cd ${BINPATH}; chmod 755 $?; chgrp videen $?
+
+clean:
+	rm -f ${SAV}
+
+cleanall:
+	rm -f ${PRO} ${COMP} ${SCRIPTS} 

@@ -1,0 +1,307 @@
+head	2.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.5
+date	2004.02.17.14.58.13;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	99.10.13.18.49.42;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.10.16.22.42.11;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.04.27.20.13.02;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.01.19.20.13.37;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@First checking in, working version.
+@
+
+
+2.5
+log
+@Feb 2004
+@
+text
+@C$Id: peak3dck.f,v 2.1 1999/10/13 18:49:42 tom Exp tom $
+C$Log: peak3dck.f,v $
+c Revision 2.1  1999/10/13  18:49:42  tom
+c increase number of slices to 150
+c
+c Revision 2.0  1996/10/16  22:42:11  tom
+c TOV libs
+c
+c Revision 1.2  1994/04/27  20:13:02  ty7777
+c Added NUMSLICES to process 75-slice images.
+c
+c Revision 1.1  1994/01/19  20:13:37  ty7777
+c Initial revision
+c
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   PEAK3DCK.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         25-Sep-90
+C  Written For:  3D check for connected pixels
+C
+C  History:
+C     Renamed PEAK3DCK (formerly IMG3DCHK) 18-Nov-90.
+C     Modified 05-Dec-90 by TOV:
+C        1) add common block PEAKPARM
+C        2) add MASK for restricting volume in which peaks are allowed
+C           without biasing peaks away from brain or sample edges;
+C     Modified 18-Jan-94 by Tom Yang to port to the UNIX environment.
+C
+C  Intent:
+C     Beginning with point X,Y,Z, identify all pixels which are
+C     connected whose values*SIGN are > CUTOFF.
+C     If any pixel is USED, then set UNIQUE=false.
+C     Set USED for all included pixels before returning.
+C
+C  Call by:  PEAKID
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE PEAK3DCK (X, Y, Z, SIGN, CUTOFF, SUM, UNIQUE, NUMSLICES)
+C
+      INTEGER*4   X,Y,Z           ! start point
+      INTEGER*4   SIGN            ! 1 for log max! -1 for local min
+      INTEGER*4   CUTOFF          ! pixels must be > CUTOFF
+      INTEGER*4   SUM             ! sum of pixels > CUTOFF
+      LOGICAL*1   UNIQUE          ! peak is unique
+      INTEGER*4   NUMSLICES       ! number of slices in image
+C
+      INTEGER*2   IMG (128, 128, 150)  ! image array
+      INTEGER*2   MASK (128, 128, 150) ! masking array
+      LOGICAL*1   INC (128, 128, 150)  ! elements included in this peak
+      LOGICAL*1   USED (128, 128, 150) ! elements included in other peaks
+      INTEGER*4   XLOC(310,0:4)  ! locations of pixels for 2D section
+      INTEGER*4   YLOC(310,0:4)  !    of a local region
+      INTEGER*4   NPIX(0:4)      ! number of pixels in region for 2D section
+      INTEGER*4   NSUM           ! total pixels within 3D region
+C
+      INTEGER*4   C               ! local value for CUTOFF
+      INTEGER*4   X1,X2,Y1,Y2,Z1,Z2 ! limits on 3-D search
+      INTEGER*4   XT1,XT2,YT1,YT2,ZT1,ZT2
+      INTEGER*4   I,J,S
+      INTEGER*4   TEMP
+      LOGICAL*1   MORE
+      CHARACTER*256 RCSHEADER
+C
+      COMMON /PEAKPARM/ IMG,MASK,INC,USED,XLOC,YLOC,NPIX,NSUM
+C
+      RCSHEADER = '$Header: /home/npggw/tom/src/peakid/RCS/peak3dck.f,v 2.1 1999/10/13 18:49:42 tom Exp tom $'
+C
+C  Initialize
+C
+      DO 30 S = 1, 150
+        DO 20 J = 1, 128
+          DO 10 I = 1, 128
+            INC (I, J, S) = .FALSE.
+10        CONTINUE
+20      CONTINUE
+30    CONTINUE
+      XT1 = X
+      XT2 = X
+      YT1 = Y
+      YT2 = Y
+      ZT1 = Z
+      ZT2 = Z
+      INC(X,Y,Z) = .TRUE.
+      C = CUTOFF
+C
+C  Loop for more connected pixels
+C
+100   MORE = .FALSE.
+      X1 = XT1
+      X2 = XT2
+      Y1 = YT1
+      Y2 = YT2
+      Z1 = ZT1
+      Z2 = ZT2
+      DO 400 S=Z1,Z2
+        DO 300 J=Y1,Y2
+          DO 200 I=X1,X2
+            IF (INC(I,J,S)) THEN
+              TEMP = I-1
+              IF (.NOT.INC(TEMP,J,S) .AND. MASK(TEMP,J,S).GT.0
+     &            .AND. SIGN*IMG(TEMP,J,S).GT.C) THEN
+                INC(TEMP,J,S) = .TRUE.
+                IF (TEMP.LT.XT1) XT1=TEMP
+                MORE = .TRUE.
+              END IF
+              TEMP = I+1
+              IF (.NOT.INC(TEMP,J,S) .AND. MASK(TEMP,J,S).GT.0
+     &            .AND. SIGN*IMG(TEMP,J,S).GT.C) THEN
+                INC(TEMP,J,S) = .TRUE.
+                IF (TEMP.GT.XT2) XT2=TEMP
+                MORE = .TRUE.
+              END IF
+              TEMP = J-1
+              IF (.NOT.INC(I,TEMP,S) .AND. MASK(I,TEMP,S).GT.0
+     &            .AND. SIGN*IMG(I,TEMP,S).GT.C) THEN
+                INC(I,TEMP,S) = .TRUE.
+                IF (TEMP.LT.YT1) YT1=TEMP
+                MORE = .TRUE.
+              END IF
+              TEMP = J+1
+              IF (.NOT.INC(I,TEMP,S) .AND. MASK(I,TEMP,S).GT.0
+     &            .AND. SIGN*IMG(I,TEMP,S).GT.C) THEN
+                INC(I,TEMP,S) = .TRUE.
+                IF (TEMP.GT.YT2) YT2=TEMP
+                MORE = .TRUE.
+              END IF
+              TEMP = S-1
+              IF (TEMP.GE.1 .AND. .NOT.INC(I,J,TEMP) .AND.
+     &          MASK(I,J,TEMP).GT.0 .AND. SIGN*IMG(I,J,TEMP).GT.C) THEN
+                INC(I,J,TEMP) = .TRUE.
+                IF (TEMP.LT.ZT1) ZT1=TEMP
+                MORE = .TRUE.
+              END IF
+              TEMP = S+1
+              IF (TEMP .LE. NUMSLICES .AND. .NOT. INC (I, J, TEMP) .AND.
+     &          MASK (I, J, TEMP) .GT. 0 .AND. SIGN * IMG (I, J, TEMP) .GT. C) THEN
+                INC (I, J, TEMP) = .TRUE.
+                IF (TEMP .GT. ZT2) ZT2 = TEMP
+                MORE = .TRUE.
+              END IF
+            END IF
+200       CONTINUE
+300     CONTINUE
+400   CONTINUE
+      IF (MORE) GO TO 100
+C
+C  For included pixels, set USED=TRUE;
+C  Check if peak is UNIQUE (no pixels USED);
+C
+      UNIQUE = .TRUE.
+      SUM = 0
+      DO 700 S=Z1,Z2
+        DO 600 J=Y1,Y2
+          DO 500 I=X1,X2
+            IF (INC(I,J,S)) THEN
+              IF (USED(I,J,S)) UNIQUE=.FALSE.
+              USED(I,J,S) = .TRUE.
+              SUM = SUM + 1
+            END IF
+500       CONTINUE
+600     CONTINUE
+700   CONTINUE
+C
+      RETURN
+      END
+@
+
+
+2.1
+log
+@increase number of slices to 150
+@
+text
+@d1 1
+a1 1
+C$Id: peak3dck.f,v 2.0 1996/10/16 22:42:11 tom Exp tom $
+d3 3
+d70 1
+a70 1
+      RCSHEADER = '$Header: /home/npggw/tom/src/peakid/RCS/peak3dck.f,v 2.0 1996/10/16 22:42:11 tom Exp tom $'
+@
+
+
+2.0
+log
+@TOV libs
+@
+text
+@d1 1
+a1 1
+C$Id: peak3dck.f,v 1.2 1994/04/27 20:13:02 ty7777 Exp tom $
+d3 3
+d48 4
+a51 4
+      INTEGER*2   IMG (128, 128, 75)  ! image array
+      INTEGER*2   MASK (128, 128, 75) ! masking array
+      LOGICAL*1   INC (128, 128, 75)  ! elements included in this peak
+      LOGICAL*1   USED (128, 128, 75) ! elements included in other peaks
+d67 1
+a67 1
+      RCSHEADER = '$Header: /home/npggw/tom/src/peakid/RCS/peak3dck.f,v 1.2 1994/04/27 20:13:02 ty7777 Exp tom $'
+d71 1
+a71 1
+      DO 30 S = 1, 75
+@
+
+
+1.2
+log
+@Added NUMSLICES to process 75-slice images.
+@
+text
+@d1 1
+a1 1
+C$Id: peak3dck.f,v 1.1 1994/01/19 20:13:37 ty7777 Exp ty7777 $
+d3 3
+d43 1
+a43 1
+      INTEGER*2   NUMSLICES       ! number of slices in image
+d64 1
+a64 1
+      RCSHEADER = '$Header: /home/petsun4/ty7777/src/peakid/RCS/peak3dck.f,v 1.1 1994/01/19 20:13:37 ty7777 Exp ty7777 $'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d33 1
+a33 1
+      SUBROUTINE PEAK3DCK(X,Y,Z,SIGN,CUTOFF,SUM,UNIQUE)
+d40 1
+d42 4
+a45 4
+      INTEGER*2   IMG(128,128,49) ! image array
+      INTEGER*2   MASK(128,128,49)! masking array
+      LOGICAL*1   INC(128,128,49) ! elements included in this peak
+      LOGICAL*1   USED(128,128,49)! elements included in other peaks
+d61 1
+a61 1
+      RCSHEADER = '$Header$'
+d65 4
+a68 4
+      DO 30 S=1,49
+        DO 20 J=1,128
+          DO 10 I=1,128
+            INC(I,J,S) = .FALSE.
+d130 4
+a133 4
+              IF (TEMP.LE.49 .AND. .NOT.INC(I,J,TEMP) .AND.
+     &          MASK(I,J,TEMP).GT.0 .AND. SIGN*IMG(I,J,TEMP).GT.C) THEN
+                INC(I,J,TEMP) = .TRUE.
+                IF (TEMP.GT.ZT2) ZT2=TEMP
+@

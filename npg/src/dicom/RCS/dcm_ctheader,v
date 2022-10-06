@@ -1,0 +1,771 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	2002.01.18.21.32.34;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.30.19.37.57;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Jane's version
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@#!/usr/local/bin/perl
+# =====
+# Name:    dcm_ctheader.pl
+# Date:    22-may-98
+# Author:  Jane Dunford-Shore
+# Purpose: Print Dicom CT header info. to STDOUT
+# Usage:   dcm_ctheader <firstfile> <lastfile> [-tv] [-all] [-debug ]
+# Options: 
+#          -t           Print list of table positions.
+#          -v (verbose) Print detailed header info. for each file.
+#          -all         Print all implemented Dicom field names and values
+#                       as they appear in Dicom file (ascii - no conversion
+#                       from yyyymmdd to mm/dd/yy, for instance)
+# Examples:
+#   ctheader 1 42    [Summary only for files 00001.dcm - 00042.dcm]
+#   ctheader -v 3 6  [Detailed info for files 00003.dcm - 00006.dcm]
+#   ctheader -v 1 1  [Detailed info. for file 00001.dcm only]
+#   ctheader -vt 2 47    [Include list of table positions]
+#   ctheader -debug 3 45 [Include debugging info.]
+#   ctheader -a 3 44     [Print all Dicom field values, in original format]
+# =====
+
+use strict;        # use strict code checking; variables must be declared
+
+# ---------------
+# Packages to use
+# ---------------
+
+# Packages used to be in /usr/local/lib/perl5/site_perl/Dicom
+# Packages are in /usr/local/lib/perl5/5.00503/Dicom
+use Dicom::Anal_util;
+use Dicom::Image_util;
+use Dicom::Dicom_util;
+use Dicom::Config;
+
+# ---------------
+# Variable declarations
+# ---------------
+
+my $first;              # number of first slice
+my $last;               # number of last slice
+
+my $option;             # program option without the '-'
+my $VERBOSE = 0;	# whether or not to print detailed info. for each slice
+my $ALL = 0;            # 0 = don't display all fields; 1 = do display all
+my $DEBUG = 0;          # 0 = don't display debug info.; 1 = do display it
+
+my %name_and_val;       # DICOM field names and associated values
+
+my @@studydate = ();
+my @@studytime = ();
+my @@ptname = ();
+my @@ptdob = ();
+my @@imgtype = ();
+my @@tp = ();
+
+my %basic_info = (
+               'ID Study Date', \@@studydate,
+               'ID Study Time', \@@studytime,
+               'PAT Patient Name', \@@ptname,
+               'PAT Patient Birthdate', \@@ptdob,
+               'ID Image Type', \@@imgtype,     # e.g., 'ORIGINAL\PRIMARY\LOCALIZER'
+                                               #    or 'ORIGINAL\PRIMARY\AXIAL'
+               'REL Slice Location', \@@tp,  
+	       );
+
+my @@instname = ();
+my @@ptid = ();
+my @@modelname = ();
+my @@version = ();
+my @@imgno = ();
+my @@acqno = ();
+my @@kv = ();
+my @@ma = ();
+my @@exptime = ();
+my @@gt = ();
+my @@sl = ();
+my @@ptpos = ();
+my @@convkern = ();
+my @@winwidth = ();
+my @@wincen = ();
+my @@descrip = ();
+
+my %verbose_info = (
+               'ID Institution Name', \@@instname,
+               'PAT Patient ID', \@@ptid,
+               'ID Manufacturer Model Name', \@@modelname,
+               'ACQ Software Version', \@@version,
+               'REL Slice Location', \@@tp,       
+               'REL Image Number', \@@imgno,
+               'REL Acquisition Number', \@@acqno,
+               'ACQ KVP', \@@kv,
+               'ACQ X-ray Tube Current', \@@ma,
+               'ACQ Exposure Time', \@@exptime,
+               'ACQ Gantry/Detector Tilt', \@@gt,
+               'ACQ Slice Thickness', \@@sl,
+               'REL Image Patient Position', \@@ptpos,
+               'ACQ Convolution Kernel', \@@convkern,
+               'IMG Window Width', \@@winwidth,
+               'IMG Window Center', \@@wincen,
+               'ID Study Description', \@@descrip,
+		    );
+
+my %filenames;        # file numbers ('1', '2', etc.) and assoc. filename
+
+my $dcm_filetype;
+my @@dcm_filetypes;
+my @@dcmfiles;
+
+my %dbmfiles;
+my $dbmfile;
+
+my %name_and_key_def;
+my %name_and_key_ex;
+my $name;
+
+my $axial_file;
+
+my $arg;
+my $file;
+my $filename;
+my $fileno;
+my @@filenos;
+my $r_array;
+my $key;
+
+my $width;          # for sprintf - width of number
+my $precision;      # for sprintf - precision of number
+
+my @@xpos;           # x portion of $ptpos
+my @@ypos;           # y portion of $ptpos
+my @@zpos;           # z portion of $ptpos
+
+my($yr, $mo, $day);   # for reformatting date
+my($hr, $min, $sec);  # for reformatting time
+
+my @@localizers;      # list of filenames of localizers
+my $i;               # for looping through element numbers
+
+# print table position
+my $table_pos;
+
+# duplicates
+my $tp;              # given table position
+my @@dups_fileno;     # duplicates for a given table pos., as array of fileno's
+my $dup_fileno;      # each duplicate for a given table pos., as fileno
+my $dups_fileno;     # duplicates for a given table pos., joined by ';'
+my %dups;            # file numbers and associated file numbers of duplicates
+my @@keys;            # keys of %dups
+my $key;             # given key
+my %dupsct;          # fileno and assoc. number of duplicates
+my $DUPS;            # whether or not duplicates are present
+my @@outstring;       # list of duplicates for given table position
+
+my $std;
+my $filetot;
+my $matches;
+my $compare;
+
+my $def_mismatch = 0;
+
+# Required fields
+my @@fieldnames;
+my $name;
+my $signif_field;
+my @@missing_fields;
+my $field;
+my @@signif_fields;
+
+# ---------------
+# Get command-line args
+# ---------------
+
+# Check argument number; should be 2-5
+if (($#ARGV < 1) || ($#ARGV > 2)) {
+    printusage();
+    exit(0);
+}
+                  
+$arg = $ARGV[0];
+if ($arg =~ /^-/) {
+    shift(@@ARGV);
+    if ($arg =~ /-([a-zA-Z]+)/) {
+        $option = $1;
+    } else {
+        printusage();
+        exit(0);
+    }
+    if ($option =~ /v/) {
+         ($option =~ /v/) && ($VERBOSE = 1);
+    } elsif ($option =~ /^debug/) {
+        $DEBUG = 1;
+    } elsif ($option =~ /^a/) {
+        $ALL = 1;
+    }
+    $first = shift(@@ARGV);
+    $last  = shift(@@ARGV);
+} else {
+    $first = shift(@@ARGV);
+    $last  = shift(@@ARGV);
+}
+
+if ($DEBUG) {
+    print STDERR "-----\n";
+    print STDERR "Program parameters passed:";
+    print STDERR "    \$first   = $first\n";
+    print STDERR "    \$last    = $last\n";
+    print STDERR "    \$VERBOSE = $VERBOSE\n";
+    print STDERR "    \$ALL     = $ALL\n";
+    print STDERR "    \$DEBUG   = $DEBUG\n";
+    print STDERR "-----\n";
+}
+
+# ---------------
+# Check for specified files, and check file names (must be 000xx.dcm)
+# ---------------
+
+$DEBUG && print STDERR "-----\n";
+$DEBUG && print STDERR "Checking for specified files:\n";
+
+@@dcmfiles = Dicom_util::get_dcm_filenames($first, $last);
+$DEBUG && print STDERR "Dicom files specified:\n    ";
+$DEBUG && print STDERR join("\n    ", @@dcmfiles), "\n";
+
+foreach $file (@@dcmfiles) {
+    (-e $file) || die "File does not exist: $file\n";
+    (-r $file) || die "File permissions do not allow read access: $file\n";
+}
+
+$DEBUG && print STDERR "    All specified files are present and readable\n";
+
+# ---------------
+# Find first axial file, for extracting header value.
+# Localizers don't have necessary values such as gantry tilt.
+# ---------------
+
+$DEBUG && print STDERR "-----\n";
+$DEBUG && print STDERR "Finding first axial file:\n";
+$axial_file = Dicom_util::find_axial($first, $last);
+
+if ($axial_file) {
+    $DEBUG && print STDERR "First axial file: $axial_file\n";
+} else {
+    die "Error: No axial files were specified.\n";
+}
+
+$DEBUG && print STDERR "---------------------\n";
+$DEBUG && print STDERR "\$axial_file = $axial_file\n";
+$DEBUG && print STDERR "---------------------\n";
+
+# ---------------------
+# Check for required Dicom fields
+# ---------------------
+
+# Get key/name pairs for first axial file
+Dicom_util::get_name_and_key($axial_file, \%name_and_key_ex) || die "Cannot read Dicom file $axial_file\n";
+
+@@fieldnames = (sort keys(%name_and_key_ex));
+
+if ($DEBUG) {
+    print STDERR "Fields present:\n";
+    foreach $name (@@fieldnames) {
+        print STDERR "$name\n";
+    }
+}
+
+foreach $signif_field (@@Config::signif_fields) {
+    (grep(/$signif_field/, @@fieldnames)) || push(@@missing_fields, $signif_field);
+}
+
+if (@@missing_fields) {
+    print STDOUT "Required fields not present:\n";
+    foreach $field (@@missing_fields) {
+        print STDOUT "    $field\n";
+    }
+    exit(0);
+}
+
+# ---------------
+# Parse header info.
+# ---------------
+
+foreach $filename (@@dcmfiles) {
+
+    $filename =~ /0+(\d+).dcm/;
+    $fileno = $1;
+    push(@@filenos, $fileno);
+    $filenames{$fileno} = $filename;
+    $DEBUG && print STDERR "-----\n";
+    $DEBUG && print STDERR "Filename: $filename    Fileno: $fileno\n";
+    $ALL && print STDOUT "-----\n";
+    $ALL && print STDOUT "Filename: $filename    Fileno: $fileno\n";
+
+    Dicom_util::get_name_and_val($filename, \%name_and_val);
+    if ($ALL || $DEBUG) {
+        foreach $name (sort keys(%name_and_val)) {
+            $DEBUG && print STDERR "$name: $name_and_val{$name}\n";
+            $ALL && print STDOUT "$name: $name_and_val{$name}\n";
+        }
+    }
+
+    # Add values for each field for this slice to corresponding assoc. array
+    foreach $name (keys(%basic_info)) {
+        $r_array = $basic_info{$name};
+        $r_array->[$fileno] = $name_and_val{$name};
+    }
+  
+    if ($DEBUG) {
+        foreach $name (keys(%basic_info)) {
+            $r_array = $basic_info{$name};
+            print STDERR "-----\n$name\n";
+            $DEBUG && print STDERR "File $filename: $r_array->[$fileno]\n";
+        }
+    }
+  
+    if ($VERBOSE) {
+        foreach $filename (@@dcmfiles) {
+            $DEBUG && print STDERR "File: $filename\n";
+
+            # Add values for each field for this slice to corresponding assoc. array
+            foreach $name (keys(%verbose_info)) {
+                $r_array = $verbose_info{$name};
+                $r_array->[$fileno] = $name_and_val{$name};
+                # e.g., $ptname->[1] = 'Susan Doe';
+            }
+    
+            if ($DEBUG) {
+	        foreach $name (keys(%verbose_info)) {
+                    print STDERR "-----\n$name\n";
+                    $DEBUG && print STDERR "File $filename: $verbose_info{$name}->[$fileno]\n";
+                }
+            }
+        }     
+    }
+
+} 
+
+# -----
+# Reformat some values
+# -----
+
+foreach $fileno (@@filenos) {
+
+    # Get filename from fileno
+    $filename = Image_util::fileno2name($fileno);
+
+    # -- ID Image Type --
+    # 'ORIGINAL/PRIMARY/AXIAL' => 'AXIAL'
+    $imgtype[$fileno] =~ s/.+\\.+\\(.+)/$1/;
+    ($imgtype[$fileno] eq 'LOCALIZER') && push(@@localizers, $filename);
+
+    # -- ID Image Date --
+    # yyyymmdd => dd-mmm-yyyy
+    ($yr, $mo, $day) = ($studydate[$fileno] =~ /(\d\d\d\d)(\d\d)(\d\d)/);
+    $DEBUG && print STDERR "yr: $yr  mo: $mo  day: $day\n";
+    $mo = Image_util::monum2char($mo);
+    $studydate[$fileno] = $day . "-" . $mo . "-" . $yr;
+
+    # -- ID Image Time --
+    # hhmmss.ssssss => hh:mm:ss
+    ($hr, $min, $sec) = ($studytime[$fileno] =~ /(\d\d)(\d\d)(\d\d)\.\d+/);
+    $studytime[$fileno] = $hr . ":" . $min . ":" . $sec;
+   
+    # -- PAT Patient birthdate --
+    # mm/dd/yy? (operator-entered)
+    # If not present in birthdate field, look in patient name field
+    if ($ptdob[$fileno] == '') {
+        if ($ptname[$fileno] =~ /(\d+\/\d+\/\d+)/) {
+            $ptdob[$fileno] = $1;
+        }
+    }
+
+    # -- PAT Patient name --
+    # DOE^JOHN 01/01/01 => DOE,JOHN
+    $ptname[$fileno] =~ s/(.+)\^([a-zA-Z]+)\s*\d*.*$/$1,$2/;
+
+}
+
+if ($VERBOSE) {
+
+    foreach $fileno (@@filenos) {
+
+        # -- ID Institution Name --
+        # Mallinckrodt Inst <H>
+
+        # -- PAT Patient ID --
+        # 7685433
+
+        # -- ID Manufacturer Model Name --
+        # SOMATOM PLUS 4
+
+        # -- ACQ Software Version --
+        # VB30B
+
+        # -- REL Slice Location --
+        # -38.5
+
+        # -- REL Image Number --
+        # 000002
+        $imgno[$fileno] = Image_util::rm_lead_char('0', $imgno[$fileno]);
+
+        # REL Acquisition Number
+        # 000005
+        $acqno[$fileno] = Image_util::rm_lead_char('0', $acqno[$fileno]);
+
+        # -- ACQ KVP --
+        # 000140 => 140
+        $kv[$fileno] = Image_util::rm_lead_char('0', $kv[$fileno]); 
+
+        # -- ACQ X-ray Tube Current --
+        # 360
+
+        # -- ACQ Exposure Time --
+        # 2000 => 2.0
+        $exptime[$fileno] = $exptime[$fileno] / 1000;
+        $width = ($exptime[$fileno] < 10) ? 1 : 2; 
+        $precision = 1;
+        ($exptime[$fileno] > 99 ) && print STDERR "Check exposure time: $exptime[$fileno]\n";   
+        $exptime[$fileno] = sprintf("%${width}.${precision}f", $exptime[$fileno]);
+
+        # -- ACQ Gantry/Detector Tilt --
+        # -27.000000E+01
+        $gt[$fileno] = Image_util::dcmfchar2num($gt[$fileno]);
+
+        # -- ACQ Slice Thickness --
+        # 0003.000000E+00
+        $sl[$fileno] = Image_util::dcmfchar2num($sl[$fileno]);
+
+        # -- REL Image Patient Position --
+        # -111/-185/-38.5
+        ($xpos[$fileno], $ypos[$fileno], $zpos[$fileno]) = ($ptpos[$fileno] =~ /([-+]\d+)\/([-+]\d+)\/([-+]\d+)/);
+
+        # -- ACQ Convolution Kernel --
+        # 59 .10.AB40
+
+        # -- IMG Window Width --
+        # 000512\03000
+        $winwidth[$fileno] =~ s/^[0]*(\d+)\\\d+/$1/;
+
+        # -- IMG Window Center --
+        # 000035\00400
+        $wincen[$fileno] =~ s/^[0]*(\d+)\\\d+/$1/;
+
+    }
+}
+
+if ($DEBUG) {
+    print STDERR "-----\n";
+    print STDERR "Reformatted values:\n";
+    foreach $fileno (@@filenos) {
+        $filename = Image_util::fileno2name($fileno);
+        print STDERR "\$fileno = $fileno; \$filename = $filename:\n";
+        print STDERR "    \$studydate = $studydate[$fileno]\n";
+        print STDERR "    \$studytime = $studytime[$fileno]\n";
+        print STDERR "    \$ptname  = $ptname[$fileno]\n";
+        print STDERR "    \$ptdob   = $ptdob[$fileno]\n";
+        print STDERR "    \$instname = $instname[$fileno]\n";
+        print STDERR "    \$ptid = $ptid[$fileno]\n";
+        print STDERR "    \$modelname = $modelname[$fileno]\n";
+        print STDERR "    \$version = $version[$fileno]\n";
+        print STDERR "    \$tp = $tp[$fileno]\n";
+        print STDERR "    \$imgno = $imgno[$fileno]\n";
+        print STDERR "    \$acqno = $acqno[$fileno]\n";
+        print STDERR "    \$kv = $kv[$fileno]\n";
+        print STDERR "    \$ma = $ma[$fileno]\n";
+        print STDERR "    \$exptime = $exptime[$fileno]\n";
+        print STDERR "    \$gt = $gt[$fileno]\n";        
+        print STDERR "    \$sl = $sl[$fileno]\n";
+        print STDERR "    \$ptpos = $ptpos[$fileno]\n";
+        print STDERR "    \$convkern = $convkern[$fileno]\n";
+        print STDERR "    \$winwidth = $winwidth[$fileno]\n";
+        print STDERR "    \$wincen = $wincen[$fileno]\n";
+    }
+    print STDERR "-----\n";
+}
+
+# -----
+# Get duplicates
+# -----
+
+foreach $fileno (@@filenos) {
+    $tp = $tp[$fileno];
+
+    # All filenos with this tp get saved to same assoc. array element
+    $dupsct{$tp} ++;
+    if ($dupsct{$tp} > 0) {
+        $dups{$tp} = $dups{$tp} . $fileno . ";";
+    }
+}
+
+if ($DEBUG) {
+    foreach $tp (sort numerically keys(%dups)) {
+        if ($dupsct{$tp} > 1) {
+            print STDERR "$tp = $dups{$tp}\n";
+        }
+    }
+}
+
+# -----
+# Print reports to STDOUT
+# -----
+
+if ($VERBOSE) {
+    $~ = 'VERBOSE_INFO';
+    print STDOUT "-----------------------------------------------------------\n";
+    foreach $fileno (@@filenos) {
+        write STDOUT;
+    }
+} else {
+    $~ = 'BASIC_INFO';
+    write STDOUT;
+
+    # --- Print localizers ---
+    print STDOUT "Localizers:\n";
+    if ($#localizers < 0) {
+        print STDOUT "    none\n";
+    } else {
+        foreach $i (0..$#localizers) {
+	    print STDOUT "    $localizers[$i]\n";
+        }
+    }
+
+    # --- Print duplicates ---
+    print STDOUT "Duplicates:\n";
+    @@keys = keys(%dups);
+    foreach $key (@@keys) {
+        @@dups_fileno = split(/;/, $dups{$key}); 
+        if ($#dups_fileno > 0) {
+            print STDOUT "    $key: ";
+            foreach $i (@@dups_fileno) {           
+		        push(@@outstring, "$filenames{$i} =");
+            }
+            chop($outstring[$#outstring]);       # Trim off last '-'
+            print STDOUT "@@outstring\n";
+            @@outstring = ();
+            $DUPS = 1;
+		}
+    }
+    if ($DUPS == 0) {
+        print "    None\n";
+    }
+
+    # --- Check patient name and DOB - should be same in all files ---
+    # Print any values that don't match that of first axial
+    $std = $ptname[$axial_file] . ' ' . $ptdob[$axial_file];
+    foreach $fileno (@@filenos) {
+        $compare = $ptname[$fileno] . ' ' . $ptdob[$fileno];
+        if ($std ne $compare) {
+            push(@@outstring, "    $filenames{$fileno}: $compare\n");
+		}
+    }
+    if (@@outstring) {
+        print STDOUT "=> Not all names/birthdates match:\n";
+        print STDOUT "@@outstring";
+        @@outstring = ();
+    }
+
+    # --- Check study date - should be same in all files ---
+    # Print any values that don't match that of first axial
+    $std = $studydate[$axial_file];
+    $filetot = $#filenos + 1;
+    $matches = grep(/$std/, @@studydate);
+    if ($matches <=> $filetot) {
+        print "=> Not all study dates match:\n";
+        foreach $fileno (@@filenos) {
+            if ($studydate[$fileno] ne $std) {
+                print "    $filenames{$fileno}: $studydate[$fileno]\n";
+            }
+        }
+    }
+
+    # --- Check study time - should be same in all files ---
+    # Print any values that don't match that of first axial
+    $std = $studytime[$axial_file];
+    $filetot = $#filenos + 1;
+    $matches = grep(/$std/, @@studytime);
+    if ($matches <=> $filetot) {
+        print "=> Not all study times match:\n";
+        foreach $fileno (@@filenos) {
+            if ($studytime[$fileno] ne $std) {
+                print "    $filenames{$fileno}: $studytime[$fileno]\n";
+            }
+        }
+    }
+}
+
+# Print table positions if verbose (-v) specified
+if ($VERBOSE) {
+    $~ = 'TABLEPOS_HDR';
+    write STDOUT;
+    $~ = 'TABLEPOS_REC';
+    foreach $fileno (@@filenos) {
+        $table_pos = $tp[$fileno];
+        $table_pos =~ s/\s*([-]*\d+)\s*/$1/;
+        write STDOUT;
+    }
+}
+exit(0);
+
+# =====
+# Subroutines
+# =====
+
+sub printusage {
+    $~ = "USAGE";
+    write STDOUT;
+}
+
+sub numerically {
+    $a <=> $b;
+}
+
+# =====
+# Formats
+# =====
+
+format USAGE =
+Usage:    dcm_ctheader [ -v ] firstfile# lastfile#
+Options:  -v (verbose) Print detailed header info. for each file.
+Examples:
+   dcm_ctheader 1 42        [Summary only for files 00001.dcm - 00042.dcm]
+   dcm_ctheader -v 3 6      [Detailed info for files 00003.dcm - 00006.dcm]
+   dcm_ctheader -a 3 44     [Print all Dicom field values, in original format]
+   dcm_ctheader -debug 3 45 [Include debugging info.]
+.
+
+format BASIC_INFO =
+-----------
+  SUMMARY  
+-----------                        
+Study date and time:     @@<<<<<<<<<<  @@<<<<    
+                         $studydate[$fileno]  $studytime[$fileno]      
+Pt. name and birthdate:  @@<<<<<<<<<<<<<<<<<<<<  @@<<<<<<<<
+                         $ptname[$fileno]       $ptdob[$fileno]
+.
+
+format VERBOSE_INFO =
+@@<<<<<<<<<<<<<<<<<<  @@<<<<<<<<      @@>>>>>>>>>>>>>>>>>>>>>>
+$ptname[$fileno] $ptdob[$fileno]         $instname[$fileno]
+@@<<<<<<<<                                   @@>>>>>>>>>>>>>>
+$ptid[$fileno]                          $modelname[$fileno]
+                                                    @@>>>>>>
+                                          $version[$fileno]
+@@<<<<<<<<<<<
+$studydate[$fileno]  
+@@<<<<<<<<                  
+$studytime[$fileno]
+TP @@<<<<<<
+   $tp[$fileno]
+IMA @@<<<
+    $imgno[$fileno]
+SEQ @@<<<
+    $acqno[$fileno]
+kv  @@<<<<
+    $kv[$fileno]
+mA @@<<<<
+   $ma[$fileno] 
+TI @@<<<<<                          
+   $exptime[$fileno]           
+GT @@<<<<<<
+   $gt[$fileno]
+SL @@<<<<<
+   $sl[$fileno]
+                                                  W   @@>>>>
+                                         $winwidth[$fileno]
+@@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<        C   @@>>>>
+$descrip[$fileno]                          $wincen[$fileno]
+-----------------------------------------------------------
+.
+
+format TABLEPOS_HDR =
+
+============================
+ Filename    Table Position
+============================
+.
+
+format TABLEPOS_REC =
+ @@<<<<<<<<<    @@>>>>>
+ $filenames{$fileno}   $table_pos
+.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@a1 1
+# $Log$
+d15 3
+a17 3
+#   ctheader 1 42    [Summary only for files 00001.ima - 00042.ima]
+#   ctheader -v 3 6  [Detailed info for files 00003.ima - 00006.ima]
+#   ctheader -v 1 1  [Detailed info. for file 00001.ima only]
+d29 2
+a30 1
+# Packages are in /usr/local/lib/perl5/site_perl/Dicom
+d185 1
+a185 2
+    }
+    else {
+d191 1
+a191 2
+    }       
+    elsif ($option =~ /^debug/) {
+d193 1
+a193 2
+    }
+    elsif ($option =~ /^a/) {
+d198 1
+a198 2
+}
+else {
+d243 1
+a243 2
+}
+else {
+d509 1
+a509 2
+}
+else {
+d517 1
+a517 2
+    }
+    else {
+d531 1
+a531 1
+	        push(@@outstring, "$filenames{$i} =");
+d537 1
+a537 1
+	}
+d550 1
+a550 1
+	}
+a597 3
+
+print STDOUT "\nctheader completed successfully\n";
+
+a636 1
+
+@

@@ -1,0 +1,264 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.7
+date	2004.02.17.15.02.24;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.25.23.22.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   SIMPLEX3.FTN
+C  Author:       Tom O. Videen
+C  Date:         11-Sep-89
+C  Written For:  Curve Fitting of PET Impulse Response Functions
+C
+C  History:
+C     Modification of SIMPLEX1 by TOV 11-Sep-89 to eliminate all
+C        output to user for PEAKSK6B.
+C     No changes but also used by PEAKSK7B (20-Sep-89).
+C
+C  Intent:
+C     Find minimum of multivariate nonlinear function FUNC using
+C     variation of Nead & Melder's simplex algorithm.
+C
+C     The routine write the values of all parameters for the best fit
+C     for each 25 iterations.  When these values appear not to be changing,
+C     the simplex is exploring around or shrinking about the best point.
+C     The routine exits when the SD of ALL points of the simplex is less
+C     than the specified tolerance (FTOL).
+C
+C  References:
+C     Press W.H., et al (1986) Numerical Recipes pp 292-293.
+C     S.L.S. Jacoby, J.S. Kowalik & J.T. Pizzo (1972) Iterative Methods
+C       for Nonlinear Optimization Problems, Prentice-Hall, pp 79-83.
+C
+C  Subroutines:
+C     FUNC - functional declared EXTERNAL in calling program;
+C            (name passed to this subroutine)
+C
+C  Called by:  GAUS22DB, GAUS2DGB
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE SIMPLEX3 (P, Y, MPTS, NPARM, FTOL, FUNC, ITER, ILO)
+
+      PARAMETER (NMAX  = 10)    ! maximum number of function parameters
+      PARAMETER (ALPHA = 1.0)   ! reflection parameter
+      PARAMETER (BETA  = 0.5)   ! contraction parameter
+      PARAMETER (GAMMA = 2.0)   ! expansion parameter
+      PARAMETER (ITMAX = 200)   ! max. no. of iterations allowed
+
+C  Variables Passed:
+
+      REAL*4     P(MPTS,NPARM)  ! input:  starting simplex
+C                               ! output: final simplex (best in (1,n)
+      REAL*4     Y(MPTS)        ! input:  initial functional values of simplex
+C                               ! output: final functional values of simplex
+      INTEGER*4  MPTS           ! no. of points in simplex (NPARM+1)
+      INTEGER*4  NPARM          ! no. of parameters in function (<= NMAX))
+C                                 (also dimension of simplex)
+      REAL*4     FTOL           ! input:  functional tolerance
+      INTEGER*4  ITER           ! output: number of iterations
+      INTEGER*4  ILO            ! output: lowest (best) point of simplex
+
+C  Other variables
+
+      REAL*4     PR(NMAX)       ! reflected pt. or contraction point
+      REAL*4     PRR(NMAX)      ! expansion pt. or contraction about the low pt.
+      REAL*4     PBAR(NMAX)     ! center of simplex face across from high pt.
+C                               ! (centroid of all points except high pt)
+      REAL*4     RTOL           ! test range for tolerance
+      REAL*4     CTR            ! functional value of centroid
+
+      INTEGER*4  IHI            ! highest (worst) point of simplex
+      INTEGER*4  INHI           ! next highest point of simplex
+
+      ITER = 0
+      ILO = 1
+
+C  Determine which point is highest (worst), next highest, and lowest (best)
+
+100   ILO = 1
+      IF (Y(1).GT.Y(2)) THEN
+        IHI = 1
+        INHI = 2
+      ELSE
+        IHI = 2
+        INHI = 1
+      END IF
+
+C  by looping over the points in the simplex.
+
+      DO 110 I=1,MPTS
+        IF (Y(I).LT.Y(ILO)) ILO = I
+        IF (Y(I).GT.Y(IHI)) THEN
+          INHI = IHI
+          IHI = I
+        ELSE IF (Y(I).GT.Y(INHI)) THEN
+          IF (I.NE.IHI) INHI = I
+        END IF
+110   CONTINUE
+
+C  Use Jacoby et al test for tolerance (the test of Press et al does not
+C  work for small tolerances with Wood's test function)
+
+C  Compute the centroid of the current simplex, or the
+C  vector average of all points except the highest, i.e.,
+C  the center of the "face" of the simplex across from the high point.
+
+      DO 120 J=1,NPARM
+        PBAR(J) = 0
+        DO 115 I=1,MPTS
+          IF (I.NE.IHI) PBAR(J) = PBAR(J) + P(I,J)
+115     CONTINUE
+        PBAR(J) = PBAR(J)/NPARM
+120   CONTINUE
+
+C  Compute standard deviation of points from the current centroid
+
+      CTR = FUNC(PBAR)
+      RTOL = 0.
+      DO 130 I=1,MPTS
+        RTOL = RTOL + (Y(I)-CTR)**2
+130   CONTINUE
+      RTOL = SQRT(RTOL/FLOAT(MPTS))
+
+C  Compare SD to tolerance
+C  If acceptable, return the centroid as point 1 (minimum)
+C  with its functional value in Y(1)
+
+      IF (RTOL.LT.FTOL)  RETURN
+      IF (ITER.EQ.ITMAX) RETURN
+
+C  Begin a new iteration.
+C  Explore by a factor of ALPHA through the face, i.e.
+C  reflect the simplex from the high point.
+
+      ITER = ITER+1
+      DO 150 J=1,NPARM
+        PR(J) = (1.+ALPHA)*PBAR(J) - ALPHA*P(IHI,J)
+150   CONTINUE
+
+C  Evaluate the function at the reflected point.
+
+      YPR = FUNC(PR)
+
+C  Gives a result better than the best point, so try an additional
+C  extrapolation by a factor of GAMMA,
+
+      IF (YPR.LE.Y(ILO)) THEN
+        DO 160 J=1,NPARM
+          PRR(J) = GAMMA*PR(J) + (1.-GAMMA)*PBAR(J)
+160     CONTINUE
+
+C  and check out the function there.
+
+        YPRR = FUNC(PRR)
+
+C  The additional extrapolation succeeded, and replaces the high point.
+
+        IF (YPRR.LT.Y(ILO)) THEN
+          DO 170 J=1,NPARM
+            P(IHI,J) = PRR(J)
+170       CONTINUE
+          Y(IHI) = YPRR
+
+C  The additional extrapolation failed, but we can still use the reflected pt.
+
+        ELSE
+          DO 180 J=1,NPARM
+            P(IHI,J) = PR(J)
+180       CONTINUE
+          Y(IHI) = YPR
+        END IF
+
+C  The reflected point is worse than the second-highest.
+
+      ELSE IF (YPR.GE.Y(INHI)) THEN
+
+C  If it's better than the highest, then replace the highest.
+
+        IF (YPR.LT.Y(IHI)) THEN
+          DO 190 J=1,NPARM
+            P(IHI,J) = PR(J)
+190       CONTINUE
+          Y(IHI) = YPR
+        END IF
+
+C  but look for an intermediate point,
+C  in other words, perform a contraction of the simplex along one dimension.
+
+        DO 210 J=1,NPARM
+          PRR(J) = BETA*P(IHI,J) + (1.-BETA)*PBAR(J)
+210     CONTINUE
+
+C  Then evaluate the function.
+
+        YPRR = FUNC(PRR)
+
+C  Comtraction gives an improvement, so accept it.
+
+        IF (YPRR.LT.Y(IHI)) THEN
+          DO 220 J=1,NPARM
+            P(IHI,J) = PRR(J)
+220       CONTINUE
+          Y(IHI) = YPRR
+
+C  Can't seem to get rid of that high point.
+C  Better contract around the lowest (best) point.
+
+        ELSE
+          DO 240 I=1,MPTS
+            IF (I.NE.ILO) THEN
+              DO 230 J=1,NPARM
+                PR(J) = 0.5*(P(I,J) + P(ILO,J))
+                P(I,J) = PR(J)
+230           CONTINUE
+              Y(I) = FUNC(PR)
+            END IF
+240       CONTINUE
+        END IF
+
+C  We arrive here if the original reflection gives a middling point.
+C  Replace the old high point and continue
+
+      ELSE
+        DO 250 J=1,NPARM
+          P(IHI,J) = PR(J)
+250     CONTINUE
+        Y(IHI) = YPR
+      END IF
+
+C  for the test of doneness and the next fraction.
+
+      GO TO 100
+      END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

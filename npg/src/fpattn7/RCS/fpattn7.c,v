@@ -1,0 +1,395 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	2006.10.09.20.12.36;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2004.02.16.15.22.16;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2003.02.14.21.22.23;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2001.11.27.16.52.56;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2001.10.24.18.16.19;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2001.10.16.20.58.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@pretty good
+@
+
+
+1.10
+log
+@test for 962
+@
+text
+@/*	$Log: fpattn7.c,v $
+ * Revision 1.9  2004/02/16  15:22:16  tom
+ * Feb 2004
+ *
+ * Revision 1.4  2003/02/14  21:22:23  tom
+ * set storage_order = 1
+ *
+ * Revision 1.3  2001/11/27  16:52:56  tom
+ * gets left/right correct
+ * uses 15 degree offset
+ * based on zoom
+ *
+ * Revision 1.2  2001/10/24  18:16:19  tom
+ * pretty good without arc-correction
+ *
+ * Revision 1.1  2001/10/16  20:58:47  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			fpattn7.c
+ *	Date:			Nov 2001
+ *	Author:			Tom Videen
+ *	Description:	Read ECAT7 image and attn hdr and create new attn.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpattn7/RCS/fpattn7.c,v 1.9 2004/02/16 15:22:16 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <math.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	int             reprojection ();
+	ImageFile      *file;
+	Index           indx;
+	char           *imgname;		 /* image filename */
+	char           *attname;		 /* orig attenuation filename */
+	char           *outname;		 /* forward-projected sinogram filename */
+	float        ***img;			 /* image */
+	float        ***attn;			 /* attenuation */
+	float          *fmatrix;		 /* for output */
+	DataSetType     dtype;
+	int             fformat;
+	int             xdim;
+	int             numray, numang, numpln;
+	int             system;
+	float           offset, z1size;
+	float           pixsize, binsize;
+	double          tmpa;
+	int             stat;
+	long            i, j, k, p;
+
+	if (argc < 4) {
+		fprintf (stderr, "Usage: fpattn7 image attn output\n");
+		return (ERROR);
+	}
+	imgname = argv[1];
+	attname = argv[2];
+	outname = argv[3];
+
+/*	Read Image */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (imgname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpattn7]: opening %s\n", imgname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpattn7]: reading MainHeader from %s\n", imgname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [fpattn7]: reading subheader from %s\n", imgname);
+		return (ERROR);
+	}
+	xdim = file->sh->dim1;
+	pixsize = file->sh->sample_size_1;
+	if ((img = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	close_imgfile (file);
+
+/*	Read Input Attenuation header */
+
+	(void) strcpy (file->name, attname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpattn7]: Opening %s\n", attname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpattn7]: Reading MainHeader from %s\n", attname);
+		return (ERROR);
+	}
+	fformat = file->mh->file_format;
+	dtype = (DataSetType) file->mh->filetype;
+	if (fformat != MATRIX_REV7) {
+		fprintf (stderr, "ERROR [fpattn7]: Unsupported file format %d\n", fformat);
+		return (ERROR);
+	}
+	if (dtype != AttenCor) {
+		fprintf (stderr, "ERROR [fpattn7]: Not an attenuation file %s\n", attname);
+		return (ERROR);
+	}
+	if (get_sa (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [fpattn7]: Reading attenuation subheader in %s\n", attname);
+		return (ERROR);
+	}
+	system = file->mh->scanner_type;
+	if (system == 961) {
+		offset = 15.0;
+		z1size = 0.440484;
+	} else if (system == 962) {
+		offset = 0.0;
+		z1size = 0.514851;
+	} else {
+		fprintf (stderr, "ERROR [fpattn7]: non-standard scanner_type %d\n", system);
+		return (ERROR);
+	}
+	binsize = file->sh->sample_size_1;
+	numray = (long) file->sh->dim1;
+	numang = (long) file->sh->dim2;
+	numpln = (long) file->sh->dim3;
+	fprintf (stderr, "scanner_type %d\n", system);
+	close_imgfile (file);
+
+/*	Create Output attenuation	*/
+
+	(void) strcpy (file->name, outname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpattn7]: opening %s\n", outname);
+		return (ERROR);
+	}
+	if (put_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpattn7]: writing MainHeader to %s\n", outname);
+		return (ERROR);
+	}
+	if ((attn = f3tensor (0, numpln - 1, 0, numang - 1, 0, numray - 1)) == NULL) {
+		fprintf (stderr, "ERROR [fpattn7]: malloc attn\n");
+		return (ERROR);
+	}
+	if ((fmatrix = (float *) calloc (numang * numray, sizeof (float))) == NULL) {
+		fprintf (stderr, "ERROR [fpattn7]: calloc fmatrix\n");
+		return (ERROR);
+	}
+/*	Forward-projection	*/
+
+	fprintf (stdout, "Converting\n");
+	for (p = 1; p <= numpln; p++) {
+		for (j = 1; j <= xdim; j++) {
+			for (i = 1; i <= xdim; i++)
+				img[p][j][i] /= ATNSCALER;
+		}
+	}
+	fprintf (stdout, "pixsize %f binsize %f offset %.1f degrees\n", pixsize, binsize, offset);
+	fprintf (stdout, "Reprojecting %d rays and %d angles ____________|\n", numray, numang);
+	stat = reprojection (img, xdim, pixsize, attn, numang, numray, numpln, binsize, offset, z1size);
+	if (stat == ERROR) {
+		fprintf (stderr, "ERROR [fpattn7]: reprojection\n");
+		return (ERROR);
+	}
+	free (img);
+
+/*	Write attn	*/
+
+	file->m7->atn->storage_order = 1;
+	for (p = 0; p < numpln; p++) {
+		k = 0;
+		indx.pln = p + 1;
+		for (j = numang - 1; j >= 0; j--) {
+			for (i = 0; i < numray; i++) {
+				tmpa = attn[p][j][i];
+				if (tmpa > 0)
+					fmatrix[k] = exp (tmpa);
+				else
+					fmatrix[k] = 1;
+				k++;
+			}
+		}
+		if (p == 0) {
+			if (put_sa7 (file, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [fpattn7]: writing subheader to %s\n", outname);
+				return (ERROR);
+			}
+		}
+		if (wrattn7 (file, indx, fmatrix) == ERROR) {
+			fprintf (stderr, "ERROR [fpattn7]: writing plane %d of %s\n",
+				 (int) p + 1, outname);
+			return (ERROR);
+		}
+	}
+	free (attn);
+	free (fmatrix);
+	close_imgfile (file);
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.9
+log
+@Feb 2004
+@
+text
+@d2 3
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpattn7/RCS/fpattn7.c,v 1.4 2003/02/14 21:22:23 tom Exp tom $";
+d55 1
+a55 1
+	int	            xdim;
+d57 2
+d82 1
+a82 1
+		fprintf (stderr, "ERROR [fpattn7]: Cannot open %s\n", imgname);
+d86 1
+a86 1
+		fprintf (stderr, "ERROR [fpattn7]: Cannot read MainHeader from %s\n", imgname);
+d90 1
+a90 1
+		fprintf (stderr, "ERROR [fpattn7]: Cannot read subheader from %s\n", imgname);
+d124 11
+d136 4
+a139 3
+    numray = (long) file->sh->dim1;
+    numang = (long) file->sh->dim2;
+    numpln = (long) file->sh->dim3;
+d147 1
+a147 1
+		fprintf (stderr, "ERROR [fpattn7]: Cannot open %s\n", outname);
+d151 1
+a151 1
+		fprintf (stderr, "ERROR [fpattn7]: Cannot write MainHeader to %s\n", outname);
+d155 1
+a155 1
+		fprintf (stderr, "ERROR [fpattn7]: Cannot malloc attn\n");
+d159 1
+a159 1
+		fprintf (stderr, "ERROR [fpattn7]: Cannot calloc fmatrix\n");
+a161 1
+
+d167 1
+a167 1
+			for (i = 1; i <= xdim; i++) 
+d171 1
+a171 1
+	fprintf (stdout, "pixsize %f binsize %f\n", pixsize, binsize);
+d173 1
+a173 1
+	stat = reprojection (img, xdim, pixsize, attn, numang, numray, numpln, binsize);
+d186 1
+a186 1
+		for (j = numang-1; j >= 0; j--) {
+d190 1
+a190 1
+					fmatrix[k] = exp(tmpa);
+d198 1
+a198 1
+				fprintf (stderr, "ERROR [fpattn7]: Cannot write file subheader to %s\n", outname);
+d203 1
+a203 1
+			fprintf (stderr, "ERROR [fpattn7]: Cannot write plane %d of %s\n",
+@
+
+
+1.4
+log
+@set storage_order = 1
+@
+text
+@d2 3
+d23 1
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpattn7/RCS/fpattn7.c,v 1.3 2001/11/27 16:52:56 tom Exp tom $";
+@
+
+
+1.3
+log
+@gets left/right correct
+uses 15 degree offset
+based on zoom
+@
+text
+@d2 5
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpattn7/RCS/fpattn7.c,v 1.2 2001/10/24 18:16:19 tom Exp tom $";
+d162 1
+@
+
+
+1.2
+log
+@pretty good without arc-correction
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Oct 2001
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpattn7/RCS/fpattn7.c,v 1.1 2001/10/16 20:58:47 tom Exp tom $";
+d160 1
+a160 1
+		for (j = 0; j < numang; j++) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpattn7/RCS/fpattn7.c,v 1.4 2000/09/06 19:11:43 tom Exp tom $";
+d136 1
+a136 1
+	printf ("Converting\n");
+d143 2
+a144 2
+	printf ("pixsize %f binsize %f\n", pixsize, binsize);
+	printf ("Reprojecting %d rays and %d angles ____________|\n", numray, numang);
+@

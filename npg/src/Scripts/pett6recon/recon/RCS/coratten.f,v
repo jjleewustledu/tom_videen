@@ -1,0 +1,200 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.13.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      CORATTEN.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         03-Jun-88
+C  Written For:  PETT VI Image Reconstruction
+C
+C  History/Revisions:
+C     Original TRANSIAL Written for PETT VI 4/16/81 by Mark Mintun.
+C     Modified to insert data type 505 in header  8 Apr 81  GRH.
+C     Modified to get correct transmission time and change
+C        misleading comments  Gary R. Hoffman  21 Sep 81.
+C     Prevent ALOG error due to bad blank data: 10 Jul 84 GRH.
+C     Modified and restructured 08-Mar-88 by TOV incorporating
+C        specific rounding and type changes.
+C     Modified 03-Jun-88 by TOV to read input file of REALs.
+C        Data type changed to 420 in header.
+C
+C  Intent:
+C     Create a file of transmissions profiles which can be reconstructed.
+C       1) Correct for normalization;
+C       2) Divide NORM average by transmission;
+C       3) Calculate the log(base=2) and multiply by scale;
+C
+C     The program writes the following values to the file header:
+C       (23) total counts;
+C       (38) file type changed to 420;
+C       (50) normal average counts/profile point
+C       (70) scan time for norm run in seconds;
+C
+C  Number of slices = 7
+C  Number of profiles = 72
+C  Number of points/profile = 108
+C
+C  Logical Units:
+C     1 = Attenuation profiles (input file) (TSORTS)
+C     2 = Corrected attenuation profiles (output file) (ASORTS)
+C     3 = Normalization profiles (input) (NSORTS)
+C     4 = Normalization profile header (input) (NORMHEAD)
+C     5 = User output (USEROUT)
+C
+C  Uses Subroutines:
+C     SYSIO
+C
+C  Instructions for Compiling/Linking:  LINK7 CORATTEN
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM CORATTEN
+C
+      INTEGER*2  HEADER(128) ! transmission file header
+      INTEGER*2  HEADER1(128) ! norm file header
+      INTEGER*2  NORMAVE     ! mean normal value across 7 slices
+      INTEGER*2  JUNK(112)
+C
+      INTEGER*4  TSORTS      ! log. unit for binned attenuation profiles
+      INTEGER*4  ASORTS      ! log. unit for output file
+      INTEGER*4  NSORTS      ! log. unit for binned normal profiles
+      INTEGER*4  NORMHEAD    ! log. unit for normal header file
+      INTEGER*4  USEROUT     ! log. unit for user output
+      INTEGER*4  NBYTES      ! no. of bytes to read or write for 1 slice
+      INTEGER*4  IOREAD      ! SYSIO read sequential binary wait
+      INTEGER*4  IOWRITE     ! SYSIO write sequential binary wait
+      INTEGER*4  PB(6)       ! parameter block used in SYSIO
+      INTEGER*4  SLICE       ! slice number
+      INTEGER*4  NORMTIME    ! scan time for normal scan
+      INTEGER*4  NTOTAL      ! total corrected attenuation counts
+      INTEGER*4  I           ! local integer for DO loop
+C
+      REAL*4     TRAN(7776)  ! transmission profile data
+      REAL*4     NORM(7776)  ! normal profile data
+      REAL*4     TRANTIME    ! scan time for attenuation scan
+      REAL*4     TOTAL       ! total corrected attenuation counts
+      REAL*4     CONST       ! constant used in computational loop
+      REAL*4     NR          ! local for NORM(I) in loop
+      REAL*4     TR          ! local for TRAN(I) in loop
+C
+      CHARACTER*1 BELL       ! used to ring terminal bell
+      CHARACTER*20 TSORTSNAME,ASORTSNAME,NSORTSNAME,NORMHEADNAME
+C
+      EQUIVALENCE (HEADER(23), NTOTAL)
+C
+      DATA IOREAD,IOWRITE  /88,56/
+      DATA TSORTS,ASORTS,NSORTS,NORMHEAD,USEROUT /1,2,3,4,6/
+      DATA NBYTES /31104/    ! 72*108*4
+
+      CALL GETARG (1, TSORTSNAME)
+      CALL GETARG (2, ASORTSNAME)
+      CALL GETARG (3, NSORTSNAME)
+      CALL GETARG (4, NORMHEADNAME)
+C
+      OPEN(TSORTS,FILE=TSORTSNAME)
+      OPEN(ASORTS,FILE=ASORTSNAME)
+      OPEN(NSORTS,FILE=NSORTSNAME)
+      OPEN(NORMHEAD,FILE=NORMHEADNAME)
+      
+      WRITE(USEROUT,*) '*** CORATTEN  Sep-97  {correct attenuation profiles}'
+      BELL = CHAR(7)
+      PB(6) = 0
+      TRANTIME = 0.
+C
+C  Read NORM header
+C
+      CALL SYSIO(PB,IOREAD,NORMHEAD,HEADER,256,0)
+      IF (HEADER(38).NE.320) THEN
+        WRITE(USEROUT,*) '*******************************************'
+        WRITE(USEROUT,*) '*  NORM Average file is of wrong type.'
+        WRITE(USEROUT,*) '*  It must be a file processed by NORMAVE.'
+        WRITE(USEROUT,*) '*******************************************'
+        WRITE(USEROUT,*) BELL
+        PAUSE
+        STOP
+      END IF
+      NORMTIME = HEADER(8)
+      NORMAVE  = HEADER(50)
+C
+C  Loop for seven slices
+C
+      DO 200 SLICE=1,7
+C
+C  Read transmission header & data
+C
+        CALL SYSIO(PB,IOREAD,TSORTS,HEADER,256,0)
+        IF (SLICE.EQ.1 .AND. HEADER(38).NE.120) THEN
+          WRITE(USEROUT,*) '*******************************************'
+          WRITE(USEROUT,*) '*  Transmission file is of wrong type.'
+          WRITE(USEROUT,*) '*  It must be a file processed by BINPROF.'
+          WRITE(USEROUT,*) '*******************************************'
+          WRITE(USEROUT,*) BELL
+          PAUSE
+          STOP
+        END IF
+        IF (SLICE.EQ.1) TRANTIME = FLOAT(HEADER(8))
+        CALL SYSIO(PB,IOREAD,TSORTS,TRAN,NBYTES,0)
+        CALL SYSIO(PB,IOREAD,TSORTS,JUNK,128,0)
+C
+C  Read normal data
+C
+        CALL SYSIO(PB,IOREAD,NSORTS,HEADER1,256,0) ! skip header
+        IF (SLICE.EQ.1 .AND. HEADER1(38).NE.120) THEN
+          WRITE(USEROUT,*) '*******************************************'
+          WRITE(USEROUT,*) '*  NORM file is of wrong type.'
+          WRITE(USEROUT,*) '*  It must be a file processed by BINPROF.'
+          WRITE(USEROUT,*) '*******************************************'
+          STOP
+        END IF
+        CALL SYSIO(PB,IOREAD,NSORTS,NORM,NBYTES,0)
+        CALL SYSIO(PB,IOREAD,NSORTS,JUNK,128,0)
+C
+C  Correct all transmission data
+C
+        CONST = TRANTIME/FLOAT(NORMTIME)
+        TOTAL = 0.0
+        DO 100 I=1,7776
+          TR = TRAN(I)
+          IF (TR.LE.0.0) TR = 1.0
+          NR = NORM(I)
+          IF (NR.LE.0.0) NR = 1.0  ! Prevent error during ALOG
+          TRAN(I) = 1000. * ALOG(CONST*NR/TR)
+          TOTAL = TOTAL + TR
+100     CONTINUE
+C
+C  Insert total counts in header and write to file
+C
+        NTOTAL = JINT(TOTAL)
+        HEADER(38) = 420
+        HEADER(50) = NORMAVE
+        HEADER(70) = NORMTIME
+        CALL SYSIO(PB,IOWRITE,ASORTS,HEADER,256,0)
+        CALL SYSIO(PB,IOWRITE,ASORTS,TRAN,NBYTES,0)
+C
+200   CONTINUE
+C
+      STOP
+      END
+
+@

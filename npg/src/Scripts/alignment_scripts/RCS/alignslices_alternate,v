@@ -1,0 +1,180 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	2003.12.17.15.08.25;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.06.17.18.30.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@#!/bin/csh
+# Program:	alignslices_alternate
+# Author:	Tom Videen
+# Date:		Jun 2003
+# Function:	Align slices in an Analyze image.
+# 	Separates 3D image into single-slice images;
+#	Uses alignlinear to align these in 2D;
+#	Copies slices as is above FIRST and below LAST slices;
+#	Coregisters each slice below FIRST and above LAST to the slice above it!
+#	Air files are used to reslice single-slice images,
+#	and these are merged into a single 3D image.
+#	All single-slice images are removed but air files and a log remain.
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv != 5) then
+	echo "Usage:  alignslices_alternate in out thresh first last"
+	echo " e.g.,  alignslices_alternate p6273_flair1a p6273_flair1 140 1 32"
+	exit 1
+endif
+
+set IN  = $1
+set OUT = $2
+set THR = $3
+set FIRST = $4
+set LAST  = $5
+set SLICES = `scanheader $IN | grep z_dim | cut -f2 -d=`
+set NAM = ${OUT}_
+set LOGFILE = ${OUT}_alignslices_alternate.log
+
+unalias mv
+unalias rm
+
+if (! -e $IN.img) then
+	echo "ERROR [alignslices_alternate]: $IN.img does not exist.
+	exit 1
+endif
+if (! -e $IN.hdr) then
+	echo "ERROR [alignslices_alternate]: $IN.hdr does not exist.
+	exit 1
+endif
+if ($SLICES < $LAST) then
+	echo "ERROR [alignslices_alternate]: last slice is greater than $SLICES"
+	exit 1
+endif
+echo $IN $SLICES slices, ref = $FIRST >! $LOGFILE
+${NPG}/bin/separate_slices $IN $NAM
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set PRM = "-m 23 -t1 $THR -t2 $THR -p1 1 -p2 1 -b1 10 10 0 -b2 10 10 0 -x 1"
+set REF = $NAM$FIRST
+${NPG}/bin/setanamin $REF 0
+${NPG}/bin/alignlinear $REF $REF $REF.air $PRM
+cp $REF.hdr r$REF.hdr
+cp $REF.img r$REF.img
+
+# Copy files above FIRST 
+# ---------------------------------------------------------
+set i = 1
+while ($i < $FIRST)
+	mv $NAM$i.hdr r$NAM$i.hdr
+	mv $NAM$i.img r$NAM$i.img
+	@@ i++
+end
+
+# Align every-other adjacent pairs (and remove single-slice images)
+# FIRST slice is fixed; next slice (NEW) is coregistered to FIRST
+# ---------------------------------------------------------
+set i = $FIRST
+while ($i < $LAST)
+	set k = `echo "$i + 1; quit" | bc`
+	set FIX = $NAM$i
+	set NEW = $NAM$k
+	set AIR = ${NEW}vs${i}
+	${NPG}/bin/setanamin $FIX 0
+	${NPG}/bin/setanamin $NEW 0
+	${NPG}/bin/alignlinear $FIX $NEW $AIR.air $PRM
+	${NPG}/bin/airdif $AIR.air $REF.air | head -3 >> $LOGFILE
+	${NPG}/bin/airdif $AIR.air $REF.air | head -3 
+	${NPG}/bin/imgreslice $NEW $AIR 2 6 6
+	mv $FIX.img r$FIX.img
+	mv $FIX.hdr r$FIX.hdr
+	rm $NEW.img
+	rm $NEW.hdr
+	@@ i++
+	@@ i++
+end
+
+# Copy any remaining slices
+# ---------------------------------------------------------
+while ($i <= $SLICES)
+	mv $NAM$i.hdr r$NAM$i.hdr
+	mv $NAM$i.img r$NAM$i.img
+	cp $REF.air $NAM$i.air
+	@@ i++
+end
+
+# Merge realigned single-slice images, then remove them
+# -----------------------------------------------------
+${NPG}/bin/merge_slices r$NAM 1 $SLICES $OUT
+set i = 1
+while ($i <= $SLICES)
+	rm r${NAM}$i.img
+	rm r${NAM}$i.hdr
+	@@ i++
+end
+echo "Created $OUT.img"
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d14 2
+d17 3
+a19 3
+	echo "Usage: alignslices_alternate in out thresh first last"
+	echo " e.g., alignslices_alternate p6273_flair1a p6273_flair1 140 1 32"
+	exit (1)
+a21 1
+if (! $?BINPATH) set BINPATH = /usr/local/npg/bin
+d36 1
+a36 1
+	exit(1)
+d40 1
+a40 1
+	exit(1)
+d44 1
+a44 1
+	exit(1)
+d47 1
+a47 1
+${BINPATH}/separate_slices $IN $NAM
+d53 2
+a54 2
+${BINPATH}/setanamin $REF 0
+${BINPATH}/alignlinear $REF $REF $REF.air $PRM
+d76 6
+a81 6
+	${BINPATH}/setanamin $FIX 0
+	${BINPATH}/setanamin $NEW 0
+	${BINPATH}/alignlinear $FIX $NEW $AIR.air $PRM
+	${BINPATH}/airdif $AIR.air $REF.air | head -3 >> $LOGFILE
+	${BINPATH}/airdif $AIR.air $REF.air | head -3 
+	${BINPATH}/imgreslice $NEW $AIR 2 6 6
+d101 1
+a101 1
+${BINPATH}/merge_slices r$NAM 1 $SLICES $OUT
+@

@@ -1,0 +1,197 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.23.15.42.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   D2TEMPLA.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         25-Mar-87
+C  Written For:  SPIDERAM Super PET Image Display Program
+C
+C  Intent:
+C     This routine sets elements of the array TIMAGE true or false
+C     according to which pixels of an image are to be displayed.
+C     TIMAGE thus forms a template for image display.
+C     The IMAGE templated is always in IMAGE(n,n,1) and the
+C     template is stored in TIMAGE(n,n).
+C     If NUM > 0 the template is stored on disk;  NUM=0 indicates
+C     that the template created is only used for thresholding
+C     the current image.
+C
+C  History:
+C     Modified 13-Sep-88 by TOV:
+C        1) change FILETP from I*4 to CH*23 in **DISPLAY common block.
+C     Modified 3-Jan-90 by TOV to alter documentation of NUM (now 15).
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (write)
+C     **LUINFO   - logical units                  (read)
+C     **DISPLAY  - display parameters             (write)
+C     **FILES    - scan file list                 (read)
+C
+C  Variable Passed:
+C     NUM = number of template (0-15);
+C
+C  Variables Internal:
+C     IN  = number assigned to points included in the template;
+C     OUT = number assigned to points outside the template;
+C     MORE = true when more points have been added to the exterior;
+C     IOWRITER - random access I/O wait write;
+C     PB - parameter block used by SYSIO;
+C     TBYTES - no. of bytes to read for a template (TIMAGE);
+C     ADDR - random address to start reading a template from;
+C
+C  Called by:  D2SCALER
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE D2TEMPLA (NUM)
+C
+      INTEGER*4 NUM, PB (6), IOWRITER, TBYTES, ADDR
+      INTEGER*2 THRESH, IN, OUT
+      LOGICAL*1 MORE
+      character*256 rcsheader
+C
+      INCLUDE 'spideram.inc'
+      rcsheader = "$Id: d2templa.f,v 1.3 1993/10/04 21:55:32 tom Exp $"
+
+      DATA IN, OUT, IOWRITER, TBYTES /1, 2, 60, 16384/
+C
+      THRESH	= INT (THRESHLD * DMAX / 100)
+C
+C  Record file number and threshold used for current template
+C
+      IF (NUM .GT. 0) THEN
+	THRESHTP	= THRESHLD
+	FILETP		= FILENAME (FILE (1))//'   '
+      END IF
+C
+C  Assign IN to all points >= to the threshold value
+C
+      DO 200 J=1,128
+        DO 100 I=1,128
+          IF (IMAGE(I,J,1).GE.THRESH) THEN
+            IARRAY(I,J) = IN
+          ELSE
+            IARRAY(I,J) = 0
+          END IF
+100     CONTINUE
+200   CONTINUE
+C
+C  Assign OUT to all points along the boundaries of the array
+C  which are not IN the template.
+C
+      DO 300 I=1,128
+        IF (IARRAY(I,1).NE.IN) IARRAY(I,1) = OUT
+        IF (IARRAY(I,128).NE.IN) IARRAY(I,128) = OUT
+300   CONTINUE
+      DO 400 J=2,127
+        IF (IARRAY(1,J).NE.IN) IARRAY(1,J) = OUT
+        IF (IARRAY(128,J).NE.IN) IARRAY(1,J) = OUT
+400   CONTINUE
+C
+C  Now, starting with the boundaries of the array, expand the
+C  area excluded from the template by assigning OUT to all points
+C  directly adjacent to a point whose value is OUT and which
+C  are currently zero (neither IN nor OUT).
+C
+      MORE = .FALSE.
+C
+C  Outside Rows
+C
+      DO 500 I=2,127
+        IF (IARRAY(I,1).EQ.OUT .AND. IARRAY(I,2).LT.IN) THEN
+          IARRAY(I,2) = OUT
+          MORE = .TRUE.
+        END IF
+        IF (IARRAY(I,128).EQ.OUT .AND. IARRAY(I,127).LT.IN) THEN
+          IARRAY(I,127) = OUT
+          MORE = .TRUE.
+        END IF
+500   CONTINUE
+C
+C  Outside Columns
+C
+      DO 600 J=2,127
+        IF (IARRAY(1,J).EQ.OUT .AND. IARRAY(2,J).LT.IN) THEN
+          IARRAY(2,J) = OUT
+          MORE = .TRUE.
+        END IF
+        IF (IARRAY(128,J).EQ.OUT .AND. IARRAY(127,J).LT.IN) THEN
+          IARRAY(127,J) = OUT
+          MORE = .TRUE.
+        END IF
+600   CONTINUE
+C
+C  The following loop is repeated until it cycles with no more points
+C  added to the outside of the region.
+C
+1000  IF (MORE) THEN
+        MORE = .FALSE.
+        DO 1500 I=2,127
+          DO 1400 J=2,127
+            IF (IARRAY(I,J).EQ.OUT) THEN
+              IF (IARRAY(I-1,J).LT.IN) THEN
+                IARRAY(I-1,J) = OUT
+                MORE = .TRUE.
+              END IF
+              IF (IARRAY(I+1,J).LT.IN) THEN
+                IARRAY(I+1,J) = OUT
+                MORE = .TRUE.
+              END IF
+              IF (IARRAY(I,J-1).LT.IN) THEN
+                IARRAY(I,J-1) = OUT
+                MORE = .TRUE.
+              END IF
+              IF (IARRAY(I,J+1).LT.IN) THEN
+                IARRAY(I,J+1) = OUT
+                MORE = .TRUE.
+              END IF
+            END IF
+1400      CONTINUE
+1500    CONTINUE
+        GO TO 1000
+      END IF
+C
+C  All points that are < OUT are included in the region;
+C
+      DO 3000 I=1,128
+        DO 2500 J=1,128
+          IF (IARRAY(I,J).LT.OUT) THEN
+            TIMAGE(I,J) = .TRUE.
+          ELSE
+            TIMAGE(I,J) = .FALSE.
+          END IF
+2500    CONTINUE
+3000  CONTINUE
+C
+C  If template is to be saved, write it to disk file
+C
+      IF (NUM.GT.0) THEN
+        ADDR = (NUM-1)*64
+        CALL SYSIO(PB,IOWRITER,TDISK,TIMAGE,TBYTES,ADDR)
+      END IF
+C
+      RETURN
+      END
+@

@@ -1,0 +1,152 @@
+ECAT Ver 7 image files:  (04-Aug-2008)
+----------------------
+
+This change was implemented Aug 4, 2008:
+---------------------------------------
+When ECAT image data are read, values are always divided by decay_corr 
+	but the subheader parameter decay_corr is left as is.
+When image data are written in ECAT format,
+	values are multiplied by decay_corr and the subheader parameter
+	decay_corr is written to the file.
+	An exception is when frames are summed (sumimgframes) where decay correction
+	must be applied first and the subheader parameter is set to 1.
+	This is the only time decay_corr is set to 1.
+When images are written in Analyze or Interfile format, 
+	the header does not contain a decay_corr factor and,
+	therefore, values are not multiplied by decay_corr.
+When images are converted from Analyze/Interfile format to ECAT
+	the subheader decay_corr_fctr will be 1 unless a reference
+	image header is provided with another decay_corr_fctr.
+
+Definitions:
+	dcps	= decay-corrected counts/pixel/sec
+	value	= raw pixel value in image array
+	mh->calibration_factor	= ECAT calibration factor
+	sh->scale_factor	= subheader scale factor
+	sh->decay_corr_fctr	= decay correction factor
+	sh->frame_duration	= frame duration (msec) (0 for attenuation image)
+	ATNSCALER	= 10000.0
+	REV7SCALER	= 0.000001
+	REV7NSCALE	= 20.0
+
+CTI programs display:
+	dcps = value * mh->calibration_factor * sh->scale_factor
+	approximately in units of Bq/cc
+
+
+With the 7.0 release software:
+	mh->calibration_factor = 1.0 
+unless both scatter-correction and decay-correction were used during reconstruction.
+
+
+With 7.0 beta (before May 1996):
+	mh->calibration_factor was approx 15000000.
+when there was no scatter-correction or decay-correction.
+
+
+Attenuation images have sh->frame_duration = 0
+
+
+Our programs use:
+	dcps = value * mh->calibration_factor * sh->scale_factor * sh->frame_duration
+			* SCALER / sh->decay_corr_fctr
+
+For images in which mh->calibration_factor == 1.0 AND
+	sh->filter_scatter_fraction > 0 AND sh->filter_scatter_slope > 0
+then:  (non-quantitative image in 7.0 release)
+	SCALER = 20.0  (REV7NSCALE)
+otherwise: (quantitative image OR 7.0 beta release)
+	SCALER = 0.000001 (REV7SCALER)
+
+
+
+Library Functions for reading/writing images:
+============================================
+
+libimage.a
+----------
+rdimg6
+	matrix_read
+	if (sh6->frame_duration == 0)
+		scaler = ATNSCALER;
+	else
+		scaler = (float) sh6->frame_duration;
+	if (sh6->quant_scale > 0)
+		scaler *= sh6->quant_scale;
+	if (sh6->ecat_calibration_fctr > 0)
+		scaler *= sh6->ecat_calibration_fctr;
+	img[i] = scaler * simg[i]
+
+rdimg7 
+	fread
+    if (mh7->calibration_factor == 1 && sh7->filter_scatter_fraction == 0
+        && sh7->filter_scatter_slope == 0)
+        scl = REV7NSCALE;        /* non-quantitative image and 7.0 release file */
+    else
+        scl = REV7SCALER;        /* quantitative image */
+	if (sh7->frame_duration == 0)
+		scaler = ATNSCALER * sh7->scale_factor;
+	else if (strncmp (mh7->data_units, "1/cm", 4) == 0)
+		scaler = ATNSCALER * sh7->scale_factor;
+	else
+		scaler = (scl * mh7->calibration_factor * sh7->scale_factor * 
+			(float) sh7->frame_duration) / sh7->decay_corr_fctr;
+	img[i] = scaler * simg[i]
+
+wrimg6
+	if (sh6->frame_duration == 0)
+		scaler = 1./ATNSCALER;
+	else
+		scaler = 1./((float) sh6->frame_duration);
+	img[i] *= scaler;
+
+	if (max > -min)
+		scaler = MAXSCL / max;
+	else
+		scaler = -MAXSCL / min;
+	sh6->quant_scale = 1. / (scaler * sh6->ecat_calibration_fctr);
+	simg[i] = (short) (scaler * img[i]);
+	matrix_write
+
+wrimg7
+    if (mh7->calibration_factor == 1 && sh7->filter_scatter_fraction == 0
+        && sh7->filter_scatter_slope == 0)
+        scl = REV7NSCALE;        /* non-quantitative image and 7.0 release file */
+    else
+        scl = REV7SCALER;        /* quantitative image */
+	if (sh7->frame_duration == 0)
+		scaler = 1./ATNSCALER;
+	else if (strncmp (mh7->data_units, "1/cm", 4) == 0)
+		scaler = 1./ATNSCALER;
+	else
+		scaler = 1./(scl * (float) file->sh->duration);
+	img[i] *= scaler;
+
+	if (max > -min)
+		scaler = MAXSCL / max;
+	else
+		scaler = -MAXSCL / min;
+	sh7->scale_factor = 1.0 / (scaler * mh7->calibration_factor);
+	simg[i] = (short) (scaler * img[i]);
+	wrtrec
+
+libnrimg.a
+----------
+readtensor
+	rdimg
+
+rdtensor
+	rdimg
+
+wrtensor
+	wrimg7
+
+writetensor
+	wrimg7
+	wrimg6
+
+
+spideram.f
+----------
+getimage 
+	rdimg

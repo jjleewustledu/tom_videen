@@ -1,0 +1,173 @@
+/*$Id: OpenEcat.c,v 1.1 1996/04/30 19:36:50 ty7777 Exp $*/
+/*$Log: OpenEcat.c,v $
+ * Revision 1.1  1996/04/30  19:36:50  ty7777
+ * Initial revision
+ *
+ * Revision 1.19  1995/10/24  21:38:09  ty7777
+ * Same as the last version, just want to check in.
+ *
+ * Revision 1.18  1995/10/17  21:21:05  ty7777
+ * Same as the last version.
+ *
+ * Revision 1.17  1995/10/13  17:04:09  ty7777
+ * Use matrix7.h
+ *
+ * Revision 1.16  1995/09/28  18:28:18  ty7777
+ * Updated for 961 data.
+ *
+ * Revision 1.15  1995/06/14  20:08:08  ty7777
+ * Identical to the last version.
+ *
+ * Revision 1.14  1993/11/03  17:43:18  ty7777
+ * delete ssccsid.
+ *
+ * Revision 1.13  1993/10/27  21:23:07  ty7777
+ * Added checking for frames.
+ *
+ * Revision 1.12  1993/10/27  20:27:41  ty7777
+ * Change error message for make_list.
+ *
+ * Revision 1.11  1993/10/26  14:35:07  ty7777
+ * Added processing if matval.frame is <= 0.
+ *
+ * Revision 1.10  1993/10/26  14:17:48  ty7777
+ * Modified to use different frames.
+ *
+ * Revision 1.9  1993/10/25  20:46:17  ty7777
+ * Change rcsid content from id to header.
+ *
+ * Revision 1.8  1993/10/25  20:43:58  ty7777
+ * Modified so that it can open any plane in any frame and plane.
+ *
+ * Revision 1.7  1993/08/06  16:31:38  ty7777
+ * Changed error message.
+ *
+ * Revision 1.6  1993/06/22  22:30:37  ty7777
+ * matval is nonger used.
+ * matval is no longer used.
+ *
+ * Revision 1.5  1993/04/28  16:01:45  ty7777
+ * Make sure we get the correct number of slices by calling make_list.
+ *
+ * Revision 1.4  1993/04/21  16:59:40  ty7777
+ * initial checking in.
+ *
+ * Revision 1.3  1993/03/08  18:14:52  ty7777
+ * Before changing filter code and filter parameters.
+ *
+ * Revision 1.2  1993/03/04  17:09:00  ty7777
+ * Adding error checking.
+ *
+ * Revision 1.1  1993/03/03  20:32:05  ty7777
+ * Initial revision
+ **/
+
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libnpg/OpenEcat.c,v 1.1 1996/04/30 19:36:50 ty7777 Exp $";
+
+/*___________________________________________________________________________________
+ *
+ *	File Name:	OpenEcat.c
+ *	Function Name:	OpenEcat
+ *	Arguments:	fd:			ECAT file descriptor, not used
+ *						currently. Reserved for latter use 
+ *						for the function to work with 
+ *						FORTRAN functions.
+ *			ecat_image_file:	ECAT image file name.	
+ *			num_slices:		number of slices in image file,
+ *						returned.
+ *			xdim:			x-dimension, returned.
+ *			ydim:			y-dimension, returned.
+ *			matval:			structure containing frame, plane,
+ *						gate, data, and bed numbers. Not used,
+ *						this is here just for backward 
+ *						compability with earlier versions of
+ *						libpetutil.a and libhp.a.
+ *	Return Value:	MatrixFile *:		Pointer to a MatrixFile structure or
+ *						NULL if there is error. The user is
+ *						responsible to free memory after the 
+ *						MatrixFile pointer is no longer used 
+ *						by using  the matrix_close ()
+ *						function from the CTI library or our
+ *						own library libcti.a.
+ *	Description:	Open the ECAT image file and return matfptr, xdim, ydim, 
+ *			num_slices, pixel_size, and plane_separation.
+ *	Called by:	ecat2pett6.c in ecat2pett6.bin
+ *			getimage_type.c in libpetutil.a
+ *	Calling:	matrix_open (), matrix_read ().
+ *	Author:		Tom Yang
+ *	History:	Created by Tom Yang on 04/13/1992
+ *
+___________________________________________________________________________________*/
+
+#include <petutil/petutil.h>
+#include <petutil/matrix7.h>
+
+MatrixFile *OpenEcat (ecat_image_file, num_slices, xdim, ydim, 
+			pixel_size, plane_separation, matval)
+	char		*ecat_image_file;
+	short		*num_slices;
+	short		*xdim;
+	short		*ydim;
+	float		*pixel_size;
+	float		*plane_separation;
+	struct Matval	matval;
+{
+	MatrixFile	*matrix_open ();
+	MatrixData	*matrix_read ();
+
+	Image_subheader		*image_subheader;
+	Main_header		*main_header;
+	MatDirNode		*node;
+	MatrixData		*volume;
+	MatrixFile		*matfptr;
+
+	matfptr	= matrix_open (ecat_image_file, MAT_READ_ONLY, MAT_UNKNOWN_FTYPE);
+	main_header		= matfptr->mhptr;
+	if (matfptr == NULL || (main_header->file_type != PetImage 
+	&& main_header->file_type != PetVolume && main_header->file_type != ByteImage 
+	&& main_header->file_type != ByteVolume && main_header->file_type != InterfileImage))
+	{
+		if (matfptr != NULL)
+			fprintf (stderr, 
+	"Error: incompatible data_type: %d. Correct data type should be: %d, %d %d, %d, or %d\n", 
+				main_header->file_type, PetImage, PetVolume, ByteImage,
+				ByteVolume, InterfileImage);
+		fprintf (stderr, "Error in opening matrix file %s.\n", ecat_image_file);
+		*num_slices	= 0;
+		*xdim		= 0;
+		*ydim		= 0;
+
+		return NULL;
+	}
+
+	*plane_separation	= main_header->plane_separation;
+
+	*num_slices	= 0;
+	node		= matfptr->dirlist->first;
+	while (node) 
+	{
+		volume		= matrix_read (matfptr, node->matnum, MAT_SUB_HEADER);
+		*num_slices	+= volume->zdim;
+		free_matrix_data (volume);
+		node = node->next;
+	}
+
+	/*
+	 * Get the dimension and pixel_size of slice.
+	 */
+	node		= matfptr->dirlist->first;
+	volume		= matrix_read (matfptr, node->matnum, MAT_SUB_HEADER);
+	image_subheader	= (Image_subheader *) volume->shptr;
+
+	*xdim		= image_subheader->x_dimension; 
+	*ydim		= image_subheader->y_dimension; 
+	*pixel_size	= image_subheader->x_pixel_size;
+
+	if (pkg_abs (*plane_separation - image_subheader->z_pixel_size) 
+	> ERROR_BOUND)
+		*plane_separation	= image_subheader->z_pixel_size;
+
+	free_matrix_data (volume);
+
+	return matfptr;
+}

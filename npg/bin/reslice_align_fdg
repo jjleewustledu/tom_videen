@@ -1,0 +1,88 @@
+#!/bin/csh
+#	Module:	reslice_align_fdg
+#   Date:	Aug 2008
+#   Author:	Tom Videen
+#	Use:	Use pre-existing alignment and create new resliced dynamic image 
+#			using input header values to set output header values (analyze2img)
+#			keeping decay-correction factor of original ECAT image
+#	Calls:
+#		imghdr
+#		singleframe	(retains decay-correction factor)
+#		img2analyze
+#		imgreslice
+#		analyze2img (restores decay-correction factor and frame time)
+#		merge_dynframes (retains decay-correction factors and frame times)
+
+if ($#argv != 3) then
+	echo "Usage:  reslice_align_fdg input_img firstfrm lastfrm"
+	echo " e.g.,  reslice_align_fdg rp6000fdg1.v 2 16"
+	exit 1
+endif
+
+set FDG  = $1:r
+set FRM1 = $2
+set FRM2 = $3
+
+set SPEC = `echo $FDG | nawk '{FS="[0123456789]+";print $1}'`
+set PID  = `echo $FDG | nawk '{FS="[a-z]*";print $2}'`
+set ROOT = $SPEC$PID
+set OUT  = ${ROOT}fm
+
+# Check for existence of first and last frames, mask
+# -------------------------------------------------------
+if (! -e $FDG.v) then
+	echo "ERROR [reslice_align_fdg]: cannot find $FDG.v"
+	exit 1
+else if (-e r$FDG.v) then
+	echo "Replacing r$FDG.v"
+endif
+
+imghdr $FDG.v $FRM1 > & ! align_$PID.tmp
+set CHK1 = `head -1 align_$PID.tmp | cut -c1-5`
+imghdr $FDG.v $FRM2 > & ! align_$PID.tmp
+set CHK2 = `head -1 align_$PID.tmp | cut -c1-5`
+unalias rm
+rm align_$PID.tmp
+if ($CHK1 == ERROR) then
+	echo "ERROR [reslice_align_fdg]: cannot find frame $FRM1 in $FDG.v"
+	exit 1
+else if ($CHK2 == ERROR) then
+	echo "ERROR [reslice_align_fdg]: cannot find frame $FRM2 in $FDG.v"
+	exit 1
+endif
+
+# Check for all AIR files
+# -------------------------------------------------------
+set i = $FRM1
+while ($i < $FRM2)
+	@ i++
+	set AIR = ${ROOT}f${FRM1}_f$i
+	if (! -e $AIR.air) then
+		echo "ERROR [reslice_align_fdg]: cannot find $AIR.air"
+		exit 1
+	endif
+end
+
+# Get single frame images, convert to Analyze format,
+# Reslice, and convert to ECAT7 format
+# -------------------------------------------------------
+set i = $FRM1
+set IMG = $OUT$i
+singleframe $FDG.v r$IMG.v $i
+
+while ($i < $FRM2)
+	@ i++
+	set IMG  = $OUT$i
+	set AIR = ${ROOT}f${FRM1}_f$i
+	singleframe $FDG.v $IMG.v $i
+	img2analyze $IMG.v a$IMG
+	imgreslice a$IMG $AIR
+	analyze2img ra$IMG r$IMG.v $FDG.v $i
+	rm a$IMG.ifh a$IMG.img a$IMG.hdr ra$IMG.img ra$IMG.hdr $IMG.v
+end
+
+merge_dynframes r$OUT ${FRM1}to$FRM2 .v r$FDG.v
+rm *${OUT}*.rec *${OUT}*.v
+echo "-----------------------------"
+echo "Resliced dynamic output image:  r$FDG.v"
+

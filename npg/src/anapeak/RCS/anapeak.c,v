@@ -1,0 +1,256 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2009.03.24.15.19.29;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2004.09.23.15.45.21;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2004.09.23.14.35.17;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@update main and permit 3 dimensions
+@
+text
+@/*	===============================================================================
+ *	Module:			anapeak.c
+ *	Date:			Sep 2004
+ *	Author:			Tom Videen
+ *	Description:	Find peak within region
+ *	===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anapeak/RCS/anapeak.c,v 1.2 2004/09/23 15:45:21 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+#include <ANALYZE.h>				 /* dsr */
+
+int main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* header for Analyze */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* file for Analyze image */
+	char           *hdrfile;
+	char           *imgfile;
+	int             dim[3];
+	int             x0, y0;
+	int             x1, x2, y1, y2, z1, z2, r1, r2;
+	int             x, y, z, n;
+	int             xmax, ymax;
+	int             i, j, k;
+	float			mean, meanx, meany;
+	short        ***img;
+	short          *row;
+	short           val;
+	long            xs, ys, sum;
+
+	if (argc != 9) {
+		fprintf (stderr, "Usage:  anapeak hdr image x1 y1 first_slice last_slice search_radius definition_radius\n");
+		return (ERROR);
+	}
+	hdrfile = argv[1];
+	imgfile = argv[2];
+	x0 = atoi (argv[3]);
+	y0 = atoi (argv[4]);
+	z1 = atoi (argv[5]);
+	z2 = atoi (argv[6]);
+	r1 = atoi (argv[7]);
+	r2 = atoi (argv[8]);
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (hdrfile, "r")) == 0) {
+		fprintf (stderr, "ERROR [anapeak]: opening %s\n", hdrfile);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anapeak]: reading: %s\n", hdrfile);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [anapeak]: reading %s\n", hdrfile);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4 && hdr.dime.datatype != 16) {
+		fprintf (stderr, "ERROR [anapeak]: reading %s\n", hdrfile);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anapeak]: reading %s\n", hdrfile);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim[0] = hdr.dime.dim[1];
+	dim[1] = hdr.dime.dim[2];
+	dim[2] = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+/*
+ *	Read the img and flip X, Y & Z from Analyze convention
+ *	Find min and max for outout hdr
+ */
+
+	if ((fd_img = fopen (imgfile, "r")) == 0) {
+		fprintf (stderr, "ERROR [anapeak]: opening %s\n", imgfile);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, dim[2], 1, dim[1], 1, dim[0])) == NULL) {
+		fprintf (stderr, "ERROR [anapeak]: malloc img\n");
+		return (ERROR);
+	}
+	if ((row = (short *) calloc (dim[0], sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [anapeak]: malloc row\n");
+		return (ERROR);
+	}
+
+	for (k = dim[2]; k > 0; k--) {
+		for (j = dim[1]; j > 0; j--) {
+			(void) fread (row, sizeof (short), dim[0], fd_img);
+			for (i = 1; i <= dim[0]; i++) {
+				n = dim[0] - i;
+				img[k][j][i] = row[n];
+			}
+		}
+	}
+
+	(void) fclose (fd_img);
+	free (row);
+
+	for (z = z1; z <= z2; z++) {
+		n = 0;
+		xmax = 0;
+		ymax = 0;
+		y1 = y0 - r1;
+		y2 = y0 + r1;
+		for (y = y1; y <= y2; y++) {
+			x1 = x0 - r1;
+			x2 = x0 + r1;
+			for (x = x1; x <= x2; x++) {
+				val = img[z][y][x];
+				if (val >= 3075) {
+					xmax = xmax + x;
+					ymax = ymax + y;
+					n++;
+				}
+			}
+		}
+		if (n > 0) {
+			meanx = (float) xmax / n;
+			meany = (float) ymax / n;
+			x0 = (int) (meanx + 0.5);
+			y0 = (int) (meany + 0.5);
+		}
+		/* fprintf (stdout, "%2d %6d %6d %3d %6.2f %6.2f\n", z, n, x0, y0,meanx,meany );*/
+		sum = 0;
+		xs = 0;
+		ys = 0;
+		n = 0;
+		y1 = y0 - r2;
+		y2 = y0 + r2;
+		for (y = y1; y <= y2; y++) {
+			x1 = x0 - r2;
+			x2 = x0 + r2;
+			for (x = x1; x <= x2; x++) {
+				val = img[z][y][x];
+				sum += val;
+				xs += x * val;
+				ys += y * val;
+				n++;
+			}
+		}
+		mean = (float) sum / n;
+		fprintf (stdout, "%2d %10.2f %10.2f %10.3f\n", z, (double) xs / sum, (double) ys / sum, mean);
+	}
+
+	free_s3tensor (img, 1, dim[2], 1, dim[1], 1, dim[0]);
+	return (0);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d9 1
+a9 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anapeak/RCS/anapeak.c,v 1.1 2004/09/23 14:35:17 tom Exp $";
+d19 1
+a19 1
+main (argc, argv)
+d65 1
+a65 1
+	if (hdr.dime.dim[0] != 4) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d9 1
+a9 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anapeak/RCS/anapeak.c,v 1.3 2004/02/16 19:26:49 tom Exp $";
+d34 1
+a34 1
+	float			mean;
+d37 1
+a37 1
+	short           max, val;
+d117 3
+a119 3
+		max = 0;
+		xmax = 1;
+		ymax = 1;
+d127 4
+a130 4
+				if (val > max) {
+					max = val;
+					xmax = x;
+					ymax = y;
+d134 7
+a140 1
+		/* fprintf (stdout, "%2d %6d %6d %3d\n", z, max, xmax, ymax); */
+a144 2
+		x0 = xmax;
+		y0 = ymax;
+d152 3
+a154 3
+				sum = sum +  val;
+				xs = xs + x * val;
+				ys = ys + y * val;
+d159 1
+a159 1
+		fprintf (stdout, "%2d %10.2f %10.2f %10.3f %6d\n", z, (double) xs / sum, (double) ys / sum, mean, max);
+@

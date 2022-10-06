@@ -1,0 +1,272 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2004.02.16.21.44.48;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2003.01.21.17.03.44;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.01.21.16.42.45;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@/* $Id: meantr.c,v 1.2 2003/01/21 17:03:44 tom Exp tom $
+ * $Log: meantr.c,v $
+ * Revision 1.2  2003/01/21  17:03:44  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2003/01/21  16:42:45  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			meantr.c
+ *	Date:			Jan 2003
+ *	Author:			Tom Videen
+ *	Description:
+ *		Compute mean of 2 PET images.
+ *		Where pixels are 0 in one image, use only the second image.
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/meantr/RCS/meantr.c,v 1.2 2003/01/21 17:03:44 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <libimage.h>
+#include <imgutil.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file1;			 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+	FILE           *recfp;
+
+	char            program[MAXFNAME];
+	char            version[MAXFNAME];
+	char            runstamp[40];
+	char           *scan1;
+	char           *scan2;
+	char           *outfile;
+	char           *recfile;
+	int             pdim[3];
+	int             i, j, k;
+	int             n;
+	float           val1, val2;
+	float        ***img1;
+	float        ***img2;
+	float        ***sumimg;
+
+/*
+ *	Read command line arguments and initialize filenames.
+ */
+
+	if (argc != 13) {
+		fprintf (stderr,"Usage: meantr img1 img2 out\n");
+		return (ERROR);
+	}
+	scan1 = argv[1];
+	scan2 = argv[2];
+	outfile = argv[3];
+	recfile = argv[4];
+	n = 5;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n + 1], argv[n + 2], argv[n + 4], argv[n + 5], argv[n + 7]);
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [meantr]: cannot open %s\n", recfile);
+		return (ERROR);
+	}
+	(void) sscanf (rcsid, "%s %s", program, version);
+	(void) strcat (program, " ");
+	(void) strcat (program, version);
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file1 = make_imgfile (scan1);
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [meantr]: Cannot open %s\n", scan1);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [meantr]: Cannot get MainHeader from %s\n", scan1);
+		return (ERROR);
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [meantr]: Cannot read file subheader in %s\n", scan1);
+		return (ERROR);
+	}
+	pdim[0] = file1->sh->dim1;
+	pdim[1] = file1->sh->dim2;
+	pdim[2] = file1->sh->dim3;
+
+	if ((img1 = rdtensor (file1, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [meantr]: Cannot read %s\n", scan1);
+		return (ERROR);
+	}
+	recout (recfp, scan1);
+	close_imgfile (file1);
+
+	file1->name = scan2;
+	indx.frm = 1;
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [meantr]: Cannot open %s\n", scan2);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [meantr]: Cannot get MainHeader from %s\n", scan2);
+		return (ERROR);
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [meantr]: Cannot read file subheader in %s\n", scan2);
+		return (ERROR);
+	}
+	if ((img2 = rdtensor (file1, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [meantr] Cannot read %s\n", scan2);
+		return (ERROR);
+	}
+	recout (recfp, scan2);
+	close_imgfile (file1);
+
+	if ((sumimg = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [meantr]: Cannot malloc summed image\n");
+		return (ERROR);
+	}
+	fprintf (stdout,"Computing mean of %s + %s\n", scan1, scan2);
+	for (i = 1; i <= pdim[2]; i++) {
+		for (j = 1; j <= pdim[1]; j++) {
+			for (k = 1; k <= pdim[0]; k++) {
+				val1 = img1[i][j][k];
+				val2 = img2[i][j][k];
+				if (val1 == 0)
+					sumimg[i][j][k] = val2;
+				else if (val2 == 0)
+					sumimg[i][j][k] = val1;
+				else
+					sumimg[i][j][k] = 0.5 * (val1 + val2);
+			}
+		}
+	}
+
+	file1->name = outfile;
+	(void) strcpy (file1->mode, "w");
+	indx.frm = 1;
+	fprintf (stdout,"Writing %s\n", outfile);
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [sumimg]: Cannot open %s\n", outfile);
+		return (ERROR);
+	}
+	(void) save_rcs (file1, rcsid, runstamp);
+	file1->mh->nframe = indx.frm;
+	file1->mh->orientation = 0;
+	if (put_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [meantr] writing %s\n", outfile);
+		return (ERROR);
+	}
+	if (writetensor (file1, &indx, sumimg) == ERROR) {
+		fprintf (stderr, "ERROR [meantr] writing %s\n", outfile);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+	free_f3tensor (img1, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (img2, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (sumimg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	/* free_imgfile (file1); */
+	(void) fclose (recfp);
+	return (0);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/* $Id: meantr.c,v 1.1 2003/01/21 16:42:45 tom Exp tom $
+d3 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/meantr/meantr.c,v 1.1 2003/01/21 16:42:45 tom Exp tom $";
+d98 1
+a98 1
+	if ((img1 = rdtensor (scan1, &indx, pdim)) == NULL) {
+d119 1
+a119 1
+	if ((img2 = rdtensor (scan2, &indx, pdim)) == NULL) {
+d152 1
+a152 1
+		exit (ERROR);
+d154 1
+a154 1
+	save_rcs (file1, rcsid, runstamp);
+d159 1
+a159 1
+		exit (ERROR);
+d163 1
+a163 1
+		exit (ERROR);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/* $Id$
+ * $Log$ */
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/meantr/RCS/meantr.c,v 1.4 2002/11/26 22:29:27 tom Exp $";
+d61 1
+a61 1
+	n = 6;
+a86 7
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [meantr]: Cannot read scan %s frame %d\n", scan1, indx.frm);
+			return (ERROR);
+		}
+	}
+a111 7
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [meantr]: Cannot read scan %s frame %d\n", scan2, indx.frm);
+			return (ERROR);
+		}
+	}
+@

@@ -1,0 +1,305 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.19.35.02;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.12.16.18.07.01;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.10.26.17.39.54;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.10.26.15.18.59;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: apply_align1d.c,v $
+ * Revision 1.4  1999/12/16  18:07:01  tom
+ * sync version
+ *
+ * Revision 1.2  1999/10/26  17:39:54  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/10/26  15:18:59  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			apply_align1d.c
+ *	Date:			Oct 1999
+ *	Author:			Tom Videen
+ *	Description:	Apply corrections to a 2D Analyze image line-by-line
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/apply_align1d/RCS/apply_align1d.c,v 1.4 1999/12/16 18:07:01 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;				 /* ANALYZE.h */
+	FILE           *fd_hdr;				 /* file for ANALYZE hdr */
+	FILE           *fd_img;				 /* file for ANALYZE image */
+	FILE           *fd_cor;				 /* file for shifts */
+	char           *inimg, *inhdr;		 /* input file */
+	char           *outimg, *outhdr;	 /* output img file */
+	char           *corfil;				 /* corrections */
+	char            line[MAXLINE];
+	int             dim1, dim2, dim3;	 /* dimensions of image */
+	int             i, j, k, m, n;
+	long            num;
+	int            *shift;
+	short          *img;
+	int           **image1;
+
+	if (argc != 6) {
+		printf ("Usage: apply_align1d inhdr inimg outhdr outimg corfil\n");
+		return (ERROR);
+	}
+	inhdr = argv[1];
+	inimg = argv[2];
+	outhdr = argv[3];
+	outimg = argv[4];
+	corfil = argv[5];
+
+/*	Read Image to Reslice */
+
+	if ((fd_hdr = fopen (inhdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [apply_align1d]: Cannot open: %s\n", inhdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [apply_align1d]: Reading: %s\n", inhdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	if (dim3 != 1) {
+		fprintf (stderr, "ERROR [apply_align1d]: Not a 2D image: %s\n", inimg);
+		return (ERROR);
+	}
+	num = dim1 * dim2;
+	img = (short *) calloc (num, sizeof (short));
+	if (img == NULL) {
+		fprintf (stderr, "ERROR [apply_align1d]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (inimg, "r")) == 0) {
+		fprintf (stderr, "ERROR [apply_align1d]: Cannot open: %s\n", inimg);
+		return (ERROR);
+	}
+	if ((fread (img, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [apply_align1d]: Reading: %s\n", inimg);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	if ((image1 = imatrix (1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [apply_align1d]: Cannot malloc image1\n");
+		return (NULL);
+	}
+	k = 0;
+	for (j = 1; j <= dim2; j++) {
+		for (i = 1; i <= dim1; i++) {
+			image1[j][i] = img[k];
+			k++;
+		}
+	}
+
+	if ((fd_cor = fopen (corfil, "r")) == 0) {
+		fprintf (stderr, "ERROR [apply_align1d]: Unable to open %s\n", corfil);
+		return (ERROR);
+	}
+	(void) fgets (line, MAXLINE, fd_cor);
+	(void) fgets (line, MAXLINE, fd_cor);
+	n = 0;
+	(void) sscanf (line, "%d\n", &n);
+	if (n != dim2) {
+		fprintf (stderr, "ERROR [apply_align1d]: %d lines in %s differs from y-dim = %d in %s\n",
+			 n, corfil, dim2, inimg);
+		return (ERROR);
+	}
+	shift = (int *) calloc (dim2, sizeof (int));
+	for (j = 1; j <= dim2; j++) {
+		(void) fgets (line, MAXLINE, fd_cor);
+		(void) sscanf (line, "%d %d\n", &n, &shift[j]);
+	}
+	(void) fclose (fd_cor);
+	fprintf (stdout, "Read %s\n", corfil);
+
+/*  Shift img while moving to image */
+
+	n = 0;
+	for (j = 1; j <= dim2; j++) {
+		k = shift[dim2 - j];
+		for (i = 1; i <= dim1; i++) {
+			m = i + k;
+			if (m >= 1 && m <= dim1)
+				img[n] = image1[j][m];
+			else
+				img[n] = 0;
+			n++;
+		}
+	}
+
+	if ((fd_hdr = fopen (outhdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [apply_align1d]: Unable to open %s\n", outhdr);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [apply_align1d]: Error writing to: %s\n", outhdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	if ((fd_img = fopen (outimg, "w")) == 0) {
+		fprintf (stderr, "ERROR [apply_align1d]: Unable to open %s\n", outimg);
+		return (ERROR);
+	}
+	if ((fwrite (img, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [apply_align1d]: Error writing to: %s\n", outimg);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	free (img);
+	free (shift);
+	free_imatrix (image1, 1, dim2, 1, dim1);
+	return (OK);
+}
+@
+
+
+1.4
+log
+@sync version
+@
+text
+@d2 3
+d13 1
+a13 1
+ *	Date:			Oct-99
+d18 1
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/apply_align1d/RCS/apply_align1d.c,v 1.2 1999/10/26 17:39:54 tom Exp tom $";
+d68 1
+a68 1
+	fclose (fd_hdr);
+d90 1
+a90 1
+	fclose (fd_img);
+d107 2
+a108 2
+	fgets (line, MAXLINE, fd_cor);
+	fgets (line, MAXLINE, fd_cor);
+d110 1
+a110 1
+	sscanf (line, "%d\n", &n);
+d118 2
+a119 2
+		fgets (line, MAXLINE, fd_cor);
+		sscanf (line, "%d %d\n", &n, &shift[j]);
+d121 1
+a121 1
+	fclose (fd_cor);
+d147 1
+a147 1
+	fclose (fd_hdr);
+d156 1
+a156 1
+	fclose (fd_img);
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/apply_align1d/RCS/apply_align1d.c,v 1.1 1999/10/26 15:18:59 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/apply_align1d/RCS/apply_align1d.c,v 1.1 1999/09/02 19:43:11 tom Exp $";
+d26 4
+a29 4
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	FILE           *fd_cor;			 /* file for shifts */
+d32 1
+a32 1
+	char           *corfil;			 /* corrections */
+d35 1
+a35 1
+	int             i, j, k, m;
+a36 1
+	int             n, max1;
+a88 1
+	max1 = 0;
+a91 2
+			if (image1[j][i] > max1)
+				max1 = image1[j][i];
+d119 1
+a119 2
+	n = dim2-1;
+	k = 0;
+d121 1
+a121 1
+		printf ("%d %d   %d\n", j, n, shift[n]);
+d123 1
+a123 1
+			m = i + shift[n];
+d125 1
+a125 1
+				img[k] = image1[j][i];
+d127 2
+a128 2
+				img[k] = 0;
+			k++;
+a129 1
+		n--;
+@

@@ -1,0 +1,317 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.21.00.28;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.26.20.24.48;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.05.06.18.37.04;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*  $Log: check_shift.c,v $
+ * Revision 1.2  2002/11/26  20:24:48  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/05/06  18:37:04  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *  Module:         check_shift.c
+ *  Date:           May 1999
+ *  Author:         Tom Videen
+ *	Description:	Write difference between 2 air file matrices.
+ *	History:		Version of airdif with abbreviated output.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/check_shift/RCS/check_shift.c,v 1.2 2002/11/26 20:24:48 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <air.h>				 /* struct air */
+
+#define RADTODEG 180./M_PI
+
+/* Function to update distance and indices to a point */
+#define newdist(new,old,indx,i,j,k)	{old=new; indx[1]=k; indx[2]=j; indx[3]=i;}
+
+int             read_air ();
+float           ptdist ();
+float          *rscale;				 /* reslice (PET) image mm/pixel */
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	ImageFile      *file;
+	Index           indx;
+	struct air2     air;
+	char           *airfile1, *airfile2;
+	char           *maskfile;
+	float         **mat1, **mat2, **dmat;
+	int             i, j, k;
+	int             frm;			 /* frame number to process */
+
+	float           dist, sumdist;
+	float          *dif;
+	float           xsum, ysum, zsum;
+	float          *pt0, *pt1, *pt2, *pt3;
+
+	unsigned long   nx, ny, nz;		 /* dimensions of img */
+	int             sumpts;
+	int             sumx, sumy, sumz;
+	float        ***img;
+	double          dx, dy, dz, delta;
+	float           dxang, dyang, dzang;
+
+/* Initializations */
+
+	if (argc != 4) {
+		(void) fprintf (stderr, "Usage: check_shift a.air b.air mask\n");
+		return (1);
+	}
+	airfile1 = argv[1];
+	airfile2 = argv[2];
+	maskfile = argv[3];
+	mat1 = matrix (1, 4, 1, 4);
+	mat2 = matrix (1, 4, 1, 4);
+	dmat = matrix (1, 4, 1, 4);
+
+/* Read AIR matrices (transform pixels-to-pixels)*/
+
+	if (read_air (airfile1, &air, mat1) != 0) {
+		(void) fprintf (stderr, "ERROR [check_shift]: cannot read %s\n", airfile1);
+		return (1);
+	}
+	if (read_air (airfile2, &air, mat2) != 0) {
+		(void) fprintf (stderr, "ERROR [check_shift]: cannot read %s\n", airfile2);
+		return (1);
+	}
+	matrix_sub (mat1, mat2, dmat, 4, 4, 4);
+	dmat[4][4] = 1;
+
+/*	Read the coordinates of all points-in-the-mask */
+
+	frm = 1;
+	indx.frm = frm;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (maskfile);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [check_shift]: Could not open %s\n", maskfile);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [check_shift]: Could not get MainHeader from %s\n", maskfile);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [check_shift]: cannot find %s frame 1 or 2\n", maskfile);
+				return (ERROR);
+			}
+		} else {
+			fprintf (stderr, "ERROR [check_shift]: cannot find %s frame %d\n",
+				 maskfile, frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [check_shift]: Could not read file subheader in %s\n", maskfile);
+		return (ERROR);
+	}
+	if ((img = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+
+/*
+ *	Compute mean distance between points-in-the-mask after
+ *	misaligned by transformation with the difference matrix.
+ */
+
+	nx = (unsigned long) file->sh->dim1;
+	ny = (unsigned long) file->sh->dim2;
+	nz = (unsigned long) file->sh->dim3;
+
+	rscale = vector (1, 3);
+	rscale[1] = air.res.xsize;
+	rscale[2] = air.res.ysize;
+	rscale[3] = air.res.zsize;
+
+	pt0 = vector (1, 4);
+	pt1 = vector (1, 4);
+	pt2 = vector (1, 4);
+	pt3 = vector (1, 4);
+	dif = vector (1, 3);
+	for (i = 1; i < 4; i++)
+		pt0[i] = 0.0;
+	pt0[4] = 1.0;
+	pt1[4] = 1.0;
+
+	sumpts = 0;
+	sumx = 0;
+	sumy = 0;
+	sumz = 0;
+	sumdist = 0.0;
+	xsum = 0.0;
+	ysum = 0.0;
+	zsum = 0.0;
+
+	for (i = 1; i <= nz; i++) {
+		for (j = 1; j <= ny; j++) {
+			for (k = 1; k <= nx; k++) {
+				if (img[i][j][k] > 0) {
+					sumpts++;
+					sumx += k;
+					sumy += j;
+					sumz += i;
+					pt0[1] = (float) k;
+					pt0[2] = (float) j;
+					pt0[3] = (float) i;
+					vector_mult (mat1, pt0, pt1, 4, 4, 1);
+					vector_mult (mat2, pt0, pt2, 4, 4, 1);
+					dist = ptdist (pt1, pt2, dif);
+					sumdist += dist;
+					xsum += dif[1];
+					ysum += dif[2];
+					zsum += dif[3];
+				}
+			}
+		}
+	}
+/*
+ *	Calculate total error in each parameter.
+ *		pt1 is center-of-volume of mask
+ */
+
+	pt0[1] = (float) sumx / (float) sumpts;
+	pt0[2] = (float) sumy / (float) sumpts;
+	pt0[3] = (float) sumz / (float) sumpts;
+	pt0[4] = 1.0;
+	vector_mult (mat1, pt0, pt1, 4, 4, 1);
+	vector_mult (mat2, pt0, pt2, 4, 4, 1);
+	dist = ptdist (pt1, pt2, dif);
+	dx = (pt2[1] - pt1[1]) * rscale[1];
+	dy = (pt2[2] - pt1[2]) * rscale[2];
+	dz = (pt2[3] - pt1[3]) * rscale[3];
+
+/*	Angle estimated by comparing location of a point 20 mm away */
+
+	vector_mult (dmat, pt0, pt1, 4, 4, 1);
+	pt2[1] = pt0[1];
+	pt2[2] = pt0[2] + 20.;
+	pt2[3] = pt0[3];
+	pt2[4] = 1.;
+	vector_mult (dmat, pt2, pt3, 4, 4, 1);
+	delta = (pt3[3] - pt1[3]) * rscale[3];
+	if (delta != 0)
+		dxang = RADTODEG * atan (delta / 20.);
+	else
+		dxang = 0.;
+
+	pt2[1] = pt0[1] + 20.;
+	pt2[2] = pt0[2];
+	pt2[3] = pt0[3];
+	vector_mult (dmat, pt2, pt3, 4, 4, 1);
+	delta = (pt3[3] - pt1[3]) * rscale[3];
+	if (delta != 0.)
+		dyang = RADTODEG * atan (delta / 20.);
+	else
+		dyang = 0.;
+
+	pt2[1] = pt0[1] + 20.;
+	pt2[2] = pt0[2];
+	pt2[3] = pt0[3];
+	vector_mult (dmat, pt2, pt3, 4, 4, 1);
+	delta = (pt3[1] - pt1[1]) * rscale[3];
+	if (delta != 0.)
+		dzang = RADTODEG * atan (delta / 20.);
+	else
+		dzang = 0.;
+
+	(void) fprintf (stdout, "%8.1f %8.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n",
+		dist, dx, dy, dz, dxang, dyang, dzang);
+
+	free_vector (pt0, 1, 4);
+	free_vector (pt1, 1, 4);
+	free_vector (pt2, 1, 4);
+	free_vector (pt3, 1, 4);
+	free_vector (rscale, 1, 3);
+	free_f3tensor (img, 1, nz, 1, ny, 1, nx);
+	free_imgfile (file);
+	free_matrix (mat1, 1, 4, 1, 4);
+	free_matrix (mat2, 1, 4, 1, 4);
+	free_matrix (dmat, 1, 4, 1, 4);
+	return (0);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *  Date:           May-99
+d16 1
+a16 1
+
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/check_shift/RCS/check_shift.c,v 1.1 1999/05/06 18:37:04 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*  $Log$ */
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/check_shift/RCS/check_shift.c,v 1.5 1999/03/16 17:12:45 tom Exp $";
+a19 1
+#include <string.h>
+a23 1
+#include <nr.h>
+@

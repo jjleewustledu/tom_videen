@@ -1,0 +1,180 @@
+#!/bin/csh
+#   Module: align_oxy2
+#   Author: Tom Videen
+#   Date:   Oct 1999
+#   Use:    Align PET images (HO, OO, CO) to create OEF image.
+#	rcsid = $Id: align_oxy2,v 1.9 2003/12/17 14:45:02 tom Exp $
+
+if ($#argv != 6) then
+    echo "Usage:  align_oxy2 pid ho1 ho2 oc oo mask"
+	echo " e.g.,  align_oxy2 p5000 1 2 2 2 p5000mask.v"
+	echo " (assumes that ho1 and ho2 are aligned as rp5000ho1_g3.v and rp5000ho2_g3.v)"
+    exit 1
+endif
+
+set PID  = $1
+set H1   = $2
+set H2   = $3
+set C2   = $4
+set O2   = $5
+set MASK = $6
+
+set RID  = r$PID
+set FIL  = _g3
+set HO1  = ${RID}ho$H1$FIL
+set HO2  = ${RID}ho$H2$FIL
+set OC   = ${PID}oc$C2
+set OC2  = $OC$FIL
+set OO   = ${PID}oo$O2
+set OO2  = $OO$FIL
+set OEF  = ${PID}oef$O2
+set OCHO = $PID${C2}_to_$H2
+set OOHO = $PID${O2}_to_$H2
+set ROOT = $MASK:r
+set AMASK = a$ROOT
+set MASK2 = ${ROOT}b.v
+set AMASK2 = ${AMASK}b
+set THR = 50
+
+unalias cp
+unalias rm
+
+# Check existence of files:
+
+set EFILES = "$HO1.v $HO2.v $OO.v $OO2.v $OC.v $OC2.v $MASK"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_oxy2]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ($STATUS != 0) exit 1
+
+# Check the pixel size in PET headers:
+
+set STATUS = 0
+set ORGSIZE = 0
+foreach i ($EFILES)
+	set PIXSIZE = `imghdr $i | grep 'Pixel size' | cut -f4 -d' '`
+	if ($PIXSIZE == 0.208634) echo "Note: pixel size of $i is $PIXSIZE"
+	if ($ORGSIZE == 0) then
+		set ORGSIZE = $PIXSIZE
+		set ORGFILE = $i
+	else if ($PIXSIZE != $ORGSIZE) then
+		echo "ERROR [align_oxy2]: different pixel sizes:"
+		echo "  $ORGFILE = $ORGSIZE"
+		echo "  $i = $PIXSIZE"
+		set STATUS = 1
+	endif
+endif
+if ($STATUS != 0) exit 1
+
+# Setup log file:
+
+set BINFILE = `which align_oxy2`
+set VER = `grep rcsid $BINFILE | cut -f2- -d: | cut -f1 -dE | head -1`
+set LOGFILE = ${RID}_align.log
+if (-e $LOGFILE) then
+	echo "" >> $LOGFILE
+else
+	touch $LOGFILE
+endif
+echo "$OEF alignment:  " `whoami` `date` >> $LOGFILE
+echo "Version: " $VER         >> $LOGFILE
+echo ""                       >> $LOGFILE
+
+# Convert images to Analyze format:
+
+img2analyze $MASK $AMASK
+img2analyze $HO2.v a$HO2
+img2analyze $OO2.v a$OO2
+img2analyze $OC2.v a$OC2
+setanamin $AMASK 0
+setanamin a$HO2 0
+setanamin a$OO2 0
+
+# Combined resliced HO2 with existing mask
+ 
+maskimg $MASK $HO2.v $MASK2 10
+img2analyze $MASK2 $AMASK2
+setanamin $AMASK2 0
+ 
+# Align OO to HO, then reslice OO:
+
+echo "Aligning:  $OO2 to $HO2"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK2 -x 1 -v"
+echo ">> alignlinear oo to ho" >> $LOGFILE
+echo $PRM >> $LOGFILE
+ 
+img2analyze $HO2.v a$HO2
+alignlinear a$HO2 a$OO2 $OOHO.air $PRM >! log
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOGFILE
+    exit 1
+endif
+if (! -e null.air) alignlinear a$HO2 a$HO2 null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 $OOHO.air null.air $MASK >> $LOGFILE
+echo " " >> $LOGFILE
+imgreslice  a$OO2  $OOHO
+analyze2img ra$OO2 r$OO2.v
+
+# Combined resliced OO2 with existing mask
+ 
+maskimg $MASK r$OO2.v $MASK2 10
+img2analyze $MASK2 $AMASK2
+setanamin $AMASK2 0
+
+# Align CO to resliced OO, then reslice CO:
+ 
+echo "Aligning:  $OC2 to r$OO2"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK2 -x 1 -v"
+echo ">> alignlinear oc to oo" >> $LOGFILE
+echo $PRM >> $LOGFILE
+ 
+setanamin ra$OO2 0
+setanamin a$OC2 0
+alignlinear ra$OO2 a$OC2 $OCHO.air $PRM >! log
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOGFILE
+    exit 1
+endif
+airdif1 $OCHO.air null.air $MASK >> $LOGFILE
+imgreslice  a$OC2  $OCHO
+analyze2img ra$OC2 r$OC2.v
+
+# Copy hdrs for realigned images
+
+cp $OC2.hdr r$OC2.hdr
+cp $OO2.hdr r$OO2.hdr
+
+# Reslice unfiltered images
+
+img2analyze $OO.v a$OO
+imgreslice a$OO $OOHO
+analyze2img ra$OO r$OO.v
+img2analyze $OC.v a$OC
+imgreslice a$OC $OCHO
+analyze2img ra$OC r$OC.v
+cp $OO2.hdr r$OO.hdr
+cp $OC2.hdr r$OC.hdr
+
+rm $MASK2
+rm $AMASK2.img
+rm $AMASK2.ifh
+rm $AMASK2.hdr
+
+echo "Complete [align_oxy2] ========================"
+

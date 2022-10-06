@@ -1,0 +1,245 @@
+; $Id: fit_fiducial_triangle.pro,v 1.2 1996/02/12 20:17:41 tom Exp $
+;
+;+
+; NAME:
+;   FIT_FIDUCIAL_TRIANGLE
+;
+; PURPOSE:
+;   Fit 3 line segments to an triangular-shaped fiducial and return the coordinates
+;   of the three corners.  Each segment is fit independently with no constraints
+;   on angles or size of the sides.
+;
+; CATEGORY:
+;   Image processing.
+;
+; CALLING SEQUENCE:
+;   FIT_FIDUCIAL_TRIANGLE, Name, Branch, Flag
+;
+; INPUTS:
+;   Name:   Root name of input files.
+;   Branch: Second part of root name of input files.
+;   Flag:   Determines the axis along which to compute centers-of-mass (0 or 1)
+;			(only used for the diagonal)
+;
+; OUTPUTS:
+;   File:   A file named "Name.fid" contains the coordinates of the 3 points
+;			in both pixels and mm.
+;
+; FUNCTION:
+;   Read the points in each branch of the N from separate files (with standard names).
+;   Compute the centers-of-mass along the specified axis for the points in each
+;       branch.
+;   Perform 2-D linear regression to the centers-of-mass of each branch in a 2-D
+;       projection.
+;   Determine the 3 intersecting points in this plane.
+;	Find the coordinates of the 3rd dimension using regression against the first 2.
+;   Write the coordinates of the 3 points to a file with extension ".fid".
+;   Coordinates will be written in mm.
+;
+; EXAMPLE:
+;   FIT_FIDUCIAL_TRIANGLE "p2000", "lftri", 0
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, June 1995
+;	Change fit to 2D: Tom Videen, Feb 1996
+;-
+
+pro fit_fiducial_triangle, name, branch, flag
+
+; Get filenames & initialize parameters for the particular orientation of the fiducial
+; ------------------------------------------------------------------------------------
+
+    back = name + branch + "back.img"
+    diagonal = name + branch + "diag.img"
+    top  = name + branch + "top.img"
+    plane = 1
+    planeb = 2
+    x_title = "Y"
+    y_title = "Z"
+    xc = 1			; Y
+    yc = 2			; Z
+    zc = 0			; X
+
+	plot_title = name + branch
+	outfile = name + ".fid"
+
+; Determine image array size & type
+; ---------------------------------
+	asize = intarr(3)
+	pixsize = fltarr(3)
+	analyze_dim, back, asize, dsize, pixsize
+
+	if (dsize eq 8) then $
+		data = bytarr(asize(0), asize(1), asize(2)) $
+	else $
+		data = intarr(asize(0), asize(1), asize(2))
+	points = fltarr(2, 2)
+	get_lun,lu
+
+; Read each array & extract the non-zero coordinates for each segment of the N.
+; Then divide each column by pixel size to scale to isotropic 1x1x1 mm space.
+; ----------------------------------------------------------------------------
+
+	openr,lu,back
+	readu,lu,data,TRANSFER_COUNT=count
+	close,lu
+	nonzero_coords, data, backset
+	for i=0,2 do $
+		backset(i,*) = backset(i,*) * pixsize(i)
+	backpts = center_of_mazz(backset, planeb)
+	nb = (size(backpts))(2)
+
+	openr,lu,diagonal
+	readu,lu,data
+	close,lu
+	nonzero_coords, data, diagonalset
+	for i=0,2 do $
+		diagonalset(i,*) = diagonalset(i,*) * pixsize(i)
+	if (flag eq 1) then $
+		diagonalpts = center_of_mazz(diagonalset, planeb) $
+	else $
+		diagonalpts = center_of_mass(diagonalset, plane)
+	nd = (size(diagonalpts))(2)
+
+	openr,lu,top
+	readu,lu,data
+	close,lu
+	nonzero_coords, data, topset
+	for i=0,2 do $
+		topset(i,*) = topset(i,*) * pixsize(i)
+	toppts = center_of_mass(topset, plane)
+	nt = (size(toppts))(2)
+
+; Combine all non-zero points
+;	all contains all non-zero points
+;	data contains centers-of-mass points
+;	sn are used to index each set within "data"
+
+	all = [[backset], [topset], [diagonalset]]
+	data = [[backpts], [toppts], [diagonalpts]]
+
+	s1 = nb-1
+	s2 = nb
+	s3 = nb+nt-1
+	s4 = nb+nt
+	s5 = nb+nt+nd-1
+
+; Plot all points (2D projection prior to rotation):
+; --------------------------------------------------
+;	First plot all the points 
+
+	xp = all(xc,*)
+	yp = rotate(all(yc,*),4)
+	plot_fiducial, xp, yp, plot_title, x_title, y_title
+
+;	Then plot the centers-of-mass
+
+	xp = data(xc,*)
+	yp = rotate(data(yc,*),4)
+	oplot, xp, yp, psym=1
+
+	val = data(3,*)
+	data(3,*) = 1.
+	w = rotate(val,4)
+
+;	w now contains the weights for fitting the points
+
+; Fit the fiducial triangle to the points in the yc-zc plane
+; ----------------------------------------------------------
+; Fit line to each segment
+; Back (yc = z = indep var)
+
+	x1 = data(yc,0:s1)
+	y1 = rotate(data(xc,0:s1),4)
+	w1 = w(0:s1)
+	b0 = regress(x1, y1, w1, fit, a0, sigma, ftest, r, rmul, chisq)
+	a1 = -a0/b0
+	b1 = 1.0/b0
+    print, "Branch          Chisq           A0              A1              A2"
+    print, "Back    ",[chisq, a1, b1]
+
+; Top (xc = y = indep var)
+
+	x1 = data(xc,s2:s3)
+	y1 = rotate(data(yc,s2:s3),4)
+	w1 = w(s2:s3)
+	b2 = regress(x1, y1, w1, fit, a2, sigma, ftest, r, rmul, chisq)
+    print, "Top     ",[chisq, a2, b2]
+
+; Diagonal (xc = y = indep var)
+
+	x1 = data(xc,s4:s5)
+	y1 = rotate(data(yc,s4:s5),4)
+	w1 = w(s4:s5)
+	b3 = regress(x1, y1, w1, fit, a3, sigma, ftest, r, rmul, chisq)
+    print, "Diagonal",[chisq, a3, b3]
+
+; Compute & plot the intersections of the 3 fiducial branches in 3-D space
+; ----------------------------------------------------------------------
+; Intersection of back + top
+ 
+	xc1 = (a2 - a1) / (b1 - b2)
+	yc1 = b1 *xc1 + a1
+ 
+; Intersection of top + diagonal
+ 
+	xc2 = (a3 - a2) / (b2 - b3)
+	yc2 = b2 *xc2 + a2
+
+; Intersection of diagonal + back
+
+	xc3 = (a1 - a3) / (b3 - b1)
+	yc3 = b3 *xc3 + a3
+
+; Determine zc coordinates of the 3 points
+; ----------------------------------------
+
+	xy = [data(xc,*),data(yc,*)]
+	z = rotate(data(zc,*),4)
+	xyn = regress(xy, z, w, fit, xy0, sigma, ftest, r, rmul, chisq)
+	print, "Z     ", [chisq, xy0, rotate(xyn,4)]
+
+	zc1 = xy0 + xyn(0) * xc1 + xyn(1) * yc1
+	zc2 = xy0 + xyn(0) * xc2 + xyn(1) * yc2
+	zc3 = xy0 + xyn(0) * xc3 + xyn(1) * yc3
+
+; Plot intersection points & 3 lines (2-D projection after rotation to original space)
+ 
+	oplot,[xc1],[yc1],psym=4
+	oplot,[xc2],[yc2],psym=4
+	oplot,[xc3],[yc3],psym=4
+ 
+	xcoord = [xc1, xc2, xc3, xc1]
+	ycoord = [yc1, yc2, yc3, yc1]
+	oplot, xcoord, ycoord, psym=0
+
+; Scale coordinates back to original image space
+
+	zc1p = zc1 / pixsize(0)
+	xc1p = xc1 / pixsize(1)
+	yc1p = yc1 / pixsize(2)
+	zc2p = zc2 / pixsize(0)
+	xc2p = xc2 / pixsize(1)
+	yc2p = yc2 / pixsize(2)
+	zc3p = zc3 / pixsize(0)
+	xc3p = xc3 / pixsize(1)
+	yc3p = yc3 / pixsize(2)
+
+; Write coordinates of intersection to outfile
+ 
+	if (exist_file(outfile)) then $
+		openu, lu, outfile, /APPEND $
+	else $
+		openw, lu, outfile
+
+	print, name+branch, " (x,y,z)      pixels                          mm"
+	print, [zc1/pixsize(0), xc1/pixsize(1), yc1/pixsize(2), zc1, xc1, yc1]
+	print, [zc2/pixsize(0), xc2/pixsize(1), yc2/pixsize(2), zc2, xc2, yc2]
+	print, [zc3/pixsize(0), xc3/pixsize(1), yc3/pixsize(2), zc3, xc3, yc3]
+	printf, lu, [zc1/pixsize(0), xc1/pixsize(1), yc1/pixsize(2), zc1, xc1, yc1]
+	printf, lu, [zc2/pixsize(0), xc2/pixsize(1), yc2/pixsize(2), zc2, xc2, yc2]
+	printf, lu, [zc3/pixsize(0), xc3/pixsize(1), yc3/pixsize(2), zc3, xc3, yc3]
+
+	close, lu
+	free_lun,lu
+end

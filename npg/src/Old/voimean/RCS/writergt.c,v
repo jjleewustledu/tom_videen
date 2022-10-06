@@ -1,0 +1,792 @@
+head	1.11;
+access;
+symbols;
+locks
+	tom:1.11; strict;
+comment	@ * @;
+
+
+1.11
+date	95.04.17.17.39.53;	author ty7777;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	94.06.08.18.04.12;	author ty7777;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	94.06.07.20.28.41;	author ty7777;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	94.04.13.21.11.22;	author ty7777;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	94.04.05.21.13.15;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	94.04.05.16.56.17;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.04.04.16.57.34;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.03.30.19.23.26;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.03.29.21.40.33;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.03.16.22.18.20;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.03.09.22.20.25;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@
+Working version, first release.
+@
+
+
+1.11
+log
+@Compute the standard deviations.
+@
+text
+@/*$Id: writergt.c,v 1.10 1994/06/08 18:04:12 ty7777 Exp $*/
+/*$Log: writergt.c,v $
+ * Revision 1.10  1994/06/08  18:04:12  ty7777
+ * Updated to introduce the frame_start_time parameter.
+ *
+ * Revision 1.9  1994/06/07  20:28:41  ty7777
+ * Switch the order between the start time and the duration.
+ *
+ * Revision 1.8  1994/04/13  21:11:22  ty7777
+ * Added wellcounts to the table.
+ *
+ * Revision 1.7  1994/04/05  21:13:15  ty7777
+ * Added voxels or voxel depending on number of voxels in voi.
+ *
+ * Revision 1.6  1994/04/05  16:56:17  ty7777
+ * Changed the documentation.
+ *
+ * Revision 1.5  1994/04/04  16:57:34  ty7777
+ * Final release version.
+ *
+ * Revision 1.4  1994/03/30  19:23:26  ty7777
+ * Change the table to match the ones defined in imglist.h.
+ *
+ * Revision 1.3  1994/03/29  21:40:33  ty7777
+ * Added regfile and parameter file.
+ *
+ * Revision 1.2  1994/03/16  22:18:20  ty7777
+ * Can process multiple frames images.
+ *
+ * Revision 1.1  1994/03/09  22:20:25  ty7777
+ * Initial revision
+ **/
+
+static char rcsid [] = "$Header: /usr/local/src/voimean/RCS/writergt.c,v 1.10 1994/06/08 18:04:12 ty7777 Exp $";
+
+/*___________________________________________________________________________
+  File:		writergt.c
+
+  Function:	int writergt (char *rgtfile, PARAMETER_DATA parameter_data,
+		char *version, int nvoi, VOIDATA *voilist, int nsub, RGTDATA *rgtlist,
+		char *date, char *uid, char *short_regfile, char *parameter_list_file,
+		int voxels_in_voi, FLOAT_POINT3D voxel_size)
+
+  Arguments:	rgtfile,		output file name for the voi data.	
+		parameter_data,		parameter data structure.
+		version,		program version number.
+		nvoi,			number of vois.
+		voilist,		a list of structures containing voi names,
+					and voi center coordinates.
+		nsub,			number of subject list.
+		rgtlist,		a list of RGTDATA structure.
+		date,			current date.
+		uid,			user id name.
+		short_regfile,		short file name for thr region file.
+		parameter_list_file,	parameter file name.
+		voxels_in_voi,		number of pixels in voi.
+		voxel_size,		voxel size.
+
+  Description:	This function writes the rgt data to a file.
+
+  Called by:	voimean.c.	
+
+  Calling:	
+
+  Author:	Tom Yang, 03/01/94. 
+___________________________________________________________________________*/
+
+#include <petutil/imglist.h>
+#include <petutil/matrix.h>
+#include "voimean.h"
+
+char *processing_names [] = {"cbf", 
+			     "cbv",
+			     "tissue_activity",
+			     "wellcounts",
+			     "oef",
+			     "cmro2",
+			     "none"};
+
+PUBLIC int writergt (rgtfile, parameter_data, version, nvoi, voilist, nsub, rgtlist, 
+	date, uid, short_regfile, parameter_list_file, voxels_in_voi, voxel_size,
+	frame_start_ms, save_sd)
+	char		*rgtfile;
+	PARAMETER_DATA	parameter_data;
+	char		*version;
+	int		nvoi;
+	VOIDATA		*voilist;
+	int		nsub;
+	RGTDATA		*rgtlist;
+	char		*date;
+	char		*uid;
+	char		*short_regfile;
+	char		*parameter_list_file;
+	int		voxels_in_voi;
+	FLOAT_POINT3D	voxel_size;
+	BOOLEAN		frame_start_ms;
+	BOOLEAN		save_sd;
+{
+	MatrixData	*matrix_read ();
+
+	BOOLEAN		free_format;
+	BOOLEAN		multiple_frames;
+	FILE		*rgtfp;
+	Image_subheader	*image_subheader;
+	MatrixData	*matrixx_data;
+	MatrixFile	*fptr;
+	char		*extension;
+	char		*short_image_name;
+	float		frame_duration;
+	float		frame_start_time;
+	float		pixel_size;
+	float		plane_separation;
+	int		i;
+	int		j;
+	int		k;
+	int		matnum;
+	int		total_frames;
+	short		height;
+	short		num_slices;
+	short		*slice_data;
+	short		width;
+	struct Matval	matval;
+
+	rgtfp	= fopen (rgtfile, "w");
+	if (rgtfp == (FILE *) NULL)
+	{
+		fprintf (stderr, "Error in opening file %s\n", rgtfile);
+		return FAIL;
+	}
+
+	fprintf (rgtfp, "  %3d   %s\n", VOI_FILETYPE, 
+		processing_names [parameter_data.processing]);  
+
+	multiple_frames	= FALSE;
+	total_frames	= 0;
+	for (i = 0; i < nsub; i++)
+	{
+		total_frames	+= rgtlist [i].nframe;
+		if (rgtlist [i].nframe > 1 && !multiple_frames)
+			multiple_frames	= TRUE;
+	}
+
+	if (multiple_frames)
+		fprintf (rgtfp, "  %4d   %4d  ", total_frames, nvoi + 2);
+	else
+	{
+		if (parameter_data.rgt_format == REGIONROW)
+			fprintf (rgtfp, "  %4d   %4d  ", nvoi, nsub);
+		else
+			fprintf (rgtfp, "  %4d   %4d  ", nsub, nvoi);
+	}
+
+	if (parameter_data.rgt_format == REGIONCOL && !multiple_frames)
+	{
+		for (i = 0; i < nvoi; i++)
+		{
+			fprintf (rgtfp, "%10s", voilist [i].voiname);  
+		}
+		fprintf (rgtfp, "\n");
+
+		for (i = 0; i < nsub; i++)
+		{
+			extension	= strrchr (rgtlist [i].complete_image_name, '/');
+			if (extension != NULL && strncmp (extension, "/", 1) == 0)
+				short_image_name	= extension + 1;
+			else
+				short_image_name	= rgtlist [i].complete_image_name;
+			if (save_sd)
+			{
+				for (j = 0; j < rgtlist [i].nvoi; j++)
+				{
+					fprintf (rgtfp, "   %10.2f", rgtlist [i].sdlist [j]);
+				}
+			}
+			else
+			{
+				for (j = 0; j < rgtlist [i].nvoi; j++)
+				{
+					fprintf (rgtfp, "   %10.2f", rgtlist [i].meanlist [j]);
+				}
+			}
+			if (strlen (short_image_name) >= 10)
+				fprintf (rgtfp, "   %s\n", short_image_name);  
+			else
+				fprintf (rgtfp, "   %10s\n", short_image_name);  
+		}
+	}
+	else if (parameter_data.rgt_format == REGIONROW && !multiple_frames)
+	{
+		for (i = 0; i < nsub; i++)
+		{
+			extension	= strrchr (rgtlist [i].complete_image_name, '/');
+			if (extension != NULL && strncmp (extension, "/", 1) == 0)
+				short_image_name	= extension + 1;
+			else
+				short_image_name	= rgtlist [i].complete_image_name;
+			if (strlen (short_image_name) >= 10)
+				fprintf (rgtfp, "%s ", short_image_name);  
+			else
+				fprintf (rgtfp, "%10s", short_image_name);  
+		}
+		fprintf (rgtfp, "\n");
+
+		for (i = 0; i < rgtlist [0].nvoi; i++)
+		{
+			if (save_sd)
+			{
+				for (j = 0; j < nsub; j++)
+				{
+					fprintf (rgtfp, "   %10.2f", rgtlist [j].sdlist [i]);
+				}
+			}
+			else
+			{
+				for (j = 0; j < nsub; j++)
+				{
+					fprintf (rgtfp, "   %10.2f", rgtlist [j].meanlist [i]);
+				}
+			}
+			fprintf (rgtfp, "%10s\n", voilist [i].voiname);  
+		}
+	}
+	else
+	{
+		fprintf (rgtfp, "%12s%12s", "Start_Time", "Duration ");
+		free_format	= FALSE;
+
+		for (i = 0; i < nvoi; i++)
+		{
+			if (strlen (voilist [i].voiname) >= 10)
+				free_format	= TRUE;  
+		}
+
+		for (i = 0; i < nvoi; i++)
+		{
+			if (free_format)
+				fprintf (rgtfp, "%s ", voilist [i].voiname);  
+			else
+				fprintf (rgtfp, "%10s", voilist [i].voiname);  
+		}
+
+		fprintf (rgtfp, "\n");
+
+		for (i = 0; i < nsub; i++)
+		{
+			matval.frame	= 1;
+			matval.plane	= 1;
+			matval.gate	= 1;
+			matval.data	= 0;
+			matval.bed	= 0;
+
+			fptr	= OpenEcat (rgtlist [i].complete_image_name, &num_slices, 
+				&width, &height, &pixel_size, &plane_separation, matval);
+
+			if (fptr == (MatrixFile *) NULL) 
+			{
+				fprintf (stderr, 
+				"Error (writergt.c): ecat image %s cannot be openned.\n",
+					rgtlist [i].complete_image_name);
+				return FAIL;
+			}
+
+			if (fptr->mhptr->data_type != IMAGE_DATA)
+			{
+				fprintf (stderr, 
+				"Error (writergt.c) : ecat image %s does not contain image data.\n",
+					rgtlist [i].complete_image_name);
+
+				matrix_close (fptr);
+				return FAIL;
+			}
+
+			extension	= strrchr (rgtlist [i].complete_image_name, '/');
+			if (extension != NULL && strncmp (extension, "/", 1) == 0)
+				short_image_name	= extension + 1;
+			else
+				short_image_name	= rgtlist [i].complete_image_name;
+
+			for (j = 0; j < rgtlist [i].nframe; j++)
+			{
+				matval.frame	= j + 1;
+				matnum	= mat_numcod (matval.frame, matval.plane, 
+					matval.gate, matval.data, matval.bed);
+
+				matrixx_data	= matrix_read (fptr, matnum);
+				if (matrixx_data == NULL)
+				{
+					fprintf (stderr, "matrixx_read error in writergt.\n");
+
+					matrix_close (fptr);
+
+					return FAIL;
+				}
+
+       				image_subheader		= (Image_subheader *) matrixx_data->shptr;
+				frame_duration		= image_subheader->frame_duration 
+							/ ((float) MILISECONDS_PER_SECOND);
+				if (frame_start_ms)
+					frame_start_time	
+					= image_subheader->frame_start_time 
+					/ ((float) MILISECONDS_PER_SECOND);
+				else
+					frame_start_time	
+					= image_subheader->frame_start_time; 
+
+				fprintf (rgtfp, "%12.1f%12.1f", frame_start_time, frame_duration);
+				if (save_sd)
+				{
+					for (k = 0; k < rgtlist [i].nvoi; k++)
+					{
+						fprintf (rgtfp, "%10.2f", 
+						rgtlist [i].sdlist [j * rgtlist [i].nvoi + k]);
+					}
+				}
+				else
+				{
+					for (k = 0; k < rgtlist [i].nvoi; k++)
+					{
+						fprintf (rgtfp, "%10.2f", 
+						rgtlist [i].meanlist [j * rgtlist [i].nvoi + k]);
+					}
+				}
+				if (j == 0)
+					fprintf (rgtfp, "   %s\n", short_image_name);
+				else
+					fprintf (rgtfp, "\n");
+
+				free_matrix_data (matrixx_data);
+			}
+
+			matrix_close (fptr);
+		}
+
+	}
+
+	fprintf (rgtfp, "\n");
+	fprintf (rgtfp, "  %s   %s   %s   %s\n", version, date, uid, short_regfile);
+	if (parameter_data.voi_shape == VOI_CUBE)
+		fprintf (rgtfp, "voi: cube %f %f %f in mm, ", 
+		parameter_data.voi_xdim, 
+		parameter_data.voi_ydim, 
+		parameter_data.voi_zdim);
+	else if (parameter_data.voi_shape == VOI_SPHERE)
+		fprintf (rgtfp, "voi: sphere %f in mm, ", 
+		parameter_data.voi_xdim);
+	fprintf (rgtfp, "%f cc, %d %s in voi.\n", 
+		voxels_in_voi * voxel_size.x * voxel_size.y * voxel_size.z / 1000, 
+		voxels_in_voi, (voxels_in_voi > 1)? "voxels": "voxel");
+	fprintf (rgtfp, "\n");
+
+	/*
+	 * Put the parameter file at the end of the data file.
+	 */
+	fprintf (rgtfp, "prm\n");
+	copyrec (rgtfp, parameter_list_file); 
+	fprintf (rgtfp, "endprm\n");
+
+	fclose (rgtfp);
+
+	return SUCCEED;
+}
+@
+
+
+1.10
+log
+@Updated to introduce the frame_start_time parameter.
+@
+text
+@d1 1
+a1 1
+/*$Id: writergt.c,v 1.9 1994/06/07 20:28:41 ty7777 Exp ty7777 $*/
+d3 3
+d34 1
+a34 1
+static char rcsid [] = "$Header$";
+d39 1
+a39 1
+  Function:	int writergt (char *rgtname, PARAMETER_DATA parameter_data,
+d44 1
+a44 1
+  Arguments:	rgtname,		output file name for the voi data.	
+d80 1
+a80 1
+PUBLIC int writergt (rgtname, parameter_data, version, nvoi, voilist, nsub, rgtlist, 
+d82 2
+a83 2
+	frame_start_ms)
+	char		*rgtname;
+d97 1
+d124 1
+a124 1
+	rgtfp	= fopen (rgtname, "w");
+d127 1
+a127 1
+		fprintf (stderr, "Error in opening file %s\n", rgtname);
+d168 1
+a168 1
+			for (j = 0; j < rgtlist [i].nvoi; j++)
+d170 4
+a173 1
+				fprintf (rgtfp, "   %10.2f", rgtlist [i].meanlist [j]);
+d175 7
+d206 1
+a206 1
+			for (j = 0; j < nsub; j++)
+d208 4
+a211 1
+				fprintf (rgtfp, "   %10.2f", rgtlist [j].meanlist [i]);
+d213 7
+d307 1
+a307 1
+				for (k = 0; k < rgtlist [i].nvoi; k++)
+d309 13
+a321 2
+					fprintf (rgtfp, "%10.2f", 
+					rgtlist [i].meanlist [j * rgtlist [i].nvoi + k]);
+@
+
+
+1.9
+log
+@Switch the order between the start time and the duration.
+@
+text
+@d1 1
+a1 1
+/*$Id: writergt.c,v 1.8 1994/04/13 21:11:22 ty7777 Exp ty7777 $*/
+d3 3
+d31 1
+a31 1
+static char rcsid [] = "$Id: writergt.c,v 1.8 1994/04/13 21:11:22 ty7777 Exp ty7777 $";
+d78 2
+a79 1
+	date, uid, short_regfile, parameter_list_file, voxels_in_voi, voxel_size)
+d93 1
+d97 1
+d168 4
+a171 1
+			fprintf (rgtfp, "   %10s\n", short_image_name);  
+d183 4
+a186 1
+			fprintf (rgtfp, "%10s", short_image_name);  
+d201 3
+a203 1
+		fprintf (rgtfp, "%12s%12s", "Start_Time", "Duration");
+d206 2
+a207 1
+			fprintf (rgtfp, "%10s", voilist [i].voiname);  
+d209 9
+d274 7
+a280 2
+				frame_start_time	= image_subheader->frame_start_time 
+							/ ((float) MILISECONDS_PER_SECOND);
+@
+
+
+1.8
+log
+@Added wellcounts to the table.
+@
+text
+@d1 1
+a1 1
+/*$Id: writergt.c,v 1.7 1994/04/05 21:13:15 ty7777 Exp ty7777 $*/
+d3 3
+d28 1
+a28 1
+static char rcsid [] = "$Id: writergt.c,v 1.7 1994/04/05 21:13:15 ty7777 Exp ty7777 $";
+d189 1
+a189 1
+		fprintf (rgtfp, "%12s%12s", "Duration", "Start_Time");
+@
+
+
+1.7
+log
+@Added voxels or voxel depending on number of voxels in voi.
+@
+text
+@d1 1
+a1 1
+/*$Id: writergt.c,v 1.6 1994/04/05 16:56:17 ty7777 Exp ty7777 $*/
+d3 3
+d25 1
+a25 1
+static char rcsid [] = "$Id: writergt.c,v 1.6 1994/04/05 16:56:17 ty7777 Exp ty7777 $";
+d66 1
+@
+
+
+1.6
+log
+@Changed the documentation.
+@
+text
+@d1 1
+a1 1
+/*$Id: writergt.c,v 1.5 1994/04/04 16:57:34 ty7777 Exp ty7777 $*/
+d3 3
+d22 1
+a22 1
+static char rcsid [] = "$Id: writergt.c,v 1.5 1994/04/04 16:57:34 ty7777 Exp ty7777 $";
+d30 1
+a30 1
+		int pixels_in_voi, FLOAT_POINT3D voxel_size)
+d44 1
+a44 1
+		pixels_in_voi,		number of pixels in voi.
+d68 1
+a68 1
+	date, uid, short_regfile, parameter_list_file, pixels_in_voi, voxel_size)
+d80 1
+a80 1
+	int		pixels_in_voi;
+d275 3
+a277 2
+	fprintf (rgtfp, "%f cc, %d voxels in voi.\n", 
+		voxel_size.x * voxel_size.y * voxel_size.z / 1000, pixels_in_voi);
+@
+
+
+1.5
+log
+@Final release version.
+@
+text
+@d1 1
+a1 1
+/*$Id: writergt.c,v 1.4 1994/03/30 19:23:26 ty7777 Exp ty7777 $*/
+d3 3
+d19 1
+a19 1
+static char rcsid [] = "$Id: writergt.c,v 1.4 1994/03/30 19:23:26 ty7777 Exp ty7777 $";
+d27 1
+a27 1
+		int pixels_in_voi)
+d42 1
+d65 1
+a65 1
+	date, uid, short_regfile, parameter_list_file, pixels_in_voi)
+d78 1
+d150 1
+a150 1
+				fprintf (rgtfp, "   %7.2f", rgtlist [i].meanlist [j]);
+d172 1
+a172 1
+				fprintf (rgtfp, "   %7.2f", rgtlist [j].meanlist [i]);
+d272 2
+a273 4
+	fprintf (rgtfp, "%f cc, %d pixels in voi.\n", 
+		parameter_data.voi_xdim * 
+		parameter_data.voi_ydim *
+		parameter_data.voi_zdim / 1000, pixels_in_voi);
+@
+
+
+1.4
+log
+@Change the table to match the ones defined in imglist.h.
+@
+text
+@d1 1
+a1 1
+/*$Id: writergt.c,v 1.3 1994/03/29 21:40:33 ty7777 Exp ty7777 $*/
+d3 3
+d16 1
+a16 1
+static char rcsid [] = "$Id: writergt.c,v 1.3 1994/03/29 21:40:33 ty7777 Exp ty7777 $";
+d23 2
+a24 1
+		char *date, char *uid, char *short_regfile, char *parameter_list_file)
+d38 1
+d61 1
+a61 1
+	date, uid, short_regfile, parameter_list_file)
+d73 1
+a107 1
+	fprintf (rgtfp, "  %s   %s   %s   %s\n", version, date, uid, short_regfile);
+d119 1
+a119 1
+		fprintf (rgtfp, "  %4d   %4d\n\n", total_frames, nvoi);
+d121 6
+a126 1
+		fprintf (rgtfp, "  %4d   %4d\n\n", nsub, nvoi);
+a129 1
+		fprintf (rgtfp, "%10s", "Filename");
+d134 1
+a134 1
+		fprintf (rgtfp, "\n\n");
+a142 1
+			fprintf (rgtfp, "%10s", short_image_name);  
+d147 1
+a147 1
+			fprintf (rgtfp, "\n");
+a151 1
+		fprintf (rgtfp, "%10s", "Region");
+d161 1
+a161 1
+		fprintf (rgtfp, "\n\n");
+a164 1
+			fprintf (rgtfp, "%10s", voilist [i].voiname);  
+d169 1
+a169 1
+			fprintf (rgtfp, "\n");
+d179 1
+a215 1
+			fprintf (rgtfp, "\n%s\n", short_image_name);
+d244 4
+a247 1
+				fprintf (rgtfp, "\n");
+d257 14
+@
+
+
+1.3
+log
+@Added regfile and parameter file.
+@
+text
+@d1 1
+a1 1
+/*$Id: writergt.c,v 1.2 1994/03/16 22:18:20 ty7777 Exp ty7777 $*/
+d3 3
+d13 1
+a13 1
+static char rcsid [] = "$Id: writergt.c,v 1.2 1994/03/16 22:18:20 ty7777 Exp ty7777 $";
+d48 1
+a48 2
+char *processing_names [] = {"none", 
+			     "cbf", 
+d50 1
+d52 2
+a53 1
+			     "cmro2"};
+@
+
+
+1.2
+log
+@Can process multiple frames images.
+@
+text
+@d1 1
+a1 1
+/*$Id: writergt.c,v 1.1 1994/03/09 22:20:25 ty7777 Exp ty7777 $*/
+d3 3
+d10 1
+a10 1
+static char rcsid [] = "$Id: writergt.c,v 1.1 1994/03/09 22:20:25 ty7777 Exp ty7777 $";
+d16 2
+a17 1
+		char *version, int nvoi, VOIDATA *voilist, int nsub, RGTDATA *rgtlist)
+d19 12
+a30 8
+  Arguments:	voiname,	output file name for the voi data.	
+		parameter_data,	parameter data structure.
+		version,	program version number.
+		nvoi,		number of vois.
+		voilist,	a list of structures containing voi names,
+				and voi center coordinates.
+		nsub,		number of subject list.
+		rgtlist,	a list of RGTDATA structure.
+d51 2
+a52 1
+PUBLIC int writergt (rgtname, parameter_data, version, nvoi, voilist, nsub, rgtlist, date, uid)
+d62 2
+d98 1
+a98 1
+	fprintf (rgtfp, "  %s   %s   %s\n", version, date, uid);
+d243 9
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d7 1
+a7 1
+static char rcsid [] = "$Id$";
+d34 1
+d54 1
+a54 3
+	FILE	*rgtfp;
+	int	i;
+	int	j;
+d56 22
+a87 1
+	fprintf (rgtfp, "  %4d   %4d\n", nsub, nvoi);
+d89 3
+a91 2
+	if (parameter_data.rgt_format == REGIONCOL && 
+	parameter_data.image_frames == 1)
+d93 13
+a105 1
+		fprintf (rgtfp, "\n%10s", "Filename");
+d114 6
+a119 1
+			fprintf (rgtfp, "%10s", rgtlist [i].short_image_name);  
+d127 1
+a127 2
+	else if (parameter_data.rgt_format == REGIONROW && 
+	parameter_data.image_frames == 1)
+d129 1
+a129 1
+		fprintf (rgtfp, "\n%10s", "Region");
+d132 6
+a137 1
+			fprintf (rgtfp, "%10s", rgtlist [i].short_image_name);  
+d150 81
+@

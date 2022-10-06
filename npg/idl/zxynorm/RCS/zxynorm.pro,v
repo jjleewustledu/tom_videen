@@ -1,0 +1,391 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	2004.07.23.14.17.48;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.10.04.20.34.18;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.09.30.14.33.26;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.09.25.15.59.27;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.09.25.15.58.26;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2002.09.24.20.43.28;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@remove free_imagefile at end (odd bug)
+@
+text
+@;+
+; NAME:
+;	ZXYNORM
+;
+; PURPOSE:
+;	Normalizes axially a 3D image using values of pixels within mask.
+;
+; CATEGORY:
+;	Image processing.
+;
+; INPUTS:
+; 	INFILE:		Image to normalize.
+; 	MASKFILE:	Image mask defining pixels used in normalization.
+; 	REFFILE:	Reference image for normalization.
+;
+; OUTPUT:
+;	OUTFILE:	Normalized image.
+;
+; PROCEDURE:
+;	Compute pixel ratios of all points within mask.
+;	First, fit cubic to plane means and scale.
+;	Second, fit quadratic to ratios within each plane and scale.
+;
+; MODIFICATION HISTORY:
+;	Sep 2002 - Tom Videen
+;-
+
+PRO ZXYNORM
+@@IMAGE_UTILS.h
+
+   on_error,2
+   infile = getenv('INFILE')
+   maskfile = getenv('MASKFILE')
+   reffile = getenv('REFFILE')
+   outfile = getenv('OUTFILE')
+   rad = 1
+
+   IF (infile EQ '') THEN BEGIN 
+      message,'No input file specified'
+      exit
+   ENDIF ELSE IF (maskfile EQ '') THEN BEGIN 
+      message,'No mask image specified'
+      exit
+   ENDIF ELSE IF (reffile EQ '') THEN BEGIN 
+      message,'No reference image specified'
+      exit
+   ENDIF ELSE IF (outfile EQ '') THEN BEGIN 
+      message,'No output file specified'
+      exit
+   ENDIF
+   str1 = outfile
+   l1 = rstrpos(str1,'.')
+   IF (l1 GT 0) THEN strput,str1,'log',l1+1 $
+   ELSE logfile = logfile+'.log'
+   logfile = strcompress(str1, /remove_all)
+   get_lun,log_lun
+   openw,log_lun,logfile
+   printf,log_lun,'Output image ',outfile
+
+;  Read Original Image
+
+   img = {VIMAGE}
+   img.fname = infile
+   img.ff = 1
+   img.lf = 1
+   img.fp = 1
+   img.lp = 300
+   msg = ''
+   print,'Original image ',infile
+   printf,log_lun,'Original image ',infile
+   stat =  getframe(img, msg)
+   IF (stat NE 0) THEN BEGIN
+      message, msg
+      exit 
+   ENDIF 
+   idata = *img.data
+   nx = img.dim[0]
+   ny = img.dim[1]
+   nz = img.dim[2]
+
+;  Read Mask Image
+
+   msk = {VIMAGE}
+   msk.fname = maskfile
+   msk.ff = 1
+   msk.lf = 1
+   msk.fp = 1
+   msk.lp = 300
+   msg = ''
+   print,'Mask image ',maskfile
+   printf,log_lun,'Mask image ',maskfile
+   stat =  getframe(msk, msg)
+   IF (stat NE 0) THEN BEGIN
+      message, msg
+      exit 
+   ENDIF 
+   mdata = *msk.data
+   IF (msk.dim[0] NE nx OR msk.dim[1] NE ny OR msk.dim[2] NE nz) THEN BEGIN
+      message, "ERROR [zxynorm]: Dimensions of input image and mask image differ"
+      exit 
+   ENDIF 
+
+;  Read Reference Image
+
+   ref = {VIMAGE}
+   ref.fname = reffile
+   ref.ff = 1
+   ref.lf = 1
+   ref.fp = 1
+   ref.lp = 300
+   msg = ''
+   print,'Reference image ',reffile
+   printf,log_lun,'Reference image ',reffile
+   stat =  getframe(ref, msg)
+   IF (stat NE 0) THEN BEGIN
+      message, msg
+      exit 
+   ENDIF 
+   rdata = *ref.data
+   IF (ref.dim[0] NE nx OR ref.dim[1] NE ny OR ref.dim[2] NE nz) THEN BEGIN
+      message, "ERROR [zxynorm]: Dimensions of input image and reference image differ"
+      exit 
+   ENDIF 
+
+;  First, normalize across planes using a cubic fit to the plane mean ratios:
+;  Compute ratio of ref/img for non-zero voxels within mask
+
+   ratio = fltarr(nz)
+   pix = intarr(nz)
+   FOR z=0,nz-1 DO BEGIN
+      subm = mdata[*,*,z]
+      subi = idata[*,*,z]
+      idx = where((subi NE 0) AND (subm NE 0), count)
+      IF (count GT 1) THEN BEGIN
+         subr = rdata[*,*,z]
+         ratio[z] = mean(subr[idx]) / mean(subi[idx])
+         pix[z] = count
+      ENDIF ELSE ratio[z] = -1.
+   ENDFOR
+
+Newplot:
+   deg_z = 3                    ; degree of fit; 3=cubic
+   idx = where(ratio GT 0., count)
+   zval = idx+1
+   val = ratio[idx]
+   weights = pix[idx]
+   coef = polyfitw(zval, val, weights, deg_z)
+   print,format='("Coefficients: ",4F)', coef
+   scl = fltarr(nz)
+   FOR z=0,nz-1 DO scl[z] = poly(z,coef)
+   zall = indgen(nz)+1
+
+   heading = reffile+'/'+infile+'!Cwithin '+maskfile
+   set_plot,'x'
+   plot, zval, val, xrange=[0,nz-1], charsize=1.5, psym=4, ymargin=[4,4], $
+      title=heading, xtitle='Plane', ytitle='Value'
+   oplot,zall, scl, linestyle=0
+
+   ch = 'y'
+   read,prompt='P=Print, Q=quit, Return=Continue? ',ch
+   IF (ch eq 'Q' or ch eq 'q') THEN return $
+   ELSE IF (ch eq 'P' or ch eq 'p') THEN begin
+      printname = '/tmp/zxynorm.ps'
+      set_plot,'ps'
+      device,filename=printname,xsize=7,ysize=6,xoffset=0.8,yoffset=3,/inches
+      plot, zval, val, charsize=1.5, psym=4, title=heading, xtitle='Plane', ytitle='Value'
+      oplot,zall, scl, linestyle=0
+      today = strmid(systime(0),4,6)+strmid(systime(0),19)
+      xyouts,0.1,0.0,today,/normal
+      device,/close
+      cmd = 'cat '+printname+' | lpr'
+      spawn, cmd
+      cmd = '/usr/bin/rm '+printname
+      spawn, cmd
+      goto, Newplot
+   ENDIF 
+
+;  Multiply the fit scaler times the input image
+
+   FOR z=0,nz-1 DO BEGIN
+      print,format='("pln",I4,"  scale =",F7.4)',z, scl[z]
+      printf,log_lun,format='("pln",I4,"  scale =",F7.4)',z, scl[z]
+      idata[*,*,z] = scl[z]*idata[*,*,z]
+   ENDFOR
+
+;  Second: Normalize within each plane by fitting plane within each slice 
+
+   deg_xy = 2			; degree of fit (each dimension); 2=quadratic
+   gnum = 10			; size of grid to subdivide each plane; 10=max of 100 segments
+   xstep = nx/gnum
+   ystep = ny/gnum
+   ratio = fltarr(gnum,gnum)
+   subcoord = fltarr(gnum,gnum,2)
+   FOR z=0,nz-1 DO BEGIN
+;
+;  Subdivide each plane into a grid (gnum x gnum) and sample each grid element
+;
+      FOR y=0,gnum-1 DO BEGIN
+         y0 = y*ystep
+         y1 = (y+1)*ystep-1
+         FOR x=0,gnum-1 DO BEGIN
+            x0 = x*xstep
+            x1 = (x+1)*xstep-1
+            subm = mdata[x0:x1,y0:y1,z]
+            subi = idata[x0:x1,y0:y1,z]
+            subc = subi
+            subc[*,*] = 0
+            idx = where((subi NE 0) AND (subm NE 0), count)
+            ;; for each grid point, find ratio of mean and center-of-vol x,y coordinate
+            IF (count GT 1) THEN BEGIN
+               subr = rdata[x0:x1,y0:y1,z]
+               ratio[x,y] = mean(subr[idx]) / mean(subi[idx])
+               xtot = 0.
+               ytot = 0.
+               tot = 0
+               FOR yi=0,ystep-1 DO BEGIN
+                  FOR xi=0,xstep-1 DO BEGIN
+                     IF (subi[xi,yi] NE 0 AND subm[xi,yi] NE 0) THEN BEGIN
+                        xtot = xtot + xi
+                        ytot = ytot + yi
+                        tot = tot + 1
+                     ENDIF
+                  ENDFOR
+               ENDFOR
+               subcoord[x,y,0] = x*xstep + xtot/tot
+               subcoord[x,y,1] = y*ystep + ytot/tot
+            ENDIF ELSE ratio[x,y] = -1.
+         ENDFOR
+      ENDFOR
+      xval = reform(subcoord[*,*,0], gnum*gnum)
+      yval = reform(subcoord[*,*,1], gnum*gnum)
+      zval = reform(ratio[*,*], gnum*gnum)
+      idx = where(zval GE 0, count)
+;
+;  Compute surface fit using the grid values and normalize the plane
+;
+      IF (count GE (gnum*gnum)/5) THEN BEGIN ; don't scale unless 20% of segments sampled
+         xv = xval[idx]
+         yv = yval[idx]
+         zv = zval[idx] 
+         zmean = mean(zv)
+         zzv = zv/zmean         ; fit the surface which will scale the values appropriately
+         zfit = surface_fit(zzv, xv, yv, deg_xy, c)
+         print,format='("pln",I4,"  coef =",9F9.4)',z, c
+         printf,log_lun,format='("pln",I4,"  coef =",9F9.4)',z, c
+         FOR y=0,ny-1 DO BEGIN
+            FOR x=0,nx-1 DO BEGIN
+               fac = 0.
+               FOR i=0,deg_xy DO BEGIN
+                  FOR j=0,deg_xy DO BEGIN
+                     fac = fac + c[j,i] * float(x)^i * float(y)^j
+                  ENDFOR
+               ENDFOR
+               idata[x,y,z] = float(idata[x,y,z])*fac
+            ENDFOR
+         ENDFOR
+      ENDIF
+   ENDFOR
+
+;  Write normalized image
+
+   print,'Output image ',outfile
+   WRITE_IMAGE:
+   *img.data = idata
+   extra = strarr(8)
+   extra[0] = 'program name    := zxynorm'
+   extra[1] = 'program version := 1.1'
+   extra[2] = 'program date    := 2002:09:25'
+   extra[3] = 'input file      := '+infile
+   extra[4] = 'mask file       := '+maskfile
+   extra[5] = 'reference file  := '+reffile
+   extra[6] = 'degrees z-fit   := '+strcompress(string(deg_z), /remove_all)
+   extra[7] = 'degrees xy-fit  := '+strcompress(string(deg_xy), /remove_all)
+   IF (putinterfile(img, outfile, msg, EXTRA=extra) NE 0) THEN BEGIN
+      message, msg
+      exit
+   ENDIF 
+   print,msg
+   close,log_lun
+   free_lun,log_lun
+END
+@
+
+
+1.5
+log
+@add today's date to printout
+@
+text
+@d134 1
+a134 1
+      IF (count GT 0) THEN BEGIN
+@
+
+
+1.4
+log
+@change descriptions (quadratic-> cubic)
+@
+text
+@d168 2
+@
+
+
+1.3
+log
+@change version date
+@
+text
+@d21 1
+a21 1
+;	First, fit quadratic to plane means and scale.
+d125 1
+a125 1
+;  First, normalize across planes using a quadratic fit to the plane mean ratios:
+d142 1
+a142 1
+   deg_z = 3                    ; degree of fit; 2=quadratic
+@
+
+
+1.2
+log
+@change deg_z to 3
+@
+text
+@d266 1
+a266 1
+   extra[2] = 'program date    := 2002:09:24'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d142 1
+a142 1
+   deg_z = 2                    ; degree of fit; 2=quadratic
+d148 1
+a148 1
+   print,format='("Coefficients: ",F,F,F)', coef[2], coef[1], coef[0]
+@

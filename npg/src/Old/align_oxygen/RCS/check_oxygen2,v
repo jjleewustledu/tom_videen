@@ -1,0 +1,253 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.5
+date	99.05.11.15.02.56;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.05.11.14.49.39;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.03.25.17.52.08;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.03.22.15.19.57;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.03.22.15.19.37;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@change partitions
+@
+text
+@#!/bin/csh
+#   Module: check_oxygen2
+#   Author: Tom Videen
+#   Date:   Mar-99
+#   Use:    Compare alignment of PET images (OO2->OO1 and CO2->OC1) where these
+#			image pairs are aligned using least squares with intensity rescaling.
+#	rcsid = $Id: check_oxygen2,v 1.4 1999/05/11 14:49:39 tom Exp $
+
+if ($#argv != 5) then
+    echo "Usage: check_oxygen2 pid oo1 oo2 oc1 oc2"
+	echo " i.e., check_oxygen2 p5000 1 2 1 2"
+	echo " (assumes aligned images rp5000oo1_g3.v, etc.)"
+    exit (-1)
+endif
+
+set RID = r$1
+set O1  = oo$2
+set O2  = oo$3
+set C1  = oc$4
+set C2  = oc$5
+set FIL = _g3
+set OO1 = ${O1}${FIL}
+set OO2 = ${O2}${FIL}
+set OC1 = ${C1}${FIL}
+set OC2 = ${C2}${FIL}
+set OOOO = ${O2}_to_${O1}
+set OCOC = ${C2}_to_${C1}
+
+# Check existence of files:
+
+set EFILES = "brainmsk.v ${RID}${OO1}.v ${RID}${OO2}.v ${RID}${OC1}.v ${RID}${OC2}.v"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [check_oxygen2]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit (-1)
+
+# Check the pixel size in PET headers:
+
+set PIXSIZE = `imghdr ${RID}${OO1}.v | grep 'Pixel size' | cut -f4 -d' '`
+set TPIXSIZE = `imghdr ${RID}${OO2}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($TPIXSIZE != $PIXSIZE) then
+	echo "ERROR [check_oxygen2]: different pixel sizes:"
+	echo "  ${RID}${OO1}.v = $PIXSIZE"
+	echo "  ${RID}${OO2}.v = $TPIXSIZE"
+	exit (-1)
+endif
+set TPIXSIZE = `imghdr ${RID}${OC1}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($TPIXSIZE != $PIXSIZE) then
+	echo "ERROR [check_oxygen2]: different pixel sizes:"
+	echo "  ${RID}${OO1}.v = $PIXSIZE"
+	echo "  ${RID}${OC1}.v = $TPIXSIZE"
+	exit (-1)
+endif
+set TPIXSIZE = `imghdr ${RID}${OC2}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($TPIXSIZE != $PIXSIZE) then
+	echo "ERROR [check_oxygen2]: different pixel sizes:"
+	echo "  ${RID}${OO1}.v = $PIXSIZE"
+	echo "  ${RID}${OC2}.v = $TPIXSIZE"
+	exit (-1)
+endif
+
+# Setup log file:
+
+set BINFILE = `which check_oxygen2`
+set VER = `grep rcsid $BINFILE | cut -f2- -d: | cut -f1 -dE | head -1`
+set LOGFILE = ${RID}_align2b.log
+echo "${RID} OEF2 check alignment:  " `whoami` `date` >! $LOGFILE
+echo "Version: " $VER         >> $LOGFILE
+echo ""                       >> $LOGFILE
+
+# Convert images to Analyze format:
+
+img2analyze ${RID}${OO1}.v a${RID}${OO1}
+img2analyze ${RID}${OO2}.v a${RID}${OO2}
+img2analyze ${RID}${OC1}.v a${RID}${OC1}
+img2analyze ${RID}${OC2}.v a${RID}${OC2}
+
+# Align OO2 to OO1
+
+echo "Aligning: ${RID}${OO2} to ${RID}${OO1}"
+set imax = `imghdr ${RID}${OO1}.v | grep Max | cut -f3 -d ' '`
+set thr1 = `echo "$imax/5;quit" | bc`
+set imax = `imghdr ${RID}${OO2}.v | grep Max | cut -f3 -d ' '`
+set thr2 = `echo "$imax/5;quit" | bc`
+setanamin a${RID}${OO1} 0
+setanamin a${RID}${OO2} 0
+set PRM = "-m 6 -p1 1 -t1 $thr1 -p2 1 -t2 $thr2 -x 3 -v"
+alignlinear a${RID}${OO1} a${RID}${OO2} ${RID}${OOOO}.air $PRM >! log
+echo ">> alignlinear $O2 to $O1" >> $LOGFILE
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+echo " " >> $LOGFILE
+imgreslice a${RID}${OO2} ${RID}${OOOO}
+analyze2img ra${RID}${OO2} ${RID}${OOOO}.v
+
+if (! -e null.air) then
+	alignlinear a${RID}${OO1} a${RID}${OO1} null.air -m 6 -p1 1 -t1 $thr1 -p2 0 -x 2
+endif
+echo ">> airdif ${RID}${OOOO}.air" >> $LOGFILE
+airdif ${RID}${OOOO}.air null.air brainmsk.v | tail -7 >> $LOGFILE
+echo " " >> $LOGFILE
+
+# Align OC2 to OC1
+
+echo "Aligning: ${RID}${OC2} to ${RID}${OC1}"
+set imax = `imghdr ${RID}${OC1}.v | grep Max | cut -f3 -d ' '`
+set thr1 = `echo "$imax/5;quit" | bc`
+set imax = `imghdr ${RID}${OC2}.v | grep Max | cut -f3 -d ' '`
+set thr2 = `echo "$imax/5;quit" | bc`
+setanamin a${RID}${OC1} 0
+setanamin a${RID}${OC2} 0
+set PRM = "-m 6 -p1 1 -t1 $thr1 -p2 1 -t2 $thr2 -x 3 -v"
+alignlinear a${RID}${OC1} a${RID}${OC2} ${RID}${OCOC}.air $PRM >! log
+echo ">> alignlinear $C2 to $C1" >> $LOGFILE
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+echo " " >> $LOGFILE
+imgreslice a${RID}${OC2} ${RID}${OCOC}
+analyze2img ra${RID}${OC2} ${RID}${OCOC}.v
+
+echo ">> airdif ${RID}${OCOC}.air" >> $LOGFILE
+airdif ${RID}${OCOC}.air null.air brainmsk.v | tail -7 >> $LOGFILE
+echo " " >> $LOGFILE
+
+echo "-------------------------"
+grep '=' $LOGFILE
+echo "-------------------------"
+echo "Finished: $LOGFILE"
+@
+
+
+1.4
+log
+@change to -x 3
+@
+text
+@d7 1
+a7 1
+#	rcsid = $Id: check_oxygen2,v 1.2 1999/03/22 15:19:57 tom Exp $
+d91 1
+a91 1
+set PRM = "-m 6 -p1 256 -t1 $thr1 -p2 256 -t2 $thr2 -x 3 -v"
+d101 1
+a101 1
+	alignlinear a${RID}${OO1} a${RID}${OO1} null.air -m 6 -p1 256 -t1 $thr1 -p2 0 -x 2
+d116 1
+a116 1
+set PRM = "-m 6 -p1 256 -t1 $thr1 -p2 256 -t2 $thr2 -x 3 -v"
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d5 2
+a6 2
+#   Use:    Compare alignment of PET images (OO2->OO1 and CO2->OC1)
+#			where these image pairs are aligned using SD of ratio image
+d91 1
+a91 1
+set PRM = "-m 6 -p1 256 -t1 $thr1 -p2 256 -t2 $thr2 -x 1 -v"
+d116 1
+a116 1
+set PRM = "-m 6 -p1 256 -t1 $thr1 -p2 256 -t2 $thr2 -x 1 -v"
+@
+
+
+1.2
+log
+@switch to ratio cost fn
+@
+text
+@d7 1
+a7 1
+#	rcsid = $Id: check_oxygen2,v 1.16 1999/03/02 15:23:47 tom Exp $
+d91 2
+a92 1
+alignlinear a${RID}${OO1} a${RID}${OO2} ${RID}${OOOO}.air -m 6 -p1 256 -t1 $thr1 -p2 256 -t2 $thr2 -x 1 -v >! log
+d116 2
+a117 1
+alignlinear a${RID}${OC1} a${RID}${OC2} ${RID}${OCOC}.air -m 6 -p1 256 -t1 $thr1 -p2 256 -t2 $thr2 -x 1 -v >! log
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d6 2
+a7 1
+#	rcsid = $Id$
+d70 1
+a70 1
+set LOGFILE = ${RID}_align2.log
+d91 1
+a91 1
+alignlinear a${RID}${OO1} a${RID}${OO2} ${RID}${OOOO}.air -m 6 -p1 1 -t1 $thr1 -p2 1 -t2 $thr2 -x 3 -v >! log
+d100 1
+a100 1
+	alignlinear a${RID}${OO1} a${RID}${OO1} null.air -m 6 -p1 1 -t1 $thr1 -p2 0 -x 2
+d115 1
+a115 1
+alignlinear a${RID}${OC1} a${RID}${OC2} ${RID}${OCOC}.air -m 6 -p1 1 -t1 $thr1 -p2 1 -t2 $thr2 -x 3 -v >! log
+@

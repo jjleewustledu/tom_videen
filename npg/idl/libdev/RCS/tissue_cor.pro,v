@@ -1,0 +1,201 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.04.08.21.14.40;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.27.15.58.13;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@; $Id: tissue_cor.pro,v 1.1 1996/11/27 15:58:13 tom Exp tom $
+;+
+; NAME:
+;	TISSUE_COR
+;
+; PURPOSE:
+;   Divide a PET image by a filtered, tissue image to correct for
+;	partial volume effects.
+;
+; CATEGORY:
+;	Image processing
+;
+; CALLING SEQUENCE:
+;   TISSUE_COR, PETfile, Tissuefile, Maskfile, Correctedfile, Scale
+;
+; INPUTS:
+;   PETfile:		input filename for PET
+;   Tissuefile:		input filename for tissue
+;   Maskfile:		input filename for brain mask
+;	Correctedfile:	output filename
+;	Scale:			pixel value of tissuefile representing 100%
+;
+; OUTPUTS:
+;	Correctedfile:	PET activity scaled to units of brain tissue
+;
+; RESTRICTIONS:
+;	All files in Analyze format.
+;
+; PROCEDURE:
+;	Read PET and Tissue images.
+;	If (mask(i,j,k) > 0 and tissue(i,j,k) > 0)
+;		then corrected(i,j,k) = pet(i,j,k)/tissue(i,j,k)
+;	else corrected(i,j,k) = 0
+;	Write Corrected image to file.
+;
+; MODIFICATION HISTORY:
+;   Tom Videen, April 1995.
+;-
+
+pro tissue_cor, petfile, tissuefile, maskfile, correctedfile, scale
+
+	on_error,2
+	if n_params() ne 5 then $
+		message,'Usage: tissue_cor, petfile, tissuefile, maskfile, correctedfile, scale'
+
+; Determine image array size & type
+
+	tsize = intarr(3)
+	tpixsize = fltarr(3)
+	msize = intarr(3)
+	mpixsize = fltarr(3)
+	asize = intarr(3)
+	pixsize = fltarr(3)
+	analyze_dim, tissuefile, tsize, tdsize, tpixsize
+	analyze_dim, maskfile, msize, mdsize, mpixsize
+	analyze_dim, petfile, asize, dsize, pixsize
+
+    if ((asize(0) ne tsize(0)) or (asize(1) ne tsize(1)) or (asize(2) ne tsize(2)) or $
+		(asize(0) ne msize(0)) or (asize(1) ne msize(1)) or (asize(2) ne msize(2))) then begin
+		print, asize, petfile
+		print, tsize, tissuefile
+		print, msize, maskfile
+        message, 'Error: input files must be same size'
+        return
+    endif
+
+	print, petfile, " is ",dsize, "-bit"
+	print, tissuefile, " is ",tdsize, "-bit"
+	print, maskfile, " is ",mdsize, "-bit"
+
+	if (mdsize eq 8) then begin
+		mask = bytarr(asize(0), asize(1), asize(2))
+	endif else begin
+        mask = intarr(asize(0), asize(1), asize(2))
+	endelse
+
+	if (tdsize eq 8) then begin
+		tissue = bytarr(asize(0), asize(1), asize(2))
+	endif else begin
+        tissue = intarr(asize(0), asize(1), asize(2))
+	endelse
+
+	if (dsize eq 8) then begin
+		pet = bytarr(asize(0), asize(1), asize(2))
+	endif else begin
+        pet = intarr(asize(0), asize(1), asize(2))
+	endelse
+	get_lun,lu
+
+; Read images
+
+	openr,lu,petfile
+	readu,lu,pet,TRANSFER_COUNT=count
+	close,lu
+	openr,lu,tissuefile
+	readu,lu,tissue,TRANSFER_COUNT=count
+	close,lu
+	openr,lu,maskfile
+	readu,lu,mask,TRANSFER_COUNT=count
+	close,lu
+
+; Divide and scale
+
+	pet = float(pet)
+	tissue = float(tissue)
+	maxpet = max(pet)
+	cutoff = scale/2
+	print, "PET max = ", maxpet
+	print, "Tissue max = ",scale
+	print, "Mask <= ",cutoff
+	petmax = 0.
+	limit = 1.5 * maxpet
+
+    for k = 0, asize(2)-1 do begin
+        print, "Slice = ",k+1
+        for j = 0, asize(1)-1 do begin
+            for i = 0, asize(0)-1 do begin
+                if ((mask(i,j,k) gt cutoff) and (tissue(i,j,k) gt 1.)) then begin
+                   	pet(i,j,k) = scale * pet(i,j,k) / tissue(i,j,k)
+					if (pet(i,j,k) gt limit) then begin
+						print, i, j, k, pet(i,j,k), mask(i,j,k), tissue(i,j,k)
+					endif
+					if (pet(i,j,k) gt petmax) then petmax = pet(i,j,k)
+                endif else begin
+                    pet(i,j,k) = 0
+				endelse
+            endfor
+        endfor
+    endfor
+	print, "Corrected maximum = ", petmax
+	pet = fix(pet)
+
+; Write to correctedfile
+ 
+	openw, lu, correctedfile
+	writeu, lu, pet
+	close, lu
+	free_lun,lu
+
+end
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+; $Id: tissue_cor.pro,v 1.1 1995/05/02 13:54:42 tom Exp $
+d14 1
+a14 1
+;   TISSUE_COR, PETfile, Tissuefile, Maskfile, Correctedfile
+d21 1
+d40 1
+a40 1
+pro tissue_cor, petfile, tissuefile, maskfile, correctedfile
+d43 2
+a44 1
+	if n_params() ne 4 then message,'Usage: tissue_cor, petfile, tissuefile, maskfile, correctedfile'
+d74 1
+a74 2
+		message, 'Error: maskfile must be 8-bit'
+		return
+a105 2
+	if (tdsize eq 8) then scale = 255. $
+	else scale = max(tissue)
+d107 1
+d110 1
+d118 1
+a118 1
+                if ((mask(i,j,k) gt 0) and (tissue(i,j,k) gt 1.)) then begin
+@

@@ -1,0 +1,126 @@
+#!/bin/csh
+# Module:	manual_fidpts_to_atlas
+# Date:		26-Feb-2007
+# Intent:
+#	Used AC, PC, OX and Tilt ONLY
+#	1) Read fiducial pts and draw lines in halfmm_crop space
+#	2) Align image to reference standard (halfmm_crop_fid.img)
+#	4) Combine fiducial AIR files and reslice to MaiAtlas
+#	5) Combine MR AIR files and reslice to MaiAtlas
+#	6) Reslice Coronal MR to MaiAtlas
+#	7) Compute coordinates in MaiAtlas (.loc) and Sterotaxic space (.atl)
+# Image Arrays:
+#	ct1      = original CT
+#	tse1     = original transverse Turbo Spin Echo MR
+#	atlas    = initial atlas estimate (256x256x128)
+#	halfmm   = initial atlas interpolated to 0.5 mm pixels (512x512x256)
+#	halfmm_crop = cropped atlas interpolated to 0.5 mm pixels (300x128x64)
+#	MaiAtlas = final atlas (1113x39x960)
+#	MaiMask  = mask in final atlas (1113x39x960)
+# --------------------------------------------------------------
+if ($#argv != 1) then
+    echo "Usage:  manual_fidpts_to_atlas dbid"
+    echo " e.g.,  manual_fidpts_to_atlas db123"
+    exit 1
+endif
+
+set DB     = $1
+set DDIR   = /data/petsun48/data8/DBS/$DB/Mai
+set REF    = /data/petsun48/data8/DBS/Atlas
+set ATDIR  = /data/petsun48/data8/DBS/$DB/Atlas
+set ALDIR  = /data/petsun48/data8/DBS/$DB/Align
+set MRDIR  = /data/petsun48/data8/DBS/$DB/MR
+set PTS    = ${DB}.pts
+set DBMR2  = ${DB}_tse2
+set AIRCM  = $ALDIR/${DB}_ct2tse
+set AIRTT  = $ALDIR/${DB}_tse2to1
+set AIRMR  = $ATDIR/${DB}_tse1_to_atlas
+set AIRCT  = ${DB}_ct1_to_atlas
+set AIR1   = $REF/atlas_to_halfmm_crop
+set AIR2   = $REF/halfmm_crop_to_MaiAtlas
+set FIDC   = $REF/halfmm_crop_fid
+set DMMR2  = ${DB}_MaiAtlas_tse2
+set DFID   = ${DB}_halfmm_crop_fid
+set DMFID  = ${DB}_MaiAtlas_fid
+set DMMR   = ${DB}_MaiAtlas_tse
+set DMMR2  = ${DMMR}2
+set DMCT   = ${DB}_MaiAtlas_ct
+
+if (! -e $DDIR) mkdir $DDIR
+chmod 770 $DDIR
+chgrp jsp $DDIR
+cd $DDIR
+
+if (! -e $DBMR2.hdr) cp $MRDIR/$DBMR2.hdr .
+if (! -e $DBMR2.img) cp $MRDIR/$DBMR2.img .
+
+set FILES1 = ($PTS $FIDC.img)
+set FILES2 = ($AIRCM.air $AIRMR.air $AIR1.air $AIR2.air)
+set FILES3 = ($DBMR2.img)
+set FILES  = ($FILES1 $FILES2)
+checkfiles $FILES
+if ($status != 0) exit
+
+# ==================================================================
+# 1) Read fiducial pts and draw lines in halfmm_crop space
+#	--------------------------------
+echo "Fiducial points defined:"
+if (! -e $PTS) cp ../Atlas/$PTS .
+if (! -e $DFID.img) fidpts_to_halfmm_crop $PTS $DFID
+set FILES = ($PTS $DFID.img)
+checkfiles $FILES
+if ($status != 0) exit
+
+set INIT = $DFID.init
+if (! -e $INIT) then
+	echo "ERROR: No initialization file: $INIT"
+	exit
+endif
+
+# ==================================================================
+# 4) Combine AIR files 
+#	-------------------------------------------
+combine_air $DMFID.air y $AIR2.air $DFID.air
+combine_air $DMMR.air y $AIR2.air $DFID.air $AIR1.air $AIRMR.air
+combine_air $DMMR2.air y $AIR2.air $DFID.air $AIR1.air $AIRMR.air $AIRTT.air
+combine_air $AIRCT.air y $AIRMR.air $AIRCM.air
+combine_air $DMCT.air y $AIR2.air $DFID.air $AIR1.air $AIRCT.air
+
+# ==================================================================
+# 5) Compute coordinates in MaiAtlas (.loc) and Sterotaxic space (.atl)
+#	------------------------------------------------------
+fidpts_mai $AIR1 $DMFID $DB
+fidpts_format $DB.atl ${DB}_axial.atl a
+rm $DB.atl
+echo "Fiducials in Atlas Space:"
+cat ${DB}_axial.atl
+
+# ==================================================================
+# 6) Reslice Coronal MR (TSE2) to MaiAtlas
+#	-------------------------------------------
+echo " ";echo "While waiting for completion, set"
+echo "  Orient=coronal; Magnify=1; Minimize Image 1 & 2"
+echo "  Image 2 = $REF/MaiOverlays.img"; echo " "
+
+imgreslice $DBMR2 $DMMR2
+mv r$DBMR2.hdr $DMMR2.hdr
+mv r$DBMR2.img $DMMR2.img
+
+echo " ";echo "Check coronal planes: OX=14, AC=17, PC=38, RN=34, STN=29"
+echo "  Image 1  $DDIR/${DB}_MaiAtlas_tse2.img"
+echo "  Image 2  $REF/MaiOverlays.img"
+echo "-------------------------------------------"
+#set data = `line`
+
+# ==================================================================
+#	Clean up
+#	Final files: 2 Manual, 2 img, 2 hdr, 7 air, 1 init, 1 pts, 1 atl, 1 loc = 18 total
+#	-------------------------------------------
+rm $DFID.hdr $DFID.img
+rm $DBMR2.hdr $DBMR2.img
+cp /usr/local/npg/bin/manual_fidpts_to_atlas $DDIR/Manual_fidpts_to_atlas
+jsp
+set NFILES = `ls | wc | cut -c1-8`
+echo ">>> $DB  number of files = $NFILES"
+echo "=========================================================="
+

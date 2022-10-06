@@ -1,0 +1,112 @@
+head	1.1;
+access;
+symbols;
+locks
+	tom:1.1; strict;
+comment	@# @;
+
+
+1.1
+date	93.12.07.20.44.00;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@from E Pearson 12/07/93
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@;       $Revision:   1.1  $ $Date:   10/15/93 18:41:36  $
+;       Copyright(c) 1993 CTI PET Systems, Inc.
+
+;+
+; NAME:		
+;		WMATS6
+;
+; PURPOSE:	
+;		Write subheader and data into the file represented by unit.		
+;
+; CATEGORY:	
+;		CTI Matrix utility		
+;
+; CALLING SEQUENCE:		
+;		result = wmats6 (unit,ftype,sh,data,mats,dir,dirinfo,SH_ONLY=sh_only)
+; INPUTS:			
+;
+; KEYWORD PARAMETERS:		
+;
+; OUTPUTS:			
+;
+; HISTORY NOTES:		
+;-
+
+function wmats6,unit,ftype,sh,data,mats,dir,dirinfo,SH_ONLY=sh_only
+
+	on_error,2
+	on_ioerror,io_error
+	if(n_params() NE 7) then begin
+	   set_ecat_error,2,"WMATS6",UNIT=unit
+	   return,!ECAT.ERROR
+	endif
+	
+	if (ftype eq 5) then dtype=2 else dtype = sh(0).data_type
+	s = size(data(*,*,0))
+	scale = 0
+	
+	nblks = data_size(dtype,s(n_elements(s)-1))+1L
+	if((!ECAT.file_types(ftype) EQ "IMG") OR 		$
+	   (!ECAT.file_types(ftype) EQ "SCN")) then		$
+	   scale = dscale(data)					$
+	else							$
+	   scale = replicate(1.0,n_elements(mats))
+
+	for i=0,n_elements(mats)-1 do begin
+	   ind = where(dir(0,*) EQ mats(i), cnt)
+	   if(cnt EQ 0) then begin
+	      nextblk = nextfree(unit,mats(i),nblks,dir,dirinfo,/ECAT6)
+	      if(nextblk EQ !ECAT.ERROR) then begin
+	         set_ecat_error,0,"WMATS6"
+	         return,!ECAT.ERROR
+	      endif
+	      off = (nextblk-1)*!ECAT.BLKSIZE
+	   endif else begin
+	      off = dir(4,ind)
+	   endelse
+	   if(NOT keyword_set(SH_ONLY)) then begin
+	      if(!ECAT.file_types(ftype) EQ "IMG") then begin
+	         imin = 0
+	   	 sh(i).image_max = max(data(*,*,i), min=imin)
+	         sh(i).image_min = imin
+	      endif
+	      if(!ECAT.file_types(ftype) EQ "SCN") then begin
+	         smin = 0
+	         sh(i).scan_max = max(data(*,*,i), min=smin)
+	         sh(i).scan_min = smin
+	      endif
+	   endif
+	   stat = wsubheader6(unit,ftype,off,sh(i),SCALE=scale(i))
+	   if(stat EQ !ECAT.ERROR) then return,!ECAT.ERROR
+	   if(NOT keyword_set(SH_ONLY)) then begin
+	     if (ftype eq 5) then begin
+	       stat=wpmdata6(unit, sh(0), data)
+	     endif else begin
+	      stat = wdata(unit,ftype,dtype,off+!ECAT.BLKSIZE,data(*,*,i))
+	     endelse
+	     
+	      if(stat EQ !ECAT.ERROR) then return,!ECAT.ERROR
+	   endif
+	endfor
+
+	return,!ECAT.OK
+
+io_error : set_ecat_error,1,"WMATS6",UNIT=unit
+           return,!ECAT.ERROR
+
+end
+@

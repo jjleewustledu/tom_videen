@@ -1,0 +1,217 @@
+#!/bin/csh
+#	Name:	align_ho2ref
+#	Author: Tom Videen
+#	Date:	Feb 2006
+#	Intent: Coregister HO to reference t88-atlas brain
+
+if ($#argv != 3) then
+    echo "Usage: align_ho2ref pid ho tr"
+    echo " e.g., align_ho2ref p6104 rp6104mean0 p6104tr1"
+    exit 1
+endif
+
+set PID = $1
+set HO  = $2
+set TR  = $3
+
+set TRf = ${TR}_2dg5
+set LAT = ${PID}lat
+set MSK = ${PID}msk
+set HOREF = ${HO}_to_meanpet
+set INIT  = $HOREF.init
+set LOGFILE = $HOREF.log
+set REF  = /usr/local/npg/lib/t88/meanpet
+set MASK = /usr/local/npg/lib/t88/meanmask
+set DDIR = `pwd`
+set Z0 = 38
+
+# Check existence of files:
+# -------------------------
+set EFILES = "$HO.v $TR.v $REF.img $MASK.img $REF.t88"
+checkfiles $EFILES
+if ($status != 0) exit 1
+touch $LOGFILE
+
+# Create PET mask from transmission image
+# ---------------------------------------
+gauss2d $TR.v $TRf.v 0.5
+maskslc $TRf.v $TRf.v 1to1
+maskslc $TRf.v $TRf.v 47to47
+
+prompt0:
+echo "============================================================"
+echo "Use vidi to edit the filtered transmission image"
+echo "   Get Files->Image 1:   $TRf.v"
+echo "   Edit->Image 1"
+echo "      Remove headholder (if visible) from top and bottom planes"
+echo "      Fill using Fill Value = 0"
+echo "   Save Image->Image 1:  $TRf.img"
+echo "   Press RETURN to continue (CTRL-C to quit)"
+set data = `line`
+ 
+if (! -e $TRf.ifh) then
+	echo "ERROR: Save as $TRf.img"
+	goto prompt0
+endif
+if2analyze $TRf
+analyze2img $TRf $TRf.v
+
+sumlateral $TRf.v $LAT.v 700 1300
+maskpct $LAT.v tmp.v 40
+maskimg $LAT.v tmp.v $LAT.v 1
+
+prompt1:
+echo "============================================================"
+echo "Use vidi to edit the lateral projection of the mask"
+echo "   Get Files->Image 1:   $LAT.v"
+echo "   Edit->Image 1"
+echo "      Outline nose and tissue below base of cranium"
+echo "      Fill using Fill Value = 0"
+echo "   Save Image->Image 1:  $LAT.img"
+echo "   Press RETURN to continue (CTRL-C to quit)"
+set data = `line`
+ 
+if (! -e $LAT.ifh) then
+	echo "ERROR: Save as $LAT.img"
+	goto prompt1
+endif
+if2analyze $LAT
+analyze2img $LAT $LAT.v
+
+masklateral $HO.v $LAT.v $MSK.v 10
+maskslc $MSK.v $MSK.v 1to1
+if ($status != 0) exit 1
+
+# Coregister to standard image
+# --------------------------------
+set RMAX = `imghdr $REF.t88 | grep Max | cut -f2 -d= | cut -f1 -dM`
+maskimg $HO.v $MSK.v tmp.v 1
+
+# SCALE is set to facilitate the coregistration to the standard and is restored later
+set HMAX = `imghdr tmp.v | grep Max | cut -f2 -d= | cut -f1 -dM`
+set SCALE = `echo "$RMAX / $HMAX" | bc -l | cut -c1-11`
+set INVSCALE = `echo "1.0 / $SCALE" | bc -l | cut -c1-11`
+echo "Scale = $SCALE   Inverse Scale = $INVSCALE" >> $LOGFILE
+echo "Scale = $SCALE   Inverse Scale = $INVSCALE"
+scaleimage $HO.v $SCALE
+img2analyze $HO.v a$HO
+scaleimage $HO.v $INVSCALE
+
+if (-e $INIT) goto 9_PARAMETER
+
+set FIRST = 1
+prompt2:
+setanamin a$HO 0
+if (-e air_init) then
+	set N = `wc air_init | cut -c1-8`
+	if ($N != 6) then
+		echo "ERROR: air_init must have 6 lines"
+		echo "   Be certain to run manualreslice with scale-down factors=1"
+		echo 
+		exit 1
+	endif
+	set PRM = "-m 6 -p1 1 -t1 300 -e1 $MASK -x 3 -f air_init -v"
+	echo "Initial 6-parameter coregistration using air_init ..."
+else
+	set PRM = "-m 6 -p1 1 -t1 300 -e1 $MASK -x 3 -v"
+	echo "Initial 6-parameter coregistration ..."
+endif
+echo alignlinear $REF a$HO $HOREF.air $PRM >> $LOGFILE
+
+alignlinear $REF a$HO $HOREF.air $PRM >! log
+imgreslice a$HO $HOREF
+tail -8 log >> $LOGFILE
+set ERROR = `grep Hessian log | tail -1`
+if (`echo $ERROR | wc -w` != 0) then
+	echo $ERROR
+	if ($FIRST != 0) then
+		set FIRST = 0
+		echo "============================================================"
+		echo "6-parameter initial alignment appears to have failed."
+		echo ""
+		echo "Use vidi to check check it"
+		echo "   Image 1: $REF.t88		(PET Rainbow)"
+		echo "   Image 2: $DDIR/ra$HO.img	(Hot Metal)"
+		echo ""
+		echo "Run manualreslice and save an initialization file named 'air_init'"
+		echo ""
+		echo "Open 2 new shells:"
+		echo "   in one, copy the Manualreslice commands and edit them."
+		echo "   in the other, paste the manualreslice commands to run them."
+		echo ""
+		echo "cp /data/petsun48/data10/DBS/Processing/Manualreslice_ho2atlas ."
+		echo "chmod 660 Manualreslice_ho2atlas"
+		echo ""
+		echo "When satisfied (with air_init), press RETURN to continue (CTRL-C to quit)"
+		set data = `line`
+		goto prompt2
+	endif
+endif
+cp ra$HO.hdr ri$HO.hdr
+cp ra$HO.img ri$HO.img
+cp $HOREF.air ri$HOREF.air
+
+echo 0.0 >! $INIT
+echo 0.0 >> $INIT
+echo 0.0 >> $INIT
+set shifts = `scanair $HOREF.air | tail -6 | head -3 | cut -f4 -d' '`
+foreach i ($shifts)
+	set a = `echo $i | cut -f1 -de`
+	set chk = `echo $i | grep "+"`
+	if ($chk == "") then
+		set b = `echo $i | cut -f2 -de`
+	else
+		set b = `echo $i | cut -f2 -d+`
+	endif
+	set n = `echo "-2 * $a * 10^$b" | bc -l`
+	echo $n | cut -c1-6 >> $INIT
+end
+echo 1.0 >> $INIT
+echo 1.0 >> $INIT
+echo 1.0 >> $INIT
+
+9_PARAMETER:
+
+set PRM = "-m 9 -p1 1 -t1 100 -e1 $MASK -f $INIT -x 3 -v"
+setanamin a$HO 0
+echo "Final 9-parameter coregistration ..."
+echo "Initialization file:" >> $LOGFILE
+cat $INIT >> $LOGFILE
+echo alignlinear $REF a$HO $HOREF.air $PRM >> $LOGFILE
+
+alignlinear $REF a$HO $HOREF.air $PRM >! log
+set ERROR = `grep HESSIAN log`
+if (`echo $ERROR | wc -w` != 0) then
+	echo $ERROR
+	echo "Alignment failed and will require full manual processing" 
+	exit 1
+endif
+# Most common reason for failure with 9-parameter fit when 6-prm succeeds
+# is a difference in scaling between $REF and a$HO
+
+imgreslice a$HO $HOREF
+tail -8 log | tee -a $LOGFILE
+analyze2img ra$HO $HO.t88
+scaleimage $HO.t88 $INVSCALE
+setz0 $HO.t88 $Z0
+
+echo "============================================================"
+echo "Use vidi to check co-registration of $HO.t88 to standard"
+echo "   Image 1: $REF.t88		(PET Rainbow)"
+echo "   Image 2: $DDIR/$HO.t88	(Hot Metal)"
+echo "   Compare composite transverse, sagittal, and coronal views."
+echo "Press RETURN to cleanup and finish (CTRL-C to quit)"
+set data = `line`
+
+unalias rm
+rm tmp.v log
+rm a$HO.*
+rm ra$HO.*
+rm ${PID}lat*
+rm ri$HO*
+jsp
+
+echo "HO-to-atlas AIR file:  $HOREF.air" | tee -a $LOGFILE
+echo "HO atlas-image:        $HO.t88" | tee -a $LOGFILE
+echo "============================================================"
+

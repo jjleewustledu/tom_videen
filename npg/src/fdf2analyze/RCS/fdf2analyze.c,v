@@ -1,0 +1,591 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.16.14.45.06;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.11.26.21.01.14;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.07.23.19.35.53;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.07.07.21.41.50;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.06.27.18.39.57;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/* $Log: fdf2analyze.c,v $
+ * Revision 1.4  2002/11/26  21:01:14  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  1998/07/23  19:35:53  tom
+ * modify to use output from fdfsplit
+ *
+ * Revision 1.2  1998/07/07  21:41:50  tom
+ * add flag for floating pt
+ *
+ * Revision 1.1  1998/06/27  18:39:57  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			fdf2analyze.c
+ *	Date:			Jul 1998
+ *	Author:			Tom Videen
+ *	Description:	Transform FDF images into Analyze format.
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fdf2analyze/RCS/fdf2analyze.c,v 1.4 2002/11/26 21:01:14 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ANALYZE.h>				 /* dsr */
+#define ROUND(x)    (short int) ((x) > 0 ? ((x) + 0.5) : ((x) - 0.5))	/* round to int */
+
+/*	----------------------------
+ *	Function:	fdf2analyze
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* header for ANALYZE */
+	FILE           *in_hdr;			 /* FDF hdr */
+	FILE           *in_img;			 /* FDF img */
+	FILE           *out_hdr;		 /* ANALYZE hdr   */
+	FILE           *out_img;		 /* ANALYZE image */
+
+	char           *FDF_hdr;		 /* input FDF header filename */
+	char           *FDF_img;		 /* input FDF image filename */
+	char           *ANALYZE_hdr;	 /* output Analyze header filename  */
+	char           *ANALYZE_img;	 /* output Analyze image filename */
+	char           *ptr;
+	char            str[256];
+	char            c1, c2;
+	char            version[5];
+	char            program_date[12];
+	long            n;
+	int             dim0, dim1, dim2;
+	float           imax, imin, scaler;
+	short           global_max, global_min;
+	int             nbits;
+	int             i;
+	int             flag = 0;		 /* set positive to create floating point */
+
+	float          *image;			 /* input FDF image */
+	short          *img;			 /* output image of short integers */
+
+/*
+ *  Initializations
+ */
+
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	(void) strcpy (version, "    ");
+	if (ptr != NULL)
+		(void) strncpy (version, ptr, 4);
+	if (ptr != NULL) {
+		ptr = strstr (ptr, " ");
+		ptr++;
+	}
+	(void) strcpy (program_date, "           ");
+	if (ptr != NULL)
+		(void) strncpy (program_date, ptr, 10);
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	dim0 = 1;
+	dim1 = 1;
+	dim2 = 1;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc < 5) {
+		printf ("Usage: fdf2analyze FDF_img FDF_hdr ANALYZE_img ANALYZE_hdr [1]\n");
+		return (1);
+	}
+	FDF_img = argv[1];
+	FDF_hdr = argv[2];
+	ANALYZE_img = argv[3];
+	ANALYZE_hdr = argv[4];
+	flag = atoi (argv[5]);
+
+	if ((in_hdr = fopen (FDF_hdr, "r")) == 0) {
+		printf ("Unable to open FDF file %s\n", FDF_hdr);
+		return (1);
+	}
+	if ((in_img = fopen (FDF_img, "r")) == 0) {
+		printf ("Unable to open FDF file %s\n", FDF_img);
+		return (1);
+	}
+	if ((out_hdr = fopen (ANALYZE_hdr, "w")) == 0) {
+		printf ("Unable to create ANALYZE header %s\n", ANALYZE_hdr);
+		return (1);
+	}
+	if ((out_img = fopen (ANALYZE_img, "w")) == 0) {
+		printf ("Unable to create ANALYZE image %s\n", ANALYZE_img);
+		return (1);
+	}
+/*
+ *	Read the image.
+ */
+
+	(void) fgets (str, sizeof (str), in_hdr);
+	if (strstr (str, "#!/usr/local/fdf/startup") == NULL) {
+		fprintf (stderr, "ERROR [fdf2analyze]: %s is not an FDF file\n", FDF_img);
+		return (1);
+	}
+	while ((fgets (str, sizeof (str), in_hdr) != NULL) && (str[0] != '')) {
+		if (strstr (str, "storage")) {
+			if (strstr (str, "float") == NULL) {
+				fprintf (stderr, "ERROR [fdf2analyze]: file is not type float\n");
+				return (1);
+			}
+			continue;
+		};
+		if (strstr (str, "float  bits")) {
+			ptr = strstr (str, "=") + 1;
+			(void) sscanf (ptr, "%d", &nbits);
+			if (nbits != 32) {
+				fprintf (stderr, "ERROR [fdf2analyze]: file is not type float\n");
+				return (1);
+			}
+			continue;
+		};
+		if (strstr (str, "matrix[]")) {
+			ptr = strstr (str, "{") + 1;
+			(void) sscanf (ptr, "%d%c%d%c%d", &dim0, &c1, &dim1, &c2, &dim2);
+			continue;
+		}
+		if (strstr (str, "orientation[]")) {
+		};
+	}
+	(void) fclose (in_hdr);
+
+	printf ("Converting %s\n", FDF_img);
+	n = dim0 * dim1 * dim2;
+	image = calloc (n, sizeof (float));
+	if (image == NULL) return (1);
+	img = calloc (n, sizeof (short));
+	if (img == NULL) return (1);
+	if ((fread (image, sizeof (float), n, in_img)) != n) {
+		fprintf (stderr, "ERROR [fdf2analyze]: Reading %s\n", FDF_img);
+		return (1);
+	}
+	(void) fclose (in_img);
+
+/*
+ * Find min and max for hdr
+ */
+
+	imax = -32767.;
+	imin = 32767.;
+	for (i = 0; i < n; i++) {
+		if (image[i] > imax)
+			imax = image[i];
+		if (image[i] < imin)
+			imin = image[i];
+	}
+	printf ("Min/Max: %f  %f\n", imin, imax);
+
+/*
+ * Convert from float to short
+ */
+
+	if (flag > 0) {
+		global_max = (short) imax;
+		global_min = (short) imin;
+		if ((fwrite (image, sizeof (float), n, out_img)) != n) {
+			printf ("Error writing to: %s\n", ANALYZE_img);
+			return (1);
+		}
+	} else {
+		scaler = 32767. / imax;
+		global_max = -32767;
+		global_min = 32767;
+		for (i = 0; i < n; i++) {
+			img[i] = (short) ROUND (scaler * image[i]);
+			if (img[i] > global_max)
+				global_max = img[i];
+			if (img[i] < global_min)
+				global_min = img[i];
+		}
+		if ((fwrite (img, sizeof (short), n, out_img)) != n) {
+			printf ("Error writing to: %s\n", ANALYZE_img);
+			return (1);
+		}
+	}
+
+/*
+ * Create Analyze hdr file
+ */
+
+	(void) strncpy (hdr.hk.db_name, FDF_img, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	hdr.hk.extents = 16384;			 /* recommended by developers  */
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.dime.dim[0] = 4;			 /* typically only 4 dimensions  */
+	hdr.dime.dim[1] = dim0;			 /* x dimension of atlas   */
+	hdr.dime.dim[2] = dim1;			 /* y dimension of atlas   */
+	hdr.dime.dim[3] = dim2;			 /* number of slices in volume */
+	hdr.dime.dim[4] = 1;			 /* only one volume typically  */
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	if (flag > 0) {
+		hdr.dime.datatype = 16;		 /* floating pt */
+		hdr.dime.bitpix = 32;		 /* number of bits/pixel */
+	} else {
+		hdr.dime.datatype = 4;		 /* 16 bit signed integer  */
+		hdr.dime.bitpix = 16;		 /* number of bits/pixel */
+	}
+	hdr.dime.pixdim[1] = 10;		 /* in mm */
+	hdr.dime.pixdim[2] = 10;		 /* in mm */
+	hdr.dime.pixdim[3] = 10;		 /* in mm */
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+	(void) strncpy (hdr.hist.descrip, FDF_img, 79);
+	(void) strcpy (hdr.hist.originator, "fdf2analy");
+	(void) strncpy (hdr.hist.patient_id, version, 4);
+/*	hdr.hist.orient = TRANSVERSE; */
+
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, out_hdr)) != 1) {
+		printf ("Error writing to: %s\n", ANALYZE_hdr);
+		return (1);
+	}
+
+/*
+ *	Free & Exit
+ */
+
+	printf ("Successful conversion to %s\n", ANALYZE_img);
+	free (image);
+	free (img);
+	(void) fclose (out_hdr);
+	(void) fclose (out_img);
+	return (0);
+}
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			Jul-98
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fdf2analyze/RCS/fdf2analyze.c,v 1.3 1998/07/23 19:35:53 tom Exp tom $";
+d70 10
+a79 6
+	strcpy (version, "    ");
+	strncpy (version, ptr, 4);
+	ptr = strstr (ptr, " ");
+	ptr++;
+	strcpy (program_date, "           ");
+	strncpy (program_date, ptr, 10);
+d94 1
+a94 1
+		return (-1);
+d104 1
+a104 1
+		return (-1);
+d108 1
+a108 1
+		return (-1);
+d112 1
+a112 1
+		return (-1);
+d116 1
+a116 1
+		return (-1);
+d125 1
+a125 1
+		return (-1);
+d131 1
+a131 1
+				return (-1);
+d137 1
+a137 1
+			sscanf (ptr, "%d", &nbits);
+d140 1
+a140 1
+				return (-1);
+d146 1
+a146 1
+			sscanf (ptr, "%d%c%d%c%d", &dim0, &c1, &dim1, &c2, &dim2);
+d152 1
+a152 1
+	fclose (in_hdr);
+d157 1
+d159 1
+d162 1
+a162 1
+		return (-1);
+d164 1
+a164 1
+	fclose (in_img);
+d189 1
+a189 1
+			return (-1);
+d204 1
+a204 1
+			return (-1);
+d212 1
+a212 1
+	strncpy (hdr.hk.db_name, FDF_img, 17);
+d246 3
+a248 3
+	strncpy (hdr.hist.descrip, FDF_img, 79);
+	strcpy (hdr.hist.originator, "fdf2analy");
+	strncpy (hdr.hist.patient_id, version, 4);
+d253 1
+a253 1
+		return (-1);
+d263 2
+a264 2
+	fclose (out_hdr);
+	fclose (out_img);
+@
+
+
+1.3
+log
+@modify to use output from fdfsplit
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fdf2analyze/RCS/fdf2analyze.c,v 1.2 1998/07/07 21:41:50 tom Exp tom $";
+a22 2
+#include <fcntl.h>
+#include <math.h>
+a35 1
+	FILE           *fopen ();		 /* fopen stuff  */
+d50 2
+a51 1
+	long            n, dim0, dim1, dim2;
+d53 1
+a53 1
+	int             global_max, global_min;
+d55 1
+a55 1
+	int             i, j, k;
+d115 1
+a115 1
+	fgets (str, sizeof (str), in_hdr);
+d176 2
+a177 2
+		global_max = (int) imax;
+		global_min = (int) imin;
+d187 1
+a187 1
+			img[i] = ROUND (scaler * image[i]);
+d253 3
+a255 2
+	close (out_hdr);
+	close (out_img);
+@
+
+
+1.2
+log
+@add flag for floating pt
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fdf2analyze/RCS/fdf2analyze.c,v 1.1 1998/06/27 18:39:57 tom Exp tom $";
+a21 3
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <myvalues.h>
+d26 1
+a26 1
+ *	Function:			fdf2analyze
+d36 4
+a39 3
+	FILE           *input;			 /* FDF file */
+	FILE           *fd_hdr;			 /* ANALYZE hdr file */
+	FILE           *fd_img;			 /* ANALYZE image file */
+d41 1
+d43 2
+a44 3
+	char           *ANALYZE_hdr;		 /* output Analyze header filename  */
+	char           *ANALYZE_img;		 /* output Analyze image filename */
+	char           *IF_hdr;			 /* output Interfile Format header filename */
+d84 3
+a86 3
+	if (argc < 4) {
+		printf ("Usage: fdf2analyze FDF_img ANALYZE_img ANALYZE_hdr [1]\n");
+		return (ERROR);
+d89 4
+a92 3
+	ANALYZE_img = argv[2];
+	ANALYZE_hdr = argv[3];
+	flag = atoi (argv[4]);
+d94 5
+a98 1
+	if ((input = fopen (FDF_img, "r")) == 0) {
+d100 1
+a100 1
+		return (ERROR);
+d102 1
+a102 1
+	if ((fd_hdr = fopen (ANALYZE_hdr, "w")) == 0) {
+d104 1
+a104 1
+		return (ERROR);
+d106 1
+a106 1
+	if ((fd_img = fopen (ANALYZE_img, "w")) == 0) {
+d108 1
+a108 1
+		return (ERROR);
+d114 1
+a114 1
+	fgets (str, sizeof (str), input);
+d117 1
+a117 1
+		return (ERROR);
+d119 1
+a119 1
+	while ((fgets (str, sizeof (str), input) != NULL) && (str[0] != '')) {
+d123 1
+a123 1
+				return (ERROR);
+d132 1
+a132 1
+				return (ERROR);
+d144 1
+d150 1
+a150 1
+	if ((fread (image, sizeof (float), n, input)) != n) {
+d152 1
+a152 1
+		return (ERROR);
+d154 2
+d177 1
+a177 1
+		if ((fwrite (image, sizeof (float), n, fd_img)) != n) {
+d179 1
+a179 1
+			return (ERROR);
+d192 1
+a192 1
+		if ((fwrite (img, sizeof (short), n, fd_img)) != n) {
+d194 1
+a194 1
+			return (ERROR);
+d241 1
+a241 1
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+d243 1
+a243 1
+		return (ERROR);
+d245 1
+d252 3
+a254 4
+	fclose (input);
+	close (fd_hdr);
+	close (fd_img);
+	return (OK);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d7 1
+a7 1
+ *	Date:			Jun-98
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fdf2analyze/RCS/fdf2analyze.c,v 2.13 1998/01/14 17:44:12 tom Exp $";
+d18 1
+d41 2
+a42 2
+	char           *ANALYZE_hdr;	 /* output Analyze header filename  */
+	char           *ANALYZE_img;	 /* output Analyze image filename */
+d54 1
+d83 2
+a84 2
+	if (argc != 4) {
+		printf ("Usage: fdf2analyze FDF_img ANALYZE_img ANALYZE_hdr\n");
+d90 1
+d148 1
+a148 1
+ * Convert from float to short, find min and max for hdr
+d160 27
+a186 9
+	scaler = 32767. / imax;
+	global_max = -32767;
+	global_min = 32767;
+	for (i = 0; i < n; i++) {
+		img[i] = ROUND (scaler * image[i]);
+		if (img[i] > global_max)
+			global_max = img[i];
+		if (img[i] < global_min)
+			global_min = img[i];
+a187 4
+	if ((fwrite (img, sizeof (short), n, fd_img)) != n) {
+		printf ("Error writing to: %s\n", ANALYZE_img);
+		return (ERROR);
+	}
+d209 7
+a215 2
+	hdr.dime.datatype = 4;			 /* 16 bit signed integer  */
+	hdr.dime.bitpix = 16;			 /* number of bits/pixel */
+@

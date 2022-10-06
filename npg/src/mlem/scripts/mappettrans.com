@@ -1,0 +1,377 @@
+#!/bin/csh
+
+# Initialisations
+# ===============
+
+#find the current path
+#-----
+set filename = $0
+set pathname = `echo $filename:h`
+if ($pathname == $filename) set pathname = $cwd
+
+if (-f $pathname/mappettrans) then
+ set MLEM_bin = "$pathname"
+ set MLEM_src = "$pathname"
+ echo $MLEM_bin
+else
+ set MLEM_bin = "$pathname/../bin"
+ set MLEM_src = "$pathname/../src"
+ echo $MLEM_bin
+endif
+
+if (((`uname -r` == "5.4")  || (`uname -r` == "5.6")) && (-f $MLEM_bin/mlempetv7_solaris)) then
+  echo "Solaris"
+  set mappet   = "$MLEM_bin/mappettrans_solaris"
+else
+  echo "SunOS"
+  set mappet   = "$MLEM_bin/mappettrans"
+endif
+
+set action = 1
+set singleplane = ""
+set scanner = ""
+set parms = ""
+
+set blankname   = ""
+set transname   = ""
+set normname    = ""
+set contamname  = ""
+set dwellname   = ""
+set arcradius   = ""
+set sumdet      = ""
+set smoothaxial = ""
+
+set plane    = 1
+set frame    = 1
+set gate     = 1
+set bed      = 0
+set contamweight = ""
+set contambed = ""
+set contamframe = 1
+set iters = ""
+set default_iters_931 = "-i 3 -j 32"
+set default_iters_hrp = "-i 2 -j 36 -i 1 -j 24"
+set verb = ""
+set lik  = ""
+#
+# 2- nov-1999
+# Laatste simulaties suggereren dat voor zeer korte scans de priors
+# lager moeten zijn: markovw = 0.2, priorw = 0.2 lijkt iets te laag.
+#                    markovw = 0.4, priorw = 0.4 lijkt goed,
+#                    markovw = 0.5, priorw = 0.5 lijkt iets te hoog.
+# Met priorw = markovw = 0.5 hebben we volgens de simulaties 
+# bij zeer korte transmissiescans (30..60 s) hot spots in kleine regio's met
+# zero atten (luchtpijp, darmen, maag...).
+#
+# De bed-prior wordt weggelaten: de lage std bij 0.0236 laat reconstructie
+# van het bed toe:
+## set defprior = "$defprior -prior 0.0510 0.06 2"  #bed, possibly lungs
+#
+#                                mean    std  width
+set prior    = ""
+set defprior =           "-prior 0.0000 0.019 3"  #air
+set defprior = "$defprior -prior 0.0236 0.06  3"  #lung, inhomogeneous
+set defprior = "$defprior -prior 0.0950 0.019 1"  #tissue
+set defprior = "$defprior -prior 0.2000  999  1"  #much higher than tissue
+set priorw  = 0.4      #weight
+set markovw = 0.4      #weight
+set markovn = 4        #neighborhood (we found no difference between 4 and 8)
+set markovf = "h"      #huber prior is convex
+set markovd = "0.014"  #0.014 cm-1: "standard dev" of markov function
+
+# check all arguments
+#====================
+@ i = 1
+set nargs = $#argv
+while ($i <= $nargs)
+  switch ($argv[$i])
+    case "-bl":
+        @ i++; set blankname = "-bl $argv[$i]"
+        breaksw
+    case "-tr":
+        @ i++; set transname = "-tr $argv[$i]"
+        breaksw
+    case "-n":
+        @ i++; set normname = "-n $argv[$i]"
+        breaksw
+    case "-orecon":
+        @ i++; set parms = "$parms -orecon $argv[$i]"
+        breaksw
+    case "-oacf":
+        @ i++; set parms = "$parms -oacf $argv[$i]"
+        breaksw
+    case "-oimg":
+        @ i++; set parms = "$parms -oimg $argv[$i]"
+        breaksw
+    case "-c":
+        @ i++; set contamname = "-c $argv[$i]"
+        breaksw
+    case "-cd":
+        @ i++; set dwellname = "-cd $argv[$i]"
+        breaksw
+    case "-cw":
+        @ i++; set contamweight = "-cw $argv[$i]"
+        breaksw
+    case "-cf":
+        @ i++; set contamframe = $argv[$i]
+        breaksw
+    case "-cb":
+        @ i++; set contambed =   $argv[$i]
+        breaksw
+    case "-i":
+        @ i++; set iters = "$iters -i $argv[$i]"
+        breaksw
+    case "-j":
+        @ i++; set iters = "$iters -j $argv[$i]"
+        breaksw
+    case "-V":
+       @ i++;  set parms = "$parms -V $argv[$i]"
+       breaksw
+    case "-p":
+        @ i++;  set plane = $argv[$i]
+        breaksw
+    case "-f":
+        @ i++;  set frame = $argv[$i]
+        breaksw
+    case "-g":
+        @ i++;  set gate = $argv[$i]
+        breaksw
+    case "-b":
+        @ i++;  set bed = $argv[$i]
+        breaksw
+    case "-R":
+        @ i++;  set arcradius = $argv[$i]
+        breaksw
+    case "-sumd":
+        @ i++;  set sumdet = $argv[$i]
+        breaksw
+    case "-rev":
+        @ i++;  set parms = "$parms -rev $argv[$i]"
+        breaksw
+    case "-sa":
+        @ i++;  set smoothaxial = "-sa $argv[$i]"
+        breaksw
+    case "-v":
+        set verb = "-v"
+        set lik = "-lik"
+        breaksw
+    case "-lik":
+        set lik = "-lik"
+        breaksw
+    case "-SP":
+        set singleplane = "-SP"
+        breaksw
+    case "-z":
+        @ i++;  set parms = "$parms -z $argv[$i]"
+        breaksw
+    case "-X":
+        @ i++;  set parms = "$parms -X $argv[$i]"
+        breaksw
+    case "-x":
+        @ i++;  set parms = "$parms -x $argv[$i]"
+        breaksw
+    case "-y":
+        @ i++;  set parms = "$parms -y $argv[$i]"
+        breaksw
+    case "-r":
+        @ i++;  set parms = "$parms -r $argv[$i]"
+        breaksw
+    case "-prior":
+        @ i++;  set prior = "$prior -prior $argv[$i]"
+        @ i++;  set prior = "$prior $argv[$i]"
+        @ i++;  set prior = "$prior $argv[$i]"
+        breaksw
+    case "-priorw":
+        @ i++; set priorw =  $argv[$i]
+        breaksw
+    case "-markovf":
+        @ i++; set markovf =  $argv[$i]
+        breaksw
+    case "-markovd":
+        @ i++; set markovd =  $argv[$i]
+        breaksw
+    case "-markovw":
+        @ i++; set markovw =  $argv[$i]
+        breaksw
+    case "-markovn":
+        @ i++; set markovn =  $argv[$i]
+        breaksw
+    case "-scan":
+        @ i++; set scanner =  $argv[$i]
+        breaksw
+    case "-test":
+        set action = 0
+        breaksw
+
+    case "-h":
+        echo "Syntax: mappettrans.com accepts all keywords of the c-program."
+        echo "        However, for plane, gate, frame and bed ranges can be"
+        echo "        specified: eg. <-p 1-63>. Put NO BLANKS in the spec."
+        echo "        In addition, you can specify <-scan 931> or <-scan hr+>."
+        echo "        The script then yields defaults for"
+        echo "          arcradius, sumd and iteration scheme,"
+        echo "            which you can override by specifying them yourself."
+        echo ""
+        echo "Defaults of the program"
+        goto maphelp
+        breaksw
+
+    default:
+        echo "Illegal parameter: $argv[$i]"
+        goto stopermee
+  endsw
+  @ i++
+end
+if (("$scanner" == "ecat931") || ("$scanner" == "931")) then
+      if ("$arcradius" == "")    set arcradius = "52"
+      if ("$sumdet" == "")       set sumdet = "1"
+      if ("$iters" == "")        set iters = "$default_iters_931"
+      if ("$contamweight" == "") set contamweight = "-cw 1"
+else if (("$scanner" == "962") || ("$scanner" == "hr+") \
+        || ("$scanner" == "hrplus")) then
+      if ("$arcradius" == "")    set arcradius = "42.2"
+      if ("$sumdet" == "")       set sumdet = "2"
+      if ("$smoothaxial" == "")  set smoothaxial = "-sa 1" 
+      if ("$iters" == "")        set iters = "$default_iters_hrp"
+      if (("$dwellname" == "") && ("$contamweight" == "")) \
+            set dwellname = "-cd $MLEM_src/hrplus.dwell"
+else if (("$scanner" == "961") || ("$scanner" == "hr")) then
+      if ("$arcradius" == "")    set arcradius = "42.2"
+      if ("$sumdet" == "")       set sumdet = "2"
+      if ("$smoothaxial" == "")  set smoothaxial = "-sa 1" 
+      if ("$iters" == "")        set iters = "$default_iters_hrp"
+else
+  if ("$scanner" != "") then
+    echo "Unknown scanner type $scanner"
+    goto stopermee
+  endif
+endif
+
+if ("$priorw" != "0") then
+  if ("$prior" == "") set prior = "$defprior"
+endif
+
+
+
+set firstplane = `echo $plane | cut -f1 -d-`
+set lastplane  = `echo $plane | cut -f2 -d-`
+set firstframe = `echo $frame | cut -f1 -d-`
+set lastframe  = `echo $frame | cut -f2 -d-`
+set firstgate  = `echo $gate | cut -f1 -d-`
+set lastgate   = `echo $gate | cut -f2 -d-`
+set firstbed   = `echo $bed | cut -f1 -d-`
+set lastbed    = `echo $bed | cut -f2 -d-`
+
+if ("$contambed" == "")   set contambed   = $bed
+
+set cfirstbed = `echo $contambed | cut -f1 -d-`
+set clastbed  = `echo $contambed | cut -f2 -d-`
+
+if ("$sumdet" == "") set sumdet = "1"
+
+if ("$contamname" != "") then
+  if (("$contamweight" == "") && ("$dwellname" == "")) then
+    echo "Specify weight of emission contamination"
+    goto stopermee
+  endif
+
+  if ($firstbed < $lastbed) then
+    @  afstand = $lastbed  - $firstbed + 1
+  else
+    @  afstand = $firstbed  - $lastbed + 1
+  endif
+  if ($cfirstbed < $clastbed) then
+    @  cafstand = $clastbed  - $cfirstbed + 1
+  else
+    @  cafstand = $cfirstbed  - $clastbed + 1
+  endif
+  if ($cafstand != $afstand) then
+    echo "Range of transmission beds           = $afstand"
+    echo "Range of emission contamination beds = $cafstand"
+    echo "These ranges should be identical"
+    goto stopermee
+  endif
+endif
+
+if (("$blankname" == "") || ("$transname" == "")) then
+  echo "Error! Both transmission and sinogram files should be specified."
+  echo "Use -h to get some help."
+  goto stopermee
+endif
+if ("$iters" == "") then
+  echo "Specify the iteration scheme, or specify the scanner with -scan"
+  goto stopermee
+endif
+
+if ($singleplane != "") then
+  if (($firstplane != $lastplane) || ($firstbed != $lastbed) \
+    || ($firstgate != $lastgate) || ($firstframe != $lastframe)) then
+    echo "Single output plane (flag -SP) was asked for multiple input planes."
+    echo "This would result in overwriting all put one planes"
+    goto stopermee
+  else
+    set parms = "$parms -SP"
+  endif
+endif
+
+echo $lastbed
+
+
+set nextgate = 1
+set nextbed  = 1
+set nextcbed = 1
+set nextframe = 1
+set nextplane = 1
+
+if ($firstgate  > $lastgate)  set nextgate = -1
+if ($firstbed   > $lastbed)   set nextbed = -1
+if ($cfirstbed  > $clastbed)  set nextcbed = -1
+if ($firstframe > $lastframe) set nextframe = -1
+if ($firstplane > $lastplane) set nextplane = -1
+
+set curgate  = $firstgate
+while ($curgate <= $lastgate)
+ set curbed   = $firstbed
+ set ccurbed  = $cfirstbed
+ while ($curbed <= $lastbed)
+  set curframe  = $firstframe
+  while ($curframe <= $lastframe)
+   set curplane = $firstplane
+   while ($curplane <= $lastplane)
+
+    set cmds = "$mappet $blankname $transname $normname $smoothaxial"
+    if ("$arcradius" != "") set cmds = "$cmds -R $arcradius"
+    if ("$sumdet" != "") set cmds = "$cmds -sumd $sumdet"
+    set cmds = "$cmds $iters $verb $lik $parms -priorw $priorw $prior"
+    if ($markovw != "0") then
+      set cmds = "$cmds -markovw $markovw -markovn $markovn  -markovf $markovf"
+      set cmds = "$cmds -markovd $markovd"
+    endif
+    if ("$contamname" != "") then
+      set cmds = "$cmds $contamname $contamweight $dwellname"
+      set cmds = "$cmds -cf $contamframe -cb $ccurbed"
+    endif
+    set cmds = "$cmds -p $curplane -f $curframe -g $curgate -b $curbed"
+
+    echo "$cmds"
+
+    if ($action) then
+       $cmds
+    endif
+
+    @ curplane = $curplane + $nextplane
+   end #plane
+   @ curframe = $curframe + $nextframe
+  end #frame
+  @ curbed  = $curbed +  $nextbed
+  @ ccurbed = $ccurbed + $nextcbed
+ end #bed
+ @ curgate = $curgate + $nextgate
+end #gate
+
+goto stopermee
+
+maphelp:
+    $mappet -h
+
+stopermee:

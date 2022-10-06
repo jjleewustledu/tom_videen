@@ -1,0 +1,1270 @@
+head	1.18;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.18
+date	99.03.25.17.52.08;	author tom;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	99.03.22.15.23.08;	author tom;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	99.03.02.15.23.47;	author tom;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	99.01.05.18.19.30;	author tom;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	98.12.28.21.23.27;	author tom;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	98.12.28.20.46.04;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	98.12.28.20.44.57;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	98.12.28.20.40.28;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	98.12.28.20.02.20;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	98.12.28.15.04.23;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.12.24.19.20.35;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.12.24.18.12.08;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.12.23.15.29.45;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.12.21.20.28.15;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.12.21.19.53.08;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.12.08.21.10.21;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.12.07.20.00.32;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.04.22.39.08;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.18
+log
+@*** empty log message ***
+@
+text
+@#!/bin/csh
+#   Module: align_oxygen
+#   Author: Tom Videen
+#   Date:   Mar-99
+#   Use:    Align PET images (HO, OO, CO) to create OEF image.
+#	rcsid = $Id: align_oxygen,v 1.17 1999/03/22 15:23:08 tom Exp $
+
+if ($#argv != 2 && $#argv != 6) then
+    echo "Usage: align_oxygen pid slices [tr ho oc oo]"
+	echo " i.e., align_oxygen p5000 3to37"
+	echo "  or , align_oxygen p5000 3to37 1 2 1 1"
+    exit (-1)
+endif
+
+set PID    = $1
+set SLICES = $2
+set FIL    = _g3
+
+# Notes on filenames:
+#	TR	- used for mask for airdif check
+#	HO	- reference water (HO1 is filtered)
+#	OC, OO - aligned to HO (OC1, OO1 are filtered)
+#	OEF	- created for comparison with unaligned oef
+#	HOX	- aligned OO1 renamed as ho for imean
+#	OOX	- aligned OO1 minus HO1
+
+if ($#argv != 6) then
+	set TR  = tr1_2dg5
+	set HO  = ho1
+	set OC  = oc1
+	set OO  = oo1
+	set HOX = ho100${FIL}
+	set OOHOSET = "100 1"
+	set OEFSET = 1f1v1
+	set OEF = oef1
+else
+	set TR  = tr${3}_2dg5
+	set HO  = ho${4}
+	set OC  = oc${5}
+	set OO  = oo${6}
+	set HOX = ho${6}00${FIL}
+	set OOHOSET = "${6}00 $4"
+	set OEFSET = ${6}f${4}v${5}
+	set OEF = oef${6}
+endif
+set HO1 = ${HO}${FIL}
+set OC1 = ${OC}${FIL}
+set OO1 = ${OO}${FIL}
+set OOX = ${OO}00
+set OCHO = ${OC}_to_${HO}
+set OOHO = ${OO}_to_${HO}
+
+set ID = `echo $PID | cut -c2-`
+set THRESH_HO = 50
+set THRESH_OC = 30
+
+set TOP = `echo $SLICES | cut -f1 -dt`
+set BOT = `echo $SLICES | cut -f2 -do`
+set BOC = `echo $BOT - 20 | bc`
+set SLICES_OC = 1to${BOC}
+set MASKTOP = '1to'`echo $TOP - 1 | bc`
+set MASKBOT = `echo $BOT + 1 | bc`'to47'
+
+# Check existence of files:
+
+set EFILES = "oef.prm oo-ho.prm ua_oef.prm ${PID}${TR}.v ${PID}${HO}.v ${PID}${OO}.v ${PID}${OC}.v  ${PID}${HO1}.v ${PID}${OO1}.v ${PID}${OC1}.v ${PID}${HO1}.hdr ${PID}${OO1}.hdr ${PID}${OC1}.hdr"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_oxygen]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit (-1)
+
+# Check the pixel size in PET headers:
+
+set PIXSIZE = `imghdr ${PID}${HO1}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($PIXSIZE != 0.214400) then
+	echo "Note: pixel size of ${PID}${HO1}.v = $PIXSIZE"
+endif
+set TPIXSIZE = `imghdr ${PID}${OO1}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($TPIXSIZE != $PIXSIZE) then
+	echo "ERROR [align_oxygen]: different pixel sizes:"
+	echo "	${PID}${HO1}.v = $PIXSIZE"
+	echo "	${PID}${OO1}.v = $TPIXSIZE"
+	exit (-1)
+endif
+set TPIXSIZE = `imghdr ${PID}${OC1}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($TPIXSIZE != $PIXSIZE) then
+	echo "ERROR [align_oxygen]: different pixel sizes:"
+	echo "	${PID}${HO1}.v = $PIXSIZE"
+	echo "	${PID}${OC1}.v = $TPIXSIZE"
+	exit (-1)
+endif
+set TPIXSIZE = `imghdr ${PID}${TR}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($TPIXSIZE != $PIXSIZE) then
+	echo "ERROR [align_oxygen]: different pixel sizes:"
+	echo "	${PID}${HO1}.v = $PIXSIZE"
+	echo "	${PID}${TR}.v = $TPIXSIZE"
+	exit (-1)
+endif
+
+# Setup log file:
+
+set BINFILE = `which align_oxygen`
+set VER = `grep rcsid $BINFILE | cut -f2- -d: | cut -f1 -dE | head -1`
+
+set LOGFILE = ${PID}${OEF}_align.log
+echo "${PID} OEF alignment:  " `whoami` `date` >! $LOGFILE
+echo "Version: " $VER         >> $LOGFILE
+echo ""                       >> $LOGFILE
+echo ">> parameters"          >> $LOGFILE
+echo "PID       = $PID"       >> $LOGFILE
+echo "SLICES    = $SLICES"    >> $LOGFILE
+echo "THRESH_HO = $THRESH_HO" >> $LOGFILE
+echo "THRESH_OC = $THRESH_OC" >> $LOGFILE
+echo "SLICES_OC = $SLICES_OC" >> $LOGFILE
+echo ""                       >> $LOGFILE
+
+# Create a brain mask from transmission: 
+
+maskpct ${PID}${HO1}.v maskcbf.v $THRESH_HO $SLICES
+maskimg ${PID}${TR}.v maskcbf.v masktr.v 1
+maskrange masktr.v masktr.v 900 1100
+if ($TOP > 1) then
+	maskslc masktr.v brainmsk.v $MASKTOP
+	if ($BOT < 47) maskslc brainmsk.v brainmsk.v $MASKBOT
+else if ($BOT < 47) then
+	maskslc masktr.v brainmsk.v $MASKBOT
+else
+	/usr/bin/cp masktr.v brainmsk.v
+endif
+
+# Convert images to Analyze format:
+
+img2analyze brainmsk.v abrainmsk
+img2analyze ${PID}${HO}.v a${PID}${HO}
+img2analyze ${PID}${OO}.v a${PID}${OO}
+img2analyze ${PID}${OC}.v a${PID}${OC}
+img2analyze ${PID}${HO1}.v a${PID}${HO1}
+img2analyze ${PID}${OO1}.v a${PID}${OO1}
+img2analyze ${PID}${OC1}.v a${PID}${OC1}
+
+# Align OO to HO, then reslice OO:
+
+setanamin a${PID}${HO1} 0
+setanamin a${PID}${OO1} 0
+echo "Aligning: ${PID}${OO1} to ${PID}${HO1}"
+set PRM = '-m 6 -p1 256 -t1 100 -p2 256 -t2 100 -e1 abrainmsk -e2 abrainmsk -x 1 -v'
+alignlinear a${PID}${HO1} a${PID}${OO1} ${PID}${OOHO}.air $PRM >! log
+echo ">> alignlinear oo to ho" >> $LOGFILE
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+imgreslice a${PID}${OO1} ${PID}${OOHO}
+analyze2img ra${PID}${OO1} r${PID}${OO1}.v
+/usr/bin/cp ${PID}${OO1}.hdr r${PID}${OO1}.hdr
+imgreslice a${PID}${OO} ${PID}${OOHO}
+analyze2img ra${PID}${OO} r${PID}${OO}.v
+/usr/bin/cp ${PID}${OO1}.hdr r${PID}${OO}.hdr
+
+# Check amount of movement:
+
+alignlinear a${PID}${HO1} a${PID}${HO1} null.air -m 6 -p1 1 -t1 100 -p2 1 -t2 100 -x 1
+echo ">> airdif ${PID}${OOHO}.air" >> $LOGFILE
+airdif ${PID}${OOHO}.air null.air brainmsk.v | tail -7 >> $LOGFILE
+
+# Create OO-HO with imean:
+
+echo "slices:	$SLICES" >> oo-ho.prm
+/usr/bin/cp r${PID}${OO1}.v ${PID}${HOX}.v
+echo "$ID $OOHOSET" >! oo-ho.lst
+imgmean oo-ho.prm oo-ho.lst 
+imean oo-ho.prm oo-ho.lst ${PID}${OOX}-${HO}.v
+img2analyze ${PID}${OOX}-${HO}.v a${PID}${OOX}-${HO}
+/usr/bin/rm ${PID}${HOX}.v
+
+# Create a vessel mask from CO:
+
+threshpct ${PID}${OC1}.v vas0.v $THRESH_OC $SLICES_OC
+invertimg vas0.v nonvas0.v
+img2analyze vas0.v avas0
+setanamin avas0 0
+
+# Align CO to OO-HO, then reslice CO:
+
+setanamin a${PID}${OOX}-${HO} 0
+setanamin a${PID}${OC1} 0
+echo "Aligning: ${PID}${OC1} to ${PID}${OOX}-${HO}"
+set PRM = '-m 6 -p1 256 -t1 100 -p2 256 -t2 100 -e1 avas0 -e2 avas0 -x 1 -v'
+alignlinear a${PID}${OOX}-${HO} a${PID}${OC1} ${PID}${OCHO}.air $PRM >! log
+echo ">> alignlinear oc to oo-ho" >> $LOGFILE
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+/usr/bin/rm log
+imgreslice a${PID}${OC1} ${PID}${OCHO}
+analyze2img ra${PID}${OC1} r${PID}${OC1}.v
+/usr/bin/cp ${PID}${OC1}.hdr r${PID}${OC1}.hdr
+imgreslice a${PID}${OC} ${PID}${OCHO}
+analyze2img ra${PID}${OC} r${PID}${OC}.v
+/usr/bin/cp ${PID}${OC1}.hdr r${PID}${OC}.hdr
+
+# Copy original HO to rp
+
+/usr/bin/cp ${PID}${HO1}.v r${PID}${HO1}.v
+/usr/bin/cp ${PID}${HO1}.hdr r${PID}${HO1}.hdr
+/usr/bin/cp ${PID}${HO}.v r${PID}${HO}.v
+/usr/bin/cp ${PID}${HO1}.hdr r${PID}${HO}.hdr
+
+# Check amount of movement:
+
+echo ">> airdif ${PID}${OCHO}.air" >> $LOGFILE
+airdif ${PID}${OCHO}.air null.air brainmsk.v | tail -7 >> $LOGFILE
+
+# Create filtered, aligned OEF image:
+
+echo "$ID $OEFSET 1.0" >! oef.lst
+imean oef.prm oef.lst r${PID}${OEF}${FIL}.v
+
+# Create filtered, unaligned OEF image:
+
+imean ua_oef.prm oef.lst ${PID}${OEF}${FIL}.v
+
+# Create brain+venous and venous masks using aligned CO:
+# (also, mask areas no sampled in realigned CO)
+
+threshpct r${PID}${OC1}.v vas1.v $THRESH_OC $SLICES_OC
+invertimg vas1.v nonvas1.v
+maskimg brainmsk.v nonvas1.v mask${OEF}.v 0
+maskimg mask${OEF}.v r${PID}${OC1}.v mask${OEF}.v 1
+maskimg vas1.v brainmsk.v vas1.v 1
+
+# Complete brain+venous and venous masks using unaligned CO:
+maskimg brainmsk.v nonvas0.v mask${OEF}u.v 0
+
+# Combine brain-only mask with realigned OO and HO to exclude
+# pixels not included in all images
+
+maskimg brainmsk.v r${PID}${OO1}.v rbrainmsk.v 1
+maskimg rbrainmsk.v r${PID}${OC1}.v rbrainmsk.v 1
+
+# Compare masked aligned and unaligned OEF images:
+
+histoimg ${PID}${OEF}${FIL}.v mask${OEF}u.v 1 0 1000 100 | tail -16 | head -13 >! a.tmp
+histoimg r${PID}${OEF}${FIL}.v mask${OEF}.v 1 0 1000 100 | tail -16 | head -13 >! b.tmp
+echo ">> histoimg ${PID}${OEF}${FIL}.v r${PID}${OEF}${FIL}.v" >> $LOGFILE
+echo "Brain   Original   Aligned" >> $LOGFILE
+echo "-----   --------   -------" >> $LOGFILE
+cut -c7- b.tmp >! c.tmp
+paste a.tmp c.tmp >> $LOGFILE
+/usr/bin/rm a.tmp b.tmp c.tmp
+echo '' >> $LOGFILE
+histoimg ${PID}${OEF}${FIL}.v mask${OEF}u.v 1 0 1000 100 | tail -3 >> $LOGFILE
+histoimg r${PID}${OEF}${FIL}.v mask${OEF}.v 1 0 1000 100 | tail -1 >> $LOGFILE
+echo '' >> $LOGFILE
+
+echo "Processing Complete [align_oxygen]:  r${PID}${OEF}${FIL}.v"
+
+@
+
+
+1.17
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.16 1999/03/02 15:23:47 tom Exp $
+d8 2
+a9 2
+if ($#argv != 2 && $#argv != 7) then
+    echo "Usage: align_oxygen pid slices [tr ho oc oo oef]"
+d11 1
+a11 1
+	echo "  or , align_oxygen p5000 3to37 1 2 1 1 1"
+d27 1
+a27 1
+if ($#argv != 7) then
+d32 3
+a35 2
+	set OOHOSET = "100 1"
+	set OEFSET  = 1f1v1
+d41 4
+a44 3
+	set OEF = oef${7}
+	set OOHOSET = "${4}00 $4"
+	set OEFSET  = ${6}f${4}v${5}
+a48 1
+set HOX = ${HO}00${FIL}
+d51 1
+a51 1
+set OOHO = ${OO}_to_{HO}
+a146 2
+set mask = abrainmsk
+setanamin abrainmsk 0
+d150 2
+a151 1
+alignlinear a${PID}${HO1} a${PID}${OO1} ${PID}${OOHO}.air -m 6 -p1 256 -t1 100 -p2 256 -t2 100 -e1 $mask -e2 $mask -x 1 -v >! log
+a181 2
+if ($TOP > 1) maskslc vas0.v vas0.v $MASKTOP
+if ($BOT < 47) maskslc vas0.v vas0.v $MASKBOT
+a186 1
+set mask = avas0
+d190 2
+a191 1
+alignlinear a${PID}${OOX}-${HO} a${PID}${OC1} ${PID}${OCHO}.air -m 6 -p1 256 -t1 100 -p2 256 -t2 100 -e1 $mask -e2 $mask -x 1 -v >! log
+a233 1
+
+a234 1
+maskimg vas0.v brainmsk.v vas0.v 1
+@
+
+
+1.16
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.15 1999/01/05 18:19:30 tom Exp tom $
+d19 8
+d29 3
+a31 5
+	set HO  = ho1${FIL}
+	set HOX = ho100${FIL}
+	set OC  = oc1${FIL}
+	set OO  = oo1${FIL}
+	set OOX = oo100
+a32 2
+	set OCHO = oc1_to_ho1
+	set OOHO = oo1_to_ho1
+d37 3
+a39 5
+	set HO  = ho${4}${FIL}
+	set HOX = ho${4}00${FIL}
+	set OC  = oc${5}${FIL}
+	set OO  = oo${6}${FIL}
+	set OOX = oo${6}00
+a40 2
+	set OCHO = oc${5}_to_ho${4}
+	set OOHO = oo${6}_to_ho${4}
+d44 7
+d65 1
+a65 1
+set EFILES = "oef.prm oo-ho.prm ua_oef.prm ${PID}${TR}.v ${PID}${HO}.v ${PID}${OO}.v ${PID}${OC}.v ${PID}${HO}.hdr ${PID}${OO}.hdr ${PID}${OC}.hdr"
+d75 28
+d108 1
+a108 1
+set LOGFILE = ${PID}_align.log
+a119 20
+# Check the pixel size in PET headers:
+
+set PIXSIZE = `imghdr ${PID}${HO}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($PIXSIZE == 0.208634) then
+	echo "Note: pixel size of ${PID}${HO}.v is $PIXSIZE"
+endif
+set PIXSIZE = `imghdr ${PID}${OO}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($PIXSIZE == 0.208634) then
+	echo "Note: pixel size of ${PID}${OO}.v is $PIXSIZE"
+endif
+set PIXSIZE = `imghdr ${PID}${OC}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($PIXSIZE == 0.208634) then
+	echo "Note: pixel size of ${PID}${OC}.v is $PIXSIZE"
+endif
+set TPIXSIZE = `imghdr ${PID}${TR}.v | grep 'Pixel size' | cut -f4 -d' '`
+if ($TPIXSIZE != $PIXSIZE) then
+	echo "ERROR: pixel size of ${PID}${TR}.v differs from ${PID}${OC}.v"
+	exit (-1)
+endif
+
+d122 1
+a122 1
+maskpct ${PID}${HO}.v maskcbf.v $THRESH_HO $SLICES
+d140 3
+d148 4
+a151 3
+setanamin a${PID}${HO} 0
+setanamin a${PID}${OO} 0
+alignlinear a${PID}${HO} a${PID}${OO} ${PID}${OOHO}.air -m 6 -p1 256 -t1 100 -p2 256 -t2 100 -e1 $mask -e2 $mask -x 1 -v >! log
+d155 3
+a157 1
+echo " " >> $LOGFILE
+d160 1
+a160 1
+/usr/bin/cp ${PID}${OO}.hdr r${PID}${OO}.hdr
+d164 1
+a164 1
+alignlinear a${PID}${HO} a${PID}${HO} null.air -m 6 -p1 1 -t1 100 -p2 1 -t2 100 -x 1
+d166 1
+a166 2
+airdif ${PID}${OOHO}.air null.air brainmsk.v | tail -4 >> $LOGFILE
+echo " " >> $LOGFILE
+d171 1
+a171 1
+/usr/bin/cp r${PID}${OO}.v ${PID}${HOX}.v
+d180 1
+a180 1
+threshpct ${PID}${OC}.v vas0.v $THRESH_OC $SLICES_OC
+d191 3
+a193 2
+setanamin a${PID}${OC} 0
+alignlinear a${PID}${OOX}-${HO} a${PID}${OC} ${PID}${OCHO}.air -m 6 -t1 100 -p1 1 -t2 100 -p2 1 -e1 $mask -e2 $mask -x 1 -v >! log
+d198 3
+d203 1
+a203 1
+/usr/bin/cp ${PID}${OC}.hdr r${PID}${OC}.hdr
+d205 7
+a213 1
+echo " " >> $LOGFILE
+d215 1
+a215 2
+airdif ${PID}${OCHO}.air null.air brainmsk.v | tail -4 >> $LOGFILE
+echo " " >> $LOGFILE
+a218 2
+/usr/bin/cp ${PID}${HO}.v r${PID}${HO}.v
+/usr/bin/cp ${PID}${HO}.hdr r${PID}${HO}.hdr
+d229 1
+a229 1
+threshpct r${PID}${OC}.v vas1.v $THRESH_OC $SLICES_OC
+d232 1
+a232 1
+maskimg mask${OEF}.v r${PID}${OC}.v mask${OEF}.v 1
+d243 2
+a244 2
+maskimg brainmsk.v r${PID}${OO}.v rbrainmsk.v 1
+maskimg rbrainmsk.v r${PID}${OC}.v rbrainmsk.v 1
+@
+
+
+1.15
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 1
+#   Date:   Jan-99
+d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.14 1998/12/28 21:23:27 tom Exp tom $
+d27 2
+d39 2
+a43 1
+set OEFu = oef0
+d132 1
+a132 1
+alignlinear a${PID}${HO} a${PID}${OO} ${PID}oo2ho.air -m 6 -p1 256 -t1 100 -p2 256 -t2 100 -e1 $mask -e2 $mask -x 1 -v >! log
+d137 1
+a137 1
+imgreslice a${PID}${OO} ${PID}oo2ho
+d144 2
+a145 2
+echo ">> airdif ${PID}oo2ho.air" >> $LOGFILE
+airdif ${PID}oo2ho.air null.air brainmsk.v | tail -4 >> $LOGFILE
+d156 1
+d172 1
+a172 1
+alignlinear a${PID}${OOX}-${HO} a${PID}${OC} ${PID}oc2ho.air -m 6 -t1 100 -p1 1 -t2 100 -p2 1 -e1 $mask -e2 $mask -x 1 -v >! log
+d177 1
+a177 1
+imgreslice a${PID}${OC} ${PID}oc2ho
+d184 2
+a185 2
+echo ">> airdif ${PID}oc2ho.air" >> $LOGFILE
+airdif ${PID}oc2ho.air null.air brainmsk.v | tail -4 >> $LOGFILE
+d197 1
+a197 1
+imean ua_oef.prm oef.lst ${PID}${OEFu}${FIL}.v
+d210 1
+a210 1
+maskimg brainmsk.v nonvas0.v mask${OEFu}.v 0
+d221 1
+a221 1
+histoimg ${PID}${OEFu}${FIL}.v mask${OEFu}.v 1 0 1000 100 | tail -16 | head -13 >! a.tmp
+d230 1
+a230 1
+histoimg ${PID}${OEFu}${FIL}.v mask${OEFu}.v 1 0 1000 100 | tail -3 >> $LOGFILE
+@
+
+
+1.14
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 1
+#   Date:   Dec-98
+d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.13 1998/12/28 20:46:04 tom Exp tom $
+d15 4
+a18 2
+set PID       = $1
+set SLICES    = $2
+d20 6
+a25 4
+	set TR = tr1
+	set HO = ho1
+	set OC = oc1
+	set OO = oo1
+d30 7
+a36 5
+	set TR = tr$3
+	set HO = ho$4
+	set OC = oc$5
+	set OO = oo$6
+	set OEF = oef$7
+d55 1
+a55 1
+set EFILES = "oef.prm oo-ho.prm ua_oef.prm ${PID}${TR}.v ${PID}${HO}.v ${PID}${OO}.v ${PID}${OC}.v ${PID}${HO}_g3.hdr ${PID}${OO}_g3.hdr ${PID}${OC}_g3.hdr"
+d82 1
+a82 1
+# Correct the pixel size in PET headers:
+d86 1
+a86 5
+	echo "Correcting pixel size'
+	setpixsize ${PID}${TR}.v 0.2144
+	setpixsize ${PID}${HO}.v 0.2144
+	setpixsize ${PID}${OC}.v 0.2144
+	setpixsize ${PID}${OO}.v 0.2144
+d88 13
+a101 7
+# Filter:
+
+if (! -e ${PID}${TR}_2dg5.v) gauss2d ${PID}${TR}.v ${PID}${TR}_2dg5.v 0.5
+if (! -e ${PID}${HO}_g3.v) gauss ${PID}${HO}.v ${PID}${HO}_g3.v 0.3
+if (! -e ${PID}${OC}_g3.v) gauss ${PID}${OC}.v ${PID}${OC}_g3.v 0.3
+if (! -e ${PID}${OO}_g3.v) gauss ${PID}${OO}.v ${PID}${OO}_g3.v 0.3
+
+d104 2
+a105 2
+maskpct ${PID}${HO}_g3.v maskcbf.v $THRESH_HO $SLICES
+maskimg ${PID}${TR}_2dg5.v maskcbf.v masktr.v 1
+d119 3
+a121 3
+img2analyze ${PID}${HO}_g3.v a${PID}${HO}_g3
+img2analyze ${PID}${OO}_g3.v a${PID}${OO}_g3
+img2analyze ${PID}${OC}_g3.v a${PID}${OC}_g3
+d127 3
+a129 3
+setanamin a${PID}${HO}_g3 0
+setanamin a${PID}${OO}_g3 0
+alignlinear a${PID}${HO}_g3 a${PID}${OO}_g3 ${PID}oo2ho.air -m 6 -p1 256 -t1 100 -p2 256 -t2 100 -e1 $mask -e2 $mask -x 1 -v >! log
+d134 3
+a136 3
+imgreslice a${PID}${OO}_g3 ${PID}oo2ho
+analyze2img ra${PID}${OO}_g3 r${PID}${OO}_g3.v
+/usr/bin/cp ${PID}${OO}_g3.hdr r${PID}${OO}_g3.hdr
+d140 1
+a140 1
+alignlinear a${PID}${HO}_g3 a${PID}${HO}_g3 null.air -m 6 -p1 1 -t1 100 -p2 1 -t2 100 -x 1
+d148 1
+a148 1
+/usr/bin/cp r${PID}${OO}_g3.v ${PID}${HO}00_g3.v
+d151 2
+a152 2
+imean oo-ho.prm oo-ho.lst ${PID}${OO}00-${HO}_g3.v
+img2analyze ${PID}${OO}00-${HO}_g3.v a${PID}${OO}00-${HO}_g3
+d156 1
+a156 1
+threshpct ${PID}${OC}_g3.v vas0.v $THRESH_OC $SLICES_OC
+d166 3
+a168 3
+setanamin a${PID}${OO}00-${HO}_g3 0
+setanamin a${PID}${OC}_g3 0
+alignlinear a${PID}${OO}00-${HO}_g3 a${PID}${OC}_g3 ${PID}oc2ho.air -m 6 -t1 100 -p1 1 -t2 100 -p2 1 -e1 $mask -e2 $mask -x 1 -v >! log
+d172 4
+a175 3
+imgreslice a${PID}${OC}_g3 ${PID}oc2ho
+analyze2img ra${PID}${OC}_g3 r${PID}${OC}_g3.v
+/usr/bin/cp ${PID}${OC}_g3.hdr r${PID}${OC}_g3.hdr
+d186 2
+a187 2
+/usr/bin/cp ${PID}${HO}_g3.v r${PID}${HO}_g3.v
+/usr/bin/cp ${PID}${HO}_g3.hdr r${PID}${HO}_g3.hdr
+d189 1
+a189 1
+imean oef.prm oef.lst r${PID}${OEF}_g3.v
+d193 1
+a193 1
+imean ua_oef.prm oef.lst ${PID}${OEFu}_g3.v
+d198 1
+a198 1
+threshpct r${PID}${OC}_g3.v vas1.v $THRESH_OC $SLICES_OC
+d201 1
+a201 1
+maskimg mask${OEF}.v r${PID}${OC}_g3.v mask${OEF}.v 1
+d209 6
+d217 3
+a219 3
+histoimg ${PID}${OEFu}_g3.v mask${OEFu}.v 1 0 1000 100 | tail -16 | head -13 >! a.tmp
+histoimg r${PID}${OEF}_g3.v mask${OEF}.v 1 0 1000 100 | tail -16 | head -13 >! b.tmp
+echo ">> histoimg ${PID}${OEF}_g3.v r${PID}${OEF}_g3.v" >> $LOGFILE
+d226 2
+a227 2
+histoimg ${PID}${OEFu}_g3.v mask${OEFu}.v 1 0 1000 100 | tail -3 >> $LOGFILE
+histoimg r${PID}${OEF}_g3.v mask${OEF}.v 1 0 1000 100 | tail -1 >> $LOGFILE
+d230 1
+a230 8
+# Create masked original and aligned OEF images:
+
+maskimg ${PID}${OEFu}_g3.v mask${OEFu}.v ${PID}${OEFu}_msk.v 1
+maskimg r${PID}${OEF}_g3.v mask${OEF}.v r${PID}${OEF}_msk.v 1
+/usr/bin/cp ${PID}${OEFu}_g3.hdr ${PID}${OEFu}_msk.hdr
+/usr/bin/cp r${PID}${OEF}_g3.hdr r${PID}${OEF}_msk.hdr
+
+echo "Processing Complete [align_oxygen]:  r${PID}${OEF}_msk.v"
+@
+
+
+1.13
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.12 1998/12/28 20:44:57 tom Exp tom $
+d23 1
+a23 1
+	set OOHOSET = "11 1"
+d31 1
+a31 1
+	set OOHOSET = "${4}1 $6"
+d140 1
+a140 1
+/usr/bin/cp r${PID}${OO}_g3.v ${PID}${HO}1_g3.v
+d143 2
+a144 2
+imean oo-ho.prm oo-ho.lst ${PID}${OO}1-${HO}_g3.v
+img2analyze ${PID}${OO}1-${HO}_g3.v a${PID}${OO}1-${HO}_g3
+d158 1
+a158 1
+setanamin a${PID}${OO}1-${HO}_g3 0
+d160 1
+a160 1
+alignlinear a${PID}${OO}1-${HO}_g3 a${PID}${OC}_g3 ${PID}oc2ho.air -m 6 -t1 100 -p1 1 -t2 100 -p2 1 -e1 $mask -e2 $mask -x 1 -v >! log
+d219 1
+a219 1
+/usr/bin/cp ${PID}${OEF}_g3.hdr ${PID}${OEF}_msk.hdr
+@
+
+
+1.12
+log
+@fix oohoset
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.11 1998/12/28 20:40:28 tom Exp tom $
+a33 2
+echo $OOHOSET $OEFSET
+exit
+@
+
+
+1.11
+log
+@fix lst entries
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.10 1998/12/28 20:02:20 tom Exp tom $
+d31 1
+a31 1
+	set OOHOSET = "${6}1 $4"
+d34 2
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.9 1998/12/28 15:04:23 tom Exp tom $
+d23 2
+d31 2
+d141 1
+a141 1
+echo "$ID 11 1" >! oo-ho.lst
+d179 1
+a179 1
+echo "$ID 1f1v1 1.0" >! oef.lst
+@
+
+
+1.9
+log
+@generalize to any tr, ho, oc, oo
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.8 1998/12/24 19:20:35 tom Exp tom $
+d188 1
+a188 1
+maskimg mask${OEF}.v r${PID}_g3.v mask${OEF}.v 1
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.7 1998/12/24 18:12:08 tom Exp $
+d8 2
+a9 2
+if ($#argv != 2) then
+    echo "Usage: align_oxygen pid slices"
+d11 1
+d17 14
+d45 1
+a45 1
+set EFILES = "oef.prm oo-ho.prm ua_oef.prm ${PID}tr1.v ${PID}ho1.v ${PID}oo1.v ${PID}oc1.v ${PID}ho1_g3.hdr ${PID}oo1_g3.hdr ${PID}oc1_g3.hdr"
+d74 1
+a74 1
+set PIXSIZE = `imghdr ${PID}ho1.v | grep 'Pixel size' | cut -f4 -d' '`
+d77 4
+a80 4
+	setpixsize ${PID}tr1.v 0.2144
+	setpixsize ${PID}ho1.v 0.2144
+	setpixsize ${PID}oc1.v 0.2144
+	setpixsize ${PID}oo1.v 0.2144
+d85 4
+a88 4
+if (! -e ${PID}tr1_2dg5.v) gauss2d ${PID}tr1.v ${PID}tr1_2dg5.v 0.5
+if (! -e ${PID}ho1_g3.v) gauss ${PID}ho1.v ${PID}ho1_g3.v 0.3
+if (! -e ${PID}oc1_g3.v) gauss ${PID}oc1.v ${PID}oc1_g3.v 0.3
+if (! -e ${PID}oo1_g3.v) gauss ${PID}oo1.v ${PID}oo1_g3.v 0.3
+d92 2
+a93 2
+maskpct ${PID}ho1_g3.v maskcbf.v $THRESH_HO $SLICES
+maskimg ${PID}tr1_2dg5.v maskcbf.v masktr.v 1
+d107 3
+a109 3
+img2analyze ${PID}ho1_g3.v a${PID}ho1_g3
+img2analyze ${PID}oo1_g3.v a${PID}oo1_g3
+img2analyze ${PID}oc1_g3.v a${PID}oc1_g3
+d115 3
+a117 3
+setanamin a${PID}ho1_g3 0
+setanamin a${PID}oo1_g3 0
+alignlinear a${PID}ho1_g3 a${PID}oo1_g3 ${PID}oo2ho.air -m 6 -p1 256 -t1 100 -p2 256 -t2 100 -e1 $mask -e2 $mask -x 1 -v >! log
+d122 3
+a124 3
+imgreslice a${PID}oo1_g3 ${PID}oo2ho
+analyze2img ra${PID}oo1_g3 r${PID}oo1_g3.v
+/usr/bin/cp ${PID}oo1_g3.hdr r${PID}oo1_g3.hdr
+d128 1
+a128 1
+alignlinear a${PID}ho1_g3 a${PID}ho1_g3 null.air -m 6 -p1 1 -t1 100 -p2 1 -t2 100 -x 1
+d136 1
+a136 1
+/usr/bin/cp r${PID}oo1_g3.v ${PID}ho11_g3.v
+d139 2
+a140 2
+imean oo-ho.prm oo-ho.lst ${PID}oo11-ho1_g3.v
+img2analyze ${PID}oo11-ho1_g3.v a${PID}oo11-ho1_g3
+d144 1
+a144 1
+threshpct ${PID}oc1_g3.v vas0.v $THRESH_OC $SLICES_OC
+d154 3
+a156 3
+setanamin a${PID}oo11-ho1_g3 0
+setanamin a${PID}oc1_g3 0
+alignlinear a${PID}oo11-ho1_g3 a${PID}oc1_g3 ${PID}oc2ho.air -m 6 -t1 100 -p1 1 -t2 100 -p2 1 -e1 $mask -e2 $mask -x 1 -v >! log
+d160 3
+a162 3
+imgreslice a${PID}oc1_g3 ${PID}oc2ho
+analyze2img ra${PID}oc1_g3 r${PID}oc1_g3.v
+/usr/bin/cp ${PID}oc1_g3.hdr r${PID}oc1_g3.hdr
+d173 2
+a174 2
+/usr/bin/cp ${PID}ho1_g3.v r${PID}ho1_g3.v
+/usr/bin/cp ${PID}ho1_g3.hdr r${PID}ho1_g3.hdr
+d176 1
+a176 1
+imean oef.prm oef.lst r${PID}oef1_g3.v
+d180 1
+a180 1
+imean ua_oef.prm oef.lst ${PID}oef1_g3.v
+d185 1
+a185 1
+threshpct r${PID}oc1_g3.v vas1.v $THRESH_OC $SLICES_OC
+d187 2
+a188 2
+maskimg brainmsk.v nonvas1.v maskoef1.v 0
+maskimg maskoef1.v r${PID}oc1_g3.v maskoef1.v 1
+d193 1
+a193 1
+maskimg brainmsk.v nonvas0.v maskoef0.v 0
+d198 3
+a200 3
+histoimg ${PID}oef1_g3.v maskoef0.v 1 0 1000 100 | tail -16 | head -13 >! a.tmp
+histoimg r${PID}oef1_g3.v maskoef1.v 1 0 1000 100 | tail -16 | head -13 >! b.tmp
+echo ">> histoimg ${PID}oef1_g3.v r${PID}oef1_g3.v" >> $LOGFILE
+d207 2
+a208 2
+histoimg ${PID}oef1_g3.v maskoef0.v 1 0 1000 100 | tail -3 >> $LOGFILE
+histoimg r${PID}oef1_g3.v maskoef1.v 1 0 1000 100 | tail -1 >> $LOGFILE
+d213 4
+a216 4
+maskimg ${PID}oef1_g3.v maskoef0.v ${PID}oef1_msk.v 1
+maskimg r${PID}oef1_g3.v maskoef1.v r${PID}oef1_msk.v 1
+/usr/bin/cp ${PID}oef1_g3.hdr ${PID}oef1_msk.hdr
+/usr/bin/cp r${PID}oef1_g3.hdr r${PID}oef1_msk.hdr
+d218 1
+a218 1
+echo "Processing Complete [align_oxygen]:  r${PID}oef1_msk.v"
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.6 1998/12/23 15:29:45 tom Exp tom $
+d183 2
+a184 2
+histoimg ${PID}oef1_g3.v maskoef0.v 1 0 1000 100 | tail -15 >! a.tmp
+histoimg r${PID}oef1_g3.v maskoef1.v 1 0 1000 100 | tail -15 >! b.tmp
+a185 1
+echo "--------------------------" >> $LOGFILE
+d187 1
+a189 1
+echo "--------------------------" >> $LOGFILE
+d191 4
+@
+
+
+1.6
+log
+@change ho thresh to 50
+change oc slices to bottom-20
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.5 1998/12/21 20:28:15 tom Exp tom $
+d40 2
+a44 2
+# Setup log file:
+
+d59 8
+a66 4
+setpixsize ${PID}tr1.v 0.2144
+setpixsize ${PID}ho1.v 0.2144
+setpixsize ${PID}oc1.v 0.2144
+setpixsize ${PID}oo1.v 0.2144
+d81 2
+a82 2
+	maskslc masktr.v brain.v $MASKTOP
+	if ($BOT < 47) maskslc brain.v brain.v $MASKBOT
+d84 1
+a84 1
+	maskslc masktr.v brain.v $MASKBOT
+d86 1
+a86 1
+	/usr/bin/cp masktr.v brain.v
+d91 1
+a91 1
+img2analyze brain.v abrain
+d98 2
+a99 2
+set mask = abrain
+setanamin abrain 0
+d115 1
+a115 1
+airdif ${PID}oo2ho.air null.air brain.v | tail -4 >> $LOGFILE
+d153 1
+a153 1
+airdif ${PID}oc2ho.air null.air brain.v | tail -4 >> $LOGFILE
+d172 1
+a172 1
+maskimg brain.v nonvas1.v maskoef1.v 0
+d174 1
+a174 1
+maskimg vas1.v brain.v vas1.v 1
+d178 2
+a179 2
+maskimg brain.v nonvas0.v maskoef0.v 0
+maskimg vas0.v brain.v vas0.v 1
+d183 2
+a184 4
+histoimg ${PID}oef1_g3.v maskoef0.v 1 0 1000 100 | tail -15 >! org.dat
+histoimg ${PID}oef1_g3.v vas0.v 1 0 1000 200 | tail -10 >! vorg.dat
+histoimg r${PID}oef1_g3.v maskoef1.v 1 0 1000 100 | tail -15 >! align.dat
+histoimg r${PID}oef1_g3.v vas1.v 1 0 1000 200 | tail -10 >! valign.dat
+d188 2
+a189 2
+cut -c7- align.dat >! temp
+paste org.dat temp >> $LOGFILE
+d191 1
+a191 5
+echo "Vessel  Original   Aligned" >> $LOGFILE
+cut -c7- valign.dat >! temp
+paste vorg.dat temp >> $LOGFILE
+echo "--------------------------" >> $LOGFILE
+/usr/bin/rm temp
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.4 1998/12/21 19:53:08 tom Exp tom $
+d16 3
+a18 1
+set THRESH_HO = 40
+a19 2
+set SLICES_OC = 1to14
+set ID = `echo $PID | cut -c2-`
+d21 7
+a72 5
+set TOP = `echo $SLICES | cut -f1 -dt`
+set MASKTOP = '1to'`echo $TOP - 1 | bc`
+set BOT = `echo $SLICES | cut -f2 -do`
+set MASKBOT = `echo $BOT + 1 | bc`'to47'
+
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.3 1998/12/08 21:10:21 tom Exp tom $
+d8 5
+a12 1
+# Check that all environmental variables are set:
+d14 2
+a15 10
+if (! $?PID ) then
+	echo "ERROR [align_oxygen]: PID is not defined."
+	echo "	(align_oxygen requires setenv PID and SLICES)"
+	exit (-1)
+endif
+if (! $?SLICES ) then
+	echo "ERROR [align_oxygen]: SLICES is not defined."
+	echo "	(align_oxygen requires setenv PID and SLICES)"
+	exit (-1)
+endif
+d33 3
+a37 2
+set BINFILE = `which align_oxygen`
+set VER = `grep rcsid $BINFILE | cut -f2- -d: | cut -f1 -dE | head -1`
+a38 1
+
+d66 1
+a66 1
+set TOP = `printenv SLICES | cut -f1 -dt`
+d68 1
+a68 1
+set BOT = `printenv SLICES | cut -f2 -do`
+@
+
+
+1.3
+log
+@fix SLICES_OC, THRESH_HO, THRESH_OC
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.2 1998/12/07 20:00:32 tom Exp tom $
+d12 1
+d17 1
+a19 8
+#if (! $?THRESH_HO ) then
+#	echo "ERROR [align_oxygen]: THRESH_HO is not defined."
+#	exit (-1)
+#endif
+#if (! $?THRESH_OC ) then
+#	echo "ERROR [align_oxygen]: THRESH_OC is not defined."
+#	exit (-1)
+#endif
+d23 1
+a38 1
+echo "${PID} OEF alignment:  " `whoami` `date`       >! ${PID}_align.log
+d41 1
+a41 10
+echo "Version: " $VER >> ${PID}_align.log
+echo "" >> ${PID}_align.log
+echo ">> parameters"       >> ${PID}_align.log
+echo "PID       = $PID"       >> ${PID}_align.log
+echo "SLICES    = $SLICES"    >> ${PID}_align.log
+echo "THRESH_HO = $THRESH_HO" >> ${PID}_align.log
+echo "THRESH_OC = $THRESH_OC" >> ${PID}_align.log
+echo "SLICES_OC = $SLICES_OC" >> ${PID}_align.log
+echo "" >> ${PID}_align.log
+set ID = `echo $PID | cut -c2-`
+d43 11
+d84 1
+a84 1
+	cp masktr.v brain.v
+d101 4
+a104 4
+echo ">> alignlinear oo to ho" >> ${PID}_align.log
+tail -6 log | head -3 >> ${PID}_align.log
+tail -1 log >> ${PID}_align.log
+echo " " >> ${PID}_align.log
+d107 1
+a107 1
+cp ${PID}oo1_g3.hdr r${PID}oo1_g3.hdr
+d112 3
+a114 3
+echo ">> airdif ${PID}oo2ho.air" >> ${PID}_align.log
+airdif null.air ${PID}oo2ho.air brain.v | tail -4 >> ${PID}_align.log
+echo " " >> ${PID}_align.log
+d119 3
+a121 4
+cp r${PID}oo1_g3.v ${PID}ho11_g3.v
+echo "$ID 11" >! oo-ho.lst
+echo "$ID 1" >> oo-ho.lst
+dmean oo-ho.prm oo-ho.lst -s 1
+d140 3
+a142 3
+echo ">> alignlinear oc to oo-ho" >> ${PID}_align.log
+tail -6 log | head -3 >> ${PID}_align.log
+tail -1 log >> ${PID}_align.log
+d145 1
+a145 1
+cp ${PID}oc1_g3.hdr r${PID}oc1_g3.hdr
+d149 4
+a152 4
+echo " " >> ${PID}_align.log
+echo ">> airdif ${PID}oc2ho.air" >> ${PID}_align.log
+airdif null.air ${PID}oc2ho.air brain.v | tail -4 >> ${PID}_align.log
+echo " " >> ${PID}_align.log
+d156 2
+a157 2
+cp ${PID}ho1_g3.v r${PID}ho1_g3.v
+cp ${PID}ho1_g3.hdr r${PID}ho1_g3.hdr
+d185 3
+a187 3
+echo ">> histoimg ${PID}oef1_g3.v r${PID}oef1_g3.v" >> ${PID}_align.log
+echo "--------------------------" >> ${PID}_align.log
+echo "Brain   Original   Aligned" >> ${PID}_align.log
+d189 3
+a191 3
+paste org.dat temp >> ${PID}_align.log
+echo "--------------------------" >> ${PID}_align.log
+echo "Vessel  Original   Aligned" >> ${PID}_align.log
+d193 2
+a194 2
+paste vorg.dat temp >> ${PID}_align.log
+echo "--------------------------" >> ${PID}_align.log
+d201 2
+a202 2
+cp ${PID}oef1_g3.hdr ${PID}oef1_msk.hdr
+cp r${PID}oef1_g3.hdr r${PID}oef1_msk.hdr
+@
+
+
+1.2
+log
+@single SLICES variable for CO and HO
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxygen,v 1.1 1998/12/04 22:39:08 tom Exp $
+d18 11
+a28 9
+if (! $?THRESH_HO ) then
+	echo "ERROR [align_oxygen]: THRESH_HO is not defined."
+	exit (-1)
+endif
+endif
+if (! $?THRESH_OC ) then
+	echo "ERROR [align_oxygen]: THRESH_OC is not defined."
+	exit (-1)
+endif
+d54 1
+d132 1
+a132 1
+threshpct ${PID}oc1_g3.v vas0.v $THRESH_OC $SLICES
+d173 1
+a173 1
+threshpct r${PID}oc1_g3.v vas1.v $THRESH_OC $SLICES
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id$
+d14 4
+a21 3
+if (! $?MASKTOP ) then
+	echo "ERROR [align_oxygen]: MASKTOP is not defined."
+	exit (-1)
+a22 8
+if (! $?MASKBOT ) then
+	echo "ERROR [align_oxygen]: MASKBOT is not defined."
+	exit (-1)
+endif
+if (! $?SLICES_OC ) then
+	echo "ERROR [align_oxygen]: SLICES_OC is not defined."
+	exit (-1)
+endif
+d49 1
+a50 3
+echo "MASKTOP   = $MASKTOP"   >> ${PID}_align.log
+echo "MASKBOT   = $MASKBOT"   >> ${PID}_align.log
+echo "SLICES_OC = $SLICES_OC" >> ${PID}_align.log
+d59 1
+a60 1
+setpixsize ${PID}oc1.v 0.2144
+d64 4
+a67 4
+gauss2d ${PID}tr1.v ${PID}tr1_2dg5.v 0.5
+gauss ${PID}ho1.v ${PID}ho1_g3.v 0.3
+gauss ${PID}oo1.v ${PID}oo1_g3.v 0.3
+gauss ${PID}oc1.v ${PID}oc1_g3.v 0.3
+d71 6
+a76 1
+maskpct ${PID}ho1_g3.v maskcbf.v $THRESH_HO
+d79 8
+a86 2
+maskslc masktr.v brain.v $MASKTOP
+maskslc brain.v brain.v $MASKBOT
+d119 1
+a119 1
+echo "slices:	$SLICES_OC" >> oo-ho.prm
+d129 1
+a129 1
+threshpct ${PID}oc1_g3.v vas0.v $THRESH_OC
+d131 2
+a132 2
+maskslc vas0.v vas0.v $MASKTOP
+maskslc vas0.v vas0.v $MASKBOT
+d168 1
+d170 1
+a170 1
+threshpct r${PID}oc1_g3.v vas1.v $THRESH_OC
+d173 1
+@

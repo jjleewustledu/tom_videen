@@ -1,0 +1,263 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2010.04.07.17.05.34;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@original
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/*	===============================================================================
+ *	Module:			downsize2d.c
+ *	Date:			Apr 2010
+ *	Author:			Tom Videen
+ *	Description:	Resample 2 dimensions of a 3D Analyze image;
+ *					Written to reduce image size of some U Cincinnati MR images (1024x1024)
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/downsize2d/RCS/downsize2d.c,v 2.3 2009/01/07 22:00:15 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+#include <ANALYZE.h>
+
+int             main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;		 /* input file */
+	char           *img2, *hdr2;		 /* output file */
+	int             fac;
+	int             dim1, dim2, dim3;	 /* dimensions of input image */
+	int             xlen, ylen, zlen;	 /* dimensions of output image */
+	float           pix1, pix2, pix3;
+	long            num, pln;
+	long            i, j, k, m, q, p;
+	int             sum;
+	short          *img;
+	short        ***image;
+
+	if (argc != 6) {
+		fprintf (stderr, "Usage: downsize2d img1 hdr1 img2 hdr2 fac\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	fac = atoi (argv[5]);
+
+/*	Read image */
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [downsize2d]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [downsize2d]: reading %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [downsize2d]: reading %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [downsize2d]: reading %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [downsize2d]: reading %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	pix1 = hdr.dime.pixdim[1];
+	pix2 = hdr.dime.pixdim[2];
+	pix3 = hdr.dime.pixdim[3];
+	(void) fclose (fd_hdr);
+	pln = dim1 * dim2;
+	num = pln * dim3;
+	img = (short *) calloc (num, sizeof (short));
+
+	if (img == NULL) {
+		fprintf (stderr, "ERROR [downsize2d]: calloc img\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [downsize2d]: opening %s\n", img1);
+		return (ERROR);
+	}
+	if ((fread (img, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [downsize2d]: reading %s\n", img1);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	fprintf (stdout, "Input:  %s\n", img1);
+
+	if ((image = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [downsize2d]: malloc image\n");
+		return (NULL);
+	}
+	m = 0;
+	for (k = 1; k <= dim3; k++) {
+		for (j = 1; j <= dim2; j++) {
+			for (i = 1; i <= dim1; i++) {
+				image[k][j][i] = img[m];
+				m++;
+			}
+		}
+	}
+
+	fprintf (stdout, "x y z = %d %d %d   (%f %f %f mm)\n", dim1, dim2, dim3, pix1, pix2, pix3);
+	if (dim3 < dim1 && dim3 < dim2) {
+		xlen = dim1 / fac;
+		ylen = dim2 / fac;
+		zlen = dim3;
+		pix1 = pix1 * fac;
+		pix2 = pix2 * fac;
+		fprintf (stdout, "Resampling x,y to:\n");
+		fprintf (stdout, "x y z = %d %d %d   (%f %f %f mm)\n", xlen, ylen, zlen, pix1, pix2, pix3);
+		free (img);
+		pln = xlen * ylen;
+		num = pln * zlen;
+		img = (short *) calloc (num, sizeof (short));
+		if (img == NULL)
+			return (ERROR);
+		m = 0;
+		for (k = 1; k <= zlen; k++) {
+			for (j = 1; j <= ylen; j++) {
+				for (i = 1; i <= xlen; i++) {
+					sum = 0;
+					for (q = 1; q <= fac; q++) {
+						for (p = 1; p <= fac; p++) {
+							sum += image[k][fac * (j - 1) + q][fac * (i - 1) + p];
+						}
+					}
+					img[m] = sum / (fac * fac);
+					m++;
+				}
+			}
+		}
+
+	} else if (dim2 < dim1 && dim2 < dim3) {
+		xlen = dim1 / fac;
+		ylen = dim2;
+		zlen = dim3 / fac;
+		pix1 = pix1 * fac;
+		pix3 = pix3 * fac;
+		fprintf (stdout, "Resampling x,z to:\n");
+		fprintf (stdout, "x y z = %d %d %d   (%f %f %f mm)\n", xlen, ylen, zlen, pix1, pix2, pix3);
+		free (img);
+		pln = xlen * ylen;
+		num = pln * zlen;
+		img = (short *) calloc (num, sizeof (short));
+		if (img == NULL)
+			return (ERROR);
+		m = 0;
+		for (k = 1; k <= zlen; k++) {
+			for (j = 1; j <= ylen; j++) {
+				for (i = 1; i <= xlen; i++) {
+					sum = 0;
+					for (q = 1; q <= fac; q++) {
+						for (p = 1; p <= fac; p++) {
+							sum += image[fac * (k - 1) + q][j][fac * (i - 1) + p];
+						}
+					}
+					img[m] = sum / (fac * fac);
+					m++;
+				}
+			}
+		}
+
+	} else if (dim1 < dim2 && dim1 < dim3) {
+		xlen = dim1;
+		ylen = dim2 / fac;
+		zlen = dim3 / fac;
+		pix2 = pix2 * fac;
+		pix3 = pix3 * fac;
+		fprintf (stdout, "Resampling y,z to:\n");
+		fprintf (stdout, "x y z = %d %d %d   (%f %f %f mm)\n", xlen, ylen, zlen, pix1, pix2, pix3);
+		free (img);
+		pln = xlen * ylen;
+		num = pln * zlen;
+		img = (short *) calloc (num, sizeof (short));
+		if (img == NULL)
+			return (ERROR);
+		m = 0;
+		for (k = 1; k <= zlen; k++) {
+			for (j = 1; j <= ylen; j++) {
+				for (i = 1; i <= xlen; i++) {
+					sum = 0;
+					for (q = 1; q <= fac; q++) {
+						for (p = 1; p <= fac; p++) {
+							sum += image[fac * (k - 1) + q][fac * (j - 1) + p][i];
+						}
+					}
+					img[m] = sum / (fac * fac);
+					m++;
+				}
+			}
+		}
+
+	}
+/*	Write output file 		*/
+
+	hdr.dime.dim[1] = (short) xlen;
+	hdr.dime.dim[2] = (short) ylen;
+	hdr.dime.dim[3] = (short) zlen;
+	hdr.dime.pixdim[1] = pix1;
+	hdr.dime.pixdim[2] = pix2;
+	hdr.dime.pixdim[3] = pix3;
+
+	if ((fd_img = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [downsize2d]: opening %s\n", img2);
+		return (ERROR);
+	}
+	if ((fwrite (img, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [downsize2d]: writing %s\n", img2);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [downsize2d]: opening %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [downsize2d]: writing %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	fprintf (stdout, "Output: %s\n", img2);
+	free (img);
+	return (OK);
+}
+@

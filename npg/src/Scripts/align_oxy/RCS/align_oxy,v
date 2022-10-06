@@ -1,0 +1,546 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.8
+date	2003.12.17.14.45.02;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.10.22.17.16.41;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.07.28.20.02.21;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.06.08.19.08.38;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.06.08.18.22.45;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.06.08.17.41.52;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.06.08.17.21.17;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.05.28.22.01.37;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@#!/bin/csh
+#   Module: align_oxy
+#   Author: Tom Videen
+#   Date:   Oct 1999
+#   Use:    Align PET images (HO, OO, CO) to create OEF image.
+#	rcsid = $Id: align_oxy,v 1.7 1999/10/22 17:16:41 tom Exp tom $
+
+if ($#argv != 5) then
+    echo "Usage:  align_oxy pid ho oc oo mask"
+	echo " e.g.,  align_oxy p5000 2 1 1 p5000mask.v"
+    exit 1
+endif
+
+set PID = $1
+set RID = r$PID
+set HO  = ${RID}ho$2
+set OC  = ${PID}oc$3
+set OO  = ${PID}oo$4
+set OEF = ${PID}oef$4
+set OCHO = ${PID}oc${3}_to_ho$2
+set OOHO = ${PID}oo${4}_to_ho$2
+set MASK = $5
+
+set THR   = 50
+set FIL  = _g3
+set HO1  = $HO$FIL
+set OC1  = $OC$FIL
+set OO1  = $OO$FIL
+
+set ROOT = $MASK:r
+set AMASK = a$ROOT
+set MASK2 = ${ROOT}b.v
+set AMASK2 = ${AMASK}b
+
+unalias cp
+unalias rm
+
+# Check existence of files:
+
+set EFILES = "$MASK $HO.v $OO.v $OC.v $HO1.v $OO1.v $OC1.v"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_oxy]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit (1)
+
+# Check the pixel size in PET headers:
+
+set STATUS = 0
+set ORGSIZE = 0
+foreach i ($EFILES)
+	set PIXSIZE = `imghdr $i | grep 'Pixel size' | cut -f4 -d' '`
+	if ($PIXSIZE == 0.208634) echo "Note: pixel size of $i is $PIXSIZE"
+	if ($ORGSIZE == 0) then
+		set ORGSIZE = $PIXSIZE
+		set ORGFILE = $i
+	else if ($PIXSIZE != $ORGSIZE) then
+		echo "ERROR [align_oxy]: different pixel sizes:"
+		echo "  $ORGFILE = $ORGSIZE"
+		echo "  $i = $PIXSIZE"
+		set STATUS = 1
+	endif
+endif
+if ($STATUS != 0) exit (1)
+
+# Setup log file:
+
+set BINFILE = `which align_oxy`
+set VER = `grep rcsid $BINFILE | cut -f2- -d: | cut -f1 -dE | head -1`
+set LOGFILE = ${RID}_align.log
+echo "$OEF alignment:  " `whoami` `date` >! $LOGFILE
+echo "Version: " $VER           >> $LOGFILE
+echo ""                         >> $LOGFILE
+
+# Convert images to Analyze format:
+
+img2analyze $MASK $AMASK
+img2analyze $HO1.v a$HO1
+img2analyze $OO1.v a$OO1
+img2analyze $OC1.v a$OC1
+setanamin $AMASK 0
+setanamin a$HO1 0
+setanamin a$OO1 0
+
+# Align OO to HO, then reslice OO:
+
+echo "Aligning:  $OO1 to $HO1"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK -x 1 -v"
+echo ">> alignlinear oo to ho" >> $LOGFILE
+echo $PRM >> $LOGFILE
+
+alignlinear a$HO1 a$OO1 $OOHO.air $PRM >! log
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOGFILE
+    exit 1
+endif
+imgreslice a$OO1 $OOHO
+analyze2img ra$OO1 r$OO1.v
+if (! -e null.air) alignlinear a$HO1 a$HO1 null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 $OOHO.air null.air $MASK >> $LOGFILE
+echo " " >> $LOGFILE
+
+# Combined resliced OO1 with existing mask
+ 
+maskimg $MASK r$OO1.v $MASK2 10
+img2analyze $MASK2 $AMASK2
+setanamin $AMASK2 0
+
+# Align CO to resliced OO, then reslice CO:
+ 
+echo "Aligning:  $OC1 to r$OO1"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK2 -x 1 -v"
+echo ">> alignlinear oc to oo" >> $LOGFILE
+echo $PRM >> $LOGFILE
+ 
+setanamin ra$OO1 0
+setanamin a$OC1 0
+alignlinear ra$OO1 a$OC1 $OCHO.air $PRM >! log
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOGFILE
+    exit 1
+endif
+imgreslice a$OC1 $OCHO
+analyze2img ra$OC1 r$OC1.v
+airdif1 $OCHO.air null.air $MASK >> $LOGFILE
+
+# Copy hdrs for realigned images
+ 
+cp $OO1.hdr r$OO1.hdr
+cp $OC1.hdr r$OC1.hdr
+
+img2analyze $OO.v a$OO
+imgreslice  a$OO  $OOHO
+analyze2img ra$OO r$OO.v
+
+img2analyze $OC.v a$OC
+imgreslice  a$OC  $OCHO
+analyze2img ra$OC r$OC.v
+
+cp $OO1.hdr r$OO.hdr
+cp $OC1.hdr r$OC.hdr
+
+rm $MASK2
+rm $AMASK2.img
+rm $AMASK2.ifh
+rm $AMASK2.hdr
+
+echo "Complete [align_oxy] ========================="
+@
+
+
+1.7
+log
+@revised for new Procedures
+@
+text
+@d4 1
+a4 1
+#   Date:   Oct-99
+d6 1
+a6 1
+#	rcsid = $Id: align_oxy,v 1.6 1999/07/28 20:02:21 tom Exp $
+d9 3
+a11 3
+    echo "Usage: align_oxy pid ho oc oo mask"
+	echo " i.e., align_oxy p5000 2 1 1 p5000mask.v"
+    exit (1)
+d104 1
+a104 1
+    exit (1)
+d136 1
+a136 1
+    exit (1)
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 1
+#   Date:   Jun-99
+d6 1
+a6 1
+#	rcsid = $Id: align_oxy,v 1.5 1999/06/08 19:08:38 tom Exp $
+d15 7
+a21 4
+set HO  = ho$2
+set OC  = oc$3
+set OO  = oo$4
+set OEF = oef$4
+a23 1
+set RID = r$PID
+d26 3
+a28 5
+set HO1  = ${HO}${FIL}
+set OC1  = ${OC}${FIL}
+set OO1  = ${OO}${FIL}
+set OCHO = ${OC}_to_${HO}
+set OOHO = ${OO}_to_${HO}
+d35 3
+d40 1
+a40 1
+set EFILES = "$MASK ${PID}${HO}.v ${PID}${OO}.v ${PID}${OC}.v ${PID}${HO1}.v ${PID}${OO1}.v ${PID}${OC1}.v"
+d74 1
+a74 1
+echo "$PID $OEF alignment:  " `whoami` `date` >! $LOGFILE
+d81 3
+a83 3
+img2analyze ${PID}${HO1}.v a${PID}${HO1}
+img2analyze ${PID}${OO1}.v a${PID}${OO1}
+img2analyze ${PID}${OC1}.v a${PID}${OC1}
+d85 2
+a86 2
+setanamin a${PID}${HO1} 0
+setanamin a${PID}${OO1} 0
+d90 1
+a90 1
+echo "Aligning:  ${PID}${OO1} to ${PID}${HO1}"
+d95 1
+a95 1
+alignlinear a${PID}${HO1} a${PID}${OO1} ${PID}${OOHO}.air $PRM >! log
+d106 4
+a109 4
+imgreslice a${PID}${OO1} ${PID}${OOHO}
+analyze2img ra${PID}${OO1} ${RID}${OO1}.v
+if (! -e null.air) alignlinear a${PID}${HO1} a${PID}${HO1} null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 ${PID}${OOHO}.air null.air $MASK >> $LOGFILE
+d114 1
+a114 1
+maskimg $MASK ${RID}${OO1}.v $MASK2 10
+d120 1
+a120 1
+echo "Aligning:  ${PID}${OC1} to ${RID}${OO1}"
+d125 3
+a127 3
+setanamin ra${PID}${OO1} 0
+setanamin a${PID}${OC1} 0
+alignlinear ra${PID}${OO1} a${PID}${OC1} ${PID}${OCHO}.air $PRM >! log
+d138 3
+a140 3
+imgreslice a${PID}${OC1} ${PID}${OCHO}
+analyze2img ra${PID}${OC1} ${RID}${OC1}.v
+airdif1 ${PID}${OCHO}.air null.air $MASK >> $LOGFILE
+a141 1
+# Copy original HO to rp and
+d144 2
+a145 4
+/usr/bin/cp ${PID}${HO1}.v   ${RID}${HO1}.v
+/usr/bin/cp ${PID}${OO1}.hdr ${RID}${OO1}.hdr
+/usr/bin/cp ${PID}${OC1}.hdr ${RID}${OC1}.hdr
+/usr/bin/cp ${PID}${HO1}.hdr ${RID}${HO1}.hdr
+d147 3
+a149 4
+/usr/bin/cp ${PID}${HO}.v ${RID}${HO}.v
+img2analyze ${PID}${OO}.v a${PID}${OO}
+imgreslice  a${PID}${OO}  ${PID}${OOHO}
+analyze2img ra${PID}${OO} ${RID}${OO}.v
+d151 3
+a153 3
+img2analyze ${PID}${OC}.v a${PID}${OC}
+imgreslice  a${PID}${OC}  ${PID}${OCHO}
+analyze2img ra${PID}${OC} ${RID}${OC}.v
+d155 2
+a156 3
+/usr/bin/cp ${PID}${OO1}.hdr ${RID}${OO}.hdr
+/usr/bin/cp ${PID}${OC1}.hdr ${RID}${OC}.hdr
+/usr/bin/cp ${PID}${HO1}.hdr ${RID}${HO}.hdr
+d158 4
+a161 4
+/usr/bin/rm $MASK2
+/usr/bin/rm $AMASK2.img
+/usr/bin/rm $AMASK2.ifh
+/usr/bin/rm $AMASK2.hdr
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxy,v 1.4 1999/06/08 18:22:45 tom Exp tom $
+d11 1
+a11 1
+    exit (-1)
+d45 1
+a45 1
+if ( $STATUS != 0) exit (-1)
+d64 1
+a64 1
+if ($STATUS != 0) exit (-1)
+d95 8
+d127 8
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxy,v 1.3 1999/06/08 17:41:52 tom Exp tom $
+d149 1
+a149 1
+echo "Complete [align_oxy] ======================="
+@
+
+
+1.3
+log
+@single log file
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxy,v 1.2 1999/06/08 17:21:17 tom Exp tom $
+d149 1
+a149 1
+echo "Complete [align_oxy]"
+@
+
+
+1.2
+log
+@revised mask, parameters
+@
+text
+@d6 1
+a6 1
+#	rcsid = $Id: align_oxy,v 1.1 1999/05/28 22:01:37 tom Exp $
+d37 1
+a37 1
+set EFILES = "$MASK ${PID}${HO}.v ${PID}${OO}.v ${PID}${OC}.v  ${PID}${HO1}.v ${PID}${OO1}.v ${PID}${OC1}.v"
+d70 2
+a71 2
+set LOGFILE = ${PID}${OEF}_align.log
+echo "${PID} OEF alignment:  " `whoami` `date` >! $LOGFILE
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 1
+a4 1
+#   Date:   May-99
+d6 1
+a6 1
+#	rcsid = $Id$
+d8 3
+a10 4
+if ($#argv < 5 || $#argv > 9) then
+    echo "Usage: align_oxy pid ya za yp zp [tr ho oc oo]"
+	echo " i.e., align_oxy p5000 37"
+	echo "  or , align_oxy p5000 37 1 2 1 1"
+d14 6
+a19 6
+set PID    = $1
+set Y1     = $2
+set Z1     = $3
+set Y2     = $4
+set Z2     = $5
+set FIL    = _g3
+d21 6
+a26 21
+# Notes on filenames:
+#	TR	- used for mask
+#	HO	- reference water (HO1 is filtered)
+#	OC, OO - aligned to HO (OC1, OO1 are filtered)
+
+if ($#argv < 9) then
+	set TR  = tr1_2dg5
+	set HO  = ho1
+	set OC  = oc1
+	set OO  = oo1
+	set OEF = oef1
+else
+	set TR  = tr${6}_2dg5
+	set HO  = ho${7}
+	set OC  = oc${8}
+	set OO  = oo${9}
+	set OEF = oef${9}
+endif
+set HO1 = ${HO}${FIL}
+set OC1 = ${OC}${FIL}
+set OO1 = ${OO}${FIL}
+d30 5
+d37 1
+a37 1
+set EFILES = "${PID}${TR}.v ${PID}${HO}.v ${PID}${OO}.v ${PID}${OC}.v  ${PID}${HO1}.v ${PID}${OO1}.v ${PID}${OC1}.v"
+a69 1
+
+a74 7
+# Create mask for alignment:
+
+maskimg ${PID}${TR}.v ${PID}${TR}.v mask.v 600
+maskobj mask.v mask.v 600 2000 64 64 24
+maskbelow mask.v mask.v $Y1 $Z1 $Y2 $Z2
+maskimg ${PID}${TR}.v mask.v mask.v 1
+
+d77 1
+a77 3
+if (-e amask.img) /usr/bin/rm amask*
+img2analyze mask.v amask
+
+d81 3
+d88 4
+a91 3
+set PRM = "-m 6 -p1 256 -t1 1 -p2 256 -t2 1 -e1 amask -e2 amask -x 1 -v"
+setanamin a${PID}${HO1} 0
+setanamin a${PID}${OO1} 0
+a92 1
+echo ">> alignlinear oo to ho" >> $LOGFILE
+d96 4
+a99 1
+analyze2img ra${PID}${OO1} r${PID}${OO1}.v
+d101 5
+a105 1
+# Check amount of movement:
+a106 6
+if (! -e null.air) then
+    alignlinear a${PID}${HO1} a${PID}${HO1} null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+endif
+airdif1 ${PID}${OOHO}.air null.air mask.v >> $LOGFILE
+echo " " >> $LOGFILE
+
+d108 6
+a113 3
+
+echo "Aligning:  ${PID}${OC1} to r${PID}${OO1}"
+set PRM = "-m 6 -p1 256 -t1 1 -p2 256 -t2 1 -e1 amask -e2 amask -x 1 -v"
+a116 1
+echo ">> alignlinear oc to oo" >> $LOGFILE
+d120 2
+a121 1
+analyze2img ra${PID}${OC1} r${PID}${OC1}.v
+a122 2
+airdif1 ${PID}${OCHO}.air null.air mask.v >> $LOGFILE
+
+d126 4
+a129 4
+/usr/bin/cp ${PID}${HO1}.v r${PID}${HO1}.v
+/usr/bin/cp ${PID}${OO1}.hdr r${PID}${OO1}.hdr
+/usr/bin/cp ${PID}${OC1}.hdr r${PID}${OC1}.hdr
+/usr/bin/cp ${PID}${HO1}.hdr r${PID}${HO1}.hdr
+d131 1
+a131 1
+/usr/bin/cp ${PID}${HO}.v r${PID}${HO}.v
+d133 2
+a134 2
+imgreslice a${PID}${OO} ${PID}${OOHO}
+analyze2img ra${PID}${OO} r${PID}${OO}.v
+d137 2
+a138 2
+imgreslice a${PID}${OC} ${PID}${OCHO}
+analyze2img ra${PID}${OC} r${PID}${OC}.v
+d140 3
+a142 3
+/usr/bin/cp ${PID}${OO1}.hdr r${PID}${OO}.hdr
+/usr/bin/cp ${PID}${OC1}.hdr r${PID}${OC}.hdr
+/usr/bin/cp ${PID}${HO1}.hdr r${PID}${HO}.hdr
+d144 6
+a149 1
+echo "Processing Complete [align_oxy]"
+@

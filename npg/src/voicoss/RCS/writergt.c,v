@@ -1,0 +1,493 @@
+head	2.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.2
+date	2006.02.16.20.34.59;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	2004.03.04.18.40.30;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2004.02.20.16.20.40;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2003.11.25.20.09.13;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2003.11.13.14.26.39;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2003.10.06.15.57.13;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2003.03.31.16.23.03;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.08.15.16.36.47;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.04.11.19.06.26;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.04.11.16.55.19;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2001.09.18.17.25.07;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.08.31.15.23.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.2
+log
+@eliminate zero check while computing regional means
+@
+text
+@/*	$Log: writergt.c,v $
+ * Revision 2.1  2004/03/04  18:40:30  tom
+ * always write both L/R and R/L ratios
+ *
+ * Revision 2.0  2004/02/20  16:20:40  tom
+ * Feb 2004
+ *
+ * Revision 1.9  2003/11/25  20:09:13  tom
+ * show both ratios for followup studies
+ *
+ * Revision 1.8  2003/11/13  14:26:39  tom
+ * replace Surgery with Randomization
+ *
+ * Revision 1.7  2003/10/06  15:57:13  tom
+ * add asterisk to individual regions with ratio > 1.13
+ *
+ * Revision 1.6  2003/03/31  16:23:03  tom
+ * write left and right means as normalized values
+ *
+ * Revision 1.5  2002/08/15  16:36:47  tom
+ * set criterion to greater than 1.160 (3 decimal places)
+ *
+ * Revision 1.4  2002/04/11  19:06:26  tom
+ * spelling
+ *
+ * Revision 1.3  2002/04/11  16:55:19  tom
+ * message with ratio
+ *
+ * Revision 1.2  2001/09/18  17:25:07  tom
+ * change typo (radius -> diameter)
+ *
+ * Revision 1.1  2000/08/31  15:23:07  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			writergt.c
+ *	Date:			Aug 2000
+ *	Author:			Tom Videen
+ *	Description:	Write rgt data from voicoss2.
+ *		All regional values are summed and the mean value is normalized to 0.4.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 2.1 2004/03/04 18:40:30 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <imgutil.h>
+#include <voistat.h>
+
+int             writergt (rgtfile, prm, version, nvoi, voilist, rgtlist, date,
+			                  uid, voifile, nvoxels, adim, oname, hname)
+	char           *rgtfile;		 /* output filename */
+	PARAMETER_DATA  prm;			 /* processing parameters */
+	char           *version;		 /* program version number */
+	int             nvoi;			 /* number of VOIs */
+	VOIDATA        *voilist;		 /* list of VOIs */
+	RGTDATA         rgtlist;		 /* RGTDATA */
+	char           *date;			 /* current date */
+	char           *uid;			 /* user id */
+	char           *voifile;		 /* region filename */
+	int             nvoxels;		 /* number of voxels in VOI */
+	float          *adim;			 /* voxel dimension (mm) */
+	char           *oname;
+	char           *hname;
+
+{
+	FILE           *rgtfp;
+	double          left_mean, right_mean, ratio;
+	double          mean_all;
+	double          left_sum, right_sum, normfactor;
+	double          left, right;
+	int             left_n, right_n;
+	int             k;
+
+	if ((rgtfp = fopen (rgtfile, "w")) == NULL) {
+		fprintf (stderr, "ERROR [writergt]: Cannot open file %s\n", rgtfile);
+		return (ERROR);
+	}
+	left_n = 0;
+	right_n = 0;
+	left_sum = 0;
+	right_sum = 0;
+	for (k = 0; k < nvoi; k++) {
+		if (strncmp (voilist[k].voiname, "l_", 2) == 0) {
+			left_sum += rgtlist.mean[0][k];
+			++left_n;
+		} else if (strncmp (voilist[k].voiname, "r_", 2) == 0) {
+			right_sum += rgtlist.mean[0][k];
+			++right_n;
+		}
+	}
+	left_mean = left_sum / left_n;
+	right_mean = right_sum / right_n;
+	mean_all = 0.5 * (left_mean + right_mean);
+	normfactor = 0.4 / mean_all;
+	for (k = 0; k < nvoi; k++) {
+		if (fmod ((double) k, 2.0) == 0) {
+			left = normfactor * rgtlist.mean[0][k];
+			right = normfactor * rgtlist.mean[0][k + 1];
+			if (left / right > 1.13)
+				fprintf (rgtfp, "%10.3f  %s  *\n", normfactor * rgtlist.mean[0][k], voilist[k].voiname);
+			else
+				fprintf (rgtfp, "%10.3f  %s\n", normfactor * rgtlist.mean[0][k], voilist[k].voiname);
+		} else {
+			left = normfactor * rgtlist.mean[0][k - 1];
+			right = normfactor * rgtlist.mean[0][k];
+			if (right / left > 1.13)
+				fprintf (rgtfp, "%10.3f  %s  *\n", normfactor * rgtlist.mean[0][k], voilist[k].voiname);
+			else
+				fprintf (rgtfp, "%10.3f  %s\n", normfactor * rgtlist.mean[0][k], voilist[k].voiname);
+		}
+	}
+
+	fprintf (rgtfp, "\n%10.3f  Mean Left\n", normfactor * left_mean);
+	fprintf (rgtfp, "%10.3f  Mean Right\n\n", normfactor * right_mean);
+
+	ratio = left_mean / right_mean;
+	fprintf (rgtfp, "%10.3f  Left/Right\n", ratio);
+	ratio = right_mean / left_mean;
+	fprintf (rgtfp, "%10.3f  Right/Left\n", ratio);
+
+	fprintf (rgtfp, "\n%s   %s   %s\n", oname, hname, voifile);
+	fprintf (rgtfp, "VOI sphere:  %.2f mm diameter, %.3f cc, %d voxels\n",
+		 prm.voi_xdim, nvoxels * adim[0] * adim[1] * adim[2] / 1000., nvoxels);
+	fprintf (rgtfp, "%s   %s   %s\n", version, date, uid);
+
+	(void) fclose (rgtfp);
+	return (OK);
+}
+@
+
+
+2.1
+log
+@always write both L/R and R/L ratios
+@
+text
+@d2 3
+d45 1
+a45 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 2.0 2004/02/20 16:20:40 tom Exp tom $";
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@d2 3
+d42 1
+a42 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.9 2003/11/25 20:09:13 tom Exp tom $";
+d118 4
+a121 23
+	if (strstr(rgtfile, "oo1ho1") == NULL) {
+		fprintf (rgtfp, "Followup Study\n");
+		ratio = left_mean / right_mean;
+		fprintf (rgtfp, "%10.3f  Left/Right\n", ratio);
+		ratio = right_mean / left_mean;
+		fprintf (rgtfp, "%10.3f  Right/Left\n", ratio);
+	} else if (left_mean >= right_mean) {
+		ratio = left_mean / right_mean;
+		if (ratio > 1.160)
+			fprintf (rgtfp, "%10.3f  Left/Right  is PET Eligible for Randomization\n", ratio);
+		else if (ratio > 1.130)
+			fprintf (rgtfp, "%10.3f  Left/Right  may be PET Eligible\n", ratio);
+		else
+			fprintf (rgtfp, "%10.3f  Left/Right  is within normal range\n", ratio);
+	} else {
+		ratio = right_mean / left_mean;
+		if (ratio > 1.160)
+			fprintf (rgtfp, "%10.3f  Right/Left  is PET Eligible for Randomization\n", ratio);
+		else if (ratio > 1.130)
+			fprintf (rgtfp, "%10.3f  Right/Left  may be PET Eligible for Randomization\n", ratio);
+		else
+			fprintf (rgtfp, "%10.3f  Right/Left  is within normal range\n", ratio);
+	}
+@
+
+
+1.9
+log
+@show both ratios for followup studies
+@
+text
+@d2 3
+d37 1
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.8 2003/11/13 14:26:39 tom Exp tom $";
+d141 1
+a141 1
+		 prm.voi_xdim, nvoxels * adim[0] * adim[1] * adim[2] / 1000, nvoxels);
+@
+
+
+1.8
+log
+@replace Surgery with Randomization
+@
+text
+@d2 3
+d35 1
+a35 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.7 2003/10/06 15:57:13 tom Exp tom $";
+d111 2
+a112 1
+	if (left_mean >= right_mean) {
+d114 5
+@
+
+
+1.7
+log
+@add asterisk to individual regions with ratio > 1.13
+@
+text
+@d2 3
+d32 1
+a32 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.6 2003/03/31 16:23:03 tom Exp tom $";
+d111 1
+a111 1
+			fprintf (rgtfp, "%10.3f  Left/Right  is PET Eligible for Surgery\n", ratio);
+d119 1
+a119 1
+			fprintf (rgtfp, "%10.3f  Right/Left  is PET Eligible for Surgery\n", ratio);
+d121 1
+a121 1
+			fprintf (rgtfp, "%10.3f  Right/Left  may be PET Eligible for Surgery\n", ratio);
+@
+
+
+1.6
+log
+@write left and right means as normalized values
+@
+text
+@d2 3
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.5 2002/08/15 16:36:47 tom Exp tom $";
+d34 1
+d59 1
+d84 17
+a100 2
+	for (k = 0; k < nvoi; k++)
+		fprintf (rgtfp, "%10.3f  %s\n", normfactor * rgtlist.mean[0][k], voilist[k].voiname);
+d107 1
+a107 1
+		if (ratio > 1.160) 
+d109 1
+a109 1
+		else if (ratio > 1.130) 
+d115 1
+a115 1
+		if (ratio > 1.160) 
+d117 1
+a117 1
+		else if (ratio > 1.130) 
+@
+
+
+1.5
+log
+@set criterion to greater than 1.160 (3 decimal places)
+@
+text
+@d2 3
+d22 1
+d26 1
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.4 2002/04/11 19:06:26 tom Exp tom $";
+d52 4
+a55 3
+	double          leftmean, rightmean, ratio;
+	double          leftsum, rightsum, scaler;
+	int             leftn, rightn;
+d62 4
+a65 4
+	leftn = 0;
+	rightn = 0;
+	leftsum = 0;
+	rightsum = 0;
+d68 2
+a69 2
+			leftsum += rgtlist.mean[0][k];
+			++leftn;
+d71 2
+a72 2
+			rightsum += rgtlist.mean[0][k];
+			++rightn;
+d75 4
+a78 3
+	leftmean = leftsum / leftn;
+	rightmean = rightsum / rightn;
+	scaler = 0.4 / (0.5 * (leftmean + rightmean));
+d80 1
+a80 1
+		fprintf (rgtfp, "%10.3f  %s\n", scaler * rgtlist.mean[0][k], voilist[k].voiname);
+d82 2
+a83 2
+	fprintf (rgtfp, "\n%10.3f  Mean Left\n", leftmean);
+	fprintf (rgtfp, "%10.3f  Mean Right\n", rightmean);
+d85 2
+a86 3
+	if (leftmean >= rightmean) {
+		ratio = leftmean / rightmean;
+		fprintf (rgtfp, "%10.3f  Mean L/R\n\n", ratio);
+d88 3
+a90 1
+			fprintf (rgtfp, "%10.3f  Ratio L/R   is PET Eligible for Surgery\n", ratio);
+d92 1
+a92 1
+			fprintf (rgtfp, "%10.3f  Ratio L/R   is within normal range\n", ratio);
+d94 1
+a94 2
+		ratio = rightmean / leftmean;
+		fprintf (rgtfp, "%10.3f  Mean R/L\n\n", ratio);
+d96 3
+a98 1
+			fprintf (rgtfp, "%10.3f  Ratio R/L   is PET Eligible for Surgery\n", ratio);
+d100 1
+a100 1
+			fprintf (rgtfp, "%10.3f  Ratio R/L   is within normal range\n", ratio);
+@
+
+
+1.4
+log
+@spelling
+@
+text
+@d2 3
+d22 1
+a22 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.3 2002/04/11 16:55:19 tom Exp tom $";
+d74 1
+a74 1
+		fprintf (rgtfp, "%10.4f  %s\n", scaler * rgtlist.mean[0][k], voilist[k].voiname);
+d76 2
+a77 2
+	fprintf (rgtfp, "\n%10.4f  Mean Left\n", leftmean);
+	fprintf (rgtfp, "%10.4f  Mean Right\n", rightmean);
+d81 3
+a83 2
+		if (ratio > 1.16) 
+			fprintf (rgtfp, "%10.4f  Ratio L/R   Surgery Candidate!\n", ratio);
+d85 1
+a85 1
+			fprintf (rgtfp, "%10.4f  Ratio L/R   within normal range\n", ratio);
+d88 3
+a90 2
+		if (ratio > 1.16) 
+			fprintf (rgtfp, "%10.4f  Ratio R/L   Surgery Candidate!\n", ratio);
+d92 1
+a92 1
+			fprintf (rgtfp, "%10.4f  Ratio R/L   within normal range\n", ratio);
+@
+
+
+1.3
+log
+@message with ratio
+@
+text
+@d2 3
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.2 2001/09/18 17:25:07 tom Exp tom $";
+d79 1
+a79 1
+			fprintf (rgtfp, "%10.4f  Ratio L/R   Surgical Candidate!\n", ratio);
+d85 1
+a85 1
+			fprintf (rgtfp, "%10.4f  Ratio R/L   Surgical Candidate!\n", ratio);
+@
+
+
+1.2
+log
+@change typo (radius -> diameter)
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.1 2000/08/31 15:23:07 tom Exp tom $";
+a65 1
+	ratio = leftmean / rightmean;
+a71 1
+	fprintf (rgtfp, "%10.4f  Ratio L/R\n", ratio);
+d73 14
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss/RCS/writergt.c,v 1.4 2000/08/29 13:22:33 tom Exp $";
+d73 1
+a73 1
+	fprintf (rgtfp, "VOI sphere:  %.2f mm radius, %.3f cc, %d voxels\n",
+@

@@ -1,0 +1,213 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2004.02.20.14.51.02;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2001.10.25.14.59.29;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@/* $Log: sumattn7.c,v $
+ * Revision 1.1  2001/10/25  14:59:29  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			sumattn7.c
+ *	Date:			Oct 2001
+ *	Author:			Tom Videen
+ *	Description:	Add (subtract or average) two ECAT7 attenuation files.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumattn7/RCS/sumattn7.c,v 1.1 2001/10/25 14:59:29 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;			 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+    DataSetType     dtype;
+
+	char           *scan1;
+	char           *scan2;
+	char           *outfile;
+    int             numray, numang, numpln;
+    int             sizepln;
+    int             fformat;
+	long            j, p;
+	float           f1, f2;
+	float        **atn1;
+	float        **atn2;
+	float        **sum;
+
+/*
+ *	Read command line arguments and initialize filenames.
+ */
+
+	if (argc != 6) {
+		fprintf (stderr, "Usage: sumattn7 atn1 f1 atn2 f2 out\n");
+		return (ERROR);
+	}
+	scan1 = argv[1];
+	f1 = atof (argv[2]);
+	scan2 = argv[3];
+	f2 = atof (argv[4]);
+	outfile = argv[5];
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (scan1);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [sumattn7]: Cannot open %s\n", scan1);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [sumattn7]: Cannot get MainHeader from %s\n", scan1);
+		return (ERROR);
+	}
+    fformat = file->mh->file_format;
+    dtype = (DataSetType) file->mh->filetype;
+    if (fformat != MATRIX_REV7) {
+        fprintf (stderr, "ERROR [sumattn7]: Unsupported file format %d\n", fformat);
+        return (ERROR);
+    }
+    if (dtype != AttenCor) {
+        fprintf (stderr, "ERROR [sumattn7]: Not an attenuation file %s\n", scan1);
+        return (ERROR);
+    }
+    if (get_sa (file, &indx) == ERROR) {
+        fprintf (stderr, "ERROR [sumattn7]: Reading attenuation subheader in %s\n", scan1);
+        return (ERROR);
+    }
+    numray = (long) file->sh->dim1;
+    numang = (long) file->sh->dim2;
+    numpln = (long) file->sh->dim3;
+	sizepln = numray * numang;
+	atn1 = (float **) calloc (numpln, sizeof (float *));
+    for (p = 0; p < numpln; p++) {
+        indx.pln = p+1;
+        if ((atn1[p] = rdattn7 (file, indx)) == NULL) {
+            fprintf (stderr, "Cannot read frame %d plane %d of %s\n",
+                indx.frm, indx.pln, scan1);
+            return (ERROR);
+        }
+    }
+	close_imgfile (file);
+
+	file->name = scan2;
+	indx.frm = 1;
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [sumattn7]: Cannot open %s\n", scan2);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [sumattn7]: Cannot get MainHeader from %s\n", scan2);
+		return (ERROR);
+	}
+    if (fformat != MATRIX_REV7) {
+        fprintf (stderr, "ERROR [sumattn7]: Unsupported file format %d\n", fformat);
+        return (ERROR);
+    }
+	atn2 = (float **) calloc (numpln, sizeof (float *));
+    for (p = 0; p < numpln; p++) {
+        indx.pln = p+1;
+        if ((atn2[p] = rdattn7 (file, indx)) == NULL) {
+            fprintf (stderr, "Cannot read frame %d plane %d of %s\n",
+                indx.frm, indx.pln, scan2);
+            return (ERROR);
+        }
+    }
+	close_imgfile (file);
+
+	fprintf (stdout, "Computing (%f * %s) + (%f * %s)\n", f1, scan1, f2, scan2);
+	sum = (float **) calloc (numpln, sizeof (float *));
+    for (p = 0; p < numpln; p++) {
+		sum[p] = (float *) calloc (sizepln, sizeof (float));
+        if (sum[p] == NULL) {
+            fprintf (stderr, "Cannot malloc sum plane %d\n", (int) p);
+            return (ERROR);
+        }
+    }
+	for (p = 0; p < numpln; p++)
+		for (j = 0; j < sizepln; j++)
+			sum[p][j] = f1 * atn1[p][j] + f2 * atn2[p][j];
+
+/*  Create Output attenuation   */
+
+	fprintf (stdout, "Writing %s\n", outfile);
+    (void) strcpy (file->name, outfile);
+    (void) strcpy (file->mode, "w");
+    if (open_imgfile (file) == ERROR) {
+        fprintf (stderr, "ERROR [sumattn7]: Cannot open %s\n", outfile);
+        return (ERROR);
+    }
+    if (put_mh7 (file) == ERROR) {
+        fprintf (stderr, "ERROR [sumattn7]: Cannot write MainHeader to %s\n", outfile);
+        return (ERROR);
+    }
+    for (p = 0; p < numpln; p++) {
+        indx.pln = p + 1;
+        if (p == 0) {
+            if (put_sa7 (file, &indx) == ERROR) {
+                fprintf (stderr, "ERROR [sumattn7]: Cannot write file subheader to %s\n", outfile);
+                return (ERROR);
+            }
+        }
+        if (wrattn7 (file, indx, sum[p]) == ERROR) {
+            fprintf (stderr, "ERROR [sumattn7]: Cannot write plane %d of %s\n",
+                 (int) p + 1, outfile);
+            return (ERROR);
+        }
+    }
+	close_imgfile (file);
+
+    free (atn1);
+    free (atn2);
+    free (sum);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d12 2
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumattn7/RCS/sumattn7.c,v 1.3 2001/10/04 14:25:53 tom Exp $";
+@

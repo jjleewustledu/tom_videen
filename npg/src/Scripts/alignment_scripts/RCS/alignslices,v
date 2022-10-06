@@ -1,0 +1,380 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	2003.12.22.18.08.34;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2003.12.17.15.08.25;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2003.06.17.18.31.22;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.10.20.18.56.38;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.09.10.14.29.12;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.09.03.13.10.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@#!/bin/csh
+# Program:	alignslices
+# Author:	Tom Videen
+# Date:		Oct 1999
+# Function:	Align slices in an Analyze image.
+# 	Separates 3D image into single-slice images;
+#	Uses alignlinear to align these in 2D;
+#	Copies slices as is above FIRST and below LAST slices;
+#	FIRST slice is reference for all slices FIRST to LAST;
+#	Align adjacent images and compute a combined_air file for the
+#	new slice using all air files from the reference slice;
+#	Air files are used to reslice single-slice images,
+#	and these are merged into a single 3D image.
+#	All single-slice images are removed but air files and a log remain.
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv < 4) then
+	echo "Usage:  alignslices in out thresh first [last]"
+	echo " e.g.,  alignslices p5000ct0 p5000ct 1000 9"
+	echo "   or,  alignslices p5000ct0 p5000ct 1000 9 39"
+	exit 1
+endif
+
+set IN  = $1
+set OUT = $2
+set THR = $3
+set FIRST = $4
+set SLICES = `scanheader $IN | grep z_dim | cut -f2 -d=`
+if ($#argv == 5) then
+	set LAST  = $5
+else
+	set LAST = $SLICES
+endif
+set NAM = ${OUT}_
+set LOGFILE = ${OUT}_align_slices.log
+
+unalias mv
+unalias rm
+
+if (! -e $IN.img) then
+	echo "ERROR [alignslices]: $IN.img does not exist"
+	exit 1
+endif
+if (! -e $IN.hdr) then
+	echo "ERROR [alignslices]: $IN.hdr does not exist"
+	exit 1
+endif
+if ($SLICES < $LAST) then
+	echo "ERROR [alignslices]: last slice is greater than $SLICES"
+	exit 1 
+endif
+echo $IN  $SLICES slices, ref = $FIRST >! $LOGFILE
+${NPG}/bin/separate_slices $IN $NAM
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set PRM = "-m 23 -t1 $THR -t2 $THR -p1 1 -p2 1 -b1 10 10 0 -b2 10 10 0 -x 1"
+set REF = $NAM$FIRST
+${NPG}/bin/setanamin $REF 0
+${NPG}/bin/alignlinear $REF $REF $REF.air $PRM
+cp $REF.hdr r$REF.hdr
+cp $REF.img r$REF.img
+
+# Copy files above FIRST
+# ---------------------------------------------------------
+set i = 1
+while ($i < $FIRST)
+	mv $NAM$i.hdr r$NAM$i.hdr
+	mv $NAM$i.img r$NAM$i.img
+	cp $REF.air $NAM$i.air
+	@@ i++
+end
+
+# Align all adjacent pairs (and remove single-slice images)
+# ---------------------------------------------------------
+set i = $FIRST
+set TOTAIR = $REF.air
+while ($i < $LAST)
+	set k = `echo "$i + 1; quit" | bc`
+	set PREV = $NAM$i
+	set NEXT = $NAM$k
+	set NEWAIR = ${NEXT}vs${i}.air
+	${NPG}/bin/setanamin $PREV 0
+	${NPG}/bin/setanamin $NEXT 0
+	${NPG}/bin/alignlinear $PREV $NEXT $NEWAIR $PRM
+	${NPG}/bin/combine_air $NEXT.air y $TOTAIR $NEWAIR
+	${NPG}/bin/airdif $NEXT.air $REF.air | head -3 >> $LOGFILE
+	${NPG}/bin/airdif $NEXT.air $REF.air | head -3 
+	${NPG}/bin/imgreslice $NEXT $NEXT
+	rm $NEWAIR
+	rm $PREV.img
+	rm $PREV.hdr
+	set TOTAIR = $NEXT.air
+	@@ i++
+end
+rm $NAM$LAST.img
+rm $NAM$LAST.hdr
+@@ i++
+
+# Reslice any remaining files
+# ---------------------------------------------------------
+while ($i <= $SLICES)
+	set NEXT = $NAM$i
+	cp $TOTAIR $NEXT.air
+	${NPG}/bin/imgreslice $NEXT $NEXT
+	rm $NEXT.hdr
+	rm $NEXT.img
+	@@ i++
+end
+
+# Merge realigned single-slice images, then remove them
+# -----------------------------------------------------
+${NPG}/bin/merge_slices r$NAM 1 $SLICES $OUT
+set i = 1
+while ($i <= $SLICES)
+	rm r${NAM}$i.img
+	rm r${NAM}$i.hdr
+	@@ i++
+end
+echo "Created $OUT.img"
+
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d42 1
+a42 1
+	echo "ERROR [alignslices]: $IN.img does not exist.
+d46 1
+a46 1
+	echo "ERROR [alignslices]: $IN.hdr does not exist.
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 1
+# Date:		Oct-99
+d16 2
+d19 4
+a22 4
+	echo "Usage: alignslices in out thresh first [last]"
+	echo " i.e., alignslices p5000ct0 p5000ct 1000 9"
+	echo "   or, alignslices p5000ct0 p5000ct 1000 9 39"
+	exit (1)
+a24 1
+if (! $?BINPATH) set BINPATH = /usr/local/npg/bin
+d43 1
+a43 1
+	exit(1)
+d47 1
+a47 1
+	exit(1)
+d51 1
+a51 1
+	exit(1)
+d54 1
+a54 1
+${BINPATH}/separate_slices $IN $NAM
+d60 2
+a61 2
+${BINPATH}/setanamin $REF 0
+${BINPATH}/alignlinear $REF $REF $REF.air $PRM
+d84 7
+a90 7
+	${BINPATH}/setanamin $PREV 0
+	${BINPATH}/setanamin $NEXT 0
+	${BINPATH}/alignlinear $PREV $NEXT $NEWAIR $PRM
+	${BINPATH}/combine_air $NEXT.air y $TOTAIR $NEWAIR
+	${BINPATH}/airdif $NEXT.air $REF.air | head -3 >> $LOGFILE
+	${BINPATH}/airdif $NEXT.air $REF.air | head -3 
+	${BINPATH}/imgreslice $NEXT $NEXT
+d106 1
+a106 1
+	${BINPATH}/imgreslice $NEXT $NEXT
+d114 1
+a114 1
+${BINPATH}/merge_slices r$NAM 1 $SLICES $OUT
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d23 1
+a23 1
+set BINPATH = /usr/local/npg/bin
+@
+
+
+1.2
+log
+@add option for reference slice different from 1
+change filter to 10 (from 5)
+@
+text
+@d4 2
+a5 2
+# Date:		Sep-99
+# Function:	Align all slices in an Analyze image.
+d8 4
+a11 4
+#	User-specified reference slice is fixed;
+#	Moving in either direction from this slice, adjacent images
+#	are aligned and then a combined_air file is computed for that
+#	slice using all air files from the reference slice;
+d16 2
+a17 2
+if ($#argv != 4) then
+	echo "Usage: alignslices in out thresh ref"
+d19 1
+d28 6
+d37 4
+a40 1
+if (!(-e $IN.img)) then
+d44 1
+a44 1
+if (!(-e $IN.hdr)) then
+d48 4
+a51 1
+set SLICES = `scanheader $IN | grep z_dim | cut -f2 -d=`
+d61 2
+a62 1
+${BINPATH}/imgreslice $REF $REF
+d64 10
+a74 1
+# Align up and down from FIRST (which is reference)
+d78 2
+a79 2
+while ($i > 1)
+	set k = `echo "$i - 1; quit" | bc`
+d90 3
+a92 5
+	/usr/bin/rm $NEWAIR
+	if ($i != $FIRST) then
+		/usr/bin/rm $PREV.img
+		/usr/bin/rm $PREV.hdr
+	endif
+d94 1
+a94 1
+	@@ i--
+d96 9
+a104 17
+if ($FIRST > 1) then
+	/usr/bin/rm ${NAM}1.img
+	/usr/bin/rm ${NAM}1.hdr
+	set i = $FIRST
+	set TOTAIR = $REF.air
+endif
+while ($i < $SLICES)
+	set k = `echo "$i + 1; quit" | bc`
+	set PREV = $NAM$i
+	set NEXT = $NAM$k
+	set NEWAIR = ${NEXT}vs${i}.air
+	${BINPATH}/setanamin $PREV 0
+	${BINPATH}/setanamin $NEXT 0
+	${BINPATH}/alignlinear $PREV $NEXT $NEWAIR $PRM
+	${BINPATH}/combine_air $NEXT.air y $TOTAIR $NEWAIR
+	${BINPATH}/airdif $NEXT.air $REF.air | head -3 >> $LOGFILE
+	${BINPATH}/airdif $NEXT.air $REF.air | head -3 
+d106 2
+a107 4
+	/usr/bin/rm $NEWAIR
+	/usr/bin/rm $PREV.img
+	/usr/bin/rm $PREV.hdr
+	set TOTAIR = $NEXT.air
+a109 2
+/usr/bin/rm $NAM$SLICES.img
+/usr/bin/rm $NAM$SLICES.hdr
+d116 2
+a117 2
+	/usr/bin/rm r${NAM}$i.img
+	/usr/bin/rm r${NAM}$i.hdr
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 11
+a14 2
+# Date:		Aug-99
+# Usage:	Align all slices in an Analyze image.
+d16 3
+a18 3
+if ($#argv != 3) then
+	echo "Usage: alignslices in out thresh"
+	echo " i.e., alignslices p5000ct0 p5000ct 1000"
+d26 1
+d39 1
+a39 1
+echo $IN  $SLICES slices >! $LOGFILE
+d44 5
+a48 4
+${BINPATH}/setanamin ${NAM}1 0
+set PRM = "-m 23 -t1 $THR -t2 $THR -p1 1 -p2 1 -b1 5 5 0 -b2 5 5 0 -x 1"
+${BINPATH}/alignlinear ${NAM}1 ${NAM}1 null.air $PRM
+${BINPATH}/imgreslice ${NAM}1 null
+d51 1
+d53 28
+a80 2
+set i = 1
+set TOTAIR = null.air
+d83 10
+a92 9
+	set NEWAIR = ${NAM}${i}vs${k}.air
+	set NETAIR = $NAM$k
+	${BINPATH}/setanamin $NAM$i 0
+	${BINPATH}/setanamin $NAM$k 0
+	${BINPATH}/alignlinear $NAM$i $NAM$k $NEWAIR $PRM
+	${BINPATH}/combine_air $NETAIR.air y $TOTAIR $NEWAIR
+	${BINPATH}/airdif $NETAIR.air null.air | head -3 >> $LOGFILE
+	${BINPATH}/airdif $NETAIR.air null.air | head -3 
+	${BINPATH}/imgreslice $NAM$k $NETAIR
+d94 3
+a96 3
+	/usr/bin/rm $NAM$i.img
+	/usr/bin/rm $NAM$i.hdr
+	set TOTAIR = $NETAIR.air
+@

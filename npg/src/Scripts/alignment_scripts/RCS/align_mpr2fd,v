@@ -1,0 +1,176 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	2003.01.09.21.15.02;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2001.07.11.19.58.19;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@July 11, 2001
+@
+
+
+1.2
+log
+@increase THR, decrease PTS
+@
+text
+@#!/bin/csh
+#	Module:	align_mpr2fd
+#	Author:	Tom Videen
+#	Date:	Jan 2003
+#	Use:	Align MPRAGE images to PET FDOPA image.
+#	Creates:
+#		rp3000_mprage.img	- coregistered MPRAGE
+#		p3000_mpr2fd.air
+#		align_mpr2fd.log
+#	Uses:
+#		p3000_mprage.img	- original MPRAGE
+#		rp3000fd_f1to8.img	- sum of first 11 minutes of FDOPA
+
+# Parameters for alignlinear which may affect accuracy of the coregistration
+
+if ($#argv < 2) then
+	echo "Usage: align_mpr2fd mpr pet [-mb 3] [-pb 6] [-t 10]"
+	echo " e.g., align_mpr2fd p3000_mprmsk rp3000fd_f1to8"
+	echo "  or,  align_mpr2fd p3000_mprmsk rp3000fd_f1to8 -mb 3 -pb 6 -t 400"
+	exit 1
+endif
+
+set MPR  = $1
+set FD   = $2
+set AIR  = ${MPR}_to_${FD}
+set LOGFILE = align_mpr2fd.log
+set INIT = air_init
+set MB   = 3
+set PB   = 6
+set THR  = 400
+set PTS  = 1024
+
+shift argv
+shift argv
+top:
+	if ($#argv > 0) then
+		switch ("$argv[1]")
+		case -mb:
+			shift argv
+			if ($#argv > 0) then
+				set MB = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_dynpet]: missing number following -mb"
+				exit 1
+			endif
+			goto top
+		case -pb:
+			shift argv
+			if ($#argv > 0) then
+				set PB = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_dynpet]: missing number following -pb"
+				exit 1
+			endif
+			goto top
+		case -t:
+			shift argv
+			if ($#argv > 0) then
+				set THR = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_dynpet]:
+				echo "Usage: align_mpr2fd mpr pet [-mb 3] [-pb 6] [-t 10]"
+				exit 1
+			endif
+			goto top
+		case -?*:
+			echo "ERROR [align_dynpet]: illegal parameter $argv[1]"
+			echo "Usage: align_mpr2fd mpr pet [-mb 3] [-pb 6] [-t 10]"
+			exit 1
+		default:
+			echo "ERROR [align_dynpet]: extra parameter $argv[1]"
+			echo "Usage: align_mpr2fd mpr pet [-mb 3] [-pb 6] [-t 10]"
+			exit 1
+		endsw
+	endif
+endif
+set MBLUR = "$MB $MB $MB"
+set PBLUR = "$PB $PB $PB"
+
+set EFILES = "$MPR.img $MPR.hdr $FD.img"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_mpr2fd]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit 1
+set t1 = `t`
+
+img2analyze $FD.img a$FD
+setanamin a$FD 0
+setanamin $MPR 0
+if (-e $INIT) then
+	set PRM = "-m 6 -p1 0 -p2 $PTS -t2 $THR -b1 $PBLUR -b2 $MBLUR -x 1 -v -f $INIT"
+	echo "Aligning $MPR to a$FD using initialization file $INIT ..."
+else
+	set PRM = "-m 6 -p1 0 -p2 $PTS -t2 $THR -b1 $PBLUR -b2 $MBLUR -x 1 -v"
+	echo "Aligning $MPR to a$FD ..."
+endif
+echo $PRM 
+alignlinear a$FD $MPR $AIR.air $PRM >! log
+
+echo alignlinear a$FD $MPR $AIR.air $PRM >! $LOGFILE
+tail -6 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file ($INIT)"
+	echo $ERROR >> $LOGFILE
+	exit 1
+endif
+
+imgreslice $MPR $AIR
+rm a$FD.img
+rm a$FD.hdr
+rm a$FD.ifh
+scanair $AIR.air | tail -6 | head -3
+set t2 = `t`
+echo "[align_mpr2fd] Complete at" `date` "   Elapsed time: " `echo "$t2 - $t1" | bc` " sec"
+echo "----------------------------------"
+echo "Check coregistration using vidi:"
+echo "   Image 1 = r$MPR.img"
+echo "   Image 2 = $FD.img"
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 1
+a4 1
+#	Date:	Jul 2001
+d19 1
+a19 1
+	echo "  or,  align_mpr2fd p3000_mprmsk rp3000fd_f1to8 -mb 3 -pb 6 -t 10"
+d30 2
+a31 2
+set THR  = 10
+set PTS  = 16384
+@

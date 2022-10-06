@@ -1,0 +1,101 @@
+#!/usr/local/bin/perl
+# $Log: dicomDef.pl,v $
+% Revision 1.1  1998/12/30  19:37:57  tom
+% Initial revision
+%
+# =====
+# Date:    17-Mar-98
+# Author:  Jane Dunford-Shore
+# Purpose: Read a DICOM file and extract corresponding
+#          group/element numbers and fieldnames. Save
+#          these pairs to DBM database file.
+# Files created: DBM file (*.dir and *.pag) 
+# =====
+
+use strict;
+
+# ---------------
+# Packages to use
+# ---------------
+
+use Dicom_util;
+use AnyDBM_File;        
+
+# ---------------
+# Variable declarations
+# ---------------
+
+# Command-line parameters
+my $first;            # first *.dcm file
+my $last;             # last *.dcm file
+my $outfile;          # DBM database file to be created
+
+# Other variables
+my %name_and_key;    # e.g., {'0008 0020', 'ID Study Date'}
+my $axial_file;
+
+# ---------------
+# Get command-line args
+# ---------------
+
+#Check argument number; should be 3-4
+if (($#ARGV < 2) || ($#ARGV >3)) {
+    &printusage;
+    exit(0);
+}
+
+$first = shift(@ARGV);
+$last = shift(@ARGV);
+$outfile = shift(@ARGV);
+
+print "\$first = $first, \$last = $last, \$outfile = $outfile\n";
+
+# ---------------
+# Get DICOM element numbers and associated field names
+# ---------------
+
+# Get name of first axial file
+$axial_file = Dicom_util::find_axial($first, $last);
+
+# Open/create DBM database file
+dbmopen(%name_and_key, $outfile, 0777) || die "Cannot open the DBM database $outfile : $!\n";;
+
+# Parse DICOM file; put values in associative array of DBM database file
+Dicom_util::get_name_and_key($axial_file, \%name_and_key);
+
+# ---
+# FOR TESTING ONLY
+# foreach $key (sort(keys %name_and_key)) {
+#    print OUTFILE "$key\;$name_and_key{$key}\n";
+# }
+# ---
+
+# Close DBM file
+dbmclose %name_and_key;
+
+# ---
+# FOR TESTING ONLY
+# dbmopen(%array, $outfile, 0777);
+# foreach $key (keys (%array)) {
+#     print "$key $array{$key}\n";
+# } 
+# dbmclose %array;
+# ---
+
+# =====
+# Subroutines
+# =====
+
+sub printusage {
+    $~ = "USAGE";
+    write STDOUT;
+}
+
+# =====
+# Formats
+# =====
+
+format USAGE =
+   Usage: dicomDef <firstfile> <lastfile> <outfile>
+ Example: dicomDef 2 47 dicomDef
+.

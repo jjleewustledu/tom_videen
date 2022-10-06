@@ -1,0 +1,365 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	95.11.10.16.28.23;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.11.03.23.13.12;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.10.13.17.03.10;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.09.28.18.31.27;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.05.18.19.19.32;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.03.03.20.12.34;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.10.12.16.50.59;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.03.03.20.34.31;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@getimage.c initial checking in.
+@
+
+
+1.8
+log
+@remove petutil parent directory from include statements
+@
+text
+@/*$Id: getimage.c,v 1.7 1995/11/03 23:13:12 ty7777 Exp tom $*/
+/*$Log: getimage.c,v $
+ * Revision 1.7  1995/11/03  23:13:12  ty7777
+ * Added ECAT961_SCANNER.
+ *
+ * Revision 1.6  1995/10/13  17:03:10  ty7777
+ * Use matrix7.h
+ *
+ * Revision 1.5  1995/09/28  18:31:27  ty7777
+ * Updated for 961 data.
+ *
+ * Revision 1.4  1995/05/18  19:19:32  ty7777
+ * Same as the last version.
+ *
+ * Revision 1.3  1994/03/03  20:12:34  ty7777
+ * Replace id with header.
+ *
+ * Revision 1.2  1993/10/12  16:50:59  ty7777
+ * Adding initialization for image array.
+ *
+ * Revision 1.1  1993/03/03  20:34:31  ty7777
+ * Initial revision
+ **/
+
+#ifndef lint
+static char sccsid [] = "@@(#)getimage.c	10/09/92  Copyright Neural Pet Group, Washington University 1992";
+#endif
+static char rcsid [] = "$Header: /export/home/npggw/tom/src/libnpg/RCS/getimage.c,v 1.7 1995/11/03 23:13:12 ty7777 Exp tom $";
+
+/*____________________________________________________________________________
+ *
+ *	File Name:	getimage.c
+ *	Function Name:	getimage ()
+ *	Arguments:	slice_data:	image array for slice , must be allocated
+ *					with memory and initialized to zero before 
+ *					calling. The array size is ENCODED_SLICE_DIM.
+ *					Altered upon return.	
+ *			header:		header from file for specified slice, altered 
+ *					upon return.
+ *			fd:		image file descriptor, get it before calling
+ *					by using the UNIX system interface call open ().
+ *			image_name:	pointer to image file name.	
+ *			slice_number:	number of the desired slice of the image, start 
+ *					at one, must be assigned before calling.
+ *			num_slices:	number of slices in the image, altered upon 
+ *					return.
+ *			scanner_type:	scanner number of the image (1, 6 - 8, 10), altered 
+ *					upon return, -1 means error.
+ *			err_value:	TRUE: if unable to open the disk file, unable to 
+ *					read the desired slice, or if the file format is 
+ *					incorrect, altered upon return.
+ *	Return Value:	void.
+ *	Description:	General function for reading image files. This function gets one 
+ *			slice of an image from a disk file. ECAT, Decoded and encoded 
+ *			PETT 6-8 images can be read (7 - 49 slices) (PETT6, Super PETT 
+ *			I and Super PETT II). The encoding algorithm is that of ENCODE1 
+ *			which was created in April 87 and differs from that used previously. 
+ *			All images are returned in a 128 x 128 array (PETT6 images are 
+ *			centered in the array).
+ *	Called by:
+ *	Calling:	pet_matrixx_open () in pet_matrixx.c of libpetutil.a.
+ *			Ecat2Pett6 () in Ecat2Pett6.c of libpetutil.a.
+ *			GetImagePett6 () in GetImagePett6.c of libpetutil.a.
+ *			GetImageSuperPett () in GetImageSuperPett.c of libpetutil.a.
+ *	Author:		Tom Yang. 
+ *	History:	Created by Tom Yang on 04/17/1992.
+ *
+____________________________________________________________________________*/
+
+#include <petutil.h>
+#include <matrix7.h>
+#define	SCALE_FACTOR		1.00000000
+
+void getimage (slice_data, header, fd, image_name, slice_number, 
+	encoded_flag, num_slices, scanner_type, err_value)
+short		*slice_data;
+short		*header;
+int		fd;
+char		*image_name;
+short		slice_number;
+BOOLEAN		encoded_flag;
+short		num_slices;
+int		scanner_type;
+BOOLEAN		*err_value;
+{
+	MatrixFile	*matrix_open ();
+
+	MatDirNode	*node;
+	MatrixFile	*matfptr;
+	float		scale;
+	int		i;
+	int		image_type;
+	short		xdim;
+	short		ydim;
+	struct Matval	matval;
+
+	/*
+	 * Zero images.
+	 */
+	for (i = 0; i < ENCODED_SLICE_DIM; i++)	
+		slice_data [i]	= 0;
+
+	if (scanner_type == ERROR_SCANNER || slice_number > num_slices
+		|| slice_number < 1)
+	{
+		*err_value	= FAIL;
+		return;
+	}
+
+	switch (scanner_type)
+	{
+		case ECAT953_SCANNER:
+		case ECAT961_SCANNER:
+			matfptr = matrix_open (image_name, MAT_READ_ONLY, MAT_UNKNOWN_FTYPE);
+			if (matfptr == NULL)
+			{
+				*err_value	= FAIL;
+				return;
+			}
+
+			node		= matfptr->dirlist->first;
+			mat_numdoc (node->matnum, &matval);
+			matval.plane	= slice_number;
+			scale		= SCALE_FACTOR;
+			*err_value	= Ecat2Pett6 (matfptr, scale, 
+				(PETT6HDR *) header, slice_data, num_slices, matval);
+
+			matrix_close (matfptr);
+			break;
+		case PETT6_SCANNER:
+			*err_value	= GetImagePett6 (fd, slice_number, encoded_flag, 
+								(char *) header, slice_data);
+			break;
+		case SUPER_PETT_I_SCANNER:
+		case SUPER_PETT_II_SCANNER:
+		case SUPER_PETT_II_OTHERS:
+			*err_value	= GetImageSuperPett (fd, slice_number, encoded_flag, 
+								(char *) header, slice_data);
+			break;
+		default:
+			*err_value	= FAIL;
+			break;
+	}
+
+	*err_value	= SUCCEED;
+}
+@
+
+
+1.7
+log
+@Added ECAT961_SCANNER.
+@
+text
+@d1 1
+a1 1
+/*$Id: getimage.c,v 1.6 1995/10/13 17:03:10 ty7777 Exp ty7777 $*/
+d3 3
+d28 1
+a28 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libnpg/RCS/getimage.c,v 1.6 1995/10/13 17:03:10 ty7777 Exp ty7777 $";
+d70 2
+a71 2
+#include <petutil/petutil.h>
+#include <petutil/matrix7.h>
+@
+
+
+1.6
+log
+@Use matrix7.h
+@
+text
+@d1 1
+a1 1
+/*$Id: getimage.c,v 1.5 1995/09/28 18:31:27 ty7777 Exp ty7777 $*/
+d3 3
+d25 1
+a25 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/getimage.c,v 1.5 1995/09/28 18:31:27 ty7777 Exp ty7777 $";
+d109 2
+a110 1
+		case ECAT_SCANNER:
+@
+
+
+1.5
+log
+@Updated for 961 data.
+@
+text
+@d1 1
+a1 1
+/*$Id: getimage.c,v 1.4 1995/05/18 19:19:32 ty7777 Exp $*/
+d3 3
+d22 1
+a22 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/getimage.c,v 1.4 1995/05/18 19:19:32 ty7777 Exp $";
+d65 1
+a65 1
+#include <petutil/matrix.h>
+a66 1
+#define	SCALE_FACTOR_961	0.01
+d117 1
+a117 4
+			if (matfptr->mhptr->system_type == SYSTEM_TYPE_961)
+				scale	= SCALE_FACTOR_961;
+			else
+				scale	= SCALE_FACTOR;
+@
+
+
+1.4
+log
+@Same as the last version.
+@
+text
+@d1 1
+a1 1
+/*$Id: getimage.c,v 1.3 1994/03/03 20:12:34 ty7777 Exp ty7777 $*/
+d3 3
+d19 1
+a19 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/getimage.c,v 1.3 1994/03/03 20:12:34 ty7777 Exp ty7777 $";
+d63 2
+a64 1
+#define	SCALE_FACTOR	1.00000000
+d80 1
+d82 1
+a94 9
+	/*
+	 * Assign default values for matval.
+	 */
+	matval.frame	= 1;
+	matval.plane	= slice_number;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+d105 1
+a105 1
+			matfptr	= matrix_open (image_name, "r");
+d112 8
+a119 1
+			*err_value	= Ecat2Pett6 (matfptr, SCALE_FACTOR, 
+@
+
+
+1.3
+log
+@Replace id with header.
+@
+text
+@d1 1
+a1 1
+/*$Id: getimage.c,v 1.2 1993/10/12 16:50:59 ty7777 Exp ty7777 $*/
+d3 3
+d16 1
+a16 1
+static char rcsid [] = "$Header$";
+d60 1
+a60 1
+#define	SCALE_FACTOR	1.0
+@
+
+
+1.2
+log
+@Adding initialization for image array.
+@
+text
+@d1 1
+a1 1
+/*$Id: getimage.c,v 1.1 1993/03/03 20:34:31 ty7777 Exp ty7777 $*/
+d3 3
+d11 1
+a11 1
+static char sccsid[]="@@(#)getimage.c	10/09/92  Copyright Neural Pet Group, Washington University 1992";
+d13 1
+a13 1
+static char rcsid []= "$Id: getimage.c,v 1.1 1993/03/03 20:34:31 ty7777 Exp ty7777 $";
+d50 1
+a50 1
+ *	Authors:	Tom Yang. 
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d10 1
+a10 1
+static char rcsid []= "$Id: getimage.c,v 1.1 1993/01/28 22:02:02 ty7777 Exp $";
+d18 2
+a19 1
+ *					calling, altered upon return.	
+d70 2
+a72 1
+	MatrixFile	*matfptr;
+d76 6
+@

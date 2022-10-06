@@ -1,0 +1,683 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	94.10.03.16.43.27;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Version 3.5 module outline.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@Functional Description of Modules for t88mean
+26-Sep-94	Tom Videen
+
+--------------------------------------------------------------------------
+Main:	t88mean
+
+Description:
+	Transform PET images (PETT VI or ECAT) into atlas space (Talairach 1988).
+	Optionally create summed images (difference, mean, or single).
+	Optionally process images as cvf, cbv, oef, cmro2.
+
+Command line parameters:
+	parameter file
+	image list
+	output filename
+
+Input Files:
+	parameter file	(prm (5))
+	image list		(imagelist (5))
+	PET image files	(PETT VI, ECAT image format; any readable by getrealimg)
+	hdr files		(hdr (5))
+	image mask		(PETT VI, ECAT image format; any readable by getrealimg)
+	sxr files		(xray (1))
+
+Output Files:
+	atlas image		(ECAT image format)
+	rec file		(rec (5))
+	hdr file		(hdr (5))
+	sd image		(ECAT image format)
+	n image			(ECAT image format)
+	
+Algorithm:
+1)	Read command line arguments and initialize filenames.
+2)	Read imagelist into structure IMAGE_LIST_DATA.
+3)	Read parameters into structure PARAMETER_DATA.
+4)	Construct full path names in structures SCANLIST_ARRAY and SXRLIST_ARRAY.
+5)	Get atlas values into structure BRAIN_ATLAS.
+6)	LOOP for each image or image-pair in the IMAGE_LIST_DATA:
+	a) For first image:
+		Get scanner and dimensions;
+		Zero output arrays (atlas_image, nin, sdimage);
+	b) Read and process first (activation) image;
+	c) Read and process second (control) image (for paired lists) (optional);
+	d) Read the mask file (optional);
+	e) Read sxr file information into structure SXR_OUTPUT;
+	f) Get translation values (center):
+ 		If smg_symmetry, compute y and z-angles and use x center-of-mass for x-origin
+ 		Otherwise, get x-origin from mean center of PET slices;
+	g) Get transformation scalers;
+	h) Build the transformation matrix (Atlas coordinates into PET coordinates);
+	i) Subtract (if paired list);
+	j) Transform each point in Atlas space into PET space and assign the (interpolated) PET value
+	   to the Atlas pixel (and add to running sum for multiple images);
+7)	Scale final atlas image and mask pixels.
+8)	Write atlas image.
+9)	Write hdr file.
+10)	Write sd image.
+11)	Write n image.
+
+
+---------------------------------------------------------------------------------
+Function:			adjust_markers.c
+
+Description:   
+	Adjust sxr.magnification_factor and sxr.dz for differences in
+	geometry of the skull xray and variations in the computation of
+	sxr.magnification_factor over the years. (PETT VI only)
+
+Input:
+	sxr	-	structure SXRLIST_ARRAY (petutil.h)
+
+Output:
+	sxr		(with possibly altered sxr.magnification_factor and/or sxr.dz)
+
+Assumptions:
+
+PETT VI type = 1
+      If the magnification factor is 0.93, then the OLD cassette
+      holder was used with the slice markers between the head and the
+      xray source, AND the PET was in the old room with the xray
+      source closer to the head.  It is further assumed that the
+      reference slice position for xrays with a single slice marker
+      (7) was measured using the slice spacing of xrays with 7-slice
+      markers (and therefore is uncorrected and must be adjusted by
+      mag_markers).
+         P < P987
+         sxr.magnification_factor = 0.93
+         mag_markers = 0.89
+
+PETT VI type = 2
+      If the magnification factor is 0.94, then the OLD cassette
+      holder was used with the slice markers between the head and the
+      xray source.
+         P987 <= P < P1575
+         sxr.magnification_factor = 0.945
+         mag_markers = 0.910
+
+PETT VI type = 3
+      If the magnification factor is 0.945 and the SXR file does NOT
+      contain an 'incorrect delta-z' message, then the NEW (1988)
+      cassette holder was used with the old slice markers between the
+      head and the xray source.
+         P1575 < P <= P1611
+         sxr.magnification_factor = 0.947
+         mag_markers = 0.913
+
+PETT VI type = 4 (no changes in values!)
+      If the magnification factor is 0.945 and the SXR file contains
+      an 'incorrect delta-z' message, then the NEW (1988) cassette
+      holder was used with the slice markers against the cassette.
+         P >= P1575
+         sxr.magnification_factor is not changed
+         mag_markers = 1.0 (but is not used)
+
+
+---------------------------------------------------------------------------------
+Function:			atlas_scalers.c
+
+Description:
+	Determine the transformation scalers from PET -> Atlas.
+
+Input:
+	sxr 		-   structure SXRLIST_ARRAY (petutil.h)
+	atlas		-	structure BRAIN_ATLAS (atlas.h)
+	center[3]	-	reference point in PET which has a known displacement from the atlas;
+	angle[3]	-	transformation angles PET -> atlas;
+	first_slice, last_slice	-	range of slices from which an x-scaler may be accepted;
+
+Output:
+	scale[3]	-	scalers for PET -> atlas;
+
+Return:
+	SUCCEED or FAIL
+
+Algorithm:
+1)	Calculate y- and z-scalers from sxr file.
+2)	Get transformation matrix MAP for given translation, rotations, and y- and z-scalers.
+3)	Determine the PET slice which intersects the ac-pc plane at y = 0.
+	a)	Compute X width and Scaling for X using the PET slice (interpolated if necessary).
+	b)	If all PET slices are below the AC-PC plane, take the most superior PET slice
+		and determine which atlas slices it falls between; then compute the x-scaler
+		from this PET slice and the interpolated width of the atlas slices.
+	c)	If all PET slices are above the AC-PC plane, take the most inferior PET slice
+		and determine which atlas slices it falls between; then compute the x-scaler
+		from this PET slice and the interpolated width of the atlas slices.
+4)	Compute x-scaler using interpolated PET slice width corresponding to the AC-PC plane
+
+
+---------------------------------------------------------------------------------
+Function:			atlas_transform.c
+
+Description:	
+	Remap a PET image into Atlas space
+
+Input:
+	pet		-	PET image;
+	sxr     -   structure SXRLIST_ARRAY (petutil.h)
+	atlas   -   structure BRAIN_ATLAS (atlas.h)
+	mask	-	masking image;
+	map     -   MATRIX: conversion matrix Atlas -> PET
+	use_mask -	if true, only include pixels in mask;
+	compute_sd - if true, compute sum of squares;
+	first_slice, last_slice -   range of slices from which an x-scaler may be accepted;
+
+Output:
+	atl		-	atlas image;
+	sd		-	sum-of-squares image;
+	nin		-	number of images contributing to each pixel in atlas image;
+
+Algorithm:
+1)	LOOP for ALL ATLAS PIXELS: Translation, Rotation, and Scaling
+2)	Find coordinates of point A in PET space (MAP*A --> P)
+	a)	If outside PET array, ATL is not altered (empty statement follows if)
+	b)	If P is within tolerance of a PET slice, use 2-D interpolation
+	c)	If P is not within TOLERANCE of slice first_slice or last_slice (z_min or z_max),
+		then p[2] must be greater than first_slice. and less than last_slice
+	d)	Otherwise use 3-D interpolation
+
+
+---------------------------------------------------------------------------------
+Function:		center_of_mass.c
+
+Description:	
+	Compute x-center-of-mass of an image for pixels within a mask.
+
+Input:
+	image	-	PET image;
+	mask	-	masking image;
+	nslice	-	number of slices;	
+	nx		-	x-dimension;
+	ny		-	z-dimension;	
+
+Output:
+	center	-	center[0] is coordinate of x-center-of-mass;
+	npix	-	number of pixels within the mask;
+	mean	-	mean pixel value within the mask;
+
+Algorithm:
+1)	For all PET pixels within the mask
+	a)	sum (x_index * pixel_value)
+	b)	sum pixel_value
+	c)	sum pixels
+2)	mean_pixel_value = sum(b) / sum(c)
+3)	center-of-mass = sum(a) / mean_pixel_value
+
+
+---------------------------------------------------------------------------------
+Function:			get_input_lists.c
+	
+Description:	
+	Read an input image list file and an input image parameter file.
+
+Input:
+	prmfile			-	parameter filename
+	lstfile			-	image list filename
+	image_mode		-	used to expand the image list 
+			(STDIMAGE_MODE, DIFIMAGE_MODE, MULTITRACER_IMAGE_MODE in imglist.h)
+	filter_mode		-	used to expand the image list 
+			(IMGFILTER_MODE in imglist.h)
+
+Output:
+	parameter_data	-	structure PARAMETER_DATA (petutil.h)
+	image_list		-	structure IMAGE_LIST_DATA (petutil.h)
+	scan			-	structure SCANLIST_ARRAY (petutil.h)
+	sxrfile			-	structure  SXRLIST_ARRAY (petutil.h)
+	lstsize			-	number of scan (pairs) in image list
+	
+Algorithm:
+1)	Read the parameter file into parameter_data.
+2)	Read the image list into image_list.
+3)	Get full names of activation  and control scans and store in scan.
+4)	Get full names of sxr files and store in sxrfile.
+
+
+---------------------------------------------------------------------------------
+Function:			getprms_t88.c
+
+Description:	
+	Read program-specific parameters from the parameter file.
+
+Input:
+	prmfile -   name of parameter file
+
+Output (parameters assigned values):	(see man t88mean)
+	smg_norm
+	smg_mode
+	smg_divisor
+	smg_included
+	processing
+	smg_mask
+	smg_sdimage
+	smg_nimage
+	smg_symmetry
+	pixel_size
+	plane_separation
+	first_slice 
+	last_slice
+	zorigin
+	zmax
+	smg_mskpct
+
+Algorithm:
+1)	Read each line of parameter file.
+2)	If the line has 2 strings:
+	a)	If the line has 2 strings, compare the label with the list of eligible keys:
+		and if the key is found, set the appropriate parameter;
+3)	Check that all required parameters have been assigned new values before exiting.
+
+
+---------------------------------------------------------------------------------	
+Function:			image_diff.c
+
+Description:	
+	Compute difference between 2 images
+
+Input:
+	a	-	initial image
+	b	-	subtrahend
+	nz	-	number of slices
+
+Output:
+	a	-	difference
+
+Algorithm:
+For all elements in arrays a[nz][DIM][DIM] and b[nz][DIM][DIM]
+	a = a - b
+
+
+---------------------------------------------------------------------------------
+Function:         image_scale.c
+
+Description:
+	Scale image by smg_divisor and mask pixels using nin.
+	Compute sd image.
+
+Input:
+	a[nz][DIM][DIM]	  -	atlas image array
+	sd[nz][DIM][DIM]  -	sum-of-squares image array
+	nin[nz][DIM][DIM] -	n image array
+	nz				-	number of slices
+	lstsize			-	number of images processed
+	smg_divisor		-	"global" or "local"
+	smg_included	-	"all", "sampled" or "n= "
+	compute_sd		-	TRUE -> compute sd 
+
+Output:
+	a[nz][DIM][DIM]	  -	atlas image array (scaled and masked)
+	sd[nz][DIM][DIM]  -	sd image array
+
+Algorithm:
+
+1)	If (compute_sd) then compute standard deviation image, sd from:
+	sd = sqrt ( (sumsqrs - ((sum * sum) / n)) / (n - 1) )
+
+	where:
+		sumsqrs = sd[i][j][k] (on input)
+		sum		= a[i][j][k]
+		n		= nin[i][j][k]
+
+	sd = 0 for n <= 1 and when sqrt of negative value
+
+2)	If (sum_included = all) then
+		If (smg_divisor = global) then divide by total number of images
+			a = a / lstsize
+		else divide by number of images contributing to each pixel
+			a = a / nin
+	Else if (smg_included = n=?) then divide by number of images contributing
+		to each pixel for all pixels which nin >= the specified n
+			a = a / nin  where nin > ?; otherwise a = 0
+	Else divide by total number of images for fully sampled pixels
+            a = a / nin where nin = lstsize; otherwise a = 0
+
+
+---------------------------------------------------------------------------------
+Function:			image_template.c
+
+Description:	Create a template of image using mskpct.
+
+Input:
+	image3d	-	input image array
+	mskpct	-	threshold (%) for creating the mask
+	width	-	x dimension
+	height	-	y dimension
+	nslices	-	number of slices to template
+
+Output:
+	mask3d	-	mask image array (pixels either 0 or 1)
+	npixels	-	number of non-zero pixels in the mask
+
+Algorithm:
+1)	Find maximum pixel value of image3d in the range of nslices.
+2)	Compute an absolute threshold from global maximum * mskpct * .01
+3)	Created a template by thresholding from the outside towards the center:
+	a)	Assign INSIDE to all points >= threshold.
+	b)	Assign 0 to all points < threshold,
+	c)	Assign OUTSIDE to all points along the boundaries of the 2d mask
+		array which are nor INSIDE the template.
+	d)	Now, starting with the boundaries of the array, expand the area excluded from
+		the template by assigning OUTSIDE to all points directly adjacent to a point
+		whose value is OUTSIDE and which are currently zero (neither INSIDE nor OUTSIDE).
+	e)	Repeat until no more points added outside of the region.
+	f)	All points that are < OUTSIDE are assigned INSIDE.
+	g)	All points that are >= OUTSIDE are assigned 0.
+
+
+---------------------------------------------------------------------------------
+Function:			imgrot.c
+
+Description:	
+	Rotate about y and z axes to produce symmetry.
+
+Input:
+	image[nz][ny][nx]	-	image array
+	center		-	y-origin, z-origin
+	angle		-	x-angle
+	sxr			-	structure SXRLIST_ARRAY (petutil.h)
+	nx			-	x-dimension
+	ny			-	y-dimension
+	nz			-	z-dimension
+	mskpct		-	threshold (%) for masking the working region of image
+
+Output:
+	center		-	x-origin
+	angle		-	y-angle, y-angle
+
+Algorithm:
+1)	x-angle, y-origin and z-origin are passed into this routine.
+2)	Create the mask.
+3)	x-origin is initialized to x center-of-mass (completing the specification of center).
+4)	param [] is initialized to x-angle, y-origin and z-origin
+  	with the center coordinates converted from C to FORTRAN-array indices (+1);
+5)	y- and z-angles are adjusted until symmetry is produced about the yz-plane;
+	Symmetry is evaluted by minimizing rms difference;
+  	A parabolic fit is made to 15 points at intervals for
+  	each parameter and the analytical minimum is used.
+6)	Set transformation parameters to C-array indices and return
+	center (in pixels) and angle (in radians).
+
+
+---------------------------------------------------------------------------------
+Function:			matrix_mult.c
+
+Description:	
+	Multiply matrices:  c[n][m] = a[n][p] * b[p][m]
+	(for points c and b, m = 1)
+
+Input:
+	a[n][p]	-	matrix
+	b[p][m]	-	matrix
+	n, m, p	-	dimensions of matrices
+
+Output:
+	c[n][m]	-	product
+
+
+---------------------------------------------------------------------------------
+Function:			matrix_transform.c
+
+Description:	
+	Create the transformation matrix from PET -> Atlas.
+
+Input:
+    sxr 		-   structure SXRLIST_ARRAY (petutil.h)
+	atlas		-	structure BRAIN_ATLAS (atlas.h)
+	center[3]	-	reference point in PET which has a known displacement from the atlas;
+	angle[3]	-	transformation angles PET -> atlas;
+	scale[3]	-	scalers for PET -> atlas;
+
+Output:
+	map			-	matrix to transform Atlas coordinates into PET coordinate system
+					(PET = map * Atlas)
+
+Note:
+	PET and Atlas arrays are represented by righthanded coordinate systems (with origin
+	at left-anterior-superior).
+
+Algorithm:
+1)	Compute the translation matrix to array origin:
+
+    ta[0][3] = -atlas.x0;
+    ta[1][3] = -atlas.y0 - (1.8 / atlas.pixel_size);
+    ta[2][3] = -atlas.z0;
+
+	Note: The atlas image is shifted an additional 1.8 cm anteriorly as its origin is not
+	at the center of the brain:
+		(17.2 / 2) - 7.0 = 1.8 cm  (based on horizontal section +1 or -1 in Tal 1988)
+
+2)	Compute the translation matrix to PET origin.
+
+    tp[0][3] = center[0];
+    tp[1][3] = center[1];
+    tp[2][3] = center[2];
+
+3)	Compute rotation matrix about the matrix origin.
+
+    rx[1][1] = cos (angle[0]);
+    rx[1][2] = sin (angle[0]);
+    rx[2][1] = -sin (angle[0]);
+    rx[2][2] = cos (angle[0]);
+ 
+    ry[0][0] = cos (angle[1]);
+    ry[0][2] = -sin (angle[1]);
+    ry[2][0] = sin (angle[1]);
+    ry[2][2] = cos (angle[1]);
+ 
+    rz[0][0] = cos (angle[2]);
+    rz[0][1] = sin (angle[2]);
+    rz[1][0] = -sin (angle[2]);
+    rz[1][1] = cos (angle[2]);
+ 
+4)	Compute scaling matrix  (Atlas dim --> PET dim).
+
+    sa[0][0] = scale[0];
+    sa[1][1] = scale[1];
+    sa[2][2] = scale[2];
+ 
+5)	Compute scaling matrix  (PET dim --> atlas dim).
+
+    sp[0][0] = atlas.pixel_size / sxr.pixel_size;
+    sp[1][1] = atlas.pixel_size / sxr.pixel_size;
+    sp[2][2] = atlas.slice_separation / sxr.slice_separation;
+
+6)	Concatenate matrices and return.
+
+	Order of multiplication (left-to-right):  ta * sa * rx * ry * rz * sp * tp = map
+
+
+---------------------------------------------------------------------------------
+Function:			process_oxygen.c
+
+Description:	
+	Process an image for CBF, CBV, OEF, CMRO2 or counts and scale the result.
+
+Input:
+	oxygenimage	-	oxygen (oo) PET input image
+	flowimage	-	flow (ho) PET input image
+	volimage	-	vol (co) PET input image
+	nx, ny, nz	-	dimensions of PET image
+	scaler		-	normalization factor
+	process		-	type of processing
+	oxygenname	-	oxygen image file name
+	flowname	-	flow image file name
+	volname		-	vol image file name
+	recfp		-	rec file pointer
+	hdr			-	structure HEADER_DATA (petutil.h)
+
+Output:
+    pet         -   processed, scaled PET image
+	writes hdr files used to rec file
+
+Returns:
+	SUCCEED or FAIL
+
+Algorithm:
+1)	If (process != "cmro2" AND process !- "oef") then return FAIL.
+2)	Process the flow image.
+3)	Process the volume image.
+4)	Read the hdr file associated with oxygen image.
+5)	If (hdr.ntype != 1) then return FAIL.
+6)	If (process = "oef") then process as oxygen extraction:
+	(scaled by 1000 to maintain dynamic range with integer pixels)
+7)	If (process = "cbf")  and (hdr.ntype = 2 or 4) then process as blood flow:
+	(scaled by 1000 to maintain dynamic range with integer pixels)
+
+Reference and Equations in:
+	Videen et al (1987) JCBFM 7:513-516.
+
+
+---------------------------------------------------------------------------------
+Function:         process_pet.c
+
+Description:	
+	Process an image for CBF, CBV, or counts and scale the result.
+
+Input:
+	pet			-	PET input image
+	nx, ny, nz	-	dimensions of PET image
+	scaler		-	normalization factor
+	process		-	type of processing
+	filename	-	image file name
+	recfp		-	rec file pointer
+	hdr			-	structure HEADER_DATA (petutil.h)
+						(use: ntype, bvfactor1, aflow1, bflow1)
+
+Output:
+    pet         -   processed, scaled PET image
+	writes hdr file used to rec file
+
+Returns:
+	SUCCEED or FAIL
+
+Algorithm:
+1)	If (process = "none" OR process = "") then only scale:
+		pet = scaler * pet
+2)	Read the hdr file associated with pet
+3)	If (process = "cbv") and (hdr.ntype = 3) then process as blood volume:
+	(scaled by 100 to maintain dynamic range with integer pixels)
+		pet = 100 * scaler * hdr.bvfactor1 * pet
+4)	If (process = "cbf")  and (hdr.ntype = 2 or 4) then process as blood flow:
+	(scaled by 50 to maintain dynamic range with integer pixels)
+		pet = 50 * scaler * pet * ((hdr.aflow1 * pet) + hdr.bflow1))
+
+Reference and Equations in:
+	Videen et al (1987) JCBFM 7:513-516.
+
+
+---------------------------------------------------------------------------------
+Function:			recout.c
+
+Description:	
+	Copy an input image's recfile to the output recfile.
+
+Input:
+	recfp	-	pointer to a new rec file
+	filename -	name of the image file associated with an old rec file
+
+Output:
+	contents of old rec file copied to recfp
+
+Algorithm:
+1)	Create the old rec file name.
+2)	Open the old rec file.
+3)	If no old rec file, write "not found" to the new rec file.
+	Otherwise, copy the contents of the old rec file to the new one.
+
+
+---------------------------------------------------------------------------------
+Function:			sxr_xcenter.c
+
+Description:	
+	Find the mean right-left center of a set of PET slices
+	(defined in the SXRLIST_ARRAY structure "sxr").
+	For PETT VI (or < 16 slices), throw out the top and bottom slice;
+	For ECAT, throw out the top 4 and bottom 4 slices.
+
+Input:
+    sxr  -   structure SXRLIST_ARRAY (petutil.h)
+			(contains number_slices and rlcenter[number_slices])
+
+Output:
+	center[0]	-	mean right-left (x) center of the PET image
+
+Algorithm:
+1)	If number_slices < 16, skip the top and bottom slices
+	otherwise skip the top 3 and bottom 3 slices.
+2)	Compute the mean rlcenter of the included PET slices.
+
+Programming Note:  sxr file has rlcenter in FORTRAN-array indices (1,2,....)
+       The center returned is a C-array index (0,1,...)
+
+
+---------------------------------------------------------------------------------
+Function:			writehdr.c
+
+Description:	
+	Write an hdr file.
+
+Input:
+	header	-   structure HEADER_DATA (petutil.h)
+	outfile	-	name of output file
+	userid	-	user's id
+	today	-	date
+	processing - type of processing
+	nslices	-	number of slces
+
+Output:
+	creates the file "outfile"
+
+Algorithm:
+1)	Open the outfile.
+2)	Copy the contents of structure HEADER_DATA to structure OS32_HEADER_DATA:
+	All real numbers must be converted from IEEE format to OS32 format.
+3)	Add or change the following to the header:
+		outfile -   name of output file
+    	userid  -   user's id  
+    	today   -   date
+    	ntype	-	code number for type of processing
+    	nslices -   number of slces
+4)	Write the new structure to the output file and close.
+
+
+---------------------------------------------------------------------------------
+Miscellaneous FORTRAN Modules (Avi Snyder)
+
+Used by imgrot.c to determine y-angle and z-angle of PET image based on
+image symmetry.
+
+	alignr.f
+	img2vrt.f
+	imgrote.f
+	imgroto.f
+	imgrotrl.f
+	imgrots.f
+	matopr.f
+	polfit.f
+	rotcal.f
+	trotcal.f
+	vrt2img.f
+
+@

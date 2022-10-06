@@ -1,0 +1,502 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2002.12.17.22.15.13;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.12.13.22.02.19;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.09.25.16.28.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.03.03.17.15.32;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.09.13.19.32.10;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Introduce rcsid.
+@
+
+
+1.5
+log
+@fix gcc warnings
+@
+text
+@/*$Id: bucketUtilities.c,v 1.4 1999/12/13 22:02:19 tom Exp tom $*/
+/*$Log: bucketUtilities.c,v $
+ *Revision 1.4  1999/12/13 22:02:19  tom
+ *partially cleaned up with lint
+ *
+ * Revision 1.3  1996/09/25  16:28:32  tom
+ * build in Solaris 2
+ *
+ * Revision 1.2  1994/03/03  17:15:32  ty7777
+ * Changed id to header.
+ **/
+
+#ifndef lint
+static char     rcsid[] = "$Header: /home/tom/src/libcti/RCS/bucketUtilities.c,v 1.4 1999/12/13 22:02:19 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
+#include <unistd.h>
+
+int             setCurrentBucketEnergySettings (startBucket, numberOfBuckets, uld, lld, scatter)
+	int             startBucket, numberOfBuckets, uld, lld, scatter;
+{
+	int             i, issueCommand ();
+
+	char            bucketCommand[64], bucketResponse[64], msg[64];
+
+	for (i = startBucket; i < numberOfBuckets; i++) {
+		sprintf (bucketCommand, "%dS0", i);
+		if (issueCommand (bucketCommand, bucketResponse)) {
+			sprintf (msg, "Gantry timeout from command - %s\n", bucketCommand);
+			perror (msg);
+			return (i);
+		}
+	}
+	if (uld > 0)
+		for (i = startBucket; i < numberOfBuckets; i++) {
+			sprintf (bucketCommand, "%dU%d", i, uld);
+			if (issueCommand (bucketCommand, bucketResponse)) {
+				sprintf (msg, "Gantry timeout from command - %s\n", bucketCommand);
+				perror (msg);
+				return (i);
+			}
+		}
+	if (lld > 0)
+		for (i = startBucket; i < numberOfBuckets; i++) {
+			sprintf (bucketCommand, "%dV%d", i, lld);
+			if (issueCommand (bucketCommand, bucketResponse)) {
+				sprintf (msg, "Gantry timeout from command - %s\n", bucketCommand);
+				perror (msg);
+				return (i);
+			}
+		}
+	if (scatter > -1)
+		for (i = startBucket; i < numberOfBuckets; i++) {
+			if (scatter)
+				sprintf (bucketCommand, "%dY%d", i, scatter);
+			else
+				sprintf (bucketCommand, "%dY1", i);
+			if (issueCommand (bucketCommand, bucketResponse)) {
+				sprintf (msg, "Gantry timeout from command - %s\n", bucketCommand);
+				perror (msg);
+				return (i);
+			}
+		}
+	return (-1);
+}
+
+int             getCurrentBucketEnergySettings (bucket, currentULD, currentLLD, currentScatter)
+	int             bucket, *currentULD, *currentLLD, *currentScatter;
+{
+	int             issueCommand (), atoi ();
+
+	char            bucketCommand[64], bucketResponse[64], msg[64];
+
+	sprintf (bucketCommand, "%dS0", bucket);
+	if (issueCommand (bucketCommand, bucketResponse)) {
+		sprintf (msg, "Gantry timeout from command - %s\n", bucketCommand);
+		perror (msg);
+		return (bucket);
+	}
+	sprintf (bucketCommand, "%dU0", bucket);
+	if (issueCommand (bucketCommand, bucketResponse)) {
+		sprintf (msg, "Gantry timeout from command - %s\n", bucketCommand);
+		perror (msg);
+		return (bucket);
+	}
+	*currentULD = atoi (&bucketResponse[2]);
+	sprintf (bucketCommand, "%dV0", bucket);
+	if (issueCommand (bucketCommand, bucketResponse)) {
+		sprintf (msg, "Gantry timeout from command - %s\n", bucketCommand);
+		perror (msg);
+		return (bucket);
+	}
+	*currentLLD = atoi (&bucketResponse[2]);
+	sprintf (bucketCommand, "%dY0", bucket);
+	if (issueCommand (bucketCommand, bucketResponse)) {
+		sprintf (msg, "Gantry timeout from command - %s\n", bucketCommand);
+		perror (msg);
+		return (bucket);
+	}
+	*currentScatter = atoi (&bucketResponse[2]);
+	return (-1);
+}
+
+int             issueCommand (command, response)
+	char           *command, *response;
+{
+	do {
+		rts_gantry (command, response);
+		if (strcmp (response, "") != 0)
+			return (1);
+		if (response[0] == 'X')
+			sleep (1);
+	}
+	while (response[0] == 'X');
+	return (0);
+}
+
+int             setULDValue (numberOfBuckets, value)
+	int             numberOfBuckets, value;
+{
+	char            bucketCommand[16], bucketResponse[16];
+
+	int             i;
+
+	for (i = 0; i < numberOfBuckets; i++) {
+		bzero (bucketResponse, 16);
+		sprintf (bucketCommand, "%dS0", i);
+		rts_gantry (bucketCommand, bucketResponse);
+		if (bucketResponse == 0) {
+			printf ("setULDValue:ERROR...could not talk to bucket %2d\n", i);
+			fflush (stdout);
+			return (i);
+		}
+		sprintf (bucketCommand, "%dU%d", i, value);
+		do {
+			bzero (bucketResponse, 16);
+			rts_gantry (bucketCommand, bucketResponse);
+			if (bucketResponse == 0) {
+				printf ("setULDValue:ERROR...could not set ULD on bucket %2d to %d\n",
+					i, value);
+				fflush (stdout);
+				return (i);
+			}
+		}
+		while (strncmp (bucketResponse, "X", strlen ("X")) != 0);
+	}
+	return (-1);
+}
+
+int             setLLDValue (numberOfBuckets, value)
+	int             numberOfBuckets, value;
+{
+	char            bucketCommand[16], bucketResponse[16];
+
+	int             i;
+
+	for (i = 0; i < numberOfBuckets; i++) {
+		bzero (bucketResponse, 16);
+		sprintf (bucketCommand, "%dS0", i);
+		rts_gantry (bucketCommand, bucketResponse);
+		if (bucketResponse == 0) {
+			printf ("setLLDValue:ERROR...could not talk to bucket %2d\n", i);
+			fflush (stdout);
+			return (i);
+		}
+		sprintf (bucketCommand, "%dV%d", i, value);
+		do {
+			bzero (bucketResponse, 16);
+			rts_gantry (bucketCommand, bucketResponse);
+			if (bucketResponse == 0) {
+				printf ("setLLDValue:ERROR...could not set LLD on bucket %2d to %d\n",
+					i, value);
+				fflush (stdout);
+				return (i);
+			}
+		}
+		while (strncmp (bucketResponse, "X", strlen ("X")) != 0);
+	}
+	return (-1);
+}
+@
+
+
+1.4
+log
+@partially cleaned up with lint
+@
+text
+@d1 1
+a1 1
+/*$Id: bucketUtilities.c,v 1.3 1996/09/25 16:28:32 tom Exp tom $*/
+d3 3
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libcti/RCS/bucketUtilities.c,v 1.3 1996/09/25 16:28:32 tom Exp tom $";
+d112 1
+a112 1
+		if (strcmp (response, "") == NULL)
+d148 1
+a148 1
+		while (strncmp (bucketResponse, "X", strlen ("X")) == NULL);
+d180 1
+a180 1
+		while (strncmp (bucketResponse, "X", strlen ("X")) == NULL);
+@
+
+
+1.3
+log
+@build in Solaris 2
+@
+text
+@d1 1
+a1 1
+/*$Id: bucketUtilities.c,v 1.2 1994/03/03 17:15:32 ty7777 Exp tom $*/
+d3 3
+d10 3
+a12 1
+static char     sccsid[] = "@@(#)bucketUtilities.c	2.5 6/8/92  Copyright 1989-1992 CTI PET Systems, Inc.";
+a13 2
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libcti/RCS/bucketUtilities.c,v 1.2 1994/03/03 17:15:32 ty7777 Exp tom $";
+
+d15 3
+@
+
+
+1.2
+log
+@Changed id to header.
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d7 1
+a7 2
+static char sccsid[]="@@(#)bucketUtilities.c	2.5 6/8/92  Copyright 1989-1992 CTI PET Systems, Inc."; 
+static char rcsid [] = "$Header$";
+d9 2
+d13 2
+a14 6
+int setCurrentBucketEnergySettings (startBucket, numberOfBuckets, uld, lld, scatter)
+int startBucket,
+    numberOfBuckets,
+    uld,
+    lld,
+    scatter;
+d16 1
+a16 5
+	int i,
+	    issueCommand();
+	char bucketCommand[64],
+	     bucketResponse[64],
+	     msg[64];
+d18 7
+a24 7
+	for (i = startBucket; i < numberOfBuckets; i++)
+	{
+		sprintf(bucketCommand, "%dS0", i);
+		if (issueCommand(bucketCommand, bucketResponse))
+		{
+			sprintf(msg, "Gantry timeout from command - %s\n", bucketCommand);
+			perror(msg);
+d29 5
+a33 7
+		for (i = startBucket; i < numberOfBuckets; i++)
+		{
+			sprintf(bucketCommand, "%dU%d", i, uld);
+			if (issueCommand(bucketCommand, bucketResponse))
+			{
+				sprintf(msg, "Gantry timeout from command - %s\n", bucketCommand);
+				perror(msg);
+d38 5
+a42 7
+		for (i = startBucket; i < numberOfBuckets; i++)
+		{
+			sprintf(bucketCommand, "%dV%d", i, lld);
+			if (issueCommand(bucketCommand, bucketResponse))
+			{
+				sprintf(msg, "Gantry timeout from command - %s\n", bucketCommand);
+				perror(msg);
+d47 1
+a47 2
+		for (i = startBucket; i < numberOfBuckets; i++)
+		{
+d49 1
+a49 1
+				sprintf(bucketCommand, "%dY%d", i, scatter);
+d51 4
+a54 5
+				sprintf(bucketCommand, "%dY1", i);
+			if (issueCommand(bucketCommand, bucketResponse))
+			{
+				sprintf(msg, "Gantry timeout from command - %s\n", bucketCommand);
+				perror(msg);
+d61 2
+a62 6
+int
+getCurrentBucketEnergySettings(bucket, currentULD, currentLLD, currentScatter)
+int bucket,
+   *currentULD,
+   *currentLLD,
+   *currentScatter;
+d64 1
+a64 5
+	int issueCommand(),
+	    atoi();
+	char bucketCommand[64],
+	     bucketResponse[64],
+	     msg[64];
+d66 6
+a71 5
+	sprintf(bucketCommand, "%dS0", bucket);
+	if (issueCommand(bucketCommand, bucketResponse))
+	{
+		sprintf(msg, "Gantry timeout from command - %s\n", bucketCommand);
+		perror(msg);
+d74 4
+a77 5
+	sprintf(bucketCommand, "%dU0", bucket);
+	if (issueCommand(bucketCommand, bucketResponse))
+	{
+		sprintf(msg, "Gantry timeout from command - %s\n", bucketCommand);
+		perror(msg);
+d80 5
+a84 6
+	*currentULD = atoi(&bucketResponse[2]);
+	sprintf(bucketCommand, "%dV0", bucket);
+	if (issueCommand(bucketCommand, bucketResponse))
+	{
+		sprintf(msg, "Gantry timeout from command - %s\n", bucketCommand);
+		perror(msg);
+d87 5
+a91 6
+	*currentLLD = atoi(&bucketResponse[2]);
+	sprintf(bucketCommand, "%dY0", bucket);
+	if (issueCommand(bucketCommand, bucketResponse))
+	{
+		sprintf(msg, "Gantry timeout from command - %s\n", bucketCommand);
+		perror(msg);
+d94 1
+a94 1
+	*currentScatter = atoi(&bucketResponse[2]);
+d98 2
+a99 4
+int
+issueCommand(command, response)
+char *command,
+    *response;
+d101 3
+a103 4
+	do
+	{
+		rts_gantry(command, response);
+		if (strcmp(response, "") == NULL)
+d106 1
+a106 1
+			sleep(1);
+d112 2
+a113 4
+int 
+setULDValue(numberOfBuckets, value)
+int numberOfBuckets,
+    value;
+d115 1
+a115 3
+	char bucketCommand[16],
+	     bucketResponse[16];
+	int i;
+d117 9
+a125 9
+	for (i = 0; i < numberOfBuckets; i++)
+	{
+		bzero(bucketResponse, 16);
+		sprintf(bucketCommand, "%dS0", i);
+		rts_gantry(bucketCommand, bucketResponse);
+		if (bucketResponse == 0)
+		{
+			printf("setULDValue:ERROR...could not talk to bucket %2d\n", i);
+			fflush(stdout);
+d128 6
+a133 8
+		sprintf(bucketCommand, "%dU%d", i, value);
+		do
+		{
+			bzero(bucketResponse, 16);
+			rts_gantry(bucketCommand, bucketResponse);
+			if (bucketResponse == 0)
+			{
+				printf("setULDValue:ERROR...could not set ULD on bucket %2d to %d\n", 
+d135 1
+a135 1
+				fflush(stdout);
+d139 1
+a139 1
+		while (strncmp(bucketResponse, "X", strlen("X")) == NULL);
+d144 2
+a145 4
+int 
+setLLDValue(numberOfBuckets, value)
+int numberOfBuckets,
+    value;
+d147 1
+a147 3
+	char bucketCommand[16],
+	     bucketResponse[16];
+	int i;
+d149 9
+a157 9
+	for (i = 0; i < numberOfBuckets; i++)
+	{
+		bzero(bucketResponse, 16);
+		sprintf(bucketCommand, "%dS0", i);
+		rts_gantry(bucketCommand, bucketResponse);
+		if (bucketResponse == 0)
+		{
+			printf("setLLDValue:ERROR...could not talk to bucket %2d\n", i);
+			fflush(stdout);
+d160 6
+a165 8
+		sprintf(bucketCommand, "%dV%d", i, value);
+		do
+		{
+			bzero(bucketResponse, 16);
+			rts_gantry(bucketCommand, bucketResponse);
+			if (bucketResponse == 0)
+			{
+				printf("setLLDValue:ERROR...could not set LLD on bucket %2d to %d\n", 
+d167 1
+a167 1
+				fflush(stdout);
+d171 1
+a171 1
+		while (strncmp(bucketResponse, "X", strlen("X")) == NULL);
+a174 1
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 3
+a3 1
+/* @@(#)bucketUtilities.c	2.5 6/8/92 */
+d5 1
+a5 1
+static char rcsid [] = "$Id$";
+d9 1
+a9 2
+int
+setCurrentBucketEnergySettings(startBucket, numberOfBuckets, uld, lld, scatter)
+@

@@ -1,0 +1,414 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	2002.12.17.21.55.15;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2000.09.27.19.03.28;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2000.01.20.21.29.59;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.12.13.17.45.50;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.12.18.15.22.01;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.12.15.14.52.22;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.10.18.41.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@fix pointer/cast errors found with gcc
+@
+text
+@/*  $Id: rdscan7.c,v 1.6 2000/09/27 19:03:28 tom Exp tom $
+    $Log: rdscan7.c,v $
+    Revision 1.6  2000/09/27 19:03:28  tom
+    *** empty log message ***
+
+ * Revision 1.5  2000/01/20  21:29:59  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  1999/12/13  17:45:50  tom
+ * tov revision
+ *
+ * Revision 1.3  1998/12/18  15:22:01  tom
+ * cosmetic differences
+ *
+ * Revision 1.2  1998/12/15  14:52:22  tom
+ * debugged version
+ *
+ * Revision 1.1  1998/12/10  18:41:56  tom
+ * Initial revision
+ * */
+/* =============================================================================
+ *	Function:		rdscan7
+ *  Date:           Dec-98
+ *  Author:         Tom Videen (from JMO)
+ *	Description:	Get scan data for 1 plane of a Version 7 file.
+ * =============================================================================
+ */
+#ifndef lint
+static char     rcsid[] = "$Header: /home/tom/src/libimage/RCS/rdscan7.c,v 1.6 2000/09/27 19:03:28 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <image.h>
+#include <libimage.h>
+
+short          *rdscan7 (file, indx)
+	ImageFile      *file;
+	Index          *indx;
+{
+	DataSetType     dtype;
+	Scan3D_subheader7 *s3d;
+	short          *matrix;
+	int             joff, stat;
+	int             dskptr, slice, group, segment, z_elements;
+	int             xdim, ydim;
+	int             matnum, begrec, endrec, len;
+	int             i, j, pln1 = 1;
+
+	dtype = (DataSetType) file->m7->mh->file_type;
+	if (dtype != Short3dSinogram) {
+		(void) fprintf (stderr, "ERROR [rdscan7]: Unsupported file type %d for %s\n", dtype, file->name);
+		return (NULL);
+	}
+	if (file->fp == NULL) {
+		(void) fprintf (stderr, "ERROR [rdscan7]: Could not get file pointer for %s\n", file->name);
+		return (NULL);
+	}
+	if ((get_ss7 (file, indx)) == ERROR) {
+		(void) fprintf (stderr, "ERROR [rdscan7]: Could not get subheader for %s\n", file->name);
+		return (NULL);
+	}
+	if ((matnum = numcode7 (indx->frm, pln1, indx->gate, indx->data, indx->bed)) == 0) {
+		(void) fprintf (stderr, "ERROR [rdscan7]: Could not get matrix number for %s\n", file->name);
+		return (NULL);
+	}
+	if ((begrec = getmatpos (file, matnum, &endrec)) == ERROR) {
+		(void) fprintf (stderr, "ERROR [rdscan7]: Matrix #%x not found\n", matnum);
+		return (NULL);
+	}
+	s3d = file->m7->s3d;
+
+	xdim = s3d->num_r_elements;
+	ydim = s3d->num_angles;
+	len = xdim * ydim;
+	slice = indx->pln - 1;
+	matrix = (short *) calloc (len, sizeof (short));
+
+/*	VIEW MODE */
+
+	if (s3d->storage_order == 0) {
+		for (group = 0; s3d->num_z_elements[group] > 0; group++) {
+			if ((slice - s3d->num_z_elements[group]) >= 0)
+				slice -= s3d->num_z_elements[group];
+			else
+				break;
+		}
+		segment = group;
+		z_elements = s3d->num_z_elements[group];
+		if (group > 0 && slice >= (z_elements / 2)) {
+			segment = -segment;
+			slice -= z_elements / 2;
+		}
+		if (group > 0)
+			z_elements /= 2;
+		if (slice >= z_elements) {
+			(void) fprintf (stderr, "ERROR [rdscan7]: slice > z_elements (%d > %d)\n",
+				slice, z_elements);
+			return (NULL);
+		}
+		dskptr = (begrec + NUMREC_SSHDR - 1) * LENREC + slice * xdim * sizeof (short);
+
+/* Point to correct ring difference group */
+
+		for (i = 0; i < group; i++)
+			dskptr += s3d->num_z_elements[i] * len * sizeof (short);
+
+/* Point to correct ring difference sign */
+
+		if (segment < 0)
+			dskptr += z_elements * len * sizeof (short);
+
+/* Extract a line from each planar view. */
+
+		for (j = 0, joff = 0; j < ydim; j++, joff += xdim) {
+			stat =  fseek (file->fp, (long) dskptr, SEEK_SET);
+			if (stat != 0) {
+				(void) fprintf (stderr, "ERROR [rdscan7]: in fseek; status=%d\n", stat);
+				return (NULL);
+			}
+			stat = fread (&matrix[joff], sizeof (short), xdim, file->fp);
+			if (stat != xdim) {
+				(void) fprintf (stderr, "ERROR [rdscan7]: reading; status=%d\n", stat);
+				return (NULL);
+			}
+			dskptr += xdim * sizeof (short) * z_elements;
+		}
+
+/*	SINOGRAM MODE */
+
+	} else {
+		dskptr = (begrec + NUMREC_SSHDR - 1) * LENREC + slice * len * sizeof (short);
+		stat =  fseek (file->fp, (long) dskptr, SEEK_SET);
+		if (stat != 0) {
+			(void) fprintf (stderr, "ERROR [rdscan7]: in fseek; status=%d\n", stat);
+			return (NULL);
+		}
+		stat = fread (matrix, sizeof (short), len, file->fp);
+		if (stat != len) {
+			(void) fprintf (stderr, "ERROR [rdscan7]: reading; status=%d\n", stat);
+			return (NULL);
+		}
+	}
+
+	return (matrix);
+}
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdscan7.c,v 1.5 2000/01/20 21:29:59 tom Exp tom $
+d3 3
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdscan7.c,v 1.5 2000/01/20 21:29:59 tom Exp tom $";
+d64 1
+a64 1
+	if ((matnum = numcode7 (indx->frm, pln1, indx->gate, indx->data, indx->bed)) == NULL) {
+d117 2
+a118 1
+			if ((stat = fseek (file->fp, (long) dskptr, SEEK_SET)) != NULL) {
+d122 2
+a123 1
+			if ((stat = fread (&matrix[joff], sizeof (short), xdim, file->fp)) != xdim) {
+d134 2
+a135 1
+		if ((stat = fseek (file->fp, (long) dskptr, SEEK_SET)) != NULL) {
+d139 2
+a140 1
+		if ((stat = fread (matrix, sizeof (short), len, file->fp)) != len) {
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdscan7.c,v 1.4 1999/12/13 17:45:50 tom Exp tom $
+d3 3
+d26 1
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdscan7.c,v 1.4 1999/12/13 17:45:50 tom Exp tom $";
+d75 1
+a75 1
+	matrix = (short *) malloc (len * sizeof (short));
+@
+
+
+1.4
+log
+@tov revision
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdscan7.c,v 1.3 1998/12/18 15:22:01 tom Exp tom $
+d3 3
+a21 1
+
+d23 1
+a23 2
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdscan7.c,v 1.3 1998/12/18 15:22:01 tom Exp tom $";
+
+@
+
+
+1.3
+log
+@cosmetic differences
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdscan7.c,v 1.2 1998/12/15 14:52:22 tom Exp tom $
+d3 3
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdscan7.c,v 1.2 1998/12/15 14:52:22 tom Exp tom $";
+d46 1
+a46 1
+		fprintf (stderr, "ERROR [rdscan7]: Unsupported file type %d for %s\n", dtype, file->name);
+d50 1
+a50 1
+		fprintf (stderr, "ERROR [rdscan7]: Could not get file pointer for %s\n", file->name);
+d54 1
+a54 1
+		fprintf (stderr, "ERROR [rdscan7]: Could not get subheader for %s\n", file->name);
+d58 1
+a58 1
+		fprintf (stderr, "ERROR [rdscan7]: Could not get matrix number for %s\n", file->name);
+d62 1
+a62 1
+		fprintf (stderr, "ERROR [rdscan7]: Matrix #%x not found\n", matnum);
+d91 1
+a91 1
+			printf ("ERROR [rdscan7]: slice > z_elements (%d > %d)\n",
+d111 1
+a111 1
+				printf ("ERROR [rdscan7]: in fseek; status=%d\n", stat);
+d115 1
+a115 1
+				printf ("ERROR [rdscan7]: reading; status=%d\n", stat);
+d126 1
+a126 1
+			printf ("ERROR [rdscan7]: in fseek; status=%d\n", stat);
+d130 1
+a130 1
+			printf ("ERROR [rdscan7]: reading; status=%d\n", stat);
+@
+
+
+1.2
+log
+@debugged version
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdscan7.c,v 1.1 1998/12/10 18:41:56 tom Exp tom $
+d3 3
+d13 1
+a13 1
+ *	Description:	Get scan data from Version 7 file.
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdscan7.c,v 1.1 1998/12/10 18:41:56 tom Exp tom $";
+d39 1
+a39 2
+	int             pln1 = 1;
+	int             i, j;
+d50 4
+a57 4
+	if ((get_ss7 (file, indx)) == ERROR) {
+		fprintf (stderr, "ERROR [rdscan7]: Could not get subheader for %s\n", file->name);
+		return (NULL);
+	}
+d97 1
+a97 1
+			dskptr += s3d->num_z_elements[i] * xdim * ydim * sizeof (short);
+d102 1
+a102 1
+			dskptr += z_elements * xdim * ydim * sizeof (short);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*  $Id$
+    $Log$ */
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdscan7.c,v 1.4 1997/11/24 17:56:45 tom Exp $";
+a29 1
+	Main_header7   *mh7;
+a30 1
+	float           scaler, scl;
+d32 1
+a32 2
+	long            dptr;
+	int             joff, stat, span, ring_difference;
+d34 2
+a35 2
+	int             xdim, ydim, zdim;
+	int             matnum, begrec, endrec, nrec_shdr, len;
+a59 1
+	mh7 = file->m7->mh;
+a60 1
+	nrec_shdr = NUMREC_SSHDR;
+a61 2
+	span = s3d->axial_compression;
+	ring_difference = s3d->ring_difference;
+a63 1
+	scl = s3d->scale_factor;
+a65 1
+	nrec_shdr = NUMREC_SSHDR;
+d67 4
+a70 1
+	if (s3d->storage_order == 0) {		 /* View mode. */
+d85 3
+a87 1
+		if (slice >= z_elements)
+d89 6
+a94 2
+		dskptr = (begrec + nrec_shdr - 1) * LENREC + slice * xdim * sizeof (short);
+		for (i = 0; i < group; i++)	 /* Point to correct ring difference group */
+d96 4
+a99 1
+		if (segment < 0)		 /* Point to correct ring difference sign. */
+d101 3
+d105 2
+a106 2
+			/* Extract a line from each planar view. */
+			if ((stat = fseek (file->fp, (long) dskptr, SEEK_SET)) != NULL)
+d108 1
+d110 1
+a110 1
+				printf ("rdimg7: Error occurred during read, status=%d\n", stat);
+d115 3
+d119 3
+a121 2
+		dskptr = (begrec + nrec_shdr - 1) * LENREC + slice * len * sizeof (short);
+		if ((stat = fseek (file->fp, (long) dskptr, SEEK_SET)) != NULL)
+d123 1
+d125 1
+a125 1
+			printf ("rdimg7: Error occurred during read, status=%d\n", stat);
+@

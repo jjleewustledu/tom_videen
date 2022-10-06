@@ -1,0 +1,490 @@
+head	1.2;
+access;
+symbols;
+locks
+	tom:1.2; strict;
+comment	@ * @;
+
+
+1.2
+date	2005.08.11.21.22.21;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2005.08.10.21.14.32;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@/*	$Log: anatlas.c,v $
+ * Revision 1.1  2005/08/10  21:14:32  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:		anatlas.c
+ *	Date:		Aug 2005
+ *	Author:		Tom Videen
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anatlas/RCS/anatlas.c,v 1.1 2005/08/10 21:14:32 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			anatlas
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* file for Analyze image */
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	int             ntype;			 /* data type	*/
+	long            nx, ny, nz;		 /* dimensions	*/
+	long            x, y, z;		 /* indices to array	*/
+
+	long            x01, x02;		 /* x-origin right and left	*/
+	long            y01, y02;		 /* y-origin right and left	*/
+	long            z0;				 /* z-origin	*/
+	long            ypc;			 /* pc = posterior commissure	*/
+	long            yx1, yx2, zx;	 /* x = optic chiasm	*/
+	long            xec1, xec2;		 /* ec = external capsule	*/
+	long            xcx1, xcx2;		 /* cx = cortex lateral edges on ACPC plane	*/
+	long            ycx1, ycx2;		 /* cx = cortex AP edges on ACPC plane */
+	long            xcx3, xcx4;		 /* cx = cortex lateral extremes of temporal cx */
+	long            xt1, xt2, yt, zt; /* t = optic tract	*/
+	long            zdac;			 /* dac = dorsal edge of cortex at AC	*/
+
+	short        ***simg;			 /* image array */
+	short          *row;			 /* single row of input image */
+	short           val = 500;
+
+	if (argc != 5) {
+		fprintf (stdout, "Usage: anatlas in.img in.hdr out.img out.hdr\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anatlas]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anatlas]: reading %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [anatlas]: reading %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	ntype = hdr.dime.datatype;
+	if (ntype != 4) {
+		fprintf (stderr, "ERROR [anatlas]: reading %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", ntype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anatlas]: reading %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	nx = hdr.dime.dim[1];
+	ny = hdr.dime.dim[2];
+	nz = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+	row = (short *) calloc (nx, sizeof (short));
+	if (row == NULL) {
+		fprintf (stderr, "ERROR [anatlas]: calloc row\n");
+		return (ERROR);
+	}
+	simg = s3tensor (1, nz, 1, ny, 1, nx);
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [anatlas]: malloc simg\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anatlas]: opening %s\n", img1);
+		return (ERROR);
+	}
+	for (z = 1; z <= nz; z++) {
+		for (y = 1; y <= ny; y++) {
+			if ((fread (row, sizeof (short), nx, fd_img)) != nx) {
+				fprintf (stderr, "ERROR [anatlas]: reading %s\n", img1);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+
+/*	=========================================================
+ *	Image array: 256x256x128 voxels 1x1x1 mm
+ *	Mai et al (2004) atlas definitions:
+ *	XYZ-origin is [128.5, 128.5, 100]
+ *	hence, xy midlines drawn as 2 rows with x01 and x02 or y01 and y02
+ */
+	x01 = 128;
+	y01 = 128;
+	x02 = 129;
+	y02 = 129;
+	z0 = 129 - 100;
+
+/*	Posterior Commissure: PC is at -28	*/
+	ypc = y01 - 24;
+
+/*	Optic Chiasm: OX center at y=+4, z=-15	*/
+	yx1 = y01 + 4;
+	yx2 = y02 + 4;
+	zx = z0 - 15;
+
+/*	Optic Tract at bisection ACPC	*/
+	xt1 = x02 - 18;
+	xt2 = x02 + 18;
+	yt = y01 -14;
+	zt = z0 - 7;
+
+/*	External Capsule along y=0 (AC)	*/
+	xec1 = x02 - 32;
+	xec2 = x02 + 32;
+
+/*	Dorsal Edge of Cortex on Coronal Plane through Chiasm	*/
+	zdac = z0 + 70;
+
+/*	Posterior and Anterior Edges of Cortex on ACPC plane	*/
+	ycx1 = y02 - 104;
+	ycx2 = y02 + 66;
+
+/*	Lateral Edges of Parietotemporal Cortex on ACPC plane	*/
+	xcx1 = x01 - 64;
+	xcx2 = x02 + 64;
+
+/*	Maximum Lateral Extent of Parietotemporal Cortex	*/
+	xcx3 = x01 - 68;
+	xcx4 = x01 + 68;
+
+/*	=========================================================
+ *	Sagittal Midline (AC-PC)	*/
+
+	for (y = ycx1; y < ycx2; y++) {
+		simg[z0][y][x01] = val;
+		simg[z0][y][x02] = val;
+	}
+	for (y = y01; y <= y01 + 1; y++) {
+		simg[z0][y][x01] = 0;
+		simg[z0][y][x02] = 0;
+	}
+	for (y = ypc; y <= ypc + 1; y++) {
+		simg[z0][y][x01] = 0;
+		simg[z0][y][x02] = 0;
+	}
+
+/*	AC & PC */
+
+	for (z = z0 - 1; z <= z0 + 1; z++) {
+		for (x = xt1; x < x01 - 1; x++) {
+			simg[z][y01][x] = val;
+			simg[z][ypc][x] = val;
+		}
+		for (x = x01 + 2; x < xt2; x++) {
+			simg[z][y01][x] = val;
+			simg[z][ypc][x] = val;
+		}
+	}
+
+/*	Optic Tract	*/
+
+	for (x = xec1; x < xt1 - 1; x++) {
+		simg[zt][yt][x] = val;
+		simg[zt][yt + 1][x] = val;
+	}
+	for (x = xt1 + 2; x < xt2 - 1; x++) {
+		simg[zt][yt][x] = val;
+		simg[zt][yt + 1][x] = val;
+	}
+	for (x = xt2 + 2; x < xec2; x++) {
+		simg[zt][yt][x] = val;
+		simg[zt][yt + 1][x] = val;
+	}
+
+	for (z = zt - 1; z <= zt + 1; z++) {
+		for (y = yt - 7; y <= yt - 1; y++) {
+			simg[z][y][xt1] = val;
+			simg[z][y][xt2] = val;
+		}
+		for (y = yt + 2; y <= yt + 7; y++) {
+			simg[z][y][xt1] = val;
+			simg[z][y][xt2] = val;
+		}
+	}
+
+/*	External Capsule	*/
+
+	for (z = z0 - 3; z < z0 + 5; z++) {
+		for (y = ypc; y <= y01; y++) {
+			simg[z][y][xec1] = val;
+			simg[z][y][xec2] = val;
+		}
+	}
+
+/*	Lateral Edges of Brain*/
+
+	for (y = ycx1; y < ycx2; y++) {
+		for (z = z0 - 10; z < z0; z++) {
+			simg[z][y][xcx3] = val;
+			simg[z][y][xcx4] = val;
+		}
+		simg[z][y][xcx1] = val;
+		simg[z][y][xcx2] = val;
+		for (z = z0 + 1; z < z0 + 5; z++) {
+			simg[z][y][xcx3] = val;
+			simg[z][y][xcx4] = val;
+		}
+	}
+
+/*	AP Edges of Brain*/
+
+	for (z = z0 - 10; z < z0 + 5; z++) {
+		for (x = xcx1; x <= xcx2; x++) {
+			simg[z][ycx1][x] = val;
+			simg[z][ycx2][x] = val;
+		}
+	}
+
+/*	Coronal Midline	*/
+
+	for (z = 1; z <= nz; z++) {
+		if (z < 28 || z > 30) {
+			for (y = y01; y <= y02; y++) {
+				for (x = x01; x <= x02; x++)
+					simg[z][y][x] = val;
+			}
+		}
+	}
+
+/*	Optic Chiasm	*/
+
+	for (x = xec1; x < x01 - 1; x++) {
+		simg[zx][yx1][x] = val;
+		simg[zx][yx2][x] = val;
+	}
+	for (x = x02 + 2; x < xec2; x++) {
+		simg[zx][yx1][x] = val;
+		simg[zx][yx2][x] = val;
+	}
+	for (z = 1; z <= nz; z++) {
+		if (z < zx - 1 || z > zx + 1) {
+			simg[z][yx1][x01] = val;
+			simg[z][yx1][x02] = val;
+			simg[z][yx2][x01] = val;
+			simg[z][yx2][x02] = val;
+		}
+	}
+
+/*	Top of brain at Chiasm	*/
+
+	for (x = xcx3; x < xcx4; x++) {
+		simg[zdac][yx1][x] = val;
+		simg[zdac][yx2][x] = val;
+	}
+
+/*	Write Atlas image	*/
+
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anatlas]: opening %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anatlas]: writing %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	if ((fd_img = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anatlas]: opening %s\n", img2);
+		return (ERROR);
+	}
+	for (z = 1; z <= nz; z++) {
+		for (y = 1; y <= ny; y++) {
+			for (x = 1; x <= nx; x++)
+				row[x - 1] = simg[z][y][x];
+			if (fwrite (row, sizeof (short), nx, fd_img) != nx) {
+				fprintf (stderr, "ERROR [anatlas]: writing %s\n", img2);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+	free_s3tensor (simg, 1, nz, 1, ny, 1, nx);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anatlas/RCS/anatlas.c,v 1.4 2005/05/04 13:29:05 tom Exp $";
+d36 18
+a53 12
+	char           *img1, *hdr1;		 /* input file */
+	char           *img2, *hdr2;		 /* output file */
+	int             ntype;			 /* data type	 */
+	long            nx, ny, nz;		 /* dimensions	 */
+	long            x, y, z;		 /* indices to array	 */
+	long            ex1, ex2;		 /* external capsule	 */
+	long            x1, x2;			 /* lateral edges of cortex on ACPC plane	 */
+	long            y1, y2;			 /* ant/post edges of cortex on ACPC plane	 */
+	long            x3, x4;			 /* lateral extremes of parietotemporal cortex */
+	long            yp, zc;			 /* posterior commissure	 */
+	long            yx, zx;			 /* optic chiasm	 */
+	long            m0, m1;			 /* xy-origin	 */
+d56 1
+a56 1
+	short           val=500;
+d59 1
+a59 1
+		fprintf (stdout, "Usage: anatlas img1 hdr1 img2 hdr2\n");
+d122 1
+a122 1
+ *	Tailarach & Tournoux (1988) atlas definitions:
+d124 1
+d126 5
+a130 3
+	m0 = 128;
+	m1 = 129;
+	zc = m1 - 100;
+d132 2
+a133 2
+/*	Posterior Commissure: PC is at -24 (anterior edge is -23.5)	*/
+	yp = m0 - 24;
+d135 4
+a138 3
+/*	Optic Chiasm: OX center at y=+3, z=-17	*/
+	yx = m0 + 3;
+	zx = zc - 17;
+d140 6
+d147 2
+a148 2
+	ex1 = m1 - 32;
+	ex2 = m1 + 32;
+d150 3
+d154 2
+a155 2
+	y1 = m1 - 103;
+	y2 = m1 + 69;
+d158 2
+a159 2
+	x1 = m1 - 64;
+	x2 = m1 + 64;
+d162 2
+a163 2
+	x3 = m1 - 67;
+	x4 = m1 + 67;
+d168 3
+a170 3
+	for (y = 1; y <= ny; y++) {
+		simg[zc][y][m0] = val;
+		simg[zc][y][m1] = val;
+d172 3
+a174 3
+	for (y = m0; y <= m0 + 1; y++) {
+		simg[zc][y][m0] = 0;
+		simg[zc][y][m1] = 0;
+d176 3
+a178 3
+	for (y = yp; y <= yp + 1; y++) {
+		simg[zc][y][m0] = 0;
+		simg[zc][y][m1] = 0;
+d183 4
+a186 4
+	for (z = zc - 1; z <= zc + 1; z++) {
+		for (x = ex1; x < m0 - 1; x++) {
+			simg[z][m0][x] = val;
+			simg[z][yp][x] = val;
+d188 3
+a190 3
+		for (x = 131; x < ex2; x++) {
+			simg[z][m0][x] = val;
+			simg[z][yp][x] = val;
+d194 26
+d222 4
+a225 4
+	for (z = zc - 10; z <= zc + 5; z++) {
+		for (y = yp; y <= m0; y++) {
+			simg[z][y][ex1] = val;
+			simg[z][y][ex2] = val;
+d231 4
+a234 4
+	for (y = y1; y < y2; y++) {
+		for (z = zc - 10; z < zc; z++) {
+			simg[z][y][x3] = val;
+			simg[z][y][x4] = val;
+d236 5
+a240 5
+		simg[z][y][x1] = val;
+		simg[z][y][x2] = val;
+		for (z = zc + 1; z < zc + 5; z++) {
+			simg[z][y][x3] = val;
+			simg[z][y][x4] = val;
+d246 4
+a249 4
+	for (z = zc - 10; z <= zc + 5; z++) {
+		for (x = x1; x <= x2; x++) {
+			simg[z][y1][x] = val;
+			simg[z][y2][x] = val;
+d257 2
+a258 2
+			for (y = m0; y <= m1; y++) {
+				for (x = m0; x <= m1; x++)
+d266 3
+a268 3
+	for (x = ex1; x < m0 - 1; x++) {
+		simg[zx][yx][x] = val;
+		simg[zx][yx + 1][x] = val;
+d270 3
+a272 3
+	for (x = m1 + 1; x < ex2; x++) {
+		simg[zx][yx][x] = val;
+		simg[zx][yx + 1][x] = val;
+d276 4
+a279 4
+			simg[z][yx][m0] = val;
+			simg[z][yx][m1] = val;
+			simg[z][yx + 1][m0] = val;
+			simg[z][yx + 1][m1] = val;
+d283 7
+@

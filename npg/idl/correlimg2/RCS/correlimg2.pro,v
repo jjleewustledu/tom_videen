@@ -1,0 +1,183 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	2000.05.19.15.45.04;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.05.17.17.00.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@PRO CORRELIMG2
+@@IMAGE_UTILS.h
+
+   on_error, 2
+   imglist = ''
+   vallist = ''
+   outfile = ''
+   msg = ''
+
+   imglist = getenv('IMGLIST')
+   vallist = getenv('VALLIST')
+   outfile = getenv('OUTFILE')
+   cortype = getenv('CORTYPE')
+
+   ;; Read correlation values list
+
+   openr,lu0, vallist, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      PRINT,'ERROR [correlimg2]: Cannot open ',vallist
+      RETURN
+   ENDIF
+   nval = 0L
+   readf, lu0, nval
+   IF (nval LT 2) THEN BEGIN
+      PRINT,'ERROR [correlimg2]: ',imglist,' has only ',nval,' values'
+      RETURN
+   ENDIF
+   v = fltarr(nval)
+   tmp = 0.
+   FOR i=0,nval-1 DO BEGIN
+      readf, lu0, tmp
+      v[i] = tmp
+   ENDFOR
+   close,lu0
+   free_lun,lu0
+
+   ;; Read image list
+
+   openr,lu1, imglist, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      PRINT,'ERROR [correlimg2]: Cannot open ',imglist
+      RETURN
+   ENDIF
+   nimg = 0L
+   fname = ''
+   readf, lu1, nimg
+   IF (nimg LT 2) THEN BEGIN
+      PRINT,'ERROR [correlimg2]: ',imglist,' has only ',nimg,' files'
+      RETURN
+   ENDIF ELSE IF (nimg NE nval) THEN BEGIN
+      PRINT,'ERROR [correlimg2]: ',imglist,' has ',nimg,' files but ',vallist,' has ',nval,' values'
+      RETURN
+   ENDIF
+
+   out = {VIMAGE}
+   img = replicate({VIMAGE}, nimg)
+   
+   FOR i=0,nimg-1 DO BEGIN
+      readf, lu1, fname
+      out.fname = fname
+      out.ff = 1
+      out.lf = 1
+      out.fp = 1
+      out.lp = 256
+      IF (getframe(out, msg) NE 0) THEN BEGIN
+         PRINT,'ERROR [correlimg2]: reading ',fname
+         RETURN
+      ENDIF
+      img[i] = out
+      print, format = '("Image File:  ",A)', fname
+      img[i].data = ptr_new(*out.data)
+   ENDFOR
+   close,lu1
+   free_lun,lu1
+
+   out.fname = img[0].fname
+   out.ff = 1
+   out.lf = 1
+   out.fp = 1
+   out.lp = 256
+   IF (getframe(out, msg) NE 0) THEN BEGIN
+      PRINT,'ERROR [correlimg2]: reading ',fname
+      RETURN
+   ENDIF
+
+   len =  img[0].dim[0] * img[0].dim[1] * img[0].dim[2]
+
+   ;; Compute correlation coefficient for each pixel
+
+   flen = len/80
+   print, FORMAT = '($,"|")'
+   FOR n=1,80 DO print, FORMAT = '($,"_")'
+   print,"|"
+
+   q = fltarr(nimg)
+   IF (cortype EQ 'linear') THEN BEGIN
+      FOR n=0L,len-1 DO BEGIN
+         IF (n MOD flen EQ 0) THEN print, FORMAT = '($,"^")'
+         FOR i=0,nimg-1 DO q[i] = (*img[i].data)[n]
+         (*out.data)[n] = fix(1000 * correlate(v,q))
+      ENDFOR
+   ENDIF ELSE IF (cortype EQ 'rank') THEN BEGIN
+      FOR n=0L,len-1 DO BEGIN
+         IF (n MOD flen EQ 0) THEN print, FORMAT = '($,"^")'
+         FOR i=0,nimg-1 DO q[i] = (*img[i].data)[n]
+         val = (r_correlate(v,q))[0]
+         (*out.data)[n] = fix(1000 * val)
+      ENDFOR
+   ENDIF ELSE BEGIN
+      PRINT,'ERROR [correlimg2]: type must be linear or rank'
+      RETURN
+   ENDELSE
+
+   print
+   print,'Max = ',max (*out.data)
+
+   ;; Write output image
+
+   extra = strarr(4)
+   extra[0] = 'program name       := correlimg2'
+   extra[1] = 'program version    := 1.0'
+   extra[2] = 'program date       := 2000:05:19'
+   extra[3] = 'input file 1       := '+fname+'
+   out.fname = outfile
+   print,'Writing '+out.fname+'... '
+   IF (PUTINTERFILE(out, outfile, type(0), msg, EXTRA=extra) NE 0) THEN message, msg
+   print,'(ignore message -- "Floating illegal operand")'
+
+END 
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d13 1
+d96 18
+a113 7
+   FOR n=0L,len-1 DO BEGIN
+      IF (n MOD flen EQ 0) THEN print, FORMAT = '($,"^")'
+      FOR i=0,nimg-1 DO q[i] = (*img[i].data)[n]
+      ;;val = (r_correlate(v,q))[0]
+      ;;(*out.data)[n] = fix(1000 * val)
+      (*out.data)[n] = fix(1000 * correlate(v,q))
+   ENDFOR
+d119 1
+a119 1
+   extra = strarr(5)
+d122 1
+a122 1
+   extra[2] = 'program date       := 2000:05:16'
+a123 1
+   extra[4] = 'input file 2       := '+fname+'
+@

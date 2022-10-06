@@ -1,0 +1,981 @@
+head	1.12;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.12
+date	95.09.26.16.06.55;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	94.04.01.16.35.10;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	93.10.08.17.55.07;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	93.10.08.16.06.15;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	93.10.06.18.40.03;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	93.10.05.22.35.19;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.10.05.21.24.41;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.04.29.22.37.28;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.04.29.19.34.17;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.03.04.15.19.40;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.02.26.22.09.51;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.11.03.18.59.32;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Original version for Unix.
+ This version gives nearly identical output to HD6MEAN on Medusa
+when compared to the original Concurrent version (which replicated
+SARP).  Differences in single pixel values are +/- 1, which is
+attributed to differences in rounding.
+@
+
+
+1.12
+log
+@add SXR type 22
+@
+text
+@c $Log: hd6mean.f,v $
+c Revision 1.11  1994/04/01  16:35:10  tom
+c add copyright
+c
+c Revision 1.10  1993/10/08  17:55:07  tom
+c libpetutil handles PETT VI in ECAT format properly
+c
+c Revision 1.9  1993/10/08  16:06:15  tom
+c rebuilt with new libpetutil
+c
+c Revision 1.8  1993/10/06  18:40:03  tom
+c correct flipping of x0i
+c
+c Revision 1.7  1993/10/05  22:35:19  tom
+c flips x0i (slice center) for old ecat sxr files
+c
+c Revision 1.6  1993/10/05  21:24:41  tom
+c new version for new libpetutil
+c
+c Revision 1.5  1993/04/29  22:37:28  tom
+c Revised to handle 31-slice input images and sxr NTYPE = 20
+c
+c Revision 1.4  1993/04/29  19:34:17  tom
+c Modified to handle new sxr files (type 20)
+c
+c Revision 1.3  1993/03/04  15:19:40  tom
+c Replace disk scratch file (hd6sum) with array SUM
+c
+c Revision 1.2  1993/02/26  22:09:51  tom
+c *** empty log message ***
+c
+c Revision 1.1  1992/11/03  18:59:32  tom
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      HD6MEAN.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         13-Jun-91
+C  Written For:  Replicate SARP
+C
+C  History:
+C     Modified 05-Aug-91 TOV to correct the calculation of dz.
+C       (see user documentation and HD6TRANS.FTN)
+C     Modified 05-Aug-91 TOV to process images as CBF or CBV and
+C       create a new, corresponding HDR file.
+C       (add subroutine HD6PROC and modify HD6MEAN to write HDR).
+C     Modified 19-Jun-92 to support SXR types 12,13,14
+C       (for SARPLOCS version 2.3)
+C
+C     Modified 03-Nov-92 for Unix:
+C       1) Change OPEN statements (hd6mean.f, hd6proc.f);
+C       2) Replace DATE with INTDATE;
+C				3) USERIN = 5; USEROUT = 6 (defaults; change to eliminate conflict)
+C				4) Add subroutines: GETARG, GETCWD
+C				5) All reads from AUXLU replaced with calls to GETARG
+C				6) Read SXR file in fixed format. (SXR files must be converted on
+C				   Concurrent with FORMSXR before moving to Suns)
+C				7) RCSHEADER added
+C				8) GETIMAGE replaced with GETIMG
+C				9) Changed PROGNAME to lowercase 'hd6mean'
+C     Modified 04-Mar-93 TOV:
+C				1) eliminate HD6SUM and add images to a COMMON array SUM.
+C				2) change ATL and NOTIN to REAL.
+C     Modified 29-Apr-93 TOV:
+C				1) to support SXR file type 20.
+C				2) read 31 slice images files.
+C				3) pass NSLICES to HD6PROC.
+C				4) add NZ to COMMON.
+C     Modified 06-Oct-93 TOV:
+C				1) use new library (libpetutil) 05-Oct-93.
+C				2) flip x0i(zi) for old ecat sxr files (type <= 20 and nslices = 31).
+C				3) read sxr file type 21.
+C
+C  Intent:
+C     Compute the mean of 7-slice PET images into a 49-slice HD6-brain image.
+C     x_atlas values are from SARP.
+C     Input is any of current PET image formats (PETT VI, Super PETT, EM, etc)
+C     Output is PETT VI standard format (100x100 arrays)
+C
+C  Logical units:
+C     1 = input list
+C     2 = input image file
+C     3 = output image file
+C     4 = SXR file
+C     5 = user output
+C     7 = HDR file input (assigned in HD6PROC)
+C     8 = HDR file output
+C
+C  Uses Subroutines:
+C     HD6TRANS - transform to HD6 image format
+C     HD6OUT   - compute mean & write 49-slice image to SMG file
+C     HD6APPND - append info to SMG file
+C     HD6PROC  - process 1 slice as counts, CBF, or CBV
+C     MATMULT  - matrix multiplication
+C
+C  FORTRAN library:
+C     INTDATE     - get current date
+C     TIME     - get current time
+C     EXIT     - set end of task code and stop
+C     INANYR   - search string from right
+C
+C		Sun FORTRAN
+C			GETARG
+C			GETCWD
+C			LNBLNK
+C
+C		libpetutil
+C			GETIMG
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM HD6MEAN
+C
+      PARAMETER (nxi = 128) ! x-dimension of PET-array
+      PARAMETER (nyi = 128) ! y-dimension of PET-array
+      PARAMETER (nzi =  31) ! z-dimension of PET-array! no. of slices
+      PARAMETER (nxa = 100) ! x-dimension of atlas-array
+      PARAMETER (nya = 100) ! y-dimension of atlas-array
+      PARAMETER (nza =  49) ! z-dimension of atlas-array! no. of slices
+C
+      INTEGER*4  zi         ! index to PET slice number
+      INTEGER*4  I,J,K      ! indices to arrays
+C
+      INTEGER*2  PET2(nxi,nyi,nzi)! PET input image (activation)
+      INTEGER*2  HEADER(128)    ! header
+      INTEGER*2  HDR(128)       ! HDR file
+C
+      REAL*4     NOTIN          ! not in PET space (value to set in ATL)
+C
+      INTEGER*4  SXRTYPE        ! determines mag and mag-markers (1-4)
+      INTEGER*4  NSLICES        ! number of slices in input file
+      INTEGER*4  PETTNUM        ! PETT number
+      INTEGER*4  LIST           ! lu for input from list
+      INTEGER*4  IN             ! lu for PET image input
+      INTEGER*4  SMG            ! lu for image output
+      INTEGER*4  SXR            ! lu for SXR input
+      INTEGER*4  USEROUT        ! lu for user output
+      INTEGER*4  HDROUT         ! lu for created HDR output
+      INTEGER*4  NFILES         ! number of images or image pairs
+      INTEGER*4  ADATE(3)       ! get date
+      INTEGER*4  ATIME(3)       ! get time
+C
+      REAL*4     NORMVAL        ! normalization value
+      REAL*4     SCALER         ! normalization factor
+      REAL*4     MEAN1,MEAN2    ! input file global means
+			REAL*4     TEMP
+C
+      CHARACTER*1   DIVISOR        ! G (global) or L (local)
+      CHARACTER*1   INCLUDE        ! A (all) or N
+      CHARACTER*4   INITIALS       ! initials
+      CHARACTER*4   HDRVOL         ! HDR volume name
+      CHARACTER*6   TYPE           ! type of averaging (PAIRED or SINGLE)
+      CHARACTER*10  PROGDATE       ! program version (date)
+      CHARACTER*10  PROCESS        ! type of processing
+      CHARACTER*16  STR1           ! check SXR header
+      CHARACTER*17  STR2           ! check SXR header for incorrect delta-z
+      CHARACTER*17  FILE1          ! input filename
+      CHARACTER*17  FILE2          ! input filename
+      CHARACTER*17  FILE3          ! input filename
+      CHARACTER*80  STR            ! string
+      CHARACTER*80  DESCRIPTOR     ! image descriptor
+      CHARACTER*256 FNAME1         ! filename
+      CHARACTER*256 FNAME2         ! filename
+      CHARACTER*256 SMGFILE        ! SMG filename
+      CHARACTER*256 PATH           ! directory path
+      CHARACTER*256 LISTNAME       ! input list name
+      CHARACTER*256 RCSHEADER      ! RCS info
+C
+C  Fields in old HEADER
+C
+      INTEGER*2     FILETYPE       ! file type
+      CHARACTER*12  FILTER         ! recon filter
+C
+C  Fields in new HEADER
+C
+      REAL*4        NORMFACT       ! normalization factor
+      CHARACTER*1   DIVIDEBY       ! G or L
+      CHARACTER*1   PIXUSED        ! A or N
+      CHARACTER*2   HEADERTYPE     ! 'P6'
+      CHARACTER*4   CREATOR        ! INITIALS
+      CHARACTER*6   RUNNAME        ! N = nfiles
+      CHARACTER*6   TDATE          ! current date
+      CHARACTER*6   PTYPE          ! type of averaging (PAIRED or SINGLE)
+      CHARACTER*8   SCANID         ! file name
+      CHARACTER*8   PROGNAME       ! program name
+      CHARACTER*10  PROCTYPE       ! type of processing
+      CHARACTER*10  VERSION        ! program version (date)
+      CHARACTER*12  TODAY          ! current date and time
+      CHARACTER*80  FILEDSC        ! image descriptor
+C
+C  Fields in SMG appendix
+C
+      CHARACTER*256 DATUM(200)     ! component image descriptors
+C
+C                   DATUM(1:17)    ; control filename
+C                   DATUM(18:28)   ; mean
+C                   DATUM(31:47)   ; activation filename
+C                   DATUM(48:58)   ; mean
+C                   DATUM(61:77)   ; SXR filename
+C
+C                   DATUM(121:124) ; control file type
+C                   DATUM(126:137) ; control file filter
+C                   DATUM(151:154) ; activation file type
+C                   DATUM(156:167) ; activation file filter
+C                   DATUM(181:183) ; SXR file type
+C                   DATUM(185:200) ; SXR file date and creator
+C
+      LOGICAL*1     HDRONLY        ! read header only
+      LOGICAL*1     ERR            ! error
+C
+C  ----------------------------------------------------------------
+C
+C  Common Block Elements:
+C
+      REAL*4     ATL(nxa,nya,nza)! atlas output image (HD6 brain)
+      INTEGER*2  NIN(nxa,nya,nza)! N component images for ATL pixels
+      INTEGER*2  PET(nxi,nyi,nzi)! PET input image
+      REAL*4     SUM(nxa,nya,nza)! summed atlas image
+C
+			INTEGER*4  NZ							! number of PET slices read from sxr file
+																! (may differ from nzi)
+      REAL*4     cmperpixi  ! cm/pixel in PET image
+      REAL*4     cmperslci  ! cm/slice in PET image
+      REAL*4     x0i(nzi)   ! x-coordinate brain midpoint in each PET slice
+      REAL*4     y0i        ! y-coordinate midpoint PET image in refslice
+      INTEGER*4  z0i        ! reference slice in PET image
+      REAL*4     x_PET(nzi) ! width of brain in each PET slice
+      REAL*4     mag        ! x-ray magnification factor
+      REAL*4     y_xray     ! length of brain (line drawn through commissures)
+      REAL*4     z_xray     ! height of brain (perpendicular to y_xray)
+      REAL*4     xdeg       ! x-axis rotation (pitch)
+      REAL*4     dyi        ! y-translation measured on x-ray in PET-space
+      REAL*4     dzi        ! z-translation measured on x-ray in PET-space
+      REAL*4     cmperpixa  ! cm/pixel in atlas-image
+      REAL*4     cmperslca  ! cm/slice in atlas-image
+      REAL*4     x0a        ! x-origin in atlas image
+      REAL*4     y0a        ! y-origin in atlas image
+      INTEGER*4  z0a        ! z-origin in atlas image
+      REAL*4     x_atlas(nza)! width of brain for specified z-positions
+      REAL*4     y_atlas    ! length of brain (line through acpc)
+      REAL*4     z_atlas    ! height of brain (perp. to ac-pc line)
+C
+      COMMON /IMAGES/ ATL, PET, NIN, SUM, NZ, cmperpixi, cmperslci,
+     &                x0i, y0i, z0i, x_PET, mag, y_xray, z_xray,
+     &                xdeg, dyi, dzi, cmperpixa, cmperslca,
+     &                x0a, y0a, z0a, x_atlas, y_atlas, z_atlas
+C
+C  ----------------------------------------------------------------
+C
+C  Equivalence arrays to save memory
+C
+      EQUIVALENCE (PET2, ATL)
+C
+C  Input HEADER fields
+C
+      EQUIVALENCE (FILETYPE, HEADER(38))
+      EQUIVALENCE (FILTER,   HEADER(41))
+C
+C  Output HEADER fields
+C
+      EQUIVALENCE (HEADERTYPE, HEADER(1))
+      EQUIVALENCE (RUNNAME , HEADER(2))
+      EQUIVALENCE (PTYPE   , HEADER(5))
+      EQUIVALENCE (SCANID  , HEADER(9))
+      EQUIVALENCE (TDATE   , HEADER(13))
+      EQUIVALENCE (DIVIDEBY, HEADER(30))
+      EQUIVALENCE (PIXUSED , HEADER(31))
+      EQUIVALENCE (CREATOR , HEADER(39))
+      EQUIVALENCE (NORMFACT, HEADER(51))
+      EQUIVALENCE (PROCTYPE, HEADER(57))
+      EQUIVALENCE (PROGNAME, HEADER(71))
+      EQUIVALENCE (VERSION , HEADER(75))
+      EQUIVALENCE (FILEDSC , HEADER(81))
+      EQUIVALENCE (TODAY   , HEADER(123))
+C
+C  ----------------------------------------------------------------
+C
+C
+      DATA LIST, IN, SMG, SXR, USEROUT, HDROUT /1,2,3,4,6,8/
+      DATA NOTIN /0./
+C
+C  HD6 atlas brain definition
+C
+      DATA cmperpixa /0.2/
+      DATA cmperslca /0.2/
+      DATA x0a       /50.5/
+      DATA y0a       /50.5/
+      DATA z0a       /31/
+      DATA y_atlas   /16.3/
+      DATA z_atlas   /7.0/
+      DATA x_atlas   /10.90, 11.35, 11.80, 12.10, 12.40, 12.70, 12.90,
+     &                13.10, 13.30, 13.50, 13.65, 13.80, 13.70, 13.60,
+     &                13.70, 13.80, 13.90, 14.00, 14.05, 14.10, 14.23,
+     &                14.36, 14.50, 14.45, 14.43, 14.46, 14.50, 14.50,
+     &                14.50, 14.30, 14.15, 14.25, 14.20, 14.18, 14.02,
+     &                13.86, 13.70, 13.63, 13.57, 13.50, 13.50, 13.50,
+     &                13.50, 13.33, 13.17, 13.00, 12.20, 11.40, 10.60/
+C
+C -------------------------------------------------------------------
+C
+      RCSHEADER = "$Header: /export/home/npggw/tom/src/hd6mean/RCS/hd6mean.f,v 1.11 1994/04/01 16:35:10 tom Exp tom $"
+      PROGDATE = '09/26/95  '
+      WRITE(USEROUT,*) 'Copyright 1991-1994, Washington University'
+      WRITE(USEROUT,*) 'All rights reserved. Unauthorized reproduction prohibited.'
+      WRITE(USEROUT,*) 'hd6mean ',PROGDATE,
+     &  '{49-slice HD6-atlas Image from PETT VI or ECAT Images}'
+C
+C  Initialize NIN, SUM
+C
+      DO 30 K=1,nza
+        DO 20 J=1,nya
+          DO 10 I=1,nxa
+            NIN(I,J,K) = 0
+						SUM(I,J,K) = 0.
+10        CONTINUE
+20      CONTINUE
+30    CONTINUE
+C
+      DO 35 I=1,200
+        DATUM(I) = ' '
+35    CONTINUE
+      HDRONLY = .FALSE.
+C
+C -------------------------------------------------------------------
+C  Read INPUT PARAMETERS
+C
+			CALL GETENV('PWD',PATH)
+			CALL GETARG(1,SMGFILE)
+			CALL GETARG(2,LISTNAME)
+			CALL GETARG(3,DIVISOR)
+			CALL GETARG(4,INCLUDE)
+			CALL GETARG(5,STR)
+			READ (STR,8101) NORMVAL
+8101	FORMAT(F80)
+			CALL GETARG(6,INITIALS)
+			CALL GETARG(7,PROCESS)
+			CALL GETARG(8,HDRVOL)
+
+      L = LNBLNK(SMGFILE)
+			WRITE(USEROUT,8105) PATH( : LNBLNK(PATH)), SMGFILE( : LNBLNK(SMGFILE))
+8105	FORMAT('Current Directory = ',A,/,'Output File = ',A)
+C
+			IF (PROCESS.EQ.'none      ') THEN
+				PROCESS = 'NONE'
+			ELSE IF (PROCESS.EQ.'cbf       ') THEN
+				PROCESS = 'CBF'
+			ELSE IF (PROCESS.EQ.'cbv       ') THEN
+				PROCESS = 'CBV'
+      ELSE IF (PROCESS.NE.'          ' .AND.
+     &    PROCESS.NE.'NONE      ' .AND.
+     &    PROCESS.NE.'CBF       ' .AND.
+     &    PROCESS.NE.'CBV       ') THEN
+        WRITE(USEROUT,*) '*** ERROR: Cannot process as ',PROCESS
+        CALL EXIT(100)
+      END IF
+C
+C -------------------------------------------------------------------
+C  Read INPUT LIST
+C
+8100  FORMAT(A80)
+8110  FORMAT(I4,1X,A6)
+      NFILES = 0
+      OPEN(LIST,FILE=LISTNAME,STATUS='OLD',ERR=40)
+      GO TO 41
+40      WRITE(USEROUT,*) '*** Error Opening ',LISTNAME( : LNBLNK(LISTNAME))
+        CALL EXIT(100)
+			
+41    READ (LIST,8100,ERR=42) DESCRIPTOR
+     	GO TO 43
+42      WRITE(USEROUT,*) '*** Error Reading ',LISTNAME( : LNBLNK(LISTNAME)),': Line #1'
+        CALL EXIT(100)
+
+43    READ (LIST,8110,ERR=44) NFILES, TYPE
+      GO TO 45
+44      WRITE(USEROUT,*) '*** Error Reading ',LISTNAME( : LNBLNK(LISTNAME)),': Line #2'
+        WRITE(USEROUT,*) '*** No. of files = ',NFILES,'  Type = ',TYPE
+        CALL EXIT(100)
+45    CONTINUE
+C
+C  Open SMG file
+C
+      OPEN(SMG,FILE=SMGFILE,STATUS='NEW',ERR=49)
+      GO TO 50
+49      WRITE(USEROUT,*) '*** Cannot open ',SMGFILE( : LNBLNK(SMGFILE))
+        CALL EXIT(100)
+50    CONTINUE
+C
+C -------------------------------------------------------------------
+C  LOOP for each input image
+C
+      DO 500 M=1,NFILES
+C
+C  Read images from List
+C
+8200    FORMAT(3(A17,F11.3,2X))
+8210    FORMAT(A17,F11.3,32X,A17)
+        FILE1 = ' '
+        FILE2 = ' '
+        FILE3 = ' '
+        MEAN1 = 0.
+        MEAN2 = 0.
+        IF (TYPE.EQ.'PAIRED') THEN
+          READ(LIST,8200,ERR=65) FILE1, MEAN1, FILE2, MEAN2, FILE3
+          FNAME1 = FILE1
+          FNAME2 = FILE2
+        ELSE
+          READ(LIST,8210,ERR=65) FILE1, MEAN1, FILE3
+          FNAME1 = FILE1
+        END IF
+      GO TO 66
+65    WRITE(USEROUT,*) '*** Error Reading ',LISTNAME( : LNBLNK(LISTNAME)),': Line #',M+2
+      WRITE(USEROUT,*) '*** Control    = ',FILE1,'  Mean = ',MEAN1
+      WRITE(USEROUT,*) '*** Activation = ',FILE2,'  Mean = ',MEAN2
+      WRITE(USEROUT,*) '*** Skull Xray = ',FILE3
+      CALL EXIT(100)
+66    CONTINUE
+C
+8250  FORMAT(F11.3)
+      DATUM(M)(1:17)    = FILE1
+      DATUM(M)(31:47)   = FILE2
+      DATUM(M)(61:77)   = FILE3
+      WRITE(DATUM(M)(18:28),8250) MEAN1
+      WRITE(DATUM(M)(48:58),8250) MEAN2
+C
+C  Read SXR file
+C
+8300  FORMAT(I3,15X,A16,28X,A17)
+8310  FORMAT(A80)
+8320  FORMAT(2(F6.3,2X),I2,2X,F6.3,1X,I2,2(2X,F5.2))
+8330  FORMAT(F6.3,1X,F7.2,7(1X,F6.2),2(1X,F7.2))
+8340  FORMAT(F5.1,2X,F5.1)
+      OPEN(SXR,FILE=FILE3,STATUS='OLD',ERR=91)
+      GO TO 92
+91      WRITE(USEROUT,*) '*** Cannot open ',FILE3
+        CALL EXIT(100)
+92    CONTINUE
+      READ(SXR,8300,ERR=95) NTYPE,STR1,STR2
+      GO TO 96
+95      WRITE(USEROUT,*) '*** Error reading ',FILE3
+        CALL EXIT(100)
+96    CONTINUE
+      IF (NTYPE.NE.12 .AND. NTYPE.NE.13 .AND. NTYPE.NE.14 .AND. 
+     &		NTYPE.NE.20 .AND. NTYPE.NE.21 .AND. NTYPE.NE.22) THEN
+        WRITE(USEROUT,*) '*** SXR type not currently supported:'
+        WRITE(USEROUT,*) '*** ',NTYPE,'  ',STR1
+        CALL EXIT(100)
+      END IF
+      READ(SXR,8310,ERR=95) STR
+      WRITE(USEROUT,*) STR
+      READ(SXR,*,ERR=95)
+      READ(SXR,8320,ERR=95) cmperpixi, mag, NZ, cmperslci, z0i
+      READ(SXR,8330,ERR=95) y_xray, xdeg, z_xray, dzi, dyi, y0i
+      DO 100 zi=1,NZ
+        READ(SXR,8340,ERR=95) x_PET(zi), x0i(zi)
+100   CONTINUE
+      CLOSE(SXR)
+C
+C  Reverse x0i for old ecat sxr files (where image was reversed when the sxr file was created)
+C
+			IF (NTYPE.LE.20 .AND. NZ.EQ.31) THEN
+				DO 110 zi=1,NZ
+					TEMP = x0i(zi)
+					x0i(zi) = 129.0 - x0i(zi)
+110			CONTINUE
+			END IF
+C
+C  Determine SXR file type (see HD6TRANS.FTN)
+C
+      SXRTYPE = 0
+      IF (mag.EQ.0.93) THEN
+        SXRTYPE = 1
+      ELSE IF (mag.EQ.0.94) THEN
+        SXRTYPE = 2
+      ELSE IF (mag.EQ.0.945 .AND. STR2.EQ.'                 ') THEN
+        SXRTYPE = 3
+      ELSE IF (mag.EQ.0.945 .AND. STR2.EQ.'incorrect delta-z') THEN
+        SXRTYPE = 4
+			ELSE IF (NTYPE.GE.20) THEN
+				SXRTYPE = 5
+      ELSE
+        WRITE(USEROUT,*) '*** SXR type not supported:'
+        WRITE(USEROUT,*) '*** Magnification factor = ',mag
+        WRITE(USEROUT,*) '*** ',NTYPE,'  ',STR2
+        CALL EXIT(100)
+      END IF
+C
+8280  FORMAT(I3)
+      WRITE(DATUM(M)(181:183),8280) NTYPE
+      L = INANYR(STR,' ')
+      IF (L.LE.13) THEN
+        L1 = 1
+        L2 = 14
+      ELSE
+        L1 = L-13
+        L2 = L
+      END IF
+      DATUM(M)(185:198) = STR(L1:L2)
+C
+C  Read PET image
+C
+        DO 200 zi=1,NZ
+          CALL GETIMG(PET(1,1,zi),HEADER,FNAME1,zi,NSLICES,PETTNUM,IN,USEROUT,HDRONLY,ERR)
+          IF (ERR) THEN
+            WRITE(USEROUT,*) '*** Cannot open ',FNAME1( : LNBLNK(FNAME1))
+            CALL EXIT(100)
+          END IF
+200     CONTINUE
+        SCALER = NORMVAL/MEAN1
+        CALL HD6PROC(PET,NSLICES,SCALER,PROCESS,FNAME1,HDRVOL,HDR,ERR)
+        IF (ERR) THEN
+          WRITE(USEROUT,*) '*** Error processing ',FNAME1( : LNBLNK(FNAME1)),' as ',PROCESS
+          CALL EXIT(100)
+        END IF
+        WRITE(USEROUT,*) FNAME1( : LNBLNK(FNAME1)),' read & scaled by ',SCALER
+8290    FORMAT(I4)
+        WRITE(DATUM(M)(121:124),8290) FILETYPE
+        DATUM(M)(126:137) = FILTER
+C
+C  For PAIRED differences, read second PET and subtract
+C
+        IF (TYPE.EQ.'PAIRED') THEN
+          DO 300 zi=1,NZ
+            CALL GETIMG(PET2(1,1,zi),HEADER,fNAME2,zi,NSLICES,PETTNUM,IN,USEROUT,HDRONLY,ERR)
+            IF (ERR) THEN
+              WRITE(USEROUT,*) '*** Cannot open ',FNAME2( : LNBLNK(FNAME2))
+              CALL EXIT(100)
+            END IF
+300       CONTINUE
+          SCALER = NORMVAL/MEAN2
+          CALL HD6PROC(PET2,NSLICES,SCALER,PROCESS,FNAME2,HDRVOL,HDR,ERR)
+          IF (ERR) THEN
+          WRITE(USEROUT,*)'*** Error processing ',FNAME2( : LNBLNK(FNAME2)),' as ',PROCESS
+          CALL EXIT(100)
+          END IF
+          WRITE(USEROUT,*) FNAME2( : LNBLNK(FNAME2)),' read & scaled by ',SCALER
+          WRITE(DATUM(M)(151:154),8290) FILETYPE
+          DATUM(M)(156:167) = FILTER
+C
+          DO 430 K=1,NZ
+            DO 420 J=1,nyi
+              DO 410 I=1,nxi
+                PET(I,J,K) = PET2(I,J,K) - PET(I,J,K)
+410           CONTINUE
+420         CONTINUE
+430       CONTINUE
+        END IF
+        WRITE(USEROUT,8500) DATUM(M)(1:80)
+        WRITE(USEROUT,8500) DATUM(M)(121:200)
+8500    FORMAT(1X,A80)
+C
+C  Transform to HD6 space
+C
+        CALL HD6TRANS(SXRTYPE,NOTIN)
+        WRITE(USEROUT,*) 'Transformed to HD6 space'
+C
+C  Update SUM image
+C
+        DO 530 K=1,nza
+          DO 520 J=1,nya
+            DO 510 I=1,nxa
+              SUM(I,J,K) = SUM(I,J,K) + ATL(I,J,K)
+510         CONTINUE
+520       CONTINUE
+530     CONTINUE
+C
+500   CONTINUE
+C
+C -------------------------------------------------------------------
+C  Alter HEADER to reflect this data set
+C
+
+8600  FORMAT(I6)
+      WRITE(RUNNAME,8600) NFILES
+      RUNNAME(1:3) = 'N ='
+C
+8700  FORMAT(I2)
+      CALL INTDATE(ADATE)
+      WRITE(TODAY(1:2),8700) ADATE(2)
+      WRITE(TODAY(3:4),8700) ADATE(3)
+      WRITE(TODAY(5:6),8700) ADATE(1)
+      TDATE = TODAY(1:6)
+C
+      CALL TIME(ATIME)
+      WRITE(TODAY(7:8),  8700) ATIME(1)
+      WRITE(TODAY(9:10), 8700) ATIME(2)
+      WRITE(TODAY(11:12),8700) ATIME(3)
+C
+C  Replace blanks with '0' in TODAY
+C
+      DO 600 I=1,12
+        IF (TODAY(I:I).EQ.' ') TODAY(I:I) = '0'
+600   CONTINUE
+C
+      SCANID   = ' '
+      L1 = IANYL(SMGFILE,':')+1
+      L2 = IANYL(SMGFILE,'.')-1
+      SCANID   = SMGFILE(L1:L2)
+C
+      HEADERTYPE = 'P6'
+      PTYPE    = TYPE
+      CREATOR  = INITIALS
+      PROGNAME = 'hd6mean '
+      IF (PROCESS.EQ.'          ') THEN
+        PROCTYPE = 'PET COUNTS'
+      ELSE
+        PROCTYPE = PROCESS
+      END IF
+      VERSION  = PROGDATE
+      DIVIDEBY = DIVISOR
+      PIXUSED  = INCLUDE
+      NORMFACT = NORMVAL
+      FILEDSC  = DESCRIPTOR
+      HEADER(32) = INT(nza)
+      HEADER(50) = INT(NFILES)
+C
+C  Compute mean, zero undesired pixels, and write to output file
+C
+      CALL HD6OUT(HEADER,SMG,NFILES,DIVISOR,INCLUDE)
+      CALL HD6APPND(SMG,NFILES,DATUM)
+C
+C  For metabolic processing, write an HDR file
+C
+      IF (PROCESS(1:3).EQ.'CBF' .OR. PROCESS(1:3).EQ.'CBV') THEN
+        CALL HD6HDR(HDROUT,HDR,PROCESS,INITIALS)
+      END IF
+C
+      WRITE(USEROUT,*) 'Atlas image complete!'
+C
+      STOP
+      END
+@
+
+
+1.11
+log
+@add copyright
+@
+text
+@d2 3
+d303 2
+a304 2
+      RCSHEADER = "$Header: /amd/home/petsun2/tom/src/hd6mean/src/RCS/hd6mean.f,v 1.10 1993/10/08 17:55:07 tom Exp tom $"
+      PROGDATE = '04/01/94  '
+d308 1
+a308 1
+     &  '{49-slice HD6-atlas Image from 7-slice PETT VI Images}'
+d445 1
+a445 1
+     &		NTYPE.NE.20 .AND. NTYPE.NE.21) THEN
+@
+
+
+1.10
+log
+@libpetutil handles PETT VI in ECAT format properly
+@
+text
+@d2 3
+d300 5
+a304 3
+      RCSHEADER = "$Header: /home/petsun2/tom/src/hd6mean/src/RCS/hd6mean.f,v 1.9 1993/10/08 16:06:15 tom Exp tom $"
+      PROGDATE = '10/08/93  '
+      WRITE(USEROUT,*) '*** HD6MEAN ',PROGDATE,
+@
+
+
+1.9
+log
+@rebuilt with new libpetutil
+@
+text
+@d2 3
+d297 1
+a297 1
+      RCSHEADER = "$Header: /home/petsun2/tom/src/hd6mean/src/RCS/hd6mean.f,v 1.8 1993/10/06 18:40:03 tom Exp tom $"
+@
+
+
+1.8
+log
+@correct flipping of x0i
+@
+text
+@d2 3
+d294 2
+a295 2
+      RCSHEADER = "$Header: /home/petsun2/tom/src/hd6mean/src/RCS/hd6mean.f,v 1.7 1993/10/05 22:35:19 tom Exp tom $"
+      PROGDATE = '10/05/93  '
+@
+
+
+1.7
+log
+@flips x0i (slice center) for old ecat sxr files
+@
+text
+@d2 3
+d291 1
+a291 1
+      RCSHEADER = "$Header: /export/home/petsun2/tom/src/hd6mean/src/RCS/hd6mean.f,v 1.6 1993/10/05 21:24:41 tom Exp tom $"
+d451 1
+a451 1
+					x0i(zi) = 128.0 - x0i(zi)
+@
+
+
+1.6
+log
+@new version for new libpetutil
+@
+text
+@d2 3
+d56 4
+a59 1
+C			New version for new library (libpetutil) 05-Oct-93.
+d133 1
+d288 1
+a288 1
+      RCSHEADER = "$Header: /export/home/petsun2/tom/src/hd6mean/src/RCS/hd6mean.f,v 1.5 1993/04/29 22:37:28 tom Exp tom $"
+d427 2
+a428 1
+      IF (NTYPE.NE.12 .AND. NTYPE.NE.13 .AND. NTYPE.NE.14 .AND. NTYPE.NE.20) THEN
+d442 9
+@
+
+
+1.5
+log
+@Revised to handle 31-slice input images and sxr NTYPE = 20
+@
+text
+@d2 3
+d53 1
+d281 2
+a282 2
+      RCSHEADER = "$Header: /usr/local/src/hd6mean/RCS/hd6mean.f,v 1.4 1993/04/29 19:34:17 tom Exp tom $"
+      PROGDATE = '04/29/93  '
+@
+
+
+1.4
+log
+@Modified to handle new sxr files (type 20)
+@
+text
+@d2 3
+d45 5
+a49 1
+C     Modified 29-Apr-93 to support SXR type 20.
+d93 1
+a93 1
+      PARAMETER (nzi =   7) ! z-dimension of PET-array! no. of slices
+a118 1
+      INTEGER*4  N              ! temp
+d196 2
+d219 1
+a219 1
+      COMMON /IMAGES/ ATL, PET, NIN, SUM, cmperpixi, cmperslci,
+d277 1
+a277 1
+      RCSHEADER = "$Header: /usr/local/src/hd6mean/RCS/hd6mean.f,v 1.3 1993/03/04 15:19:40 tom Exp tom $"
+d424 1
+a424 1
+      READ(SXR,8320,ERR=95) cmperpixi, mag,  N, cmperslci, z0i
+d426 1
+a426 1
+      DO 100 zi=1,nzi
+d442 2
+d465 1
+a465 1
+        DO 200 zi=1,nzi
+d473 1
+a473 1
+        CALL HD6PROC(PET,SCALER,PROCESS,FNAME1,HDRVOL,HDR,ERR)
+d486 1
+a486 1
+          DO 300 zi=1,nzi
+d494 1
+a494 1
+          CALL HD6PROC(PET2,SCALER,PROCESS,FNAME2,HDRVOL,HDR,ERR)
+d503 1
+a503 1
+          DO 430 K=1,nzi
+@
+
+
+1.3
+log
+@Replace disk scratch file (hd6sum) with array SUM
+@
+text
+@d2 3
+d42 1
+d269 2
+a270 2
+      RCSHEADER = "$Header: /home/petsun2/tom/src/hd6mean/src/RCS/hd6mean.f,v 1.2 1993/02/26 22:09:51 tom Exp tom $"
+      PROGDATE = '03/04/93  '
+d408 1
+a408 1
+      IF (NTYPE.NE.12 .AND. NTYPE.NE.13 .AND. NTYPE.NE.14) THEN
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d36 3
+a38 1
+C     Modified 26-Feb-93 TOV:
+a51 1
+C     6 = SUM of atlas images file
+a56 1
+C     HD6SUM   - update 49-slice summed image on disk
+d94 1
+a94 1
+      INTEGER*2  NOTIN          ! not in PET space (value to set in ATL)
+a100 1
+      INTEGER*4  SUM            ! lu for summed atlas images
+a175 1
+      LOGICAL*1     FIRST          ! first component image
+d181 1
+a181 1
+      INTEGER*2  ATL(nxa,nya,nza)! atlas output image (HD6 brain)
+d184 1
+d207 1
+a207 1
+      COMMON /IMAGES/ ATL, PET, NIN, cmperpixi, cmperslci,
+d243 2
+a244 2
+      DATA LIST, IN, SMG, SXR, USEROUT, HDROUT, SUM /1,2,3,4,6,8,9/
+      DATA NOTIN /0/
+d265 2
+a266 2
+      RCSHEADER = "$Header: /home/petsun2/tom/src/hd6mean/src/RCS/hd6mean.f,v 1.1 1992/11/03 18:59:32 tom Exp tom $"
+      PROGDATE = '02/26/93  '
+d270 1
+a270 1
+C  Initialize NIN
+d276 1
+a349 4
+C  Open SUM file
+C
+      OPEN(SUM,STATUS='SCRATCH')
+C
+d473 1
+a473 1
+            CALL GETIMG(PET2(1,1,zi),HEADER,FNAME2,zi,NSLICES,PETTNUM,IN,USEROUT,HDRONLY,ERR)
+d508 7
+a514 6
+        IF (M.EQ.1) THEN
+          FIRST = .TRUE.
+        ELSE
+          FIRST = .FALSE.
+        END IF
+        CALL HD6SUM(SUM,FIRST)
+a533 1
+			write(userout,*) 'TIME = ',ATIME(1), ATIME(2), ATIME(3)
+a536 1
+			write(userout,*) 'TODAY = ',TODAY
+d568 1
+a568 1
+      CALL HD6OUT(HEADER,SMG,SUM,NFILES,DIVISOR,INCLUDE)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+c $Log$
+d33 1
+d263 2
+a264 2
+      RCSHEADER = "$Header$"
+      PROGDATE = '11/03/92  '
+d281 1
+d453 1
+a453 2
+          CALL GETIMG(PET(1,1,zi),HEADER,FNAME1,zi,NSLICES,PETTNUM,
+     &      IN,USEROUT,HDRONLY,ERR)
+d474 1
+a474 2
+            CALL GETIMG(PET2(1,1,zi),HEADER,FNAME2,zi,NSLICES,PETTNUM,
+     &        IN,USEROUT,HDRONLY,ERR)
+d534 1
+d538 1
+d575 1
+a575 2
+      IF (PROCESS(1:3).EQ.'CBF' .OR.
+     &    PROCESS(1:3).EQ.'CBV') THEN
+@

@@ -1,0 +1,254 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2004.02.16.21.19.59;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.27.15.59.09;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.02.09.17.46.19;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@/*	$Log: maskslice.c,v $
+ * Revision 1.2  2002/11/27  15:59:09  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/02/09  17:46:19  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			maskslice.c
+ *	Date:			Jan 1999
+ *	Author:			Tom Videen
+ *	Description:	Set to val all pixels which are <= min OR >= max.
+ *					If seed != [0,0,0] mask only pixels connected to it.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskslice/RCS/maskslice.c,v 1.2 2002/11/27 15:59:09 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <matrixlib.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			maskslice
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fp;				 /* file pointer */
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	char           *range;			 /* slice range to zero */
+	int             firstpln;		 /* first plane to zero */
+	int             lastpln=0;		 /* last plane to zero */
+	long            dim1, dim2, dim3; /* dimensions of image */
+	long            i, j, k;
+	short        ***img;			 /* image */
+	short          *row;			 /* single row of input image */
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 6) {
+		printf ("Usage: maskslice img1 hdr1 img2 hdr2 slices\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	range = argv[5];
+	if (sscanf (range, "%dto%d", &firstpln, &lastpln) != 2) {
+		fprintf (stderr, "ERROR [maskslice]: Format error in %s\n", range);
+		return (ERROR);
+	}
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fp = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [maskslice]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [maskslice]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [maskslice]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [maskslice]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [maskslice]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fp);
+	if (lastpln > dim3) {
+		fprintf (stderr, "ERROR [maskslice]: %i is not in image\n", lastpln);
+		return (ERROR);
+	}
+/*	Read img */
+
+	if ((fp = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [maskslice]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [maskslice]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if (NULL == (row = (short *) calloc (dim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [maskslice]: Cannot malloc memory for row\n");
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			if ((fread (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [maskslice]: Reading: %s\n", img1);
+				return (ERROR);
+			}
+			for (k = 1; k <= dim1; k++)
+				img[i][j][dim1 - (k - 1)] = row[k - 1];
+		}
+	}
+	(void) fclose (fp);
+
+	for (i = firstpln; i <= lastpln; i++) {
+		for (j = 1; j <= dim2; j++) {
+			for (k = 1; k <= dim1; k++) {
+				img[i][j][k] = 0;
+			}
+		}
+	}
+
+/* Write output */
+
+	if ((fp = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [maskslice]: Unable to create ANALYZE header %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [maskslice]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+	if ((fp = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [maskslice]: Unable to create ANALYZE image %s\n", img2);
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			for (k = 1; k <= dim1; k++)
+				row[k - 1] = img[i][j][dim1 - (k - 1)];
+			if ((fwrite (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [maskslice]: Writing: %s\n", img2);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fp);
+
+	printf ("Masked: %s -> %s\n", img1, img2);
+	free_s3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jan-99
+d16 1
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskslice/RCS/maskslice.c,v 1.1 1999/02/09 17:46:19 tom Exp tom $";
+d125 1
+a125 1
+	fclose (fp);
+d145 1
+a145 1
+	fclose (fp);
+d161 1
+a161 1
+	fclose (fp);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskslice/RCS/maskslice.c,v 1.1 1999/02/01 20:13:51 tom Exp $";
+d18 1
+a18 2
+#include <string.h>
+#include <fcntl.h>
+a20 1
+#include <libnrimg.h>
+d39 1
+a39 1
+	int             lastpln;		 /* last plane to zero */
+d92 1
+a92 1
+	fclose (fp);
+d121 1
+a121 1
+	close (fp);
+@

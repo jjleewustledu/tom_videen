@@ -1,0 +1,229 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	2006.02.23.15.36.10;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@dev
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   GAUS2DGB.FTN
+C  Author:       Tom O. Videen
+C  Date:         21-Sep-89
+C  Written For:  PEAKSK7B (Simplex fit of single 2D gaussian)
+C
+C  History:
+C     Modified GAUS22DB to fit single 2D gaussian 21-Sep-89 TOV.
+C
+C  Intent:
+C     Find the coordinates of the peak of a local maximum;
+C     Convert coordinates to polar coordinates over region of peak;
+C     Rotate and translate the pixel values around axes R and Theta;
+C     Fit single 2D-gaussian curve to rotated, translated coordinates.
+C
+C  Uses Subroutines/Functions:
+C     SIMPINIT
+C     SIMPLEX3
+C     FCHI2DGB (P)  (named FUNC)
+C        evaluates reduced chi square for fit to data
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+      SUBROUTINE GAUS2DGB (XM, YM, MAX, XMID, YMID, IMAGE, RANGE, DATAFILE, POINT, FIRST)
+
+      PARAMETER (NDIM =100)    ! max. number of points in local arrays
+      PARAMETER (NPARM = 6)    ! number of parameters fit
+      PARAMETER (MPTS  = 7)    ! points of simplex
+      PARAMETER (P1SCALE = 10000.) ! scaling factor for amplitude
+
+C  Variables passed:
+
+      INTEGER*4   XM,YM        ! pixel coordinates of the local maximum
+      INTEGER*4   MAX          ! pixel value of local maximum
+      REAL*4      XMID,YMID    ! coordinates of center of local maximum
+      INTEGER*2   IMAGE(512,512)! image array for 1 slice
+      INTEGER*4   RANGE        ! function is fit over +- this range
+      INTEGER*4   DATAFILE     ! log. unit for final fit parmeters
+      INTEGER*4   POINT, FIRST
+
+C  Internal variables:
+
+      REAL*4     P(MPTS,NPARM) ! simplex
+      REAL*4     FN(MPTS)      ! functional values of simplex
+      REAL*4     SCALE         ! scale in initialization
+      REAL*4     FTOL          ! functional tolerance
+      REAL*4     MTOL          ! midpoint must be within this distance
+
+      INTEGER*4  ITER          ! number of iterations
+      INTEGER*4  CYCLE         ! number of icalls to SIMPLEX3
+      INTEGER*4  MIN           ! index to best point of simplex
+      INTEGER*4  X,Y           ! local integers for DO loop
+      INTEGER*4  SUMX,SUMY,SUMALL
+      INTEGER*4  XA,XB         !
+      INTEGER*4  YA,YB         !
+
+      REAL*4     XORG,YORG    ! rectang coords of image center
+      REAL*4     COSTHETA     ! cos(theta)
+      REAL*4     SINTHETA     ! sin(theta)
+      REAL*4     R,THETA      ! polar coords of XMID, YMID
+      REAL*4     RADTODEG     ! convert radians to degrees
+      REAL*4     TEMP         ! used for switching MIN param to 1st
+      REAL*4     PIXSIZE      ! pixel size in mm
+
+C  Common Block Variables
+
+      REAL*4     XP(NDIM,NDIM) ! coordinates perpendicular to R
+      REAL*4     YP(NDIM,NDIM) ! coordinates parallel to R
+      REAL*4     ZP(NDIM,NDIM) ! values of points in transformed coords
+
+      INTEGER*4  NPTS          ! number of points in X, Y
+
+      EXTERNAL   FUNC          ! function to evaluate for minimum
+C                               (this should be FCHI2DGB.FTN
+
+      COMMON /RAWDATA/ XP,YP,ZP,NPTS
+
+      DATA XORG,YORG /64.5,64.5/
+      DATA MTOL /0.01/
+      DATA PIXSIZE /2.08634/
+
+      RADTODEG = 180./3.14159
+      CYCLE = 1
+
+C  Initial point
+C  Parameters of Fit:
+C     P(1) - amplitude of gaussian
+C     P(2) - X-location of peak
+C     P(3) - Y-location of peak
+C     P(4) - sigma X of gaussian
+C     P(5) - sigma Y of gaussian
+ 
+      MIN    = 1
+      FTOL   = 1.0E-3
+      SCALE  = 1.0
+      P(1,1) = FLOAT(MAX)/P1SCALE
+      P(1,2) = 0.
+      P(1,3) = 0.
+      P(1,4) = 2.0
+      P(1,5) = 2.0
+
+C  Range over which to fit
+
+      XA = XM-RANGE
+      XB = XM+RANGE
+      YA = YM-RANGE
+      YB = YM+RANGE
+      NPTS = 2*RANGE + 1
+
+C  Compute XMID, YMID from all values within range
+
+      SUMX = 0
+      SUMY = 0
+      SUMALL = 0
+      DO 150 Y=YA,YB
+        DO 140 X=XA,XB
+          SUMX = SUMX + X*IMAGE(X,Y)
+          SUMY = SUMY + Y*IMAGE(X,Y)
+          SUMALL = SUMALL + IMAGE(X,Y)
+140     CONTINUE
+150   CONTINUE
+
+      XMID = FLOAT(SUMX)/FLOAT(SUMALL)
+      YMID = FLOAT(SUMY)/FLOAT(SUMALL)
+
+C      if (xmid .gt. 40.0 .and. xmid .lt. 45.0 .and.
+C     &  ymid .gt. 64.0 .and. ymid .lt. 74.0) then
+C     IF (POINT .EQ. FIRST) THEN
+C       WRITE (DATAFILE,8400)
+C       WRITE (DATAFILE,8410)
+C     ENDIF
+C	endif
+8400  FORMAT(' N  XMid  YMid  Theta  R(mm)   Peak   RS  ThetaS ChiSqr')
+8410  FORMAT(' -  ---- -----  ------ -----  -----  ---- ------ ------')
+8420  FORMAT(I2,2F6.2,2F7.2,I7,2F6.2,1X,F6.0)
+
+C  XMid  YMid  Theta  R(mm)   Peak   RS  ThetaS Bkgnd ChiSqr
+C  ---- -----  ------ -----  -----  ---- ------ ----- ------
+C 74.09 45.76 -62.91  60.21  21011  3.84  3.93  10550  49.75
+ 
+C  Convert midpoint to polar coordinates
+
+300   R = SQRT((XMID-XORG)**2 + (YMID-YORG)**2)
+      THETA = ATAN((YMID-YORG)/(XMID-XORG))
+      IF (XMID-XORG.LT.0.0) R = -R
+
+C  Rotate and translate the local region to align with the radius
+C  and subtract the background constant
+
+      SINTHETA = SIN(THETA)
+      COSTHETA = COS(THETA)
+      DO 450 Y=YA,YB
+        J = Y-YA+1
+        DO 400 X=XA,XB
+          I = X-XA+1
+          XP(I,J) = (FLOAT(X)-XMID)*COSTHETA + (FLOAT(Y)-YMID)*SINTHETA
+          YP(I,J) = (FLOAT(Y)-YMID)*COSTHETA - (FLOAT(X)-XMID)*SINTHETA
+          ZP(I,J) = FLOAT(IMAGE(X,Y))
+400     CONTINUE
+450   CONTINUE
+
+      CALL SIMPINIT (P, FN, MPTS, NPARM, SCALE, FUNC)
+      CALL SIMPLEX3 (P, FN, MPTS, NPARM, FTOL, FUNC, ITER, MIN)
+
+C  Put best point in P(1,n)
+
+      IF (MIN.NE.1) THEN
+        DO 500 J=1,NPARM
+          TEMP = P(1,J)
+          P(1,J) = P(MIN,J)
+          P(MIN,J) = TEMP
+500     CONTINUE
+        TEMP = FN(1)
+        FN(1) = FN(MIN)
+        FN(MIN) = TEMP
+        MIN = 1
+      END IF
+
+C  Shift midpoint XMID, YMID to zero P(1,2) and P(1,3).
+
+      IF (ABS(P(1,2)).GT.MTOL .OR. ABS(P(1,3)).GT.MTOL .OR.
+     &   CYCLE.EQ.1) THEN
+        XMID = XMID + P(1,2)*COSTHETA - P(1,3)*SINTHETA
+        YMID = YMID + P(1,2)*SINTHETA + P(1,3)*COSTHETA
+
+C  and average sigma parameters before trying again.
+
+        P(1,2) = 0.0
+        P(1,3) = 0.0
+        TEMP = (P(1,4)+P(1,5))*0.5
+        P(1,4) = TEMP
+        P(1,5) = TEMP
+        CYCLE = CYCLE + 1
+        GO TO 300
+      END IF
+
+C      if (xmid .gt. 40.0 .and. xmid .lt. 45.0 .and.
+C     &  ymid .gt. 64.0 .and. ymid .lt. 74.0) then
+      WRITE (DATAFILE,8420) POINT, XMID, YMID, THETA*RADTODEG, R*PIXSIZE,
+     &  NINT(P1SCALE*P(1,1)), P(1,4), P(1,5), FN(1)
+C	endif
+
+      RETURN
+      END
+@

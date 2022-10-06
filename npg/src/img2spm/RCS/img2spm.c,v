@@ -1,0 +1,538 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	2007.05.24.17.59.20;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2004.02.20.17.30.04;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2004.02.16.17.21.51;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.07.24.16.13.16;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2001.07.24.14.03.42;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.01.27.21.37.22;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.10.26.20.23.31;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@add SPM99 orientation to aux_file field
+@
+text
+@/*$Log: img2spm.c,v $
+ * Revision 1.6  2004/02/20  17:30:04  tom
+ * *** empty log message ***
+ *
+ * Revision 1.5  2004/02/16  17:21:51  tom
+ * Feb 2004
+ *
+ * Revision 1.4  2001/07/24  16:13:16  tom
+ * set yorg to 65 instead of 64
+ *
+ * Revision 1.3  2001/07/24  14:03:42  tom
+ * write atlas origin to hdr
+ *
+ * Revision 1.2  2000/01/27  21:37:22  tom
+ * lint clean
+ *
+ * Revision 1.1  1998/10/26  20:23:31  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			img2spm.c
+ *	Date:			Oct 1998
+ *	Author:			Tom Videen
+ *	Description:	Transform PETT VI or ECAT images into Analyze format.
+ *		Input images may be any format recognizable by getrealimg.
+ *		Output images will be displayed by Analyze with left brain on the RIGHT
+ *		and with the lower slices first.  This fits the expectations of SPM.
+ *	History:
+ *		Jul 2001 - set atlas origin
+ *		May 2007 - add "SPM99 orientation" to aux_file field
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2spm/RCS/img2spm.c,v 1.6 2004/02/20 17:30:04 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <imgutil.h>				 /* ROUND */
+#include <ANALYZE.h>				 /* dsr */
+
+#define MAXSTR 256
+#define TRANSVERSE '\000'
+#define CORONAL    '\001'
+#define SAGITTAL   '\002'
+
+/*	----------------------------
+ *	Function:			img2spm
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	ImageFile      *file;
+	Index           indx;
+	struct dsr      hdr;			 /* header for SPM */
+	FILE           *fd_hdr;			 /* file for SPM hdr */
+	FILE           *fd_img;			 /* output SPM image  */
+
+	char           *PET_img;		 /* input PET image filename */
+	char           *SPM_hdr;		 /* output Analyze header filename  */
+	char           *SPM_img;		 /* output Analyze image filename */
+	char           *xorg, *yorg, *zorg;	 /* atlas origin */
+	long            dim[3];			 /* dimensions of tensors */
+	int             global_max;		 /* global maximum */
+	int             global_min;		 /* global minimum */
+	int             z0;
+	int             i, j, k;
+
+	float        ***image;			 /* input PET image */
+	short        ***img;			 /* output Analyze image */
+	short          *row;			 /* single row of output image */
+
+/*
+ *  Initializations
+ */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	xorg = hdr.hist.originator + 1;
+	yorg = hdr.hist.originator + 3;
+	zorg = hdr.hist.originator + 5;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 4) {
+		fprintf (stderr, "Usage: img2spm PET_img SPM_img SPM_hdr\n");
+		return (ERROR);
+	}
+	PET_img = argv[1];
+	SPM_img = argv[2];
+	SPM_hdr = argv[3];
+
+	if ((fd_hdr = fopen (SPM_hdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [img2spm]: Unable to create SPM header %s\n", SPM_hdr);
+		return (ERROR);
+	}
+	if ((fd_img = fopen (SPM_img, "w")) == 0) {
+		fprintf (stderr, "ERROR [img2spm]: Unable to create SPM image %s\n", SPM_img);
+		return (ERROR);
+	}
+/*
+ *	Read the image.
+ */
+
+	file = make_imgfile (PET_img);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [img2spm]: Cannot open %s\n", PET_img);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [img2spm]: Cannot get MainHeader from %s\n", PET_img);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (indx.frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR) {
+					fprintf (stderr, "ERROR [img2spm]: cannot find %s frame 1, 2 or 3\n", PET_img);
+					return (ERROR);
+				}
+			}
+		} else {
+			fprintf (stderr, "ERROR [img2spm]: cannot find %s frame %d\n",
+				 PET_img, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [img2spm]: Cannot read file subheader in %s\n", PET_img);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	z0 = file->mh->zorigin;
+	if ((image = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	if ((img = s3tensor (1, dim[2], 1, dim[1], 1, dim[0])) == NULL) {
+		fprintf (stderr, "ERROR [img2spm]: Cannot malloc img\n");
+		return (ERROR);
+	}
+	if (NULL == (row = (short *) calloc (dim[0], sizeof (short)))) {
+		fprintf (stderr, "ERROR [img2spm]: Cannot malloc memory for row\n");
+		return (ERROR);
+	}
+/*
+ * Convert from float to short, find min and max for hdr
+ */
+
+	global_max = 0;
+	global_min = 32767;
+	for (i = 1; i <= dim[2]; i++) {
+		for (j = 1; j <= dim[1]; j++) {
+			for (k = 1; k <= dim[0]; k++) {
+				img[i][j][k] = ROUND (image[i][j][k]);
+				if (img[i][j][k] > global_max)
+					global_max = img[i][j][k];
+				if (img[i][j][k] < global_min)
+					global_min = img[i][j][k];
+			}
+		}
+	}
+
+/*
+ * Flip Y & Z, and write to output file
+ */
+
+	for (i = dim[2]; i > 0; i--) {
+		for (j = dim[1]; j > 0; j--) {
+			for (k = 0; k < dim[0]; k++)
+				row[k] = img[i][j][k + 1];
+			if ((fwrite ((char *) row, sizeof (short), dim[0], fd_img)) != dim[0]) {
+				fprintf (stderr, "ERROR [img2spm]: Error writing to: %s\n", SPM_img);
+				return (ERROR);
+			}
+		}
+	}
+
+/*
+ * Create Analyze hdr file
+ */
+
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	strncpy (hdr.hk.data_type, "dsr", 9);
+	strncpy (hdr.hk.db_name, SPM_hdr, 17);
+	hdr.hk.extents = 0;
+	hdr.hk.session_error = 0;
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.hk.hkey_un0 = '0';			 /* required by developers */
+	hdr.dime.dim[0] = 4;			 /* typically only 4 dimensions  */
+	hdr.dime.dim[1] = dim[0];		 /* x dimension of atlas   */
+	hdr.dime.dim[2] = dim[1];		 /* y dimension of atlas   */
+	hdr.dime.dim[3] = dim[2];		 /* number of slices in volume */
+	hdr.dime.dim[4] = 1;			 /* only one volume typically  */
+	hdr.dime.dim[5] = 0;			 /* only one volume typically  */
+	hdr.dime.dim[6] = 0;			 /* only one volume typically  */
+	hdr.dime.dim[7] = 0;			 /* only one volume typically  */
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 4;			 /* 16 bit signed integer  */
+	hdr.dime.bitpix = 16;			 /* number of bits/pixel */
+	hdr.dime.dim_un0 = 0;
+	hdr.dime.pixdim[0] = 0;
+	hdr.dime.pixdim[1] = 10 * file->sh->sample_size_1;	/* in mm */
+	hdr.dime.pixdim[2] = 10 * file->sh->sample_size_2;	/* in mm */
+	hdr.dime.pixdim[3] = 10 * file->sh->sample_size_3;	/* in mm */
+	hdr.dime.pixdim[4] = 0;
+	hdr.dime.pixdim[5] = 0;
+	hdr.dime.pixdim[6] = 0;
+	hdr.dime.pixdim[7] = 0;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 1.0;		 /* SPM sets this to 1 */
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.compressed = 0;
+	hdr.dime.verified = 0;
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+	strncpy (hdr.hist.descrip, PET_img, 79);
+	strncpy (hdr.hist.aux_file, "SPM99 orientation", 23);
+	hdr.hist.orient = TRANSVERSE;
+	strncpy (hdr.hist.originator, "", 9);
+	strncpy (hdr.hist.generated, "", 9);
+	strncpy (hdr.hist.scannum, "", 9);
+	strncpy (hdr.hist.patient_id, "", 9);
+	strncpy (hdr.hist.exp_date, "", 9);
+	strncpy (hdr.hist.exp_time, "", 9);
+	strncpy (hdr.hist.hist_un0, "", 2);
+
+	if (dim[0] == 128)
+		*xorg = 64;
+	if (dim[1] == 128)
+		*yorg = 65;
+	if (z0 > 0)
+		*zorg = dim[2] + 1 - z0;
+
+	hdr.hist.views = 0;
+	hdr.hist.vols_added = 0;
+	hdr.hist.start_field = 0;
+	hdr.hist.field_skip = 0;
+	hdr.hist.omax = 0;
+	hdr.hist.omin = 0;
+	hdr.hist.smax = 0;
+	hdr.hist.smin = 0;
+
+	if ((fwrite ((char *) &hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [img2spm]: Error writing to: %s\n", SPM_hdr);
+		return (ERROR);
+	}
+	fprintf (stdout, "Converted: %s to %s\n", PET_img, SPM_img);
+	free (image);
+	free (row);
+	free_s3tensor (img, 1, dim[2], 1, dim[1], 1, dim[0]);
+	(void) fclose (fd_hdr);
+	(void) fclose (fd_img);
+	return (OK);
+}
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d30 1
+d35 1
+a35 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2spm/RCS/img2spm.c,v 1.5 2004/02/16 17:21:51 tom Exp tom $";
+d243 1
+a243 1
+	strncpy (hdr.hist.aux_file, "none", 23);
+@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@d2 3
+d31 1
+a31 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2spm/RCS/img2spm.c,v 1.4 2001/07/24 16:13:16 tom Exp tom $";
+@
+
+
+1.4
+log
+@set yorg to 65 instead of 64
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			Oct-98
+d26 1
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2spm/RCS/img2spm.c,v 1.3 2001/07/24 14:03:42 tom Exp tom $";
+@
+
+
+1.3
+log
+@write atlas origin to hdr
+@
+text
+@d2 3
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2spm/RCS/img2spm.c,v 1.2 2000/01/27 21:37:22 tom Exp tom $";
+d242 4
+a245 2
+	*xorg = dim[0] / 2;
+	*yorg = dim[1] / 2;
+@
+
+
+1.2
+log
+@lint clean
+@
+text
+@d2 3
+d16 2
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2spm/RCS/img2spm.c,v 1.1 1998/10/26 20:23:31 tom Exp tom $";
+d50 3
+a52 3
+	struct dsr      hdr;			 /* header for ANALYZE */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* output ANALYZE image  */
+d55 3
+a57 2
+	char           *ANALYZE_hdr;		 /* output Analyze header filename  */
+	char           *ANALYZE_img;		 /* output Analyze image filename */
+d61 1
+d77 3
+d86 1
+a86 1
+		printf ("Usage: img2spm PET_img ANALYZE_img ANALYZE_hdr\n");
+d90 2
+a91 2
+	ANALYZE_img = argv[2];
+	ANALYZE_hdr = argv[3];
+d93 2
+a94 2
+	if ((fd_hdr = fopen (ANALYZE_hdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [img2spm]: Unable to create ANALYZE header %s\n", ANALYZE_hdr);
+d97 2
+a98 2
+	if ((fd_img = fopen (ANALYZE_img, "w")) == 0) {
+		fprintf (stderr, "ERROR [img2spm]: Unable to create ANALYZE image %s\n", ANALYZE_img);
+d137 1
+d172 2
+a173 2
+            for (k = 0; k < dim[0]; k++)
+                row[k] = img[i][j][k+1];
+d175 1
+a175 1
+				fprintf (stderr, "ERROR [img2spm]: Error writing to: %s\n", ANALYZE_img);
+d186 3
+a188 3
+	strncpy (hdr.hk.data_type,"dsr",9);
+	strncpy (hdr.hk.db_name, PET_img, 17);
+	hdr.hk.extents = 16384;			 /* recommended by developers  */
+d219 1
+a219 1
+	hdr.dime.funused9 = 0;
+d238 6
+d254 1
+a254 1
+		fprintf (stderr, "ERROR [img2spm]: Error writing to: %s\n", ANALYZE_hdr);
+d257 1
+a257 2
+
+	printf ("Converted: %s to %s\n", PET_img, ANALYZE_img);
+d261 2
+a262 2
+	fclose (fd_hdr);
+	fclose (fd_img);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*$Log$ */
+d15 3
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/img2spm/RCS/img2spm.c,v 2.15 1998/10/12 21:33:13 tom Exp $";
+d20 1
+a25 1
+#include <matrixlib.h>
+d47 1
+a47 1
+	int             fd_img;			 /* output ANALYZE image  */
+a51 3
+	char           *ptr;
+	char            version[5];
+	char            program_date[12];
+a70 13
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	strcpy (version, "    ");
+	strncpy (version, ptr, 4);
+	ptr = strstr (ptr, " ");
+	ptr++;
+	strcpy (program_date, "           ");
+	strncpy (program_date, ptr, 10);
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+
+d87 1
+a87 1
+	if ((fd_img = open (ANALYZE_img, O_CREAT | O_RDWR, 0666)) == 0) {
+d110 1
+a110 1
+					fprintf (stderr, "ERROR [img2spm]: cannot find %s frame 1, 2 or 3\n", file);
+d116 1
+a116 1
+				 file, indx.frm);
+d163 4
+a166 1
+            write (fd_img, (char *) row, dim[0] * 2);
+d174 2
+a176 1
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+d178 1
+d180 1
+d186 3
+d198 2
+d203 4
+d213 2
+d218 1
+a218 2
+	strcpy (hdr.hist.originator, "img2spm");
+	strncpy (hdr.hist.patient_id, version, 4);
+d220 15
+d236 1
+a236 1
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+d240 1
+a240 4
+/*
+ *	Free & Exit
+ *	-----------
+ */
+d243 1
+d245 2
+a246 2
+	close (fd_hdr);
+	close (fd_img);
+@

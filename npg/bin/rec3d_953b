@@ -1,0 +1,319 @@
+# /bin/csh
+#	Name:	rec3d_953b
+#	Date:	Jul 1998
+#	Author: Tom Videen
+#	Intent: Reconstruct a 3d data set using a specified frame.
+#	Modification of /usr/local/bin/recon3d_scat (John Ollinger)
+#
+#	Input files:
+#		3D emission sinogram
+#		3D plane efficiency sinogram (3D emission sinogram of uniform phantom)
+#		2D log transmission sinogram (scale = 1.0) (or 3D attenuation file created from it) 
+#
+#	Calls:
+#		apply_fp_attn
+#		arc_corr 
+#		bkproj 
+#		bkproj3d 
+#		cti_getparam 
+#		ctiscl
+#		ctistat 
+#		extract_summed_planes 
+#		floatmath 
+#		fproj_volume 
+#		import_3dscan_nonorm 
+#		list_sinograms 
+#		scat_953b
+#		scatcor_cti953b 
+#		which_geo 
+
+set argc=$#argv
+if ($argc != 12) then
+	echo "Usage: rec3d_953b path emis3d trans2d blank2d norm3d scat/norm"
+	echo "       image_dim_factor inframe outframe numframes pixsize recfile"
+	echo ""
+	echo " e.g.: rec3d_953b . m700ho1 m700tr1 980714bl1 normal3d_980713 scat "\
+			"2 1 1 2 2.08621 m700ho1.img.rec"
+	exit 1
+endif
+
+setenv BDIR /usr/local/bin
+setenv TABLES /usr/local/lib/tables
+
+# GENERAL CONTROL PARAMETERS
+
+set max_rd = 5			# set to 5 in list_singrams
+set rd2 = 15
+set trim = 128
+set image_size = 128
+
+set in	     = $1
+set out	     = $1
+set TEMPPATH = ${out}
+set scan3din = ${in}/${2}.scn
+set scan3d   = ${out}/${2}_corr.scn
+set scatfil  = ${out}/${2}_scat.scat
+set logattn  = ${in}/${3}l.scn
+set tran     = ${in}/${3}.scn
+set attn_2d  = ${out}/${3}_f3datn.img
+set attn_3d  = ${out}/${3}_rdmax${max_rd}.scn
+set blank    = ${in}/${4}.scn
+set norm     = ${5}.nrm
+set image3d  = ${out}/${2}.img
+set mode     = $6
+set IMGDIM_FCTR = $7	# 2 for quantitative images
+set frame    = $8
+set frame_out = $9
+set num_frms = $10
+set pixsiz   = $11
+set recFile	 = $12
+
+# CHECK ALL INPUT FILES
+
+if (! -e $scan3din) then
+	echo "ERROR [rec3d_953b]: Missing emission: $scan3din"
+	exit 1
+endif
+set SCANNER_TYPE = `${BDIR}/cti_getparam $scan3din -scanner_type`
+if ($SCANNER_TYPE != 953) then
+	set test = `echo $SCANNER_TYPE | cut -c1-2`
+	if ($test != 95) then	# matrixCopy changes 953 to 951
+		echo "ERROR [rec3d_953b]: $scan3din is not system 953"
+		exit 1
+	else
+		set SCANNER_TYPE = 953
+	endif
+endif
+if (! -e $tran) then
+	echo "ERROR [rec3d_953b]: Missing transmission: $tran"
+	exit 1
+endif
+if (! -e $logattn) then
+	echo "ERROR [rec3d_953b]: Missing logattn: $logattn"
+	exit 1
+endif
+if (! -e $blank) then
+	echo "ERROR [rec3d_953b]: Missing blank: $blank"
+	exit 1
+endif
+if (! -e $norm) then
+	echo "ERROR [rec3d_953b]: Missing normalization: $norm"
+	echo "   Create using:"
+	echo "   makenorm_f3d `echo $norm:r | cut -f2 -d_` $IMGDIM_FCTR"
+#	exit 1
+endif
+
+# STUDY SPECIFIC CONTROL PARAMETERS
+
+set filter3d = 1,1.0,1,.5,0.00255275
+set NUMANG = `${BDIR}/cti_getparam $scan3din -ydim -p 1`
+if ($NUMANG < 0) then
+	echo "ERROR [rec3d_953b]: cti_getparam could not get ydim from $scan3din"
+	exit 1
+endif
+set num_frames = 1
+set frameone = 1
+set EXT_TRAN_DWN = 50
+set EXT_TRAN_UP = 7
+set EXT_EMIS_DWN = 0
+set EXT_EMIS_UP = 0
+set VERBOSE =
+
+# SCATTER CORRECTION PARAMETERS
+
+set NUM_ITER = 5
+set nviews1 = 96
+set NUM_PSI_FCTR = 2
+set fullattn = false
+set SCALE_TAILS = high_count
+set SCL_3D_TO_WOB = 1.25	# Scale to same magnitude as wobbled scan.
+set SCL_3D_TO_STA = .4900	# Scale to same magnitude as stationary scan.
+
+# SCANNER SPECIFIC CONTROL PARAMETERS (953B)
+
+set vflag = 0			# (sinogram ordering in file; 0 = planes 1 to 256)
+set num_rings = 16		# (16 or 24)
+set num_sinos = `expr $num_rings \* $num_rings`
+set num_cs = 1			# (1, 2 or 3)
+set trzoom = 1.0		# (do not alter!)
+set nplanes = 31		# (953B)
+set ndets = 384
+set mash = `expr 192 / $nviews1`
+set nviews = $nviews1	# (96 or 128)
+set nprojs = 128		# (trimmed from 160)
+set zoom = `floatmath 3.13 / ${pixsiz}`
+if ($nviews == 96) then
+	set rot_offset = -14.531
+else 					# Must be 192 angles.
+	set rot_offset = -15
+endif
+set ring_spacing = 0.675
+set ring_diameter = 76.0 
+set ring_radius = `floatmath ${ring_diameter} / 2`
+set zoom2d = 1.25
+set GEO_DATE = `${BDIR}/which_geo $scan3din`
+if ($GEO_DATE == PreJan96) then
+	set geo = ${TABLES}/wu_953b_PreJan96_geo.scn
+else
+	set geo = ${TABLES}/wu_953b_PostJan96_geo.scn
+endif
+set ii = `expr $nviews \* $max_rd`
+switch ($ii)
+	case 480:
+		set SCL_3D_TO_WOB = 1.25
+		breaksw
+	case 960:
+		if ($nviews == 192) then
+			set SCL_3D_TO_WOB = 1.25
+		else
+			set SCL_3D_TO_WOB = 1.24
+		endif
+		breaksw
+	case 1920:
+		set SCL_3D_TO_WOB = 1.24
+		breaksw
+	default:
+		echo "ERROR [rec3d_953b]: Either $nviews views or $max_rd max_rd is invalid."
+		exit 1
+		breaksw
+	endsw
+
+echo "rec3d_953b $argv[1-$#argv]" >> ${recFile}
+ident ${BDIR}/bkproj3d | grep bkproj3d.c | cut -f2- -d: >> ${recFile}
+echo "Frame: ${frame_out}" >> ${recFile}
+
+# SCRATCH FILES
+
+set tmpeff = ${TEMPPATH}/${2}_tmpeff.dat
+set tmpeff = ${TABLES}/tmpeff_${SCANNER_TYPE}.dat		# JMO, substitute fake table. 
+set tmp3d  = ${TEMPPATH}/${2}_tmp3d.scn
+set tmp2d  = ${TEMPPATH}/${2}_tmp2d.scn
+set tmp2d_img  = $tmp2d:r\.img
+set tmpsyn = ${TEMPPATH}/${2}_tmpsyn.scn
+
+# COMPUTE SCATTER CORRECTION	(approx 30 min)
+
+switch ($mode)
+	case norm:
+		echo "[rec3d_953b]: Normalize (no scatter correction)"
+		set ARGS = ($scan3din $scatfil -frame $frame -gf $geo \
+					-nf $norm -o ${scan3d} -normonly)
+		${BDIR}/scatcor_cti953b $ARGS
+		breaksw
+	case scat:
+		echo "[rec3d_953b]: Starting scatter computation at `date`"
+		scat_953b ${scan3din} ${tran} ${blank} $norm $geo $recFile $VERBOSE \
+			-iter $NUM_ITER -td $EXT_TRAN_DWN -tu $EXT_TRAN_UP \
+			-ed $EXT_EMIS_DWN -eu $EXT_EMIS_UP -if $IMGDIM_FCTR -f $frame \
+			-np $NUM_PSI_FCTR -scale_tails $SCALE_TAILS -correct_data
+		echo "[rec3d_953b]: Scatter computation complete at `date`"
+		breaksw
+	default:
+		echo "ERROR [rec3d_953b]: Illegal mode selected (scat,norm)"
+		exit 1
+	breaksw	 
+endsw
+
+# GET NUMBER OF COUNTS IN DATA
+
+set TOTAL_COUNTS = `${BDIR}/ctistat ${scan3d} -totals -sumonly`
+set TOTAL_COUNTS = `${BDIR}/floatmath $TOTAL_COUNTS / 1000000`
+echo "[rec3d_953b]: Total counts: $TOTAL_COUNTS million."
+echo "Total counts: $TOTAL_COUNTS million" >> ${recFile}
+
+# DERIVED CONTROL PARAMETERS
+
+@ num_planes = 2 * ${num_rings} - 1
+@ nprojs2 = ${nprojs} / 2
+@ nviews2 = ${nviews} / 2
+set scan_parms = ${nprojs},${nviews}
+if (${fullattn} == true) then
+	set scan_parms_attn = ${nprojs},${nviews}
+else
+	set scan_parms_attn = ${nprojs2},${nviews2}
+endif
+set rdstr = ${max_rd},${vflag},${num_rings},${ring_spacing},${ring_diameter}
+
+echo "[rec3d_953b]: Starting 3D reconstruction of ${scan3d} at `date`"
+
+# CREATE 2-D ATTENUATION IMAGE (IF NECESSARY)	(approx 1.5 min)
+
+if (-e ${attn_3d}) then
+	set numray_attn = `${BDIR}/cti_getparam ${attn_3d} -xdim -p 1`
+	set numang_attn = `${BDIR}/cti_getparam ${attn_3d} -ydim -p 1`
+	set test = ${numray_attn},${numang_attn}
+	if ($test != $scan_parms_attn) then
+		echo "[rec3d_953b]: Removing stale attenuation file."
+		/usr/bin/rm ${attn_3d}
+	endif
+endif
+
+if (! -e ${attn_3d}) then
+	if (! -e ${attn_2d}) then
+		echo "[rec3d_953b]: Reconstructing transmission image."
+		set filter2d = 1,.5
+		set size = 128
+		set p = 1	
+		while (${p} <= ${nplanes})
+  			${BDIR}/bkproj ${logattn},1,${p},1 ${size},${zoom2d} \
+					${attn_2d},1,${p},1 ${filter2d}
+  			@ p++
+		end
+		echo "[rec3d_953b]: 2d attenuation image reconstructed at `date`"
+	endif
+
+	nice ${BDIR}/list_sinograms ${rdstr} | grep measured | \
+		nice ${BDIR}/fproj_volume ${attn_2d} ${attn_3d} ${scan_parms_attn}
+	echo "[rec3d_953b]: 3D Attenuation correction computed at `date`"
+endif
+
+# IMPORT 3D FRAME
+
+echo "[rec3d_953b]: *** Assuming data are pre-normalized ***"
+nice ${BDIR}/import_3dscan_nonorm ${scan3d} ${tmpeff} ${tmp3d} ${rd2},${mash},${trim} ${frameone} > /dev/null
+echo "[rec3d_953b]: Frame ${frameone} imported at `date`"
+
+# APPLY 3D ATTENUATION
+
+nice ${BDIR}/list_sinograms ${rdstr} | grep measured | ${BDIR}/apply_fp_attn ${tmp3d} ${attn_3d}
+echo "[rec3d_953b]: Attenuation correction applied at `date`"
+
+# APPLY ARC CORRECTION
+
+${BDIR}/arc_corr ${tmp3d} ${ring_radius} ${ndets}
+echo "[rec3d_953b]: Arc correction applied at `date`"
+
+# EXTRACT 2D PLANES
+
+nice ${BDIR}/extract_summed_planes -o ${vflag} -r ${num_rings} -m 4 ${tmp3d} ${tmp2d}
+echo "[rec3d_953b]: 2D sinograms extracted at `date`"
+
+# GENERATE 2D VOLUME	(approx 1 min)
+
+set p = 0
+while ( ${p} < ${num_planes})
+	@ p++
+	${BDIR}/bkproj ${tmp2d},1,${p},1 128,${trzoom} ${tmp2d_img},1,${p},1 1,.5
+end
+echo "[rec3d_953b]: 2D images reconstructed at `date`"
+
+# FORWARD PROJECT SYNTHETIC SINOGRAMS	(approx 15 min)
+
+set fitp = 1.0,0.0	# synthetic fit parameters
+
+nice ${BDIR}/list_sinograms ${rdstr} | grep synthetic | nice ${BDIR}/fproj_volume ${tmp2d_img} ${tmpsyn} ${scan_parms}
+echo "[rec3d_953b]: Synthetic sinograms forward projected at `date`"
+
+# PERFORM 3D BACKPROJECTION 	(approx 14 min)
+
+nice ${BDIR}/list_sinograms ${rdstr} | nice ${BDIR}/bkproj3d ${tmp3d} ${tmpsyn} ${fitp},${num_rings} ${image3d} ${filter3d} ${image_size},${zoom},${rot_offset} ${num_cs},${frame_out},${num_frames}
+echo "[rec3d_953b]: 3D images reconstructed at `date`"
+
+${BDIR}/ctiscl ${image3d} $SCL_3D_TO_WOB -f ${frame_out}
+
+# CLEAN UP
+
+/usr/bin/rm -rf ${tmp3d} ${tmpsyn} ${tmp2d} ${tmp2d_img} ${scan3d}
+/usr/bin/ls -l ${scan3d} | gawk '{if (/^l/) system("/usr/bin/rm " $8)}'
+echo "[rec3d_953b]: Temporary files deleted at `date`"
+echo " ----------"

@@ -1,0 +1,138 @@
+.TH MANUALRESLICE_GUIDE 1 "13-Feb-2002" "Neuroimaging Lab"
+.SH SYNOPSIS
+Procedure for aligning PET to Atlas with Align_ho2ref fails.
+
+.SH DESCRIPTION
+.fi
+Define basic parameters in your shell substituting the
+appropriate number for subject ID.
+
+.nf
+.ta 0.3i 0.7i 1.5i
+	set ID  = 5000
+	set SCN = 1
+	set HO  = ho$SCN
+	set OO  = oo$SCN
+	set PID = p$ID
+	set FIL = _g3
+	set HO1   = $PID$HO$FIL
+	set OO1   = $PID$OO$FIL
+	set HOREF = $PID${HO}_to_${REF:t}
+	set OOHO  = $PID${OO}_to_$HO
+	set OOREF = $PID${OO}_to_${REF:t}
+	set ATLDIR = /usr/local/npg/lib/t88/
+	set MASK = $ATLDIR/meanmask
+
+.fi
+Copy the meanpet image to your working directory. 
+Convert the ho image to Analyze format.
+
+.nf
+	cp $ATLDIR/meanpet.hdr .
+	cp $ATLDIR/meanpet.img .
+	img2analyze $HO1.v a$HO1
+
+.SH STANDARD PARAMETERS For MANUALRESLICE
+Typically, you will run manualreslice iteratively until
+you get a decent fit. Before re-running it, remove the 2
+files created: test.air and air_init. Substitute your image
+name for ap5000ho1_g3.img. The 9 parameters used have the
+following effect on the resliced image. For the first
+attempt (when you will be running Align_ho2ref after
+creating an initialization file) enter 1 for all the
+scale-down factors. Later, if you must do the 9-parameter
+fit manually, enter a value different from 1 for at least
+one of the scale-down factors (i.e., 0.9).
+Unfortunately, manualreslice will not like the leading spaces
+to the prompts if you cut and paste the entire section below.
+
+.nf
+x-shift: positive shifts left
+y-shift: positive shifts forward
+z-shift: positive shifts up
+roll:    positive tilts right
+pitch:   positive tilts nose up
+yaw:     positive rotates nose to right
+x scale-down factor: <1.0 enlarges in x-dimension
+y scale-down factor: <1.0 enlarges in y-dimension
+z scale-down factor: <1.0 enlarges in z-dimension
+
+	rm test.air
+	rm air_init
+	manualreslice
+	0
+	0
+	0
+	0
+	0
+	0
+	1
+	1
+	1
+	y
+	air_init
+	n
+	ap5000ho1_g3.img
+	e
+	meanpet.img
+	y
+	test.air
+	y
+	imgreslice a$HO1 test
+
+.fi
+Check each iteration of the fit with vidi.
+Load meanpet.img as Image 1 and the resliced water (rap5000ho1_g3.img)
+as Image 2. View the composite to assess the match.
+When the match is reasonably close, try Align_ho2ref again.
+It will use air_init to initialize the operation.
+
+.nf
+	Align_ho2ref $PID $HO $OO v
+	imgreslice a$HO1 test
+
+.fi
+If this succeeds, continue with ohratio.
+Otherwise, continue with 9-parameter match below:
+
+.nf
+	manualreslice (see notes above)
+	imgreslice a$HO1 test
+
+When the match is reasonably close
+
+	cp $HO1.v tmp.v
+	scaleimage tmp.v 0.33
+		(picking a value to scale tmp.v to match meanpet.t88)
+	img2analyze tmp.v a$HO1
+	setanamin a$HO1 0
+	setanamin meanpet 0
+	
+	set PRM  = "-m 9 -p1 1 -t1 100 -t2 0 -e1 $MASK -x 3 -f air_init"
+
+	alignlinear meanpet a$HO1 $HOREF.air $PRM
+	imgreslice a$HO1 $HOREF
+
+.fi
+If this looks good, convert to ECAT with the extension .t88.
+Set the atlas origin to plane 38 in the header. Combine the HO-to-atlas
+air file with the OO-to-HO air file, reslice the OO image to atlas
+space, convert it to ECAT format, and set the atlas origin.
+
+.nf
+	analyze2img ra$HO1 $HO1.t88
+	setz0 $HO1.t88 38
+
+	combine_air $OOREF.air y $HOREF.air $OOHO.air
+	img2analyze $OO1.v a$OO1
+	imgreslice a$OO1 $OOREF
+	analyze2img ra$OO1 $OO1.t88
+	setz0 $OO1.t88 38
+
+.SH SEE ALSO
+Explanations of the parameters for alignlinear and manualreslice
+may be found at Roger Woods' AIR website at UCLA:
+http://bishopw.loni.ucla.edu/AIR3/index.html
+
+.SH AUTHOR
+Tom Videen, 2002.

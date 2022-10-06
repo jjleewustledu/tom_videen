@@ -1,0 +1,123 @@
+#!/bin/csh
+# Program:	alignslices_from_middle
+# Author:	Tom Videen
+# Date:		Mar 2009
+# Function:	Align slices in an Analyze image using a middle slice as the reference.
+# 	Separates 3D image into single-slice images;
+#	Uses alignlinear to align these in 2D;
+#	Align adjacent images and compute a combined_air file for the
+#	new slice using all air files from the reference slice;
+#	Air files are used to reslice single-slice images,
+#	and these are merged into a single 3D image.
+#	All single-slice images are removed but air files and a log remain.
+
+
+if ($#argv < 5) then
+	echo "Usage:  alignslices_from_middle in out thresh refslc mask"
+	echo " e.g.,  alignslices_from_middle db300_tse1 db300_tse1a 400 56 db300_mask"
+	exit 1
+endif
+
+set IN  = $1
+set OUT = $2
+set THR = $3
+set REFSLC = $4
+set MASK = $5
+set LAST = `scanheader $IN | grep z_dim | cut -f2 -d=`
+set NAM = ${OUT}_
+set LOGFILE = ${OUT}_align_slices.log
+
+unalias mv
+unalias rm
+
+if (! -e $IN.img) then
+	echo "ERROR [alignslices_from_middle]: $IN.img does not exist"
+	exit 1
+endif
+if (! -e $IN.hdr) then
+	echo "ERROR [alignslices_from_middle]: $IN.hdr does not exist"
+	exit 1
+endif
+if ($LAST < $REFSLC) then
+	echo "ERROR [alignslices_from_middle]: reference slice is greater than $LAST"
+	exit 1 
+endif
+if (! -e $MASK.img) then
+	echo "ERROR [alignslices_from_middle]: $ MASK.img does not exist"
+	exit 1
+endif
+echo $IN  $LAST slices, ref = $REFSLC  mask = $MASK >! $LOGFILE
+separate_slices $IN $NAM
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set PRM = "-m 23 -t1 $THR -t2 $THR -p1 1 -p2 1 -b1 10 10 0 -b2 10 10 0 -e1 $MASK -e2 $MASK -x 1"
+set REF = $NAM$REFSLC
+setanamin $REF 0
+alignlinear $REF $REF $REF.air $PRM
+cp $REF.hdr r$REF.hdr
+cp $REF.img r$REF.img
+
+# Align all adjacent pairs BELOW REFSLC (and remove single-slice images)
+# ---------------------------------------------------------
+set i = $REFSLC
+set TOTAIR = $REF.air
+while ($i < $LAST)
+	set k = `echo "$i + 1; quit" | bc`
+	set PREV = $NAM$i
+	set NEXT = $NAM$k
+	set NEWAIR = ${NEXT}vs${i}.air
+	setanamin $PREV 0
+	setanamin $NEXT 0
+	alignlinear $PREV $NEXT $NEWAIR $PRM
+	combine_air $NEXT.air y $TOTAIR $NEWAIR
+	airdif $NEXT.air $REF.air | head -3 >> $LOGFILE
+	airdif $NEXT.air $REF.air | head -3 
+	imgreslice $NEXT $NEXT
+	rm $NEWAIR
+	if ($i > $REFSLC) then
+		rm $PREV.img
+		rm $PREV.hdr
+	endif
+	set TOTAIR = $NEXT.air
+	@ i++
+end
+rm $NAM$LAST.img
+rm $NAM$LAST.hdr
+
+# Align all adjacent pairs ABOVE REFSLC (and remove single-slice images)
+# ---------------------------------------------------------
+set i = $REFSLC
+set TOTAIR = $REF.air
+while ($i > 1)
+	set k = `echo "$i - 1; quit" | bc`
+	set PREV = $NAM$i
+	set NEXT = $NAM$k
+	set NEWAIR = ${NEXT}vs${i}.air
+	setanamin $PREV 0
+	setanamin $NEXT 0
+	alignlinear $PREV $NEXT $NEWAIR $PRM
+	combine_air $NEXT.air y $TOTAIR $NEWAIR
+	airdif $NEXT.air $REF.air | head -3 >> $LOGFILE
+	airdif $NEXT.air $REF.air | head -3 
+	imgreslice $NEXT $NEXT
+	rm $NEWAIR
+	rm $PREV.img
+	rm $PREV.hdr
+	set TOTAIR = $NEXT.air
+	@ i--
+end
+rm $NAM$k.img
+rm $NAM$k.hdr
+
+# Merge realigned single-slice images, then remove them
+# -----------------------------------------------------
+merge_slices r$NAM 1 $LAST $OUT
+set i = 1
+while ($i <= $LAST)
+	rm r${NAM}$i.img
+	rm r${NAM}$i.hdr
+	@ i++
+end
+echo "Created $OUT.img"
+

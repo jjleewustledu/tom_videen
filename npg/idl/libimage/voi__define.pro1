@@ -1,0 +1,509 @@
+;; VOI structure definition plus functions and procedures for
+;; manipulating them.
+
+FUNCTION VOI_NULL, voi, roi
+   ;; If the pointer roi is found further down the list beginning with
+   ;; voi, then set it to NULL (eliminates loops after VOI_SORT)
+   
+   FORWARD_FUNCTION VOI_NULL    ; necessary for recursion
+   
+   IF NOT ptr_valid((*voi).next) THEN RETURN, 0 $
+   ELSE IF ((*voi).next EQ roi) THEN BEGIN
+      (*voi).next =  ptr_new()
+      RETURN, 0
+   ENDIF ELSE BEGIN 
+      status = VOI_NULL((*voi).next, roi)
+      RETURN, status
+   ENDELSE 
+   
+END
+
+
+FUNCTION VOI_SORT, voi, roi
+   ;; Sort the element, roi, in the linked list, voi.
+   ;; Elements with same id are grouped together and sorted by z.
+   ;; Parameters:
+   ;;	voi = pointer to VOI structure (linked list of ROIs)
+   ;;	roi = pointer to element to sort
+   
+   FORWARD_FUNCTION VOI_SORT    ; necessary for recursion
+   
+   IF NOT ptr_valid(voi) THEN RETURN, roi
+   a = voi
+   b = (*a).next
+   IF NOT ptr_valid(b) THEN RETURN, voi
+   IF ((*b).id EQ (*roi).id) THEN BEGIN ; Same next ID
+      IF ((*b).z GT (*roi).z) THEN BEGIN ; Sort in ascending z-order
+         (*a).next = roi
+         (*roi).next = b
+         IF ((*b).next EQ roi) THEN (*b).next = ptr_new() $
+         ELSE BEGIN 
+            (*roi).next = b
+            status = VOI_NULL(b, roi)
+         ENDELSE 
+         RETURN, roi
+      ENDIF
+   ENDIF ELSE IF ((*a).id EQ (*roi).id) THEN BEGIN ; Different ID follows
+      (*a).next = roi
+      (*roi).next = b
+      status = VOI_NULL(b, roi)
+      RETURN, roi
+   ENDIF
+   temp = VOI_SORT(b, roi)
+   RETURN, temp
+END 
+
+
+FUNCTION VOI_EOL, voi
+   ;; Return pointer to the last defined structure in the voi linked list
+   
+   FORWARD_FUNCTION VOI_EOL  ; necessary for recursion
+   
+   IF NOT ptr_valid((*voi).next) THEN BEGIN
+      RETURN, voi
+   ENDIF ELSE RETURN, VOI_EOL((*voi).next)
+   
+END
+
+
+FUNCTION VOI_LOCATE, voi, id
+   ;; Search through voi linked list for id
+   ;; Return pointer to element of VOI corresponding to id
+   ;; 	or return end of list
+   ;; Parameters:
+   ;;	voi = pointer to VOI structure (linked list of ROIs)
+   ;;	id = string
+
+   
+   FORWARD_FUNCTION VOI_LOCATE  ; necessary for recursion
+   
+   IF NOT ptr_valid((*voi).next) THEN RETURN, (*voi).next $
+   ELSE IF ((*(*voi).next).id EQ id) THEN RETURN, (*voi).next $
+   ELSE RETURN, VOI_LOCATE((*voi).next, id)
+   
+END
+
+
+FUNCTION VOI_APPEND, voi
+   ;; Add an ROI element to the end of the VOI list and
+   ;; return pointer to it
+   
+   FORWARD_FUNCTION VOI_APPEND  ; necessary for recursion
+   
+   IF NOT ptr_valid((*voi).next) THEN BEGIN
+      (*voi).next = ptr_new({VOI})
+      RETURN, (*voi).next
+   ENDIF ELSE IF ((*(*voi).next).id EQ '') THEN BEGIN
+      RETURN, (*voi).next
+   ENDIF ELSE RETURN, VOI_APPEND((*voi).next)
+  
+END
+
+
+FUNCTION VOI_DELETE, voi, id, SLICE=slice, PTR=ptr
+   ;; Delete named roi structure from the voi linked list
+   ;; Parameters:
+   ;;	voi = pointer to VOI structure (linked list of ROIs)
+   ;;	id = roi id
+   ;; Keyword SLICE: delete only elements where z=slice
+   ;; Keyword PTR: delete only this particular element
+   ;; Return:
+   ;;	 0 = successful
+   ;;	-1 = no structures removed
+   
+   val = -1
+   roi = voi
+   IF NOT KEYWORD_SET(SLICE) THEN slice = 0
+   IF NOT KEYWORD_SET(PTR) THEN ptr = ptr_new()
+   WHILE ptr_valid(roi) DO BEGIN
+      IF ptr_valid((*roi).next) THEN BEGIN
+         next = (*roi).next
+         last = (*next).next
+         IF (KEYWORD_SET(PTR)) THEN BEGIN
+            IF (next EQ ptr) THEN BEGIN
+               val = 0
+               ptr_free, (*next).loc
+               ptr_free, next
+               (*voi).num = (*voi).num-1
+               (*roi).next = last
+               RETURN, val
+            ENDIF ELSE roi = (*roi).next
+         ENDIF ELSE IF (((*next).id EQ id) AND (slice EQ 0 OR slice EQ (*next).z)) THEN BEGIN
+            val = 0
+            ptr_free, (*next).loc
+            ptr_free, next
+            (*voi).num = (*voi).num-1
+            (*roi).next = last
+         ENDIF ELSE roi = (*roi).next
+      ENDIF ELSE roi = (*roi).next
+   ENDWHILE
+   RETURN, val
+END
+
+
+FUNCTION VOI_COORDS, voi, id, dim, msg, SLICE=slice, LIMIT=limit, OFFSET=offset
+   ;; Compute VOI statistics
+   ;; Parameters:
+   ;;	voi = pointer to VOI structure (linked list of ROIs)
+   ;;	      initial element contains: 
+   ;;	      id, type, num=number of vois, next->first voi
+   ;;	id  = ROI id to retrieve
+   ;;	dim = image dimensions
+   ;;	msg = return error message string
+   ;; Keyword SLICE: return coordinates of all ROIs on slice instead of (*roi).z
+   ;; Keyword LIMIT: return coordinates only for components which are defined
+   ;; 	on this specified slice
+   ;; Keyword OFFSET: offset coordinates by offset slices
+   ;; Return coordinates of VOI if successful,
+   ;; -1 = error with error message if not
+
+   IF (min(size((*voi)) NE [1,1,8,1])) THEN BEGIN
+      msg = 'VOI structure is undefined'
+      RETURN, -1
+   ENDIF
+   IF NOT ptr_valid((*voi).next) THEN BEGIN
+      msg = 'VOI is undefined'
+      RETURN, -1
+   ENDIF
+
+   IF (id EQ  '') THEN BEGIN
+      msg = 'No ID specified'
+      RETURN, -1
+   ENDIF
+   
+   IF NOT KEYWORD_SET(OFFSET) THEN offset = 1L
+   roi = VOI_LOCATE(voi, id) ; Search for ID
+   coords = -1
+   IF NOT ptr_valid(roi) THEN GOTO, done
+   
+   WHILE ((*roi).id EQ id) DO BEGIN ; Get  coordinates of all components of this ROI
+      
+      CASE (*roi).type OF
+         
+         0:  BEGIN              ; Circle
+            n = 30              ;# of points
+            a = findgen(n+1) * (2 * !pi/(n-1))
+            r = (*roi).r
+            xy = transpose([[(*(*roi).loc)[0] + r * cos(a)], [(*(*roi).loc)[1] + r * sin(a)]])
+            pt1 = polyfillv(xy[0,0:n-1],xy[1,0:n-1], dim[0], dim[1])
+         ENDCASE
+         
+         1: BEGIN               ; Rectangle
+            n = 5
+            x1 = (*(*roi).loc)[0,0]
+            y1 = (*(*roi).loc)[1,0]
+            x2 = (*(*roi).loc)[0,1]
+            y2 = (*(*roi).loc)[1,1]
+            xy = [[x1,y1],[x1,y2],[x2,y2],[x2,y1],[x1,y1]]
+            pt1 = polyfillv(xy[0,0:n-1],xy[1,0:n-1], dim[0], dim[1])
+         ENDCASE
+         
+         2: BEGIN               ; Polygon
+            n =(*roi).num
+            xy = (*(*roi).loc)
+            pt1 = polyfillv(xy[0,0:n-1],xy[1,0:n-1], dim[0], dim[1])
+         ENDCASE
+         
+         3: BEGIN               ; Thresholded Polygon
+            n =(*roi).num
+            pt1 = (*(*roi).loc)
+            xy = BYTARR(dim[0], dim[1])
+            FOR k=0,n-1 DO xy[pt1[0,k],pt1[1,k]] = 1
+            pt1 = [where(xy EQ 1,count)]
+         ENDCASE
+            
+      ENDCASE
+      
+      xy = BYTARR(dim[0], dim[1])
+      IF N_ELEMENTS(pt1) GT 0 THEN BEGIN
+         IF (pt1[0] NE -1) THEN BEGIN 
+            xy[pt1] = 1
+            pts = [where(xy EQ 1,count)]
+            IF (count GT 0) THEN BEGIN
+               IF KEYWORD_SET(LIMIT) THEN BEGIN 
+                  IF (slice EQ (*roi).z) THEN BEGIN 
+                     pts = pts + LONG(slice-offset)*dim[0]*dim[1]
+                     IF ((size(coords))[0] EQ 0) THEN coords = pts $
+                     ELSE coords = [coords,pts]
+                  ENDIF 
+               ENDIF ELSE BEGIN 
+                  IF KEYWORD_SET(SLICE) THEN BEGIN
+                     IF NOT keyword_set(LIMIT) THEN pts = pts + LONG(slice-offset)*dim[0]*dim[1]
+                  ENDIF ELSE pts = pts + LONG((*roi).z-offset)*dim[0]*dim[1]
+                  IF ((size(coords))[0] EQ 0) THEN coords = pts $
+                  ELSE coords = [coords,pts]
+               ENDELSE 
+            ENDIF
+         ENDIF
+      ENDIF 
+      roi =(*roi).next
+      IF NOT ptr_valid(roi) THEN GOTO, done
+   ENDWHILE 
+done:
+   RETURN, coords
+END
+
+
+FUNCTION VOI_TRANSPOSE, loc, ydim, DISPLAY=display
+   ;; Convert image [x,y] to screen[x,y] and vice versa.
+   ;; Parameters:
+   ;;	loc = array of x,y (x=loc[0,*], y=loc[1,*])
+   ;;	ydim = size y-dimension
+   ;; Keyword DISPLAY: add 1 to y; subtract 1 from x (necessary for displaying all ROIs
+   ;; 	defined as outlines; e.g., circles, rectangles, traces).
+   
+   IF ((size(loc))[0] LE 0) THEN RETURN, -1
+   newloc = loc
+   IF KEYWORD_SET(DISPLAY) THEN newloc[1,*] = ydim-loc[1,*] $
+   ELSE newloc[1,*] = ydim-1-loc[1,*]
+   IF KEYWORD_SET(DISPLAY) THEN newloc[0,*] = loc[0,*] - 1
+   RETURN, newloc   
+END 
+
+
+FUNCTION VOI_LIST, voi
+   ;; Get list of all unique VOI ids
+   ;; Parameters:
+   ;;	voi = VOI structure (linked list of ROIs)
+   ;;	      initial element contains: 
+   ;;	      id, type, num=number of vois, next->first voi
+   ;; Return sorted array of strings
+   
+   list = ['']
+   IF NOT ptr_valid((*voi).next) THEN RETURN, list
+   IF (min(size(*voi) NE [1,1,8,1])) THEN RETURN, list
+   IF NOT ptr_valid((*voi).next) THEN RETURN, list
+   
+   next = (*voi).next
+   WHILE ptr_valid(next) DO BEGIN
+      name = (*next).id
+      IF (name NE '') THEN BEGIN
+         loc = where(strpos(list,name) EQ 0)
+         IF (max(loc) GE 0) THEN BEGIN
+            IF ((min(name NE list[loc])) NE 0) THEN list = [list,name]
+         ENDIF ELSE BEGIN
+            IF (min('' EQ list) EQ 1) THEN list = [name] $
+            ELSE list = [list,name]
+         ENDELSE
+      ENDIF
+      next =(*next).next
+   ENDWHILE
+   RETURN, list[sort(list)]
+END
+
+FUNCTION VOI_PLANES, voi, voilist, np
+   ;; Get list of all planes for each VOI id
+   ;; Parameters:
+   ;;	voi = VOI structure (linked list of ROIs)
+   ;;	voilist = list of voi ids
+   ;;	np = number of planes in image
+   ;; Return array of strings containing planes in which each ROI is defined
+   ;;	corresponding to the ids in voilist
+   
+   IF max(strlen(voilist)) EQ 0 THEN RETURN, ''
+   IF NOT ptr_valid((*voi).next) THEN RETURN, ''
+   IF (min(size(*voi) NE [1,1,8,1])) THEN RETURN, ''
+   
+   n = (size(voilist))[1]
+   list = intarr(n,np)
+   next = (*voi).next
+   WHILE ptr_valid(next) DO BEGIN
+      name = (*next).id
+      plane = (*next).z
+      IF (plane GT np) THEN BEGIN
+         print,name,' is defined on more planes then current image contains',plane
+         RETURN, ''
+      ENDIF
+      IF (name NE '') THEN BEGIN
+         roi = where(voilist EQ name)
+         list[roi,plane-1] = 1
+      ENDIF
+      next =(*next).next
+   ENDWHILE
+   planelist = strarr(n)
+   FOR k=0,n-1 DO BEGIN 
+      a = string(where(list[k,*] GT 0)+1)
+      lst = ''
+      FOR j=0,(size(a))[1]-1 DO lst = lst+strtrim(a[j],2)+','
+      planelist[k] = lst
+   ENDFOR 
+   RETURN, planelist
+END
+
+FUNCTION VOI_LISTING, voi, voilist, np
+   ;; Combine listing of voi names and plane
+   ;; Parameters:
+   ;;	voi = VOI structure (linked list of ROIs)
+   ;;	voilist = list of names
+   ;;	np = number of planes
+   ;; Return array of strings
+   ;; Note that the characters (fijlt and space) fill half spaces
+   ;;	in TimesRoman font
+   
+   IF (min('' EQ voilist) EQ 1) THEN RETURN, ''
+   plnlist = VOI_PLANES(voi, voilist, np)
+   IF ((size(plnlist))[0] LE 0) THEN RETURN, ''
+   m = (size(voilist))[1]
+   IF (m EQ 1) THEN BEGIN       ; one voi
+      k = 40-strlen(voilist)
+      space = string(replicate(32b,k[0]))
+      list = voilist+space+'('+plnlist
+      k = rstrpos(list,',')
+      strput, list, ')', k[0]
+   ENDIF ELSE BEGIN 
+      list = strarr(m)
+      len = 40-strlen(voilist)
+      k = where(len LE 0, count)
+      IF (count GT 0) THEN len[k] = 2
+      space = strarr(m)
+      FOR i=0,m-1 DO space[i]=string(replicate(32b,len[i]))
+      list = voilist+space+'('+plnlist
+      FOR i=0,m-1 DO BEGIN
+         str = list[i]
+         k = rstrpos(str,',')
+         strput, str, ')', k
+         list[i] = str
+      ENDFOR 
+   ENDELSE 
+   RETURN, list
+END 
+
+
+FUNCTION VOI_WRITE, voi, fname, msg
+   ;; Write VOI structure to a file
+   
+   openw,lun, fname, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+fname
+      RETURN, -1
+   ENDIF
+   
+   printf, lun, (*voi).id
+   printf, lun, (*voi).type, format='(I0)'
+   printf, lun, (*voi).orient, format='(I0)'
+   printf, lun, (*voi).z, format='(I0)'
+   printf, lun, (*voi).r, format='(F0)'
+   printf, lun, (*voi).num, format='(I0)'
+   IF ptr_valid((*voi).loc) THEN BEGIN
+      printf, lun, (size(*(*voi).loc))[0:2], format='(3(I0," "))'
+      printf, lun, *(*voi).loc, format='(I0," ",I0)'
+   ENDIF ELSE  printf, lun, [0,0,0], format='(3(I0," "))'
+   
+   IF ptr_valid((*voi).next) THEN next = (*voi).next $
+   ELSE next = ptr_new()
+   WHILE ptr_valid(next) DO BEGIN 
+      printf, lun, (*next).id
+      printf, lun, (*next).type, format='(I0)'
+      printf, lun, (*next).orient, format='(I0)'
+      printf, lun, (*next).z, format='(I0)'
+      printf, lun, (*next).r, format='(F0)'
+      printf, lun, (*next).num, format='(I0)'
+      IF ptr_valid((*next).loc) THEN BEGIN
+         printf, lun, (size(*(*next).loc))[0:2], format='(3(I0," "))'
+         printf, lun, *(*next).loc, format='(I0," ",I0)'
+      ENDIF ELSE  BEGIN
+         printf, lun, [0,0,0], format='(3(I0," "))'
+      ENDELSE 
+      IF ptr_valid((*next).next) THEN next = (*next).next $
+      ELSE next = ptr_new()
+   ENDWHILE
+   printf, lun, 'ENDFILE'
+   close, lun
+   free_lun, lun
+   RETURN, 0
+END
+
+FUNCTION VOI_READ, voi, fname, msg
+   ;; Read VOI structure from a file
+   
+   openr,lun, fname, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+fname
+      RETURN, -1
+   ENDIF
+   
+   str = ''
+   k = 0
+   l =  0L
+   x = 0.0
+   loc = ptr_new()
+   arr = lonarr(3)
+ 
+   readf, lun, str
+   (*voi).id = str
+   readf, lun, k
+   (*voi).type = k
+   readf, lun, k
+   (*voi).orient = k
+   readf, lun, k
+   (*voi).z = k
+   readf, lun, x
+   (*voi).r = x
+   readf, lun, k
+   (*voi).num = k
+   readf, lun, arr
+   IF (arr[0] GT 0) THEN BEGIN
+      IF (arr[0] EQ 1) THEN data = lonarr(arr[1]) $
+      ELSE data = lonarr(arr[1],arr[2])
+      readf, lun, data
+      (*voi).loc = ptr_new(data)
+   ENDIF
+   
+   readf, lun, str
+   IF (strlen(str) GT 0 AND str NE 'ENDFILE') THEN BEGIN
+      (*voi).next = ptr_new({VOI})
+      next = (*voi).next
+   ENDIF ELSE next = ptr_new()
+   
+   WHILE ptr_valid(next) DO BEGIN 
+      (*next).id = str
+      readf, lun, k
+      (*next).type = k
+      readf, lun, k
+      (*next).orient = k
+      readf, lun, k
+      (*next).z = k
+      readf, lun, x
+      (*next).r = x
+      readf, lun, k
+      (*next).num = k
+      readf, lun, arr
+      IF (arr[0] GT 0) THEN BEGIN
+         IF (arr[0] EQ 1) THEN data = lonarr(arr[1]) $
+         ELSE data = lonarr(arr[1],arr[2])
+         readf, lun, data
+         (*next).loc = ptr_new(data)
+      ENDIF
+      readf, lun, str
+      str = strtrim(str,2)
+      IF (strlen(str) GT 0 AND str NE 'ENDFILE') THEN BEGIN
+         (*next).next = ptr_new({VOI})
+         next = (*next).next
+      ENDIF ELSE next = ptr_new()
+   ENDWHILE 
+   close, lun
+   free_lun, lun
+   RETURN, 0
+END
+
+
+PRO VOI__DEFINE
+   ;; A single VOI can group several individual geometric definitions
+   ;; by using VOI.next to create a linked list.
+   ;;
+   ;; When type=-1, this structure defines a group of VOIs
+   ;; with num=number of VOIs, loc=pointer to a VOI, and
+   ;; next=pointer to another parent structure.
+   ;; I.e., the last 3 fields are interpretted differently for type<0
+
+   tmp = {VOI,			$
+          id	: '',		$ ; name of VOI or VOI group
+          type  : 0L,		$ ; type (0=circle; 1=rectangle; 2=polygon; -1=group)
+          orient: 0L,		$ ; slice orientation (0=trans; 1=cor; 2=sag)
+          z     : 0L,		$ ; plane
+          r     : 0.0,		$ ; radius
+          num	: 0L,		$ ; number of points OR number of VOIs
+          loc	: ptr_new(), 	$ ; xy-coordinates OR VOI definition
+          next	: ptr_new()	$ ; additional points OR additional VOIs
+         }
+END

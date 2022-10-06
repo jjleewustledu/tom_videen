@@ -1,0 +1,679 @@
+head	2.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.8
+date	2004.02.16.20.01.36;	author tom;	state Exp;
+branches;
+next	2.7;
+
+2.7
+date	96.11.11.16.06.22;	author tom;	state Exp;
+branches;
+next	2.6;
+
+2.6
+date	96.11.08.22.51.09;	author tom;	state Exp;
+branches;
+next	2.5;
+
+2.5
+date	96.11.06.22.19.46;	author tom;	state Exp;
+branches;
+next	2.4;
+
+2.4
+date	96.11.06.16.36.17;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	96.11.06.15.57.19;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	96.10.08.16.39.47;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.10.01.22.26.32;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.08.23.18.14.39;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.08.23.18.04.53;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.8
+log
+@Feb 2004
+@
+text
+@/*  $Id: makebmap.c,v 2.7 1996/11/11 16:06:22 tom Exp tom $
+    $Log: makebmap.c,v $
+ * Revision 2.7  1996/11/11  16:06:22  tom
+ * fix location of yorg, zorg
+ *
+ * Revision 2.6  1996/11/08  22:51:09  tom
+ * fix xorg, yorg calculation
+ *
+ * Revision 2.5  1996/11/06  22:19:46  tom
+ * fix scaling bug
+ *
+ * Revision 2.4  1996/11/06  16:36:17  tom
+ * correct scaling input ysize, zsize for pixel size in mm
+ *
+ * Revision 2.3  1996/11/06  15:57:19  tom
+ * write yac, zac to map file instead of yorg, zorg
+ *
+ * Revision 2.2  1996/10/08  16:39:47  tom
+ * all parameters are now in pixels
+ * origin is center of AC
+ *
+ * Revision 2.1  1996/10/01  22:26:32  tom
+ * update to match fixes in makemap
+ *
+ * Revision 2.0  1996/08/23  18:14:39  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1996/08/23  18:04:53  tom
+ * Initial revision
+ *
+ * Revision 1.4  1995/10/18  20:27:17  tom
+ * changed z-scaling to use ACPC plane to top of brain
+ *
+ * Revision 1.3  1995/10/18  20:24:00  tom
+ * changed origin to anterior commissure
+ *
+ * Revision 1.2  1995/10/12  18:18:52  tom
+ * version added to output file
+ *
+ * Revision 1.1  1995/10/12  17:48:43  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *  Module:         makebmap.c
+ *  Date:           Oct 1995
+ *  Author:         Tom Videen
+ *	Description:
+ *		Create a map file from:
+ *			1) air file from alignpettomri;
+ *			2) x,y,z coordinates of atlas origin identified in the MR brain image;
+ *			3) x,y,z dimensions of the MR brain image
+ * ===============================================================================
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include "air.h"				 /* struct air */
+#include "brain_atlas.h"			 /* BRAIN_ATLAS */
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 2.7 1996/11/11 16:06:22 tom Exp tom $";
+
+int             read_air ();
+void            get_dh68atlas ();
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	struct air2     air;
+	BRAIN_ATLAS     atlas;
+	FILE           *fp;
+	char           *mapfile;
+	char           *airfile;
+	char           *str1, *str2;
+	char            str[80];
+	float         **map, **trans, **scale, **flip, **airmat;
+	float         **tmp0, **tmp1, **tmp2, **mrimat;
+	float          *pt0, *pt1, *ptp;
+	float           xorg, yorg, zorg;
+	float           yac, zac;			/* y, z coordinates of anterior commissure */
+	float           xsize, ysize, zsize; /* scale values in mm */
+	int             i, j;
+
+/* Read arguments */
+
+	if (argc != 9) {
+		(void) fprintf (stderr, "Usage: makebmap mapfile airfile X0 Y0 Z0 xsize ysize zsize\n");
+		return (1);
+	}
+	mapfile = argv[1];
+	airfile = argv[2];
+	xorg = atof (argv[3]);
+	yac = atof (argv[4]);
+	zac = atof (argv[5]);
+	xsize = atof (argv[6]);
+	ysize = atof (argv[7]);
+	zsize = atof (argv[8]);
+
+/* Initialize matrices */
+
+	tmp0 = matrix (1, 4, 1, 4);
+	tmp1 = matrix (1, 4, 1, 4);
+	tmp2 = matrix (1, 4, 1, 4);
+	mrimat = matrix (1, 4, 1, 4);
+	airmat = matrix (1, 4, 1, 4);
+	map = matrix (1, 4, 1, 4);
+	trans = matrix (1, 4, 1, 4);
+	scale = matrix (1, 4, 1, 4);
+	flip = matrix (1, 4, 1, 4);
+	for (i = 1; i <= 4; i++) {
+		for (j = 1; j <= 4; j++) {
+			trans[i][j] = 0.0;
+			scale[i][j] = 0.0;
+			flip[i][j] = 0.0;
+		}
+		trans[i][i] = 1.0;
+		scale[i][i] = 1.0;
+		flip[i][i] = 1.0;
+	}
+
+/* Read AIR matrix into airmat (transform pixels-to-pixels)*/
+
+	if (read_air (airfile, &air, airmat) != 0) {
+		(void) fprintf (stderr, "ERROR: cannot read %s\n", airfile);
+		return (1);
+	}
+/* Read the atlas definition */
+
+	get_dh68atlas (&atlas);
+
+	pt0 = vector (1, 4);
+	pt1 = vector (1, 4);
+	ptp = vector (1, 4);
+	pt0[1] = atlas.x0;
+	pt0[2] = atlas.y0;
+	pt0[3] = atlas.z0;
+	pt0[4] = 1.0;
+	printf ("Origin defined in Spideram space of atlas image\n");
+	ptp[1] = pt0[1] + 1;
+	ptp[2] = pt0[2] + 1;
+	ptp[3] = pt0[3] + 1;
+	ptp[4] = 0;
+	matrix_print (ptp, 3, 1);
+
+/* Translate Atlas origin to matrix origin */
+
+	trans[1][4] = -atlas.x0;
+	trans[2][4] = -atlas.y0;
+	trans[3][4] = -atlas.z0;
+
+/* Scale Atlas dimensions relative to individual's dimensions */
+
+	scale[1][1] = xsize / atlas.xsize;
+	scale[2][2] = ysize / atlas.ysize;
+	scale[3][3] = zsize / atlas.zsize;
+
+/* Scale Atlas pixels to MRI pixels */
+
+	scale[1][1] = scale[1][1] * (atlas.pixel_size / air.std.xsize);
+	scale[2][2] = scale[2][2] * (atlas.pixel_size / air.std.ysize);
+	scale[3][3] = scale[3][3] * (atlas.slice_separation / air.std.zsize);
+	matrix_mult (scale, trans, tmp0, 4, 4, 4);
+
+/* Reflect all 3 axes to conform to AIR and ANALYZE */
+
+	flip[1][1] = -1.0;
+	flip[2][2] = -1.0;
+	flip[3][3] = -1.0;
+	matrix_mult (flip, tmp0, tmp1, 4, 4, 4);
+
+/*	MRI atlas origin is is 7.0 mm inferior and 21.0 mm posterior to ant commissure */
+
+	yorg = yac - (ysize /atlas.ysize) * (21.0/air.std.ysize);
+	zorg = zac - (zsize /atlas.zsize) * (7.0/air.std.zsize);
+
+/* Translate matrix origin to MR origin */
+
+	trans[1][4] = xorg - 1.;
+	trans[2][4] = yorg - 1.;
+	trans[3][4] = zorg - 1.;
+	matrix_mult (trans, tmp1, mrimat, 4, 4, 4);
+
+	vector_mult (mrimat, pt0, pt1, 4, 4);
+	printf ("Origin defined in ANALYZE space of MR image\n");
+	ptp[1] = pt1[1] + 1;
+	ptp[2] = pt1[2] + 1;
+	ptp[3] = pt1[3] + 1;
+	matrix_print (ptp, 3, 1);
+
+/* Tranform MR to PET */
+
+	matrix_mult (airmat, mrimat, tmp2, 4, 4, 4);
+
+	vector_mult (tmp2, pt0, pt1, 4, 4);
+	printf ("Origin aligned in ANALYZE space of input PET image\n");
+	ptp[1] = pt1[1] + 1;
+	ptp[2] = pt1[2] + 1;
+	ptp[3] = pt1[3] + 1;
+	matrix_print (ptp, 3, 1);
+
+/* Reflect all 3 axes to conform to our PET pixel order */
+
+	flip[1][1] = -1.0;
+	flip[2][2] = -1.0;
+	flip[3][3] = -1.0;
+	flip[1][4] = air.res.xdim - 1.0;
+	flip[2][4] = air.res.ydim - 1.0;
+	flip[3][4] = air.res.zdim - 1.0;
+	matrix_mult (flip, tmp2, map, 4, 4, 4);
+
+	vector_mult (map, pt0, pt1, 4, 4);
+	printf ("Origin aligned in Spideram space of input PET image\n");
+	ptp[1] = pt1[1] + 1;
+	ptp[2] = pt1[2] + 1;
+	ptp[3] = pt1[3] + 1;
+	matrix_print (ptp, 3, 1);
+	printf ("Matrix MAP\n");
+	matrix_print (map, 4, 4);
+
+/* Open the matrix map file */
+
+	fp = fopen (mapfile, "w");
+	if (fp == NULL) {
+		(void) fprintf (stderr, "ERROR: cannot open %s\n", mapfile);
+		return (1);
+	}
+
+/* Write RCS version, date, and calling parameters */
+
+	str1 = strstr (rcsid, "RCS") + 4;
+	str2 = strstr (str1, "tom");
+	(void) strncpy (str, str1, str2 - str1);
+	fprintf (fp, "%s\n", str);
+	fprintf (fp, "%s %s %5.1f %5.1f %5.1f %5.1f %5.1f %5.1f\n",
+		 mapfile, airfile, xorg, yac, zac, xsize, ysize, zsize);
+
+/* Write the matrix map */
+
+	for (i = 1; i <= 4; i++) {
+		fprintf (fp, "%10.4f %10.4f %10.4f %10.4f\n",
+			 map[i][1], map[i][2], map[i][3], map[i][4]);
+	}
+
+/* Clean up */
+
+	free_matrix (trans, 1, 4, 1, 4);
+	free_matrix (scale, 1, 4, 1, 4);
+	free_matrix (airmat, 1, 4, 1, 4);
+	free_matrix (tmp0, 1, 4, 1, 4);
+	free_matrix (tmp1, 1, 4, 1, 4);
+	free_matrix (tmp2, 1, 4, 1, 4);
+	free_matrix (mrimat, 1, 4, 1, 4);
+	free_matrix (map, 1, 4, 1, 4);
+	free_matrix (flip, 1, 4, 1, 4);
+	return (0);
+}
+@
+
+
+2.7
+log
+@fix location of yorg, zorg
+@
+text
+@d1 1
+a1 1
+/*  $Id: makebmap.c,v 2.6 1996/11/08 22:51:09 tom Exp tom $
+d3 3
+d45 1
+a45 1
+ *  Date:           12-Oct-95
+d56 1
+a56 3
+#include <string.h>
+#include <math.h>
+#include <nr.h>
+d62 1
+a62 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 2.6 1996/11/08 22:51:09 tom Exp tom $";
+a63 1
+char            Usage[] = "Usage: makebmap mapfile airfile X0 Y0 Z0 xsize ysize zsize\n";
+d89 2
+a90 2
+		(void) fprintf (stderr, Usage);
+		exit (1);
+d127 1
+a127 1
+		exit (1);
+d227 1
+a227 1
+		exit (1);
+d234 1
+a234 1
+	strncpy (str, str1, str2 - str1);
+d257 1
+a257 1
+	exit (0);
+@
+
+
+2.6
+log
+@fix xorg, yorg calculation
+@
+text
+@d1 1
+a1 1
+/*  $Id: makebmap.c,v 2.5 1996/11/06 22:19:46 tom Exp tom $
+d3 3
+d61 1
+a61 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 2.5 1996/11/06 22:19:46 tom Exp tom $";
+d175 2
+a176 2
+	yorg = yac - (ysize /atlas.ysize) * (21.0/atlas.pixel_size);
+	zorg = zac - (zsize /atlas.zsize) * (7.0/atlas.pixel_size);
+@
+
+
+2.5
+log
+@fix scaling bug
+@
+text
+@d1 1
+a1 1
+/*  $Id: makebmap.c,v 2.4 1996/11/06 16:36:17 tom Exp tom $
+d3 3
+d58 1
+a58 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 2.4 1996/11/06 16:36:17 tom Exp tom $";
+d80 1
+a80 1
+	float           xsize, ysize, zsize;
+d137 1
+a137 1
+	printf ("Atlas Origin in Spideram space\n");
+d172 2
+a173 2
+	yorg = yac - (ysize/air.std.ysize * 21.0/14.5);
+	zorg = zac - (zsize/air.std.zsize * 7.0/23.2);
+d183 1
+a183 1
+	printf ("MRI Origin in ANALYZE space\n");
+d194 1
+a194 1
+	printf ("PET Origin in ANALYZE space\n");
+d211 1
+a211 1
+	printf ("PET Origin in Spideram space\n");
+@
+
+
+2.4
+log
+@correct scaling input ysize, zsize for pixel size in mm
+@
+text
+@d1 1
+a1 1
+/*  $Id: makebmap.c,v 2.3 1996/11/06 15:57:19 tom Exp tom $
+d3 3
+d55 1
+a55 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 2.3 1996/11/06 15:57:19 tom Exp tom $";
+d134 1
+a134 1
+	printf ("Atlas Origin\n");
+d147 1
+a147 1
+/* Scale Atlas dimensions to individual's dimensions */
+d149 3
+a151 3
+	scale[1][1] = (xsize * air.std.xsize) / atlas.xsize;
+	scale[2][2] = (ysize * air.std.ysize) / atlas.ysize;
+	scale[3][3] = (zsize * air.std.zsize) / atlas.zsize;
+d179 2
+a180 2
+	vector_mult (mrimat, pt0, pt1, 4, 4, 1);
+	printf ("MRI Origin\n");
+d190 1
+a190 1
+	vector_mult (tmp2, pt0, pt1, 4, 4, 1);
+d207 1
+a207 1
+	vector_mult (map, pt0, pt1, 4, 4, 1);
+d223 1
+@
+
+
+2.3
+log
+@write yac, zac to map file instead of yorg, zorg
+@
+text
+@d1 1
+a1 1
+/*  $Id: makebmap.c,v 2.2 1996/10/08 16:39:47 tom Exp tom $
+d3 3
+d52 1
+a52 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 2.2 1996/10/08 16:39:47 tom Exp tom $";
+a91 10
+/*	Atlas origin is is 7.0 mm inferior and 21.0 mm posterior to ant commissure */
+
+	yorg = yac - (ysize * 21.0/14.5);
+	zorg = zac - (zsize * 7.0/23.2);
+
+#ifdef OLDVERSION
+	yorg = atof (argv[4]);
+	zorg = atof (argv[5]);
+#endif
+
+a145 6
+#ifdef OLDVERSION
+    scale[1][1] = (atlas.pixel_size/air.std.xsize) * (xsize/atlas.xsize);
+    scale[2][2] = (atlas.pixel_size/air.std.ysize) * (ysize/atlas.ysize);
+    scale[3][3] = (atlas.slice_separation/air.std.zsize) * (zsize/atlas.zsize);
+#endif
+
+d164 5
+@
+
+
+2.2
+log
+@all parameters are now in pixels
+origin is center of AC
+@
+text
+@d1 1
+a1 1
+/*  $Id: makebmap.c,v 2.1 1996/10/01 22:26:32 tom Exp tom $
+d3 4
+d49 1
+a49 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 2.1 1996/10/01 22:26:32 tom Exp tom $";
+d235 1
+a235 1
+		 mapfile, airfile, xorg, yorg, zorg, xsize, ysize, zsize);
+@
+
+
+2.1
+log
+@update to match fixes in makemap
+@
+text
+@d1 1
+a1 1
+/*  $Id: makebmap.c,v 2.0 1996/08/23 18:14:39 tom Exp tom $
+d3 3
+d45 1
+a45 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 2.0 1996/08/23 18:14:39 tom Exp tom $";
+a47 1
+
+a48 1
+
+a52 1
+
+a55 1
+
+a56 1
+
+a57 1
+
+a58 1
+
+a59 1
+
+a60 1
+
+a61 1
+
+a62 1
+
+a63 1
+
+a64 1
+
+d66 1
+a66 1
+
+a67 1
+
+d79 2
+a80 2
+	yorg = atof (argv[4]);
+	zorg = atof (argv[5]);
+d85 10
+d148 6
+@
+
+
+2.0
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: makebmap.c,v 1.1 1996/08/23 18:04:53 tom Exp tom $
+d3 3
+d40 1
+a40 1
+#include "brain_atlas.h"		 /* BRAIN_ATLAS */
+d42 2
+a43 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 1.1 1996/08/23 18:04:53 tom Exp tom $";
+d45 1
+a46 1
+void			get_dh68atlas ();
+d48 2
+d52 1
+d56 1
+d58 1
+d60 1
+d62 1
+d64 5
+a68 2
+	char			*str1, *str2;
+	char			str[80];
+d70 1
+d72 7
+a78 3
+	float			*pt0, *pt1;
+	float			xorg, yorg, zorg;
+	float			xsize, ysize, zsize;
+d89 6
+a94 6
+	xorg = atof(argv[3]);
+	yorg = atof(argv[4]);
+	zorg = atof(argv[5]);
+	xsize = atof(argv[6]);
+	ysize = atof(argv[7]);
+	zsize = atof(argv[8]);
+a123 1
+
+d130 1
+d136 5
+a140 1
+	matrix_print (pt0, 4, 1);
+d148 1
+a148 1
+/* Scale Atlas to MRI pixel size */
+d150 9
+a158 3
+	scale[1][1] = (atlas.pixel_size/air.std.xsize) * (xsize/atlas.xsize);
+	scale[2][2] = (atlas.pixel_size/air.std.ysize) * (ysize/atlas.ysize);
+	scale[3][3] = (atlas.slice_separation/air.std.zsize) * (zsize/atlas.zsize);
+a168 4
+#ifdef UNDEF
+	trans[1][4] = air.std.xdim - xorg + 1.;
+	trans[2][4] = air.std.ydim - yorg + 1.;
+#endif
+d177 4
+a180 1
+	matrix_print (pt1, 4, 1);
+d187 5
+a191 2
+	printf ("AIR-PET Origin\n");
+	matrix_print (pt1, 4, 1);
+d204 5
+a208 2
+	printf ("PET Origin\n");
+	matrix_print (pt1, 4, 1);
+a218 1
+
+d223 1
+a223 1
+	strncpy (str, str1, str2-str1);
+d226 1
+a226 1
+		mapfile, airfile, xorg, yorg, zorg, xsize, ysize, zsize);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+/*  $Id: makebmap.c,v 1.4 1995/10/18 20:27:17 tom Exp $
+d3 3
+d33 3
+a35 3
+#include <nrecipes/kr/nr.h>
+#include <nrecipes/kr/nrutil.h>
+#include <petutil/matrixlib.h>
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makebmap/RCS/makebmap.c,v 1.4 1995/10/18 20:27:17 tom Exp $";
+d48 1
+a48 1
+	struct air      air;
+a59 1
+	float			xmid, ymid, zmid;
+d150 1
+a150 1
+	matrix_mult (mrimat, pt0, pt1, 4, 4, 1);
+d158 1
+a158 1
+	matrix_mult (tmp2, pt0, pt1, 4, 4, 1);
+d172 1
+a172 1
+	matrix_mult (map, pt0, pt1, 4, 4, 1);
+@

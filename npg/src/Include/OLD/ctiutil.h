@@ -1,0 +1,10 @@
+void           *getsbhdr ();
+int             putsbhdr ();
+void           *getmhdr ();
+float          *rdimg ();
+int             wrimg ();
+MatrixFile     *write_fp ();
+MatrixFile     *getfp ();
+void            matclose ();
+int             plnnum_f3d ();
+int             ringnum ();

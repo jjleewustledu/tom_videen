@@ -1,0 +1,870 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2008.05.22.14.56.14;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2008.05.20.16.49.51;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2008.05.13.13.53.19;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2008.05.06.21.18.40;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@//	(c) SW and KE, 2005
+#include <elastic.h>
+#include <stdio.h>
+#include <fftw3.h>
+
+void            initElasticMatrix2D (size_t m1, size_t m2, double mu, double lambda,
+									double h1, double h2, boundary_t bc, elasticMatrix * pMatrix)
+{
+	int             k1, k2;
+	double          ak1, ak2, ck1, ck2, sk1, sk2;
+	double          d11, d12, d22, detD;
+	double          lp2m = lambda + 2 * mu;
+	double          lpm = lambda + mu;
+	double          m2lp3m = -2 * (lambda + 3 * mu);
+
+	elasticMatrix   M;
+	M = (elasticMatrix) malloc (sizeof (elasticMatrix_t));
+	M->data = createTreeStructure3D (3, m1, m2, (array1D) calloc (3 * m2 * m1, sizeof (array_t)));
+	M->len = m1 * m2 * 3;
+
+	array3D         invD = M->data;
+
+	if (bc == PERIODIC) {						  // Create inverse Matrix
+		for (k1 = 0; k1 < m1; k1++) {
+			for (k2 = 0; k2 < m2; k2++) {
+				ak1 = 2 * PI * k1 / m1;
+				ak2 = 2 * PI * k2 / m2;
+
+				ck1 = 2 * cos (ak1);
+				ck2 = 2 * cos (ak2);
+				sk1 = sin (ak1);
+				sk2 = sin (ak2);
+
+				d11 = (m2lp3m + lp2m * ck1 + mu * ck2) / (h1 * h1);
+				d12 = -lpm * sk1 * sk2 / (h1 * h2);
+				d22 = (m2lp3m + mu * ck1 + lp2m * ck2) / (h2 * h2);
+
+				detD = d11 * d22 - d12 * d12;	  // Calculate determinant
+
+				if (fabs (detD) < 1e-15) 		  // numerically zero
+					invD[0][k1][k2] = invD[1][k1][k2] = invD[2][k1][k2] = 0;
+				else {
+					invD[0][k1][k2] = d22 / detD;
+					invD[1][k1][k2] = -d12 / detD;
+					invD[2][k1][k2] = d11 / detD;
+				}
+			}
+		}
+		*(pMatrix) = M;
+	}
+	else {
+		fprintf (stderr, "Elastic solver currently only implemented for periodic boundary conditions\n");
+		*(pMatrix) = NULL;
+	}
+}
+
+void            initElasticPlan2D (size_t m1, size_t m2, double alpha, double mu, double lambda,
+					double h1, double h2, boundary_t bc, elasticPlan *pPlan)
+{
+	elasticPlan     EP;
+	EP = (elasticPlan) malloc (sizeof (elasticPlan_t));
+
+	initElasticMatrix2D (m1, m2, mu, lambda, h1, h2, bc, &(EP->M));
+
+	EP->in = (fftw_complex *) fftw_malloc (sizeof (fftw_complex) * m1 * m2);
+	EP->out = (fftw_complex *) fftw_malloc (sizeof (fftw_complex) * m1 * m2);
+	EP->pForw = fftw_plan_dft_2d (m1, m2, EP->in, EP->out, FFTW_FORWARD, FFTW_MEASURE);
+	EP->pBackw = fftw_plan_dft_2d (m1, m2, EP->in, EP->out, FFTW_BACKWARD, FFTW_MEASURE);
+
+	EP->alpha = alpha;
+	EP->mu = mu;
+	EP->lambda = lambda;
+	EP->dim = 2;
+	EP->m1 = m1;
+	EP->m2 = m2;
+	EP->m3 = 1;
+	EP->h1 = h1;
+	EP->h2 = h2;
+	EP->h3 = 0;
+	EP->bc = bc;
+
+	*(pPlan) = EP;
+}
+
+
+void            printElasticPlan (const elasticPlan M)
+{
+	printf ("%s %d (Build %s %s) -- \n", __FILE__, __LINE__, __DATE__, __TIME__);
+	printf ("-- elasticPlan at %p\n", M);
+	printf ("%30s : %p\n", "M->M", M->M);
+	printf ("%30s : %p\n", "M->pForw", M->pForw);
+	printf ("%30s : %p\n", "M->pBackw", M->pBackw);
+	printf ("%30s : %p\n", "M->in", M->in);
+	printf ("%30s : %p\n", "M->out", M->out);
+	printf ("%30s : %g\n", "M->alpha", M->alpha);
+	printf ("%30s : %g\n", "M->mu", M->mu);
+	printf ("%30s : %g\n", "M->lambda", M->lambda);
+	printf ("%30s : %d\n", "M->dim", M->dim);
+	printf ("%30s : %g\n", "M->h1", M->h1);
+	printf ("%30s : %g\n", "M->h2", M->h2);
+	printf ("%30s : %g\n", "M->h3", M->h3);
+	printf ("%30s : %d\n", "M->m1", M->m1);
+	printf ("%30s : %d\n", "M->m2", M->m2);
+	printf ("%30s : %d\n", "M->m3", M->m3);
+	printf ("%30s : %d\n", "M->bc", M->bc);
+}
+
+
+void            solveElastic2D (elasticPlan EP, double ***in, double ***out)
+{
+	int             k1, k2;
+	int             m1 = EP->m1;
+	int             m2 = EP->m2;
+	int             m12 = m1 * m2;
+	double         *in1 = in[0][0];
+	double         *in2 = in[1][0];
+	array3D         invD = EP->M->data;
+	fftw_complex   *fftIn1, *fftIn2;
+	double          maxX1 = 0;
+	double          maxX2 = 0;
+
+	fftIn1 = (fftw_complex *) fftw_malloc (sizeof (fftw_complex) * m12);
+	fftIn2 = (fftw_complex *) fftw_malloc (sizeof (fftw_complex) * m12);
+
+	// fftIn1 = fft2(in1)
+
+	for (k1 = 0; k1 < m12; k1++) {
+		EP->in[k1][0] = (-1) * in1[k1];
+		EP->in[k1][1] = 0;
+	}
+	fftw_execute (EP->pForw);
+	for (k1 = 0; k1 < m12; k1++) {
+		fftIn1[k1][0] = EP->out[k1][0];
+		fftIn1[k1][1] = EP->out[k1][1];
+	}
+
+	// fftIn2 = fft2(in2)
+
+	for (k1 = 0; k1 < m12; k1++) {
+		EP->in[k1][0] = (-1) * in2[k1];
+		EP->in[k1][1] = 0;
+	}
+	fftw_execute (EP->pForw);
+	for (k1 = 0; k1 < m12; k1++) {
+		fftIn2[k1][0] = EP->out[k1][0];
+		fftIn2[k1][1] = EP->out[k1][1];
+	}
+
+	// Calculate du1 = invD11.*fft2(in1) + invD12.*fft2(in2)
+
+	for (k1 = 0; k1 < m12; k1++) {			// real and imaginary components
+		EP->in[k1][0] = invD[0][0][k1] * fftIn1[k1][0] + invD[1][0][k1] * fftIn2[k1][0];
+		EP->in[k1][1] = invD[0][0][k1] * fftIn1[k1][1] + invD[1][0][k1] * fftIn2[k1][1];
+	}
+	fftw_execute (EP->pBackw);
+	for (k1 = 0; k1 < m12; k1++)
+		maxX1 = maxAbs (maxX1, out[0][0][k1]);
+
+	// Calculate du2 = invD12.*fft2(in1) + invD22.*fft2(in2)
+
+	for (k1 = 0; k1 < m12; k1++) {			// real and imaginary components
+		EP->in[k1][0] = invD[1][0][k1] * fftIn1[k1][0] + invD[2][0][k1] * fftIn2[k1][0];
+		EP->in[k1][1] = invD[1][0][k1] * fftIn1[k1][1] + invD[2][0][k1] * fftIn2[k1][1];
+	}
+	fftw_execute (EP->pBackw);
+	for (k1 = 0; k1 < m12; k1++) {
+		out[1][0][k1] = EP->out[k1][0];
+		maxX2 = maxAbs (maxX2, out[1][0][k1]);
+	}
+
+	fftw_free (fftIn1);
+	fftw_free (fftIn2);
+	// fprintf (stdout, "solveElastic2D:");
+	// fprintf (stdout, "\tmax(abs(dU1)) = %f, max(abs(dU2)) = %f\n", maxX1, maxX2);
+}
+
+
+void            initElasticMatrix3D (size_t m1, size_t m2, size_t m3, double mu, double lambda,
+					double h1, double h2, double h3, boundary_t bc, elasticMatrix3D *pMatrix)
+{
+
+	int             k1, k2, k3;
+	double          ak1, ak2, ak3, ck1, ck2, ck3, sk1, sk2, sk3;
+	double          d11, d12, d13, d22, d23, d33, detD;
+
+	double          m2lp4m = -2 * (lambda + 4 * mu);
+	double          lp2m = lambda + 2 * mu;
+	double          lpm = lambda + mu;
+
+	elasticMatrix3D M;
+	M = (elasticMatrix3D) malloc (sizeof (elasticMatrix3D_t));
+	M->data = createTreeStructure4D (6, m1, m2, m3, (array1D) calloc (6 * m3 * m2 * m1, sizeof (array_t)));
+	M->len = m1 * m2 * m3 * 6;
+
+	array4D         invD = M->data;
+
+	if (bc == PERIODIC) {						  // create inverse Matrix
+		for (k1 = 0; k1 < m1; k1++) {
+			for (k2 = 0; k2 < m2; k2++) {
+				for (k3 = 0; k3 < m3; k3++) {
+					ak1 = 2 * PI * k1 / m1;
+					ak2 = 2 * PI * k2 / m2;
+					ak3 = 2 * PI * k3 / m3;
+
+					ck1 = 2 * cos (ak1);
+					ck2 = 2 * cos (ak2);
+					ck3 = 2 * cos (ak3);
+
+					sk1 = sin (ak1);
+					sk2 = sin (ak2);
+					sk3 = sin (ak3);
+
+					d11 = (m2lp4m + lp2m * ck1 + mu * (ck2 + ck3)) / (h1 * h1);
+					d12 = -lpm * sk1 * sk2 / (h1 * h2);
+					d13 = -lpm * sk1 * sk3 / (h1 * h3);
+					d22 = (m2lp4m + mu * (ck1 + ck3) + lp2m * ck2) / (h2 * h2);
+					d23 = -lpm * sk2 * sk3 / (h2 * h3);
+					d33 = (m2lp4m + mu * (ck1 + ck2) + lp2m * ck3) / (h3 * h3);
+
+					// Calculate determinant
+
+					detD = d11 * d22 * d33 - d11 * d23 * d23 - d12 * d12 * d33 + d12 * d13 * d23 + d12 * d13 * d23 - d13 * d13 * d22;
+
+					if (fabs (detD) < 1e-15) {	  // numerically zero
+						invD[0][k1][k2][k3] = 0;
+						invD[1][k1][k2][k3] = 0;
+						invD[2][k1][k2][k3] = 0;
+						invD[3][k1][k2][k3] = 0;
+						invD[4][k1][k2][k3] = 0;
+						invD[5][k1][k2][k3] = 0;
+					}
+					else {
+						invD[0][k1][k2][k3] = (d22 * d33 - d23 * d23) / detD;
+						invD[1][k1][k2][k3] = (d13 * d23 - d12 * d33) / detD;
+						invD[2][k1][k2][k3] = (d12 * d23 - d13 * d22) / detD;
+						invD[3][k1][k2][k3] = (d11 * d33 - d13 * d13) / detD;
+						invD[4][k1][k2][k3] = (d12 * d13 - d11 * d23) / detD;
+						invD[5][k1][k2][k3] = (d11 * d22 - d12 * d12) / detD;
+					}
+				}
+			}
+		}
+
+		*(pMatrix) = M;
+	}
+	else {
+		fprintf (stderr, "Elastic solver currently only implemented for periodic boundary conditions\n");
+		*(pMatrix) = NULL;
+	}
+}
+
+
+void            initElasticPlan3D (size_t m1, size_t m2, size_t m3, double alpha, double mu, double lambda,
+					double h1, double h2, double h3, boundary_t bc, elasticPlan3D * pPlan)
+{
+	elasticPlan3D   EP;
+	EP = (elasticPlan3D) malloc (sizeof (elasticPlan3D_t));
+
+	initElasticMatrix3D (m1, m2, m3, alpha * mu, alpha * lambda, h1, h2, h3, bc, &(EP->M));
+
+	EP->in = (fftw_complex *) fftw_malloc (sizeof (fftw_complex) * m1 * m2 * m3);
+	EP->out = (fftw_complex *) fftw_malloc (sizeof (fftw_complex) * m1 * m2 * m3);
+	EP->pForw = fftw_plan_dft_3d (m1, m2, m3, EP->in, EP->out, FFTW_FORWARD, FFTW_MEASURE);
+	EP->pBackw = fftw_plan_dft_3d (m1, m2, m3, EP->in, EP->out, FFTW_BACKWARD, FFTW_MEASURE);
+
+	EP->alpha = alpha;
+	EP->mu = mu;
+	EP->lambda = lambda;
+	EP->dim = 3;
+	EP->m1 = m1;
+	EP->m2 = m2;
+	EP->m3 = m3;
+	EP->h1 = h1;
+	EP->h2 = h2;
+	EP->h3 = h3;
+	EP->bc = bc;
+
+	*(pPlan) = EP;
+}
+
+
+void            solveElastic3D (elasticPlan3D EP, double ****in, double ****out)
+{
+	int             k1, k2, k3;
+	int             m1 = EP->m1;
+	int             m2 = EP->m2;
+	int             m3 = EP->m3;
+	int             m123 = m1 * m2 * m3;
+	double         *in1 = in[0][0][0];
+	double         *in2 = in[1][0][0];
+	double         *in3 = in[2][0][0];
+	array4D         invD = EP->M->data;
+	fftw_complex   *fftIn1, *fftIn2, *fftIn3;
+	double          maxX1, maxX2, maxX3;
+	maxX1 = maxX2 = maxX3 = 0;
+
+	fftIn1 = (fftw_complex *) fftw_malloc (sizeof (fftw_complex) * m123);
+	fftIn2 = (fftw_complex *) fftw_malloc (sizeof (fftw_complex) * m123);
+	fftIn3 = (fftw_complex *) fftw_malloc (sizeof (fftw_complex) * m123);
+
+	// fftIn1 = fft3(in1)
+	// hier werden die Daten von der bergeordneten Struktur in den FFTW-Transformations-Kasten kopiert
+
+	for (k1 = 0; k1 < m123; k1++) {
+		EP->in[k1][0] = (-1) * in1[k1];			  // real
+		EP->in[k1][1] = 0;						  // imaginary
+	}
+	fftw_execute (EP->pForw);					  // fuehre FFT aus
+
+	// nun kopiere die Daten von der FFTW-Box in die eigentliche Datenstruktur
+
+	for (k1 = 0; k1 < m123; k1++) {
+		fftIn1[k1][0] = EP->out[k1][0];			  // real
+		fftIn1[k1][1] = EP->out[k1][1];			  // imag
+	}
+
+	// fftIn2 = fft3(in2)
+
+	for (k1 = 0; k1 < m123; k1++) {
+		EP->in[k1][0] = (-1) * in2[k1];			  // real
+		EP->in[k1][1] = 0;						  // imag
+	}
+	fftw_execute (EP->pForw);					  // ausfuehren FFT
+	for (k1 = 0; k1 < m123; k1++) {
+		fftIn2[k1][0] = EP->out[k1][0];			  // real
+		fftIn2[k1][1] = EP->out[k1][1];			  // imag
+	}
+
+	// und fuer in3 ...
+
+	for (k1 = 0; k1 < m123; k1++) {
+		EP->in[k1][0] = (-1) * in3[k1];			  // real
+		EP->in[k1][1] = 0;						  // imag
+	}
+	fftw_execute (EP->pForw);					  // ausfuehren FFT
+	for (k1 = 0; k1 < m123; k1++) {
+		fftIn3[k1][0] = EP->out[k1][0];			  // real
+		fftIn3[k1][1] = EP->out[k1][1];			  // imag
+	}
+
+	// Calculate du1 = invD11.*fft3(in1) + invD12.*fft3(in2) + invD13.*fft3(in3)
+
+	for (k1 = 0; k1 < m123; k1++) {				  // real and imaginary components
+		EP->in[k1][0] = invD[0][0][0][k1] * fftIn1[k1][0] + invD[1][0][0][k1] * fftIn2[k1][0] + invD[2][0][0][k1] * fftIn3[k1][0];
+		EP->in[k1][1] = invD[0][0][0][k1] * fftIn1[k1][1] + invD[1][0][0][k1] * fftIn2[k1][1] + invD[2][0][0][k1] * fftIn3[k1][1];
+	}
+	fftw_execute (EP->pBackw);
+	for (k1 = 0; k1 < m123; k1++) {
+		out[0][0][0][k1] = EP->out[k1][0];
+		if (maxX1 < fabs (out[0][0][0][k1])) {
+			maxX1 = fabs (out[0][0][0][k1]);
+		}
+	}
+
+	// Calculate du2 = invD12.*fft3(in1) + invD22.*fft3(in2) + invD23.*fft3(in3)
+
+	for (k1 = 0; k1 < m123; k1++) {					// real and imaginary components
+		EP->in[k1][0] = invD[1][0][0][k1] * fftIn1[k1][0] + invD[3][0][0][k1] * fftIn2[k1][0] + invD[4][0][0][k1] * fftIn3[k1][0];
+		EP->in[k1][1] = invD[1][0][0][k1] * fftIn1[k1][1] + invD[3][0][0][k1] * fftIn2[k1][1] + invD[4][0][0][k1] * fftIn3[k1][1];
+	}
+	fftw_execute (EP->pBackw);
+	for (k1 = 0; k1 < m123; k1++) {
+		out[1][0][0][k1] = EP->out[k1][0];
+		if (maxX2 < fabs (out[1][0][0][k1])) {
+			maxX2 = fabs (out[1][0][0][k1]);
+		}
+	}
+
+	// Calculate du3 = invD13.*fft3(in1) + invD23.*fft3(in2) + invD33.*fft3(in3)
+
+	for (k1 = 0; k1 < m123; k1++) {				// real and imaginary components
+		EP->in[k1][0] = invD[2][0][0][k1] * fftIn1[k1][0] + invD[4][0][0][k1] * fftIn2[k1][0] + invD[5][0][0][k1] * fftIn3[k1][0];
+		EP->in[k1][1] = invD[2][0][0][k1] * fftIn1[k1][1] + invD[4][0][0][k1] * fftIn2[k1][1] + invD[5][0][0][k1] * fftIn3[k1][1];
+	}
+	fftw_execute (EP->pBackw);
+	for (k1 = 0; k1 < m123; k1++) {
+		out[2][0][0][k1] = EP->out[k1][0];
+		if (maxX3 < fabs (out[2][0][0][k1])) {
+			maxX3 = fabs (out[2][0][0][k1]);
+		}
+	}
+
+	fftw_free (fftIn1);
+	fftw_free (fftIn2);
+	fftw_free (fftIn3);
+
+	// fprintf (stdout, "solveElastic3D:");
+	// fprintf (stdout, "\tmax(abs(dU1)) = %f\n\t\tmax(abs(dU2)) = %f\n\t\tmax(abs(dU3)) = %f\n", maxX1, maxX2, maxX3);
+}
+
+
+void            deleteElasticMatrix3D (elasticMatrix3D A)
+{
+	if (A != NULL) {
+		deleteArray4D (A->data);
+		free (A);
+	}
+}
+
+
+void            deleteElasticPlan3D (elasticPlan3D EP)
+{
+	if (EP != NULL) {
+		deleteElasticMatrix3D (EP->M);
+		fftw_destroy_plan (EP->pForw);
+		fftw_destroy_plan (EP->pBackw);
+		fftw_free (EP->in);
+		fftw_free (EP->out);
+		free (EP);
+	}
+}
+
+
+void            deleteElasticMatrix (elasticMatrix A)
+{
+	if (A != NULL) {
+		deleteArray3D (A->data);
+		free (A);
+	}
+}
+
+
+void            deleteElasticPlan (elasticPlan EP)
+{
+	if (EP != NULL) {
+		deleteElasticMatrix (EP->M);
+		fftw_destroy_plan (EP->pForw);
+		fftw_destroy_plan (EP->pBackw);
+		fftw_free (EP->in);
+		fftw_free (EP->out);
+		free (EP);
+	}
+}
+@
+
+
+1.3
+log
+@May 20 version
+@
+text
+@d173 2
+a174 2
+	fprintf (stdout, "solveElastic2D:");
+	fprintf (stdout, "\tmax(abs(dU1)) = %f, max(abs(dU2)) = %f\n", maxX1, maxX2);
+d387 2
+a388 2
+	fprintf (stdout, "solveElastic3D:");
+	fprintf (stdout, "\tmax(abs(dU1)) = %f\n\t\tmax(abs(dU2)) = %f\n\t\tmax(abs(dU3)) = %f\n", maxX1, maxX2, maxX3);
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*	(c) SW and KE, 2005 */
+d6 2
+a7 9
+/* --------------------------------------------------------------------- */
+	void            initElasticMatrix2D (size_t m1,
+					                     size_t m2,
+					                     double mu,
+					                     double lambda,
+					                     double h1,
+					                     double h2,
+					                     boundary_t bc,
+					                     elasticMatrix * pMatrix)
+a17 4
+	/* SB */
+#if 0
+	M->data = createArray3D (3, m1, m2);
+#endif
+a18 2
+	/* \SB */
+
+d23 1
+a23 2
+	if (bc == PERIODIC) {
+		/* create inverse Matrix -------------------------------------------------- */
+d38 1
+a38 2
+				/* Calculate determinant */
+				detD = d11 * d22 - d12 * d12;
+d40 1
+a40 1
+				if (fabs (detD) < 1e-15) {		/* numerically zero */
+d42 1
+a42 1
+				} else {
+d50 3
+a52 2
+	} else {
+		printf ("Elastic solver currently only implemented for periodic boundary conditions!");
+d57 2
+a58 10
+/* --------------------------------------------------------------------- */
+void            initElasticPlan2D (size_t m1,
+				                   size_t m2,
+				                   double alpha,
+				                   double mu,
+				                   double lambda,
+				                   double h1,
+				                   double h2,
+				                   boundary_t bc,
+				                   elasticPlan * pPlan)
+d85 1
+a85 1
+/* --------------------------------------------------------------------- */
+a87 1
+
+d108 2
+a109 4
+/* --------------------------------------------------------------------- */
+void            solveElastic2D (elasticPlan EP,
+				                double ***in,
+				                double ***out)
+d119 2
+a120 2
+	double          maxX1, maxX2;
+	maxX1 = maxX2 = 0;
+d125 2
+a126 1
+	/* fftIn1 = fft2(in1) */
+d137 2
+a138 1
+	/* fftIn2 = fft2(in2) */
+d149 1
+d151 3
+a153 4
+	/* Calculate du1 = invD11.*fft2(in1) + invD12.*fft2(in2) */
+	for (k1 = 0; k1 < m12; k1++) {
+		EP->in[k1][0] = invD[0][0][k1] * fftIn1[k1][0] + invD[1][0][k1] * fftIn2[k1][0];	/* real */
+		EP->in[k1][1] = invD[0][0][k1] * fftIn1[k1][1] + invD[1][0][k1] * fftIn2[k1][1];	/* imag */
+d156 1
+a156 2
+	for (k1 = 0; k1 < m12; k1++) {
+		out[0][0][k1] = EP->out[k1][0];
+a157 1
+	}
+d159 5
+a163 4
+	/* Calculate du2 = invD12.*fft2(in1) + invD22.*fft2(in2) */
+	for (k1 = 0; k1 < m12; k1++) {
+		EP->in[k1][0] = invD[1][0][k1] * fftIn1[k1][0] + invD[2][0][k1] * fftIn2[k1][0];	/* real */
+		EP->in[k1][1] = invD[1][0][k1] * fftIn1[k1][1] + invD[2][0][k1] * fftIn2[k1][1];	/* imag */
+d173 2
+a174 1
+	printf ("\tmax(abs(dU1)) = %f, max(abs(dU2)) = %f\n", maxX1, maxX2);
+a176 3
+/*==============================================
+/* 3d-Fall
+/*==============================================
+d178 2
+a179 11
+/* --------------------------------------------------------------------- */
+void            initElasticMatrix3D (size_t m1,
+				                     size_t m2,
+				                     size_t m3,
+				                     double mu,
+				                     double lambda,
+				                     double h1,
+				                     double h2,
+				                     double h3,
+				                     boundary_t bc,
+				                     elasticMatrix3D * pMatrix)
+a191 4
+	/* SB */
+#if 0
+	M->data = createArray4D (6, m1, m2, m3);
+#endif
+a192 2
+	/* \SB */
+
+d197 1
+a197 2
+	if (bc == PERIODIC) {
+		/* create inverse Matrix -------------------------------------------------- */
+d220 2
+a221 1
+					/* Calculate determinant */
+d224 1
+a224 4
+					if (fabs (detD) < 1e-15) { 	/* numerically zero */
+						/* invD[0] = D11+ invD[1] = D12+ invD[2] = D13+
+						 * invD[3] = D22+ invD[4] = D23+ invD[5] = D33+
+						 */
+d231 2
+a232 1
+					} else {
+d245 3
+a247 2
+	} else {
+		printf ("Elastic solver currently only implemented for periodic boundary conditions!");
+d252 3
+a254 12
+/* --------------------------------------------------------------------- */
+void            initElasticPlan3D (size_t m1,
+				                   size_t m2,
+				                   size_t m3,
+				                   double alpha,
+				                   double mu,
+				                   double lambda,
+				                   double h1,
+				                   double h2,
+				                   double h3,
+				                   boundary_t bc,
+				                   elasticPlan3D * pPlan)
+d281 2
+a282 4
+/* --------------------------------------------------------------------- */
+void            solveElastic3D (elasticPlan3D EP,
+				                double ****in,
+				                double ****out)
+a296 1
+
+d301 2
+a302 1
+	/* fftIn1 = fft3(in1) */
+a303 3
+	/* hier werden die Daten von der übergeordneten Struktur in den
+	 * FFTW-Transformations-Kasten kopiert
+	 */
+d305 2
+a306 2
+		EP->in[k1][0] = (-1) * in1[k1];	 /* Realteil */
+		EP->in[k1][1] = 0;		 /* Imaginaerteil */
+d308 1
+a308 1
+	fftw_execute (EP->pForw);		 /* fuehre FFT aus */
+d310 2
+a311 1
+	/* nun kopiere die Daten von der FFTW-Box in die eigentliche Datenstruktur */
+d313 2
+a314 2
+		fftIn1[k1][0] = EP->out[k1][0];	 /* real */
+		fftIn1[k1][1] = EP->out[k1][1];	 /* imag */
+d317 2
+a318 1
+	/* fftIn2 = fft3(in2) */
+d320 2
+a321 2
+		EP->in[k1][0] = (-1) * in2[k1];	 /* real */
+		EP->in[k1][1] = 0;				 /* imag */
+d323 1
+a323 1
+	fftw_execute (EP->pForw);		 /* ausfuehren FFT */
+d325 2
+a326 2
+		fftIn2[k1][0] = EP->out[k1][0];	 /* real */
+		fftIn2[k1][1] = EP->out[k1][1];	 /* imag */
+d329 2
+a330 1
+	/* und fuer in3 ... */
+d332 2
+a333 2
+		EP->in[k1][0] = (-1) * in3[k1];	 /* real */
+		EP->in[k1][1] = 0;		 		 /* imag */
+d335 1
+a335 1
+	fftw_execute (EP->pForw);		 /* ausfuehren FFT */
+d337 2
+a338 2
+		fftIn3[k1][0] = EP->out[k1][0];	 /* real */
+		fftIn3[k1][1] = EP->out[k1][1];	 /* imag */
+d341 1
+d343 3
+a345 5
+	/* calculate du1 */
+	/* du1 = invD11.*fft3(in1) + invD12.*fft3(in2) + invD13.*fft3(in3) */
+	for (k1 = 0; k1 < m123; k1++) {
+		EP->in[k1][0] = invD[0][0][0][k1] * fftIn1[k1][0] + invD[1][0][0][k1] * fftIn2[k1][0] + invD[2][0][0][k1] * fftIn3[k1][0];	/* real */
+		EP->in[k1][1] = invD[0][0][0][k1] * fftIn1[k1][1] + invD[1][0][0][k1] * fftIn2[k1][1] + invD[2][0][0][k1] * fftIn3[k1][1];	/* imag */
+a349 1
+		// maxX1 = maxAbs (maxX1, out[0][0][0][k1]);
+d355 5
+a359 4
+	/* Calculate du2 = invD12.*fft3(in1) + invD22.*fft3(in2) + invD23.*fft3(in3) */
+	for (k1 = 0; k1 < m123; k1++) {
+		EP->in[k1][0] = invD[1][0][0][k1] * fftIn1[k1][0] + invD[3][0][0][k1] * fftIn2[k1][0] + invD[4][0][0][k1] * fftIn3[k1][0];	/* real */
+		EP->in[k1][1] = invD[1][0][0][k1] * fftIn1[k1][1] + invD[3][0][0][k1] * fftIn2[k1][1] + invD[4][0][0][k1] * fftIn3[k1][1];	/* imag */
+a363 1
+		// maxX2 = maxAbs (maxX2, out[1][0][0][k1]);
+d369 5
+a373 4
+	/* Calculate du3 = invD13.*fft3(in1) + invD23.*fft3(in2) + invD33.*fft3(in3) */
+	for (k1 = 0; k1 < m123; k1++) {
+		EP->in[k1][0] = invD[2][0][0][k1] * fftIn1[k1][0] + invD[4][0][0][k1] * fftIn2[k1][0] + invD[5][0][0][k1] * fftIn3[k1][0];	/* real */
+		EP->in[k1][1] = invD[2][0][0][k1] * fftIn1[k1][1] + invD[4][0][0][k1] * fftIn2[k1][1] + invD[5][0][0][k1] * fftIn3[k1][1];	/* imag */
+a377 1
+		// maxX3 = maxAbs (maxX3, out[2][0][0][k1]);
+d387 2
+a388 1
+	printf ("\tmax(abs(dU1)) = %f\n\tmax(abs(dU2)) = %f\n\tmax(abs(dU3)) = %f\n", maxX1, maxX2, maxX3);
+d391 1
+a391 1
+/* --------------------------------------------------------------------- */
+a400 1
+/* --------------------------------------------------------------------- */
+a411 3
+/*==============================================
+/* Ende der 3d-Fall
+/*==============================================
+a413 1
+/* --------------------------------------------------------------------- */
+d422 1
+a422 1
+/* --------------------------------------------------------------------- */
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@a15 1
+
+d25 1
+a25 1
+	/** SB */
+d52 1
+a52 4
+				/*
+				 * calculate determinant
+				 * --------------------------------------------
+				 */
+d55 1
+a55 2
+				if (fabs (detD) < 1e-15) {
+					/* numerically zero */
+a63 1
+
+a70 1
+
+a81 1
+
+a130 1
+
+d150 1
+a150 1
+	/* fftIn1=fft2(in1) */
+d161 1
+a161 1
+	/* fftIn2=fft2(in2) */
+d173 1
+a173 2
+	/* calculate du1 */
+	/* du1 = invD11.*fft2(in1) + invD12.*fft2(in2) */
+d184 1
+a184 2
+	/* calculate du2 */
+	/* du2 = invD12.*fft2(in1) + invD22.*fft2(in2) */
+a196 1
+
+d204 1
+a204 3
+/*
+   ---------------------------------------------------------------------
+*/
+d227 1
+a227 1
+	/** SB */
+d262 1
+a262 4
+					/*
+					 * calculate determinant
+					 * --------------------------------------------
+					 */
+d265 2
+a266 5
+					if (fabs (detD) < 1e-15) {
+						/* numerically zero */
+
+						/*
+						 * invD[0] = D11+ invD[1] = D12+ invD[2] = D13+
+a293 1
+
+a306 1
+
+d355 1
+a355 1
+	/** fftIn1=fft3(in1) */
+d357 1
+a357 2
+	/*
+	 * hier werden die Daten von der übergeordneten Struktur in den
+d366 1
+a366 3
+	/*
+	 * nun kopiere die Daten von der FFTW-Box in die eigentliche Datenstruktur
+	 */
+d372 1
+a372 1
+	/* fftIn2=fft3(in2) */
+d375 1
+a375 1
+		EP->in[k1][1] = 0;		 /* imag */
+a382 1
+
+d386 1
+a386 1
+		EP->in[k1][1] = 0;		 /* imag */
+d404 1
+a404 1
+		//maxX1 = maxAbs (maxX1, out[0][0][0][k1]);
+d410 1
+a410 2
+	/* calculate du2 */
+	/* du2 = invD12.*fft3(in1) + invD22.*fft3(in2) + invD23.*fft3(in3) */
+d418 1
+a418 1
+		//maxX2 = maxAbs (maxX2, out[1][0][0][k1]);
+d424 1
+a424 2
+	/* calculate du3 */
+	/* du3 = invD13.*fft3(in1) + invD23.*fft3(in2) + invD33.*fft3(in3) */
+d432 1
+a432 1
+		//maxX3 = maxAbs (maxX3, out[2][0][0][k1]);
+a466 1
+
+d472 1
+a472 3
+/*
+   ---------------------------------------------------------------------
+*/
+a480 1
+
+@

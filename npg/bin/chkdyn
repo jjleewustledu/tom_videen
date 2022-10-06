@@ -1,0 +1,92 @@
+#!/bin/csh
+#   Name:   chkdyn
+#   Author: Tom Videen
+#   Date:   Nov 2002
+#   Intent: View time-activity curve for dynamic image
+
+if ($#argv != 5) then
+	echo "Usage:  chkdyn prefix subject tracer scan ext"
+	echo " e.g.   chkdyn p 5660 ho 1 v"
+	exit 1
+endif
+
+set PREFIX   = $1
+set ID       = $2
+set TRACER   = $3
+set NUM      = $4
+set EXT      = $5
+
+set X    = 65
+set Y    = 65
+set Z    = 24
+set DIAM = 120
+
+set NAME = $PREFIX$ID$TRACER$NUM
+set IN   = $NAME.$EXT
+set LST  = $NAME.lst
+set PRM  = $NAME.prm
+set REG  = $NAME.reg
+set RGT  = $NAME.rgt
+set PLT  = $NAME.plt
+set CMD  = $NAME.cmd
+
+if (! -e $IN) then
+	echo "ERROR [chkdyn] file not found: $IN"
+	exit 1
+endif
+
+imgfrms $IN | cut -c1-3 >! junk
+set FIRST = `head -5 junk | tail -1`
+set LAST  = `tail -1 junk`
+/usr/bin/rm junk
+set NFRMS = `echo $LAST - $FIRST + 1 | bc`
+set MISSING = `echo $FIRST - 1 | bc`
+echo "$IN    Frames $FIRST to $LAST"
+
+set ZEROTIME = `imghdr $IN $FIRST | grep "Start time" | cut -f2 -d= | cut -f1 -ds`
+echo "Zero Time = $ZEROTIME"
+echo $ZEROTIME >! $CMD
+
+# Create lst, prm, and reg files:
+
+echo "$ID $NUM" >! $LST
+
+echo "species:   $PREFIX"          >! $PRM
+echo "tracer:    $TRACER"          >> $PRM
+echo "extension: $EXT"             >> $PRM
+echo "imgfilter: none"             >> $PRM
+echo "voi:       new_sphere $DIAM" >> $PRM
+
+echo "30  voifile"                 >! $REG
+echo "center of brain"             >> $REG
+echo "1"                           >> $REG
+echo "center_of_brain  $X  $Y  $Z" >> $REG
+
+# Create rgt file, then parse to pltfile
+
+voistat $PRM $LST $RGT $REG < $CMD
+
+set SIZE = `wc -l $RGT | cut -f1 -d$PREFIX`
+set NN = `echo $SIZE - 2 | bc`
+set INTERVAL = `tail -$NN $RGT | head -$NFRMS | cut -c14-24`
+set COUNTS = `tail -$NN $RGT | head -$NFRMS | cut -c28-40`
+
+echo 0 >! $PLT
+set i = 1
+while ($i <= $NFRMS)
+	set SEC = `echo $INTERVAL[$i] | bc -l`
+	set CNTRATE = `echo $COUNTS[$i] / $SEC | bc -l`
+	echo $CNTRATE >> $PLT
+	@ i++
+end
+
+set STRING = "$DIAM-mm sphere at $X,$Y,$Z"
+plotcol $PLT $FIRST $LAST $IN $STRING
+
+/usr/bin/rm $CMD
+/usr/bin/rm $LST
+/usr/bin/rm $PRM
+/usr/bin/rm $REG
+/usr/bin/rm $RGT
+/usr/bin/rm $PLT
+

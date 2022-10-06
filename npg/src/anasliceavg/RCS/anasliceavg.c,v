@@ -1,0 +1,206 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.18.10.30;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.10.09.15.25.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: anasliceavg.c,v $
+ * Revision 1.1  2000/10/09  15:25:02  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			anasliceavg.c
+ *	Date:			Oct 2000
+ *	Author:			Tom Videen
+ *	Description:	Compute average of adjoining slices of an Analyze image
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anasliceavg/RCS/anasliceavg.c,v 1.1 2000/10/09 15:25:02 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			anasliceavg
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;		 /* output file names */
+	char           *img2, *hdr2;		 /* input file names */
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+	long            num, pln, i;
+	long            z, z0, za, zb;
+	float          *fimg;			 /* float image */
+	short          *simg;			 /* short image */
+
+	if (argc != 5) {
+		fprintf (stderr, "Usage: anasliceavg inhdr inimg outhdr outimg\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anasliceavg]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anasliceavg]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [anasliceavg]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [anasliceavg]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anasliceavg]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+	pln = dim1 * dim2;
+	num = pln * dim3;
+
+	simg = (short *) calloc (num, sizeof (short));
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [anasliceavg]: Cannot calloc simg\n");
+		return (ERROR);
+	}
+	fimg = (float *) calloc (num, sizeof (float));
+	if (fimg == NULL) {
+		fprintf (stderr, "ERROR [anasliceavg]: Cannot calloc fimg\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anasliceavg]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((fread (simg, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [anasliceavg]: Reading: %s\n", img1);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	fprintf (stdout, "Read %s\n", img1);
+
+/*	Average adjoining slices */
+
+	z0 = 0;
+	zb = pln;
+	for (i = 0; i < pln; i++)
+		fimg[z0 + i] = 9 * ((float) simg[z0 + i]) + (float) simg[zb + i];
+
+	for (z = 1; z < dim3 - 1; z++) {
+		z0 = z * pln;
+		za = (z - 1) * pln;
+		zb = (z + 1) * pln;
+		for (i = 0; i < pln; i++)
+			fimg[z0 + i] = 8 * ((float) simg[z0 + i]) + (float) simg[za + i] + (float) simg[zb + i];
+	}
+
+	z0 = (dim3-1) * pln;
+	za = z0 - pln;
+	for (i = 0; i < pln; i++) 
+		fimg[z0 + i] = 9 * ((float) simg[z0 + i]) + (float) simg[za + i];
+
+/*	Write mean image */
+
+	for (i = 0; i < num; i++)
+		simg[i] = (short) (fimg[i] / 10.);
+
+	if ((fd_img = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anasliceavg]: Unable to open %s\n", img2);
+		return (ERROR);
+	}
+	fprintf (stdout, "Writing %s\n", img2);
+	if ((fwrite (simg, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [anasliceavg]: Error writing to: %s\n", img2);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anasliceavg]: Unable to open %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anasliceavg]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+
+	free (simg);
+	free (fimg);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anasliceavg/RCS/anasliceavg.c,v 1.2 1999/12/16 17:58:54 tom Exp $";
+d77 1
+a77 1
+	fclose (fd_hdr);
+d99 1
+a99 1
+	fclose (fd_img);
+d136 1
+a136 1
+	fclose (fd_img);
+d146 1
+a146 1
+	fclose (fd_hdr);
+@

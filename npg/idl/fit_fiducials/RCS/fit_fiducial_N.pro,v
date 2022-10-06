@@ -1,0 +1,349 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	96.01.08.15.20.13;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@pro fit_fiducial_N, name, branch, flag
+
+; Get filenames & initialize parameters for the particular orientation of the fiducial
+; ------------------------------------------------------------------------------------
+
+	if (branch eq "topz") then begin
+		left = name + branch + "top.img"
+		middle = name + branch + "diag.img"
+		right  = name + branch + "btm.img"
+		plane = 0
+		planez = 1
+		x_title = "X"
+		y_title = "Y"
+		distance = -32.0
+		angle  = +0.7854
+		xc = 0
+		yc = 1
+		zc = 2
+	endif else if (branch eq "rtz") then begin
+		left = name + branch + "top.img"
+		middle = name + branch + "diag.img"
+		right  = name + branch + "btm.img"
+		plane = 1
+		planez = 2
+		x_title = "Y"
+		y_title = "Z"
+		distance = -31.5
+		angle  = -0.7854
+		xc = 1
+		yc = 2
+		zc = 0
+	endif else if (branch eq "backn") then begin
+		left = name + branch + "lf.img"
+		middle = name + branch + "diag.img"
+		right  = name + branch + "rt.img"
+		plane = 2
+		planez = 0
+		x_title = "Z"
+		y_title = "X"
+		distance = -107.5
+		angle  = -1.0472
+		xc = 2
+		yc = 0
+		zc = 1
+	endif else begin
+		print, "Unrecognized branch"
+		exit
+	endelse
+
+	plot_title = name + branch
+	outfile = name + ".fid"
+
+; Determine image array size & type
+; ---------------------------------
+	asize = intarr(3)
+	pixsize = fltarr(3)
+	analyze_dim, left, asize, dsize, pixsize
+
+	if (dsize eq 8) then $
+		data = bytarr(asize(0), asize(1), asize(2)) $
+	else $
+		data = intarr(asize(0), asize(1), asize(2))
+	points = fltarr(2, 2)
+	get_lun,lu
+
+; Read each array & extract the non-zero coordinates for each segment of the N.
+; Then divide each column by pixel size to scale to isotropic 1x1x1 mm space.
+; ----------------------------------------------------------------------------
+
+	openr,lu,left
+	readu,lu,data,TRANSFER_COUNT=count
+	close,lu
+	nonzero_coords, data, leftset
+	for i=0,2 do $
+		leftset(i,*) = leftset(i,*) * pixsize(i)
+	if (flag eq 1) then $
+		leftpts = center_of_mass(leftset, plane) $
+	else $
+		leftpts = center_of_mazz(leftset, plane)
+	nl = (size(leftpts))(2)
+
+	openr,lu,middle
+	readu,lu,data
+	close,lu
+	nonzero_coords, data, middleset
+	for i=0,2 do $
+		middleset(i,*) = middleset(i,*) * pixsize(i)
+	if (flag eq 1) then $
+		middlepts = center_of_mass(middleset, plane) $
+	else $
+		middlepts = center_of_mazz(middleset, planez)
+	nm = (size(middlepts))(2)
+
+	openr,lu,right
+	readu,lu,data
+	close,lu
+	nonzero_coords, data, rightset
+	for i=0,2 do $
+		rightset(i,*) = rightset(i,*) * pixsize(i)
+	if (flag eq 1) then $
+		rightpts = center_of_mass(rightset, plane) $
+	else $
+		rightpts = center_of_mazz(rightset, plane)
+	nr = (size(rightpts))(2)
+
+; Combine all non-zero points
+
+	all = [[leftset], [rightset], [middleset]]
+	data = [[leftpts], [rightpts], [middlepts]]
+
+	s1 = nl-1
+	s2 = nl
+	s3 = nl+nr-1
+	s4 = nl+nr
+	s5 = nl+nr+nm-1
+
+; Plot all points (2D projection prior to rotation):
+; --------------------------------------------------
+ 
+	xp = all(xc,*)
+	yp = rotate(all(yc,*),4)
+	plot_fiducial, xp, yp, plot_title, x_title, y_title
+	xp = data(xc,*)
+	yp = rotate(data(yc,*),4)
+	oplot, xp, yp, psym=1
+	val = data(3,*)
+	data(3,*) = 1.
+	w = rotate(val,4)
+	mat0 = [[1., 0., 0., 0.], $
+			[0., 1., 0., 0.], $
+			[0., 0., 1., 0.], $
+			[0., 0., 0., 1.]]
+
+; Align yc-axis to data rotating about the xc-axis:
+; Rotation yc -> zc is positive according to the right-hand rule.
+; ---------------------------------------------------------------
+
+	y = data(yc,*)
+	z = rotate(data(zc,*),4)
+	yz = regress(y, z, w, fit, yz0, sigma, ftest, r, rmul, chisq)
+	print, yz, yz0, chisq
+
+	alpha = atan(yz)
+	mat1 = mat0
+	mat1(zc,3) = -yz0
+	mat2 = mat0
+	mat2(yc,yc) = cos(alpha)
+	mat2(zc,zc) = cos(alpha)
+	mat2(yc,zc) = -sin(alpha)
+	mat2(zc,yc) = sin(alpha)
+	matyz = mat2#mat1
+	rdata = matyz#data
+
+; Align xc-axis to data rotating about the yc-axis:
+; Rotation xc -> zc is negative according to the right-hand rule.
+; ---------------------------------------------------------------
+
+	x = rdata(xc,*)
+	z = rotate(rdata(zc,*),4)
+	xz = regress(x, z, w, fit, xz0, sigma, ftest, r, rmul, chisq)
+	print, xz, xz0, chisq
+
+	beta = atan(xz)
+	mat1 = mat0
+	mat1(zc,3) = -xz0
+	mat2 = mat0
+	mat2(xc,xc) = cos(beta)
+	mat2(zc,zc) = cos(beta)
+	mat2(xc,zc) = sin(beta)
+	mat2(zc,xc) = -sin(beta)
+	matxz = mat2#mat1
+	mat = matxz#matyz
+	rdata = mat#data
+	rdata(3,*) = val
+
+; Check new plane
+
+   xy = [rdata(xc,*), rdata(yc,*)]
+   z = rotate(rdata(zc,*),4)
+   b2 = regress(xy, z, w, fit, a2, sigma, ftest, r, rmul, chisq)
+   print,b2, a2, chisq
+
+; Fit the fiducial Z to the points in the xc-yc plane
+; ---------------------------------------------------
+ 
+	fit_fid_inplane, rdata, nl, nr, nm, xc, yc, distance, angle, fitp, xp
+	print, fitp
+
+; Compute yc values in this plane (yfit)
+
+	fiducial_func, xp, yfit, fitp, distance, angle
+ 
+; Compute & plot the intersections of the fiducial branches in 3-D space
+; ----------------------------------------------------------------------
+
+	alpha = atan(fitp(0))
+	gamma = alpha + angle
+	a = fitp(0)
+	b = fitp(1)
+	c = fitp(2)
+	d = distance / cos(alpha)
+	e = tan(gamma)
+
+; Intersection of left + middle
+ 
+	xc1 = (c - b)/(a - e)
+	yc1 = a*xc1 + b
+ 
+; Intersection of right + middle
+ 
+	xc2 = (c - b - d)/(a - e)
+	yc2 = a*xc2 + b + d
+
+; Grab point from ends of the Z
+
+	if (plane eq 0) then begin
+		xc3 = min(xp(0,0:s1))
+		xc4 = max(xp(0,s2:s3))
+	endif else begin
+		xc3 = max(xp(0,0:s1))
+		xc4 = min(xp(0,s2:s3))
+	endelse
+	yc3 = yfit(s1)	
+	yc4 = yfit(s2)	
+
+; Rotate back into original space & get the coordinates
+; -----------------------------------------------------
+
+	imat = invert(mat)
+	
+	case 1 of
+	(plane eq 0): begin
+			pt1 = [xc1, yc1, 0., 1.]
+			pt2 = [xc2, yc2, 0., 1.]
+			pt3 = [xc3, yc3, 0., 1.]
+			pt4 = [xc4, yc4, 0., 1.]
+		end
+ 	(plane eq 1): begin	
+			pt1 = [0., xc1, yc1, 1.]
+			pt2 = [0., xc2, yc2, 1.]
+			pt3 = [0., xc3, yc3, 1.]
+			pt4 = [0., xc4, yc4, 1.]
+		end
+ 	(plane eq 2): begin
+			pt1 = [yc1, 0., xc1, 1.]
+			pt2 = [yc2, 0., xc2, 1.]
+			pt3 = [yc3, 0., xc3, 1.]
+			pt4 = [yc4, 0., xc4, 1.]
+		end
+	endcase
+
+	pt1r = imat#pt1
+	pt2r = imat#pt2
+	pt3r = imat#pt3
+	pt4r = imat#pt4
+	xc1  = pt1r(xc)
+	yc1  = pt1r(yc)
+	zc1  = pt1r(zc)
+	xc2  = pt2r(xc)
+	yc2  = pt2r(yc)
+	zc2  = pt2r(zc)
+	xc3  = pt3r(xc)
+	yc3  = pt3r(yc)
+	xc4  = pt4r(xc)
+	yc4  = pt4r(yc)
+
+; Plot intersection points & 3 lines
+ 
+	oplot,[xc1],[yc1],psym=4
+	oplot,[xc2],[yc2],psym=4
+ 
+	xcoord = [xc3, xc1, xc2, xc4]
+	ycoord = [yc3, yc1, yc2, yc4]
+	oplot, xcoord, ycoord, psym=0
+
+; Scale coordinates back to original image space
+; Write coordinates of intersection to outfile
+ 
+	if (exist_file(outfile)) then $
+		openu, lu, outfile, /APPEND $
+	else $
+		openw, lu, outfile
+
+	case 1 of
+	(plane eq 0): begin
+			xc1 = xc1 / pixsize(0)
+			yc1 = yc1 / pixsize(1)
+			zc1 = zc1 / pixsize(2)
+			xc2 = xc2 / pixsize(0)
+			yc2 = yc2 / pixsize(1)
+			zc2 = zc2 / pixsize(2)
+			print, "(x,y,z) = ", xc1, yc1, zc1, "   ", name+branch
+			printf, lu, xc1, yc1, zc1
+			print, "(x,y,z) = ", xc2, yc2, zc2, "   ", name+branch
+			printf, lu, xc2, yc2, zc2
+		end
+	(plane eq 1): begin	
+			zc1 = zc1 / pixsize(0)
+			xc1 = xc1 / pixsize(1)
+			yc1 = yc1 / pixsize(2)
+			zc2 = zc2 / pixsize(0)
+			xc2 = xc2 / pixsize(1)
+			yc2 = yc2 / pixsize(2)
+			print, "(x,y,z) = ", zc1, xc1, yc1, "   ", name+branch
+			printf, lu, zc1, xc1, yc1
+			print, "(x,y,z) = ", zc2, xc2, yc2, "   ", name+branch
+			printf, lu, zc2, xc2, yc2
+		end
+	(plane eq 2): begin
+			yc1 = yc1 / pixsize(0)
+			zc1 = zc1 / pixsize(1)
+			xc1 = xc1 / pixsize(2)
+			yc2 = yc2 / pixsize(0)
+			zc2 = zc2 / pixsize(1)
+			xc2 = xc2 / pixsize(2)
+			print, "(x,y,z) = ", yc1, zc1, xc1, "   ", name+branch
+			printf, lu, yc1, zc1, xc1
+			print, "(x,y,z) = ", yc2, zc2, xc2, "   ", name+branch
+			printf, lu, yc2, zc2, xc2
+		end
+	endcase
+
+	close, lu
+	free_lun,lu
+
+end
+@

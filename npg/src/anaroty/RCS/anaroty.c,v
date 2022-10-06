@@ -1,0 +1,205 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2010.07.27.14.35.13;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/*	===============================================================================
+ *	Module:			anaroty.c
+ *	Date:			Jul 2008
+ *	Author:			Tom Videen
+ *	Description:	Reorient Analyze images rotating along y-axis (switch X and Z coordinates)
+ *	===============================================================================
+ */
+/*@@unused@@*/ 
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anaroty/RCS/anaroty.c,v 2.4 2010/05/17 20:49:55 tom Exp $";
+
+#include <stdio.h>
+#include <string.h>
+#include <myvalues.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <dbh.h>
+
+/*	----------------------------
+ *	Function:			anaroty
+ *	----------------------------
+ */
+int             main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;
+	FILE           *fd_hdr;			 /* file for hdr */
+	FILE           *fd_img;			 /* file for image */
+	char           *in_hdr;			 /* input header filename  */
+	char           *in_img;			 /* input image filename */
+	char           *out_hdr;		 /* input header filename  */
+	char           *out_img;		 /* input image filename */
+
+	int             global_max;
+	int             global_min;
+
+	float           pix2, pix3;
+	int             i, j, k;
+
+	int             dtype;			 /* data type */
+	int             idim1, idim2, idim3;	 /* dimensions of simg */
+	int             odim1, odim2, odim3;	 /* dimensions of somg */
+
+	short        ***simg;			 /* short input image */
+	short        ***somg;			 /* short output image */
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 5) {
+		fprintf (stderr, "Usage: anaroty in_img in_hdr out_img out_hdr\n");
+		return (ERROR);
+	}
+	in_img = argv[1];
+	in_hdr = argv[2];
+	out_img = argv[3];
+	out_hdr = argv[4];
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (in_hdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [anaroty]: opening %s\n", in_hdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anaroty]: reading %s\n", in_hdr);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [anaroty]: reading %s\n", in_hdr);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	dtype = hdr.dime.datatype;
+	if (dtype != 4 || hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anaroty]: reading %s\n", in_hdr);
+		fprintf (stderr, "Datatype = %d and Bits/pixel = %d\n", dtype, hdr.dime.bitpix);
+		return (ERROR);
+	}
+	idim1 = hdr.dime.dim[1];
+	idim2 = hdr.dime.dim[2];
+	idim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+	odim1 = idim1;
+	odim2 = idim3;
+	odim3 = idim2;
+	fprintf (stdout, "Dimensions: %d %d %d\n", odim1, odim2, odim3);
+
+/*
+ *	Read the img and rotate X & Z
+ */
+
+	if ((fd_img = fopen (in_img, "r")) == 0) {
+		fprintf (stderr, "ERROR [anaroty]: opening %s\n", in_img);
+		return (ERROR);
+	}
+	simg = s3tensor (1, idim3, 1, idim2, 1, idim1);
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [anaroty]: malloc simg\n");
+		return (ERROR);
+	}
+	fprintf (stdout, "Reading %s\n", in_img);
+	for (i = 1; i <= idim3; i++) {
+		for (j = 1; j <= idim2; j++) {
+			if ((fread (&simg[i][j][1], sizeof (short), idim1, fd_hdr)) != idim1) {
+				fprintf (stderr, "ERROR [anaroty]: Reading: %s\n", in_img);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+	somg = s3tensor (1, odim3, 1, odim2, 1, odim1);
+	if (somg == NULL) {
+		fprintf (stderr, "ERROR [anaroty]: malloc somg\n");
+		return (ERROR);
+	}
+	global_max = 0;
+	global_min = 32000;
+	for (i = 1; i <= odim3; i++) {
+		for (j = 1; j <= odim2; j++) {
+			for (k = 1; k <= odim1; k++) {
+				somg[i][j][k] = simg[j][i][k];
+				if (somg[i][j][k] > global_max)
+					global_max = somg[i][j][k];
+				if (somg[i][j][k] < global_min)
+					global_min = somg[i][j][k];
+			}
+		}
+	}
+	fprintf (stdout, "Min,Max = %d, %d\n", global_min, global_max);
+
+	if ((fd_img = fopen (out_img, "w")) == 0) {
+		fprintf (stderr, "Unable to create ANALYZE image %s\n", out_img);
+		return (ERROR);
+	}
+	fprintf (stdout, "Writing %s\n", out_img);
+
+	for (i = 1; i <= odim3; i++) {
+		for (j = 1; j <= odim2; j++) {
+			if ((fwrite (&somg[i][j][1], sizeof (short), odim1, fd_hdr)) != odim1) {
+				fprintf (stderr, "ERROR [anaroty]: Writing: %s\n", out_img);
+				return (ERROR);
+			}
+		}
+	}
+
+/*
+ * Modify Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (out_hdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [anaroty]: creating ANALYZE header %s\n", out_hdr);
+		return (ERROR);
+	}
+	hdr.dime.dim[1] = odim1;
+	hdr.dime.dim[2] = odim2;
+	hdr.dime.dim[3] = odim3;
+	pix2 = hdr.dime.pixdim[2];
+	pix3 = hdr.dime.pixdim[3];
+	hdr.dime.pixdim[2] = pix3;
+	hdr.dime.pixdim[3] = pix2;
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+
+	(void) strcpy (hdr.hist.originator, "anaroty");
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anaroty]: writing %s\n", out_hdr);
+		return (ERROR);
+	}
+	fprintf (stdout, "Successful conversion to %s\n", out_img);
+	free_s3tensor (simg, 1, idim3, 1, idim2, 1, idim1);
+	free_s3tensor (somg, 1, odim3, 1, odim2, 1, odim1);
+	(void) fclose (fd_hdr);
+	(void) fclose (fd_img);
+	return (OK);
+}
+@

@@ -1,0 +1,716 @@
+head	1.18;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.18
+date	2007.12.24.17.01.46;	author tom;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	2007.11.27.17.04.42;	author tom;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	2007.03.21.16.25.09;	author tom;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	2004.05.20.16.10.55;	author tom;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	2003.04.28.18.25.38;	author tom;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	2003.01.03.22.40.57;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	2000.05.22.14.47.30;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	98.07.27.21.42.41;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	98.07.27.20.37.11;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	98.07.10.14.54.00;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.10.31.17.43.48;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.02.13.19.05.47;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.01.26.22.51.51;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.12.21.17.37.42;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.12.19.17.28.16;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.12.19.16.52.16;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.11.09.18.25.34;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.11.08.22.09.38;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.18
+log
+@fix to get initial PET start frame when cannot locate a summed dynamic filename
+@
+text
+@; $Id: makedta.pro,v 1.17 2007/11/27 17:04:42 tom Exp tom $
+;
+;+
+; NAME:
+;   MAKEDTA
+;
+; PURPOSE:
+;   Create a shifted, bloodcurve file for metproc.
+;
+; CATEGORY:
+;   Metabolic processing.
+;
+; CALLING SEQUENCE:
+;   makedta
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, Dec. 1995
+;   Modified: 	Feb 95 (tov) to estimate start time more precisely by
+;		interpolating between last 2 non-zero head curve times prior to
+;		subtracting the scan duration.
+;-
+
+pro makedta
+
+;	Initializations
+
+	loadct,39,nc=10
+	ncurves=0L
+	scantype = 0
+	start = 0L
+	shift = 0L
+	shiftwater = 0L
+	oxycont=0.
+	hematocrit=0.
+	header = ''
+	str=''
+	root=''
+	scanid = ''
+	read, prompt='Subject ID: ',root
+	dtafile = root + '.dta'
+	getnum, 'Number of curves', ncurves, 0, 100
+	if (ncurves eq 0) then stop
+
+	scrnsize = get_screen_size()
+	xloc = scrnsize[0]/2
+	IF (xloc GT 1270) THEN xloc = 1270
+	window,xpos=xloc
+
+	for scannum=1, ncurves do begin
+enter:	print, 'Scan Type:'
+		print, '	1   O-15 oxygen metabolism study  (oo)'
+        print, '	2   O-15 water or butanol blood flow study (ho)'
+        print, '	3   O-15 blood volume study       (co)'
+		getnum, 'Scan type', scantype, 1, 3
+		case scantype of
+			1:	length = 40
+			2:	length = 40
+			3:	length = 300
+			else:	begin
+				print, 'Scan type must be 1-3'
+				goto, enter
+			end
+		endcase
+
+newscanid:
+		read, prompt='Scan ID: ',scanid
+		idtype = strmid (scanid, 0, 2)
+		if (scantype eq 1) and (idtype ne 'oo') then begin
+			print, 'Scan type must agree with scan ID'
+			goto, enter
+		endif
+		;;if (scantype eq 2) and (idtype ne 'ho') then begin
+			;;print, 'Scan type must agree with scan ID'
+			;;goto, enter
+		;;endif
+		if (scantype eq 3) and (idtype ne 'oc') then begin
+			print, 'Scan type must agree with scan ID'
+			goto, enter
+		endif
+
+		print,' '
+		print,'Makedta assumes that the blood curve began at time = 0.'
+		print,'If this is not the case, decay-correction will be inaccurate!'
+		bloodfile = root + scanid
+        str = bloodfile + '.dcv'
+        openr,testlu,str,/get_lun, err=err
+		if (err NE 0) then begin
+			print,'Cannot open ',str
+			goto, newscanid
+		endif else begin
+			close,testlu
+			free_lun,testlu
+		endelse
+
+		read_bloodcrv, bcrv, oxycont, hematocrit, header, bloodfile
+		zero_time, bcrv, 'Artery', 0, 1
+		bmax = max(bcrv(1,*))
+		bcrv(1,*) = bcrv(1,*)/bmax
+
+		headfile = root + scanid
+		read_headcrv, hcrv, headfile
+		indx = where (hcrv(1,*) gt 0)
+		t2 = max(indx)
+		t1 = t2-1
+		time1 = hcrv(0,t1)
+		val1 = hcrv(1,t1)
+		time2 = hcrv(0,t2)
+		val2 = hcrv(1,t2)
+		tlast = time1 + (val2/val1)*(time2-time1)
+		nframes = strtrim(string(fix(hcrv[2,t2])),2)
+		print, nframes,'-Frame Study'
+		firstfrm = fix(hcrv(2,0))
+		zerotime = hcrv(0,0)
+		print, '-------------'
+
+		if (scantype eq 3) then begin
+			frmnum = 2
+			if (nframes eq '3') then begin
+				print,'Frame 2 for the PET is used to synchronize the head curve to the blood curve,'
+				print,'If Frame 2 began simultaneously with the blood sampler, then enter 0.'
+				time0 = 0
+			endif else begin
+				print,'If Frame 2 began 15 sec after the blood sampler, then enter 15.'
+				time0 = 15
+			endelse
+		endif else if (nframes eq 3) then begin
+			frmnum = 1
+			indx = where (hcrv(2,*) eq 2)
+			t3 = min(indx)
+			time0 = -fix(hcrv[0,t3] + 0.5)
+			print,'Frame 2 for the PET is used to synchronize the head curve to the blood curve,'
+			print,'but since the head curve begins with Frame 1 we need the relative start'
+			print,'time of Frame 1 to the zero time.'
+			print,'If Frame 2 began simultaneously with the blood sampler (standard 3-frame'
+			print,'study) then Frame 1 began at: ',time0
+		endif else if (nframes gt 10) then begin
+			frmnum = 1
+			print,'If frame ',strcompress(firstfrm,/remove_all),' began simultaneously with the blood sampler,'
+			print,'then zero time (time for frame 1) is ',-strcompress(zerotime,/remove_all)
+			time0 = -zerotime
+		endif else begin
+			frmnum = 1
+			print,'Frame 2 for the PET is used to synchronize the head curve to the blood curve,'
+			print,'If Frame 1 began simultaneously with the blood sampler, it will be 0.'
+			print,'If Frame 1 began before the blood sampler, it will be negative.'
+			print,'(Frame 2 began at:',fix(tlast - 39.5)
+			time0 = 0
+		endelse
+		zero_time, hcrv, 'Head', time0, frmnum
+		hmax = max(hcrv(1,*))
+		hcrv(1,*) = hcrv(1,*)/hmax
+
+		shiftcrv = bcrv(0:1,*)
+		t1 = 0.
+		t2 = max(shiftcrv(0,*))
+		plot_bloodcrv, shiftcrv, hcrv, t1, t2
+
+		indx = where (hcrv(1,*) gt 0)
+		t2 = max(indx)
+		t1 = t2-1
+		time1 = hcrv(0,t1)
+		val1 = hcrv(1,t1)
+		time2 = hcrv(0,t2)
+		val2 = hcrv(1,t2)
+		tlast = time1 + (val2/val1)*(time2-time1)
+		if (tlast gt 300) then start = 15 $		; CO scans begin 15 sec after blood
+		else start = fix(tlast - 39.5)			; HO and OO are 40 sec scans
+
+		print,' '
+		if (nframes lt 10) then begin
+			print,'Start time for the PET is the start time of the processed frame'
+			print,'(frame ',nframes,') with respect to Zero Time (e.g., the Visual Delay)'
+		endif else begin
+			print,'Visual Delay is start time of first summed frame minus Zero Time'
+			start = 0
+			fname = root + scanid + '_f*to*.v'
+			cmd = 'ls '+fname
+			spawn,cmd,fname
+			if (strlen(fname[0]) gt 6) then begin
+				p1 = (strpos(fname,'_f'))[0] + 2
+				p2 = (strpos(fname,'to'))[0]
+				len =  p2 - p1
+				if (len gt 0) then begin
+					frmnum = (strmid(fname,p1,len))[0]
+					starttime = hcrv(0,frmnum-firstfrm)
+					zerotime = hcrv(0,0)
+					start = starttime - zerotime
+					print,'File '+strcompress(fname,/remove_all)+' suggests that this is frame '+ $
+						strcompress(frmnum,/remove_all)+' beginning at '+string(start)
+				endif
+			endif else begin
+frmloop:		print,  '-------------------------------------------------------------------'
+				print,  'WARNING: Cannot locate the summed frame image. Therefore, you must'
+				print,  'enter the FRAME NUMBER of the FIRST FRAME of the 40-sec integration.'
+				print,  '-------------------------------------------------------------------'
+				frmnum = 0
+				getnum, 'Initial Frame for 40-sec PET',frmnum, 0, 100
+				if (frmnum eq 0) then goto, frmloop
+                starttime = hcrv(0,frmnum-firstfrm)
+                zerotime = hcrv(0,0)
+                start = starttime - zerotime
+			endelse
+		endelse
+		getnum, 'Start time for PET',start, -300, 300
+		print,' '
+
+;	Align the two curves
+
+		t1 = 0.
+		t2 = max(shiftcrv(0,*))
+		print,' '
+		print,'Shift the blood curve to align it with the head curve'
+		a = ''
+		if (scantype eq 1) then shift = shiftwater
+		if (scantype eq 3) then shift = 0
+		range = ['z','u','s','p','c']
+next:	getstr, 'Zoom, Unzoom, Shift, Print, Continue', a, range
+		case 1 of
+			(a eq 'z'):	begin
+				getnum, 'Zoom from',t1, t1, t2
+				getnum, '       to',t2, t1, t2
+				plot_bloodcrv, shiftcrv, hcrv, t1, t2
+				a = 's'
+				goto, next
+			end
+			(a eq 'u'):	begin
+				t1 = 0.
+				t2 = max(shiftcrv(0,*))
+				plot_bloodcrv, shiftcrv, hcrv, t1, t2
+				a = 'c'
+				goto, next
+			end
+			(a eq 's'):	begin
+				shift0 = 0
+nextshift:		getnum, 'Shift blood curve',shift,-300, 300
+				shiftcrv(0,*) = bcrv(0,*) + shift
+				plot_bloodcrv, shiftcrv, hcrv, t1, t2
+				if (shift ne shift0) then begin
+					shift0 = shift
+					goto, nextshift
+				endif
+				a = 'c'
+				goto, next
+			end
+			(a eq 'p'):	begin
+				print_bloodcrv, shiftcrv, hcrv, t1, t2, headfile, start, length, shift
+				a = 'c'
+				goto, next
+			end
+			(a eq 'c'):
+			else:	begin
+				print,'Enter z, u, s, p, or c'
+				goto, next
+			end
+		endcase
+		if (scantype eq 2) then shiftwater = shift
+
+;	Write DTA file
+
+		if (scannum eq 1) then begin
+			openw,lu,dtafile,/get_lun
+			printf,lu,format='("@@ @@@@ ",A)',header
+			printf,lu, ncurves
+		endif
+		shiftcrv(1,*) = shiftcrv(1,*)*bmax
+		write_dta, shiftcrv, scantype, scanid, bmax, oxycont, hematocrit, start, length, lu
+	endfor
+	close,lu
+	free_lun,lu
+	exit
+end
+@
+
+
+1.17
+log
+@add nc=10 to loadct
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.16 2007/03/21 16:25:09 tom Exp tom $
+d175 1
+d191 12
+a202 1
+			endif
+@
+
+
+1.16
+log
+@fix for very large screen
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.15 2004/05/20 16:10:55 tom Exp tom $
+d27 1
+a27 1
+	loadct,39
+@
+
+
+1.15
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.14 2003/04/28 18:25:38 tom Exp tom $
+d44 5
+@
+
+
+1.14
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.13 2003/01/03 22:40:57 tom Exp tom $
+d199 2
+a200 2
+		range = ['z','u','s','c']
+next:	getstr, 'Zoom, Unzoom, Shift, Continue', a, range
+d228 5
+d235 1
+a235 1
+				print,'Enter z, u, s, or c'
+@
+
+
+1.13
+log
+@modify for 2-sec dynamic files
+change plot colors
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.12 2000/05/22 14:47:30 tom Exp tom $
+d59 2
+d80 10
+@
+
+
+1.12
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.11 1998/07/27 21:42:41 tom Exp tom $
+d27 1
+a27 1
+	loadct,5
+d95 2
+d109 1
+a109 1
+		endif else if (nframes eq '3') then begin
+d119 5
+d126 1
+a126 1
+			print,'Frame 1 for the PET is used to synchronize the head curve to the blood curve.'
+d153 22
+a174 2
+		print,'Start time for the PET is the start time of the processed frame'
+		print,'(frame ',nframes,') with respect to Zero Time (e.g., the Visual Delay)'
+a175 1
+
+@
+
+
+1.11
+log
+@add a selectable frame number in zero_time prompt
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.10 1998/07/27 20:37:11 tom Exp tom $
+d23 1
+a23 1
+pro main
+@
+
+
+1.10
+log
+@change prompts to aid processing of 3-frame vs. 2-frame studies
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.9 1998/07/10 14:54:00 tom Exp tom $
+d79 1
+a79 1
+		zero_time, bcrv, 'Artery', 0
+d97 12
+a108 1
+		if (nframes eq '3') then begin
+d118 1
+d125 1
+a125 1
+		zero_time, hcrv, 'Head', time0
+@
+
+
+1.9
+log
+@remove check for scan id for blood flow studies
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.8 1996/10/31 17:43:48 tom Exp tom $
+d79 1
+a79 1
+		zero_time, bcrv, 'Artery'
+d93 37
+d135 1
+a135 1
+		print,'(typically frame 2) with respect to Zero Time (e.g., the Visual Delay)'
+a138 6
+		print,'Frame 1 for the PET is used to synchronize the head curve to the blood curve.'
+		print,'If Frame 1 began simultaneously with the blood sampler, it will be 0.'
+		print,'If Frame 1 began before the blood sampler, it will be negative.'
+		zero_time, hcrv, 'Head'
+		hmax = max(hcrv(1,*))
+		hcrv(1,*) = hcrv(1,*)/hmax
+d140 2
+a141 1
+		shiftcrv = bcrv(0:1,*)
+a143 4
+		plot_bloodcrv, shiftcrv, hcrv, t1, t2
+
+;	Align the two curves
+
+@
+
+
+1.8
+log
+@rename as main
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.7 1996/02/13 19:05:47 tom Exp tom $
+d47 1
+a47 1
+        print, '	2   O-15 water blood flow study   (ho)'
+d65 4
+a68 4
+		if (scantype eq 2) and (idtype ne 'ho') then begin
+			print, 'Scan type must agree with scan ID'
+			goto, enter
+		endif
+@
+
+
+1.7
+log
+@estimate start time more precisely by interpolating between last
+2 non-zero head curve times prior to subtracting the scan duration
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.6 1996/01/26 22:51:51 tom Exp tom $
+d23 1
+a23 1
+pro makedta
+@
+
+
+1.6
+log
+@repeat prompt for shift until same number entered twice
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.5 1995/12/21 17:37:42 tom Exp tom $
+d18 3
+d86 7
+a92 1
+		tlast = max(hcrv(0,indx))
+d94 1
+a94 1
+		else start = fix(tlast - 40)			; HO and OO are 40 sec scans
+d118 1
+a118 1
+		a = 'c'
+@
+
+
+1.5
+log
+@changed prompts
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.4 1995/12/19 17:28:16 tom Exp tom $
+d130 2
+a131 1
+				getnum, 'Shift blood curve',shift,-300, 300
+d134 4
+@
+
+
+1.4
+log
+@modified user messages
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.3 1995/12/19 16:52:16 tom Exp $
+d17 1
+a17 1
+;   Written by: Tom Videen, Nov. 1995
+d88 2
+a89 2
+		print,'Start time for the PET is the start time of the processed frame (typically frame 2)'
+		print,'with respect to the zero time of the blood curve (e.g., the visual delay)'
+d93 3
+a95 2
+		print,'Zero time for the PET is chosen to synchronize the head curve to the blood curve.'
+		print,'If PET frame 1 began simultaneously with the blood samples, then it will be 0'
+@
+
+
+1.3
+log
+@changed message from Betadta to Makedta
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.2 1995/11/09 18:25:34 tom Exp tom $
+d88 2
+a89 2
+		print,'Start time for the PET is the start time of the processed frame '
+		print,'(typically frame 2) with respect to the zero time of the blood curve'
+d93 2
+a94 3
+		print,'Zero time for the PET is chosen to synchronize the head curve to'
+		print,'the blood curve.  If PET frame 1 began simultaneously with the'
+		print,'blood samples, then it will be 0'
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+; $Id: makedta.pro,v 1.1 1995/11/08 22:09:38 tom Exp $
+d72 1
+a72 1
+		print,'Betadta and betacrv assume that the blood curve began at time = 0.'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+; $Id$
+a27 2
+	startwater = 0L
+	zeroblood = 0L
+d71 8
+a78 4
+		if (scantype eq 1) then start = startwater
+		if (scantype eq 3) then start = 0
+		getnum, 'Start time for PET',start, -300, 300
+		if (scantype eq 2) then startwater = start
+d82 15
+a96 1
+		zero_time, hcrv, 'Head', start, scantype
+a99 8
+		if (scantype eq 3) then zeroblood = 15 $
+		else zeroblood = 0
+		bloodfile = root + scanid
+		read_bloodcrv, bcrv, oxycont, hematocrit, header, bloodfile
+		zero_time, bcrv, 'Artery', zeroblood, scantype
+		bmax = max(bcrv(1,*))
+		bcrv(1,*) = bcrv(1,*)/bmax
+
+d107 2
+a129 6
+;				case scantype of
+;					1:	print,'Shift for Oxygen is same as corresponding Water'
+;					2:	print,'Shift is typically -10 to -20 for Waters in humans'
+;					3:	print,'Shift is 0 for CO'
+;					4:	print,'Shift is typically -10 to -20 for Butanol in humans'
+;				endcase
+@

@@ -1,0 +1,538 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	2006.01.31.19.28.29;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2006.01.31.14.31.04;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2005.08.18.21.08.38;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@rename as mai_fiducials
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@/*	$Log: mai_fiducials.c,v $
+ * Revision 1.5  2006/01/31  14:31:04  tom
+ * last version with fractional pixels for fiducials
+ *
+ * Revision 1.3  2005/08/18  21:08:38  tom
+ * rename as mai_fiducials
+ *
+ * Revision 1.2  2005/08/11  21:22:21  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2005/08/10  21:14:32  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:		mai_fiducials.c
+ *	Date:		Jan 2006
+ *	Author:		Tom Videen
+ *	Intent:		Create new image from existing Mai Atlas image with
+ *				256x256x128 1x1x1mm voxels
+ *	Fiducial Points:
+ *		AC  at 128.5, 128.5, 100.0
+ *		PC  at 128.5, 157.0, 100.0
+ *		OX  at 128.5, -----, 115.0
+ *		OTL at 110.5
+ *		OTR at 146.5
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mai_fiducials/RCS/mai_fiducials.c,v 1.5 2006/01/31 14:31:04 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			mai_fiducials
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* file for Analyze image */
+	char           *hdr1;			 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	int             ntype;			 /* data type	 */
+	long            nx, ny, nz;		 /* dimensions	 */
+	long            x, y, z;		 /* indices to array	 */
+
+	float           xac;			 /* ac = anterior commissure	 */
+	float           yac;			 /* ac	*/
+	float           zac;			 /* ac	*/
+	float           ypc;			 /* pc = posterior commissure	 */
+	float           zox;			 /* ox = optic chiasm	 */
+	float           xleft;			 /* left fiducial (OT, PT or BE)	 */
+	float           xright;			 /* right fiducial (OT, PT or BE)	 */
+
+	long            x0a, x0b;		 /* pairs for fractional pixels	*/
+	long            y0a, y0b;
+	long            z0a, z0b;
+	long            y1a, y1b;
+	long            z1a, z1b;
+	long            x1a, x1b;
+	long            x2a, x2b;
+
+	short        ***simg;			 /* image array */
+	short          *row;			 /* single row of input image */
+	short           val = 1000;
+
+	if (argc != 4) {
+		fprintf (stdout, "Usage: mai_fiducials in.hdr out.img out.hdr\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	hdr2 = argv[2];
+	img2 = argv[3];
+
+	xac	= 128.5;
+	yac	= 128.5;
+	zac	= 100.0;
+	ypc	= 157.0;
+	zox = 115.0;
+	xleft = 110.5;
+	xright = 146.5;
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [mai_fiducials]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [mai_fiducials]: reading %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [mai_fiducials]: reading %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	ntype = hdr.dime.datatype;
+	if (ntype != 4) {
+		fprintf (stderr, "ERROR [mai_fiducials]: reading %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", ntype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [mai_fiducials]: reading %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	nx = hdr.dime.dim[1];
+	ny = hdr.dime.dim[2];
+	nz = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+	row = (short *) calloc (nx, sizeof (short));
+	if (row == NULL) {
+		fprintf (stderr, "ERROR [mai_fiducials]: calloc row\n");
+		return (ERROR);
+	}
+	simg = s3tensor (1, nz, 1, ny, 1, nx);
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [mai_fiducials]: malloc simg\n");
+		return (ERROR);
+	}
+
+/*	=========================================================
+ *	Image array: 256x256x128 voxels 1x1x1 mm
+ *	Mai et al (2004) atlas definitions:
+ *	XYZ-origin is [128.5, 128.5, 100]
+ *	hence, xy midlines drawn as 2 rows with xac1 and xac2 or yac1 and yac2
+ *	Note that Analyze image array is reversed
+ */
+	x0a = (nx+1) - (int) xac; 
+	y0a = (ny+1) - (int) yac;
+	z0a = (nz+1) - (int) zac;
+	y1a = (ny+1) - (int) ypc;
+	z1a = (nz+1) - (int) zox;
+	x1a = (nx+1) - (int) xleft;
+	x2a = (nx+1) - (int) xright;
+
+	x0b = (nx+1) - (int) (xac+0.5); 
+	y0b = (ny+1) - (int) (yac+0.5);
+	z0b = (nz+1) - (int) (zac+0.5);
+	y1b = (ny+1) - (int) (ypc+0.5);
+	z1b = (nz+1) - (int) (zox+0.5);
+	x1b = (nx+1) - (int) (xleft+0.5);
+	x2b = (nx+1) - (int) (xright+0.5);
+
+#ifdef SKIP
+#endif
+/*	=========================================================
+ *	Origin Midline (AC-PC)	*/
+
+	for (y = y1b; y <= y0a; y++) {
+		simg[z0a][y][x0a] = val;
+		simg[z0a][y][x0b] = val;
+		simg[z0b][y][x0a] = val;
+		simg[z0b][y][x0b] = val;
+	}
+
+/*	Left Edge	*/
+
+	for (y = y1b; y <= y0a; y++) {
+		simg[z0a][y][x1a] = val;
+		simg[z0a][y][x1b] = val;
+		simg[z0b][y][x1a] = val;
+		simg[z0b][y][x1b] = val;
+	}
+
+/*	Right Edge	*/
+
+	for (y = y1b; y <= y0a; y++) {
+		simg[z0a][y][x2a] = val;
+		simg[z0a][y][x2b] = val;
+		simg[z0b][y][x2a] = val;
+		simg[z0b][y][x2b] = val;
+	}
+
+/*	Midline	at Chiasm	*/
+
+	for (y = 0; y < ny; y++) {
+		simg[z1a][y][x0a] = val;
+		simg[z1a][y][x0b] = val;
+		simg[z1b][y][x0a] = val;
+		simg[z1b][y][x0b] = val;
+	}
+
+/*	AC	*/
+
+	for (x = x2b; x < x1a; x++) {
+		simg[z0a][y0a][x] = val;
+		simg[z0a][y0b][x] = val;
+		simg[z0b][y0a][x] = val;
+		simg[z0b][y0b][x] = val;
+	}
+
+/*	PC	*/
+
+	for (x = x2b; x < x1a; x++) {
+		simg[z0a][y1a][x] = val;
+		simg[z0a][y1b][x] = val;
+		simg[z0b][y1a][x] = val;
+		simg[z0b][y1b][x] = val;
+	}
+
+/*	Write Atlas image	*/
+
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [mai_fiducials]: opening %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [mai_fiducials]: writing %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	if ((fd_img = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [mai_fiducials]: opening %s\n", img2);
+		return (ERROR);
+	}
+	for (z = 1; z <= nz; z++) {
+		for (y = 1; y <= ny; y++) {
+			for (x = 1; x <= nx; x++)
+				row[x - 1] = simg[z][y][x];
+			if (fwrite (row, sizeof (short), nx, fd_img) != nx) {
+				fprintf (stderr, "ERROR [mai_fiducials]: writing %s\n", img2);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+	free_s3tensor (simg, 1, nz, 1, ny, 1, nx);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.5
+log
+@last version with fractional pixels for fiducials
+@
+text
+@d2 3
+d20 6
+d30 1
+a30 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maiatlas_fiducials/RCS/mai_fiducials.c,v 1.3 2005/08/18 21:08:38 tom Exp tom $";
+d53 1
+a53 1
+	char           *img1, *hdr1;	 /* input file */
+d77 1
+a77 1
+	short           val = 500;
+d79 2
+a80 2
+	if (argc != 5) {
+		fprintf (stdout, "Usage: mai_fiducials in.img in.hdr out.img out.hdr\n");
+d84 2
+a85 3
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+a133 13
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [mai_fiducials]: opening %s\n", img1);
+		return (ERROR);
+	}
+	for (z = 1; z <= nz; z++) {
+		for (y = 1; y <= ny; y++) {
+			if ((fread (row, sizeof (short), nx, fd_img)) != nx) {
+				fprintf (stderr, "ERROR [mai_fiducials]: reading %s\n", img1);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+d158 2
+d242 1
+@
+
+
+1.3
+log
+@rename as mai_fiducials
+@
+text
+@d2 3
+d13 1
+a13 1
+ *	Date:		Aug 2005
+d15 2
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mai_fiducials/RCS/mai_fiducials.c,v 1.2 2005/08/11 21:22:21 tom Exp tom $";
+d46 3
+a48 3
+	int             ntype;			 /* data type	*/
+	long            nx, ny, nz;		 /* dimensions	*/
+	long            x, y, z;		 /* indices to array	*/
+d50 7
+a56 11
+	long            x01, x02;		 /* x-origin right and left	*/
+	long            y01, y02;		 /* y-origin right and left	*/
+	long            z0;				 /* z-origin	*/
+	long            ypc;			 /* pc = posterior commissure	*/
+	long            yx1, yx2, zx;	 /* x = optic chiasm	*/
+	long            xec1, xec2;		 /* ec = external capsule	*/
+	long            xcx1, xcx2;		 /* cx = cortex lateral edges on ACPC plane	*/
+	long            ycx1, ycx2;		 /* cx = cortex AP edges on ACPC plane */
+	long            xcx3, xcx4;		 /* cx = cortex lateral extremes of temporal cx */
+	long            xt1, xt2, yt, zt; /* t = optic tract	*/
+	long            zdac;			 /* dac = dorsal edge of cortex at AC	*/
+d58 8
+d79 8
+d144 2
+a145 1
+ *	hence, xy midlines drawn as 2 rows with x01 and x02 or y01 and y02
+d147 7
+a153 5
+	x01 = 128;
+	y01 = 128;
+	x02 = 129;
+	y02 = 129;
+	z0  = 129 - 100;
+d155 7
+a161 2
+/*	Posterior Commissure: PC is at -28	*/
+	ypc = y01 - 28;
+a162 30
+/*	Optic Chiasm: OX center at y=+4, z=-15	*/
+	yx1 = y01 + 4;
+	yx2 = y02 + 4;
+	zx  = z0 - 15;
+
+/*	Optic Tract at bisection ACPC	*/
+	xt1 = x02 - 18;
+	xt2 = x01 + 18;
+	yt  = y01 - 14;
+	zt  = z0  -  7;
+
+/*	Lateral location of External Capsule along y=0 (AC)	*/
+	xec1 = x02 - 32;
+	xec2 = x01 + 32;
+
+/*	Dorsal Edge of Cortex on Coronal Plane through AC	*/
+	zdac = z0 + 70;
+
+/*	Posterior and Anterior Edges of Cortex on ACPC plane	*/
+	ycx1 = y02 - 104;
+	ycx2 = y02 + 66;
+
+/*	Lateral Edges of Parietotemporal Cortex on ACPC plane	*/
+	xcx1 = x02 - 64;
+	xcx2 = x01 + 64;
+
+/*	Maximum Lateral Extent of Parietotemporal Cortex	*/
+	xcx3 = x02 - 68;
+	xcx4 = x01 + 68;
+
+d164 1
+a164 1
+ *	Sagittal Midline (AC-PC)	*/
+d166 5
+a170 3
+	for (y = ycx1; y < ycx2; y++) {
+		simg[z0][y][x01] = val;
+		simg[z0][y][x02] = val;
+a171 8
+	for (y = y01; y <= y01 + 1; y++) {
+		simg[z0][y][x01] = 0;
+		simg[z0][y][x02] = 0;
+	}
+	for (y = ypc-1; y <= ypc + 1; y++) {
+		simg[z0][y][x01] = 0;
+		simg[z0][y][x02] = 0;
+	}
+d173 1
+a173 1
+/*	AC & PC */
+d175 5
+a179 11
+	for (z = z0 - 1; z <= z0 + 1; z++) {
+		for (x = xt1; x < x01 - 1; x++) {
+			simg[z][y01][x] = val;
+			simg[z][y02][x] = val;
+			simg[z][ypc][x] = val;
+		}
+		for (x = x02 + 2; x < xt2; x++) {
+			simg[z][y01][x] = val;
+			simg[z][y02][x] = val;
+			simg[z][ypc][x] = val;
+		}
+d182 1
+a182 1
+/*	Optic Tract	*/
+d184 5
+a188 3
+	for (x = xec1; x < xt1 - 1; x++) {
+		simg[zt][yt][x] = val;
+		simg[zt][yt + 1][x] = val;
+a189 8
+	for (x = xt1 + 2; x < xt2 - 1; x++) {
+		simg[zt][yt][x] = val;
+		simg[zt][yt + 1][x] = val;
+	}
+	for (x = xt2 + 2; x < xec2; x++) {
+		simg[zt][yt][x] = val;
+		simg[zt][yt + 1][x] = val;
+	}
+d191 1
+a191 10
+	for (z = zt - 1; z <= zt + 1; z++) {
+		for (y = yt - 7; y <= yt - 1; y++) {
+			simg[z][y][xt1] = val;
+			simg[z][y][xt2] = val;
+		}
+		for (y = yt + 2; y <= yt + 7; y++) {
+			simg[z][y][xt1] = val;
+			simg[z][y][xt2] = val;
+		}
+	}
+d193 5
+a197 7
+/*	External Capsule	*/
+
+	for (z = z0 - 3; z < z0 + 5; z++) {
+		for (y = ypc; y <= y01; y++) {
+			simg[z][y][xec1] = val;
+			simg[z][y][xec2] = val;
+		}
+d200 1
+a200 1
+/*	Lateral Edges of Brain*/
+d202 5
+a206 11
+	for (y = ycx1; y < ycx2; y++) {
+		for (z = z0 - 10; z < z0; z++) {
+			simg[z][y][xcx3] = val;
+			simg[z][y][xcx4] = val;
+		}
+		simg[z][y][xcx1] = val;
+		simg[z][y][xcx2] = val;
+		for (z = z0 + 1; z < z0 + 5; z++) {
+			simg[z][y][xcx3] = val;
+			simg[z][y][xcx4] = val;
+		}
+d209 1
+a209 1
+/*	AP Edges of Brain*/
+d211 5
+a215 5
+	for (z = z0 - 10; z < z0 + 5; z++) {
+		for (x = xcx1; x <= xcx2; x++) {
+			simg[z][ycx1][x] = val;
+			simg[z][ycx2][x] = val;
+		}
+a217 37
+/*	Coronal Midline	*/
+
+	for (z = 1; z < zdac; z++) {
+		if (z < 28 || z > 30) {
+			for (y = y01; y <= y02; y++) {
+				for (x = x01; x <= x02; x++)
+					simg[z][y][x] = val;
+			}
+		}
+	}
+
+/*	Optic Chiasm	*/
+
+	for (x = xec1; x < x01 - 1; x++) {
+		simg[zx][yx1][x] = val;
+		simg[zx][yx2][x] = val;
+	}
+	for (x = x02 + 2; x < xec2; x++) {
+		simg[zx][yx1][x] = val;
+		simg[zx][yx2][x] = val;
+	}
+	for (z = 1; z < zdac; z++) {
+		if (z < zx - 1 || z > zx + 1) {
+			simg[z][yx1][x01] = val;
+			simg[z][yx1][x02] = val;
+			simg[z][yx2][x01] = val;
+			simg[z][yx2][x02] = val;
+		}
+	}
+
+/*	Top of brain at AC	*/
+
+	for (x = xcx3; x < xcx4; x++) {
+		simg[zdac][y01][x] = val;
+		simg[zdac][y02][x] = val;
+	}
+
+@

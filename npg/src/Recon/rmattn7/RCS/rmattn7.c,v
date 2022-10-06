@@ -1,0 +1,234 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2001.09.26.17.32.23;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/* ===============================================================================
+ *	Module:			rmattn7.c
+ *	Date:			Sept 2001
+ *	Author:			Tom Videen
+ *	Description:	Read sinogram and attn file and remove attenuation correction from sino.
+ * ===============================================================================
+ */
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/rmattn7/RCS/rmattn7.c,v 1.3 2001/09/24 18:51:47 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	char           *attname;		 /* attenuation filename */
+	char           *oldname;		 /* old sinogram filename */
+	char           *fname;			 /* new sinogram filename */
+	float        ***attn;			 /* attenuation sino */
+	float        ***sino;			 /* emission sino */
+	short          *smatrix;		 /* for sino i/o */
+	float          *fmatrix;		 /* for attn input */
+	DataSetType     dtype;
+	int             numray, numang, numpln;
+	int             frm, stat;
+	float           tmp;
+	long            i, j, k, p;
+
+	if (argc < 5) {
+		fprintf (stderr, "Usage: rmattn7 attn old_emis new_emis frame\n");
+		return (ERROR);
+	}
+	attname = argv[1];
+	oldname = argv[2];
+	fname = argv[3];
+	frm = atoi (argv[4]);
+
+/*	Read Attenuation */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (attname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot open %s\n", attname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot get MainHeader from %s\n", attname);
+		return (ERROR);
+	}
+	if (get_sa (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot read subheader in %s\n", attname);
+		return (ERROR);
+	}
+	dtype = (DataSetType) file->mh->filetype;
+	if (dtype != AttenCor) {
+		fprintf (stderr, "ERROR [rmattn7]: Not an attenuation file %s\n", attname);
+		return (ERROR);
+	}
+	numray = (long) file->sh->dim1;
+	numang = (long) file->sh->dim2;
+	numpln = (long) file->sh->dim3;
+
+	if ((attn = f3tensor (0, numpln - 1, 0, numang - 1, 0, numray - 1)) == NULL) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot malloc attn\n");
+		return (ERROR);
+	}
+	if ((fmatrix = (float *) calloc (numang * numray, sizeof (float))) == NULL) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot calloc fmatrix\n");
+		return (ERROR);
+	}
+	for (p = 0; p < numpln; p++) {
+		indx.pln = p + 1;
+		fmatrix = rdattn7 (file, indx);
+		if (fmatrix == NULL) {
+			fprintf (stderr, "ERROR [rmattn7]: Cannot read plane %d of %s\n",
+				 (int) p + 1, attname);
+			return (ERROR);
+		}
+		k = 0;
+		for (i = 0; i < numang; i++) {
+			for (j = 0; j < numray; j++) {
+				attn[p][i][j] = fmatrix[k];
+				k++;
+			}
+		}
+	}
+	close_imgfile (file);
+
+/*	Read Old Emission Sinogram */
+
+	(void) strcpy (file->name, oldname);
+	indx.frm = frm;
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot open %s\n", oldname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot read MainHeader from %s\n", oldname);
+		return (ERROR);
+	}
+	if (get_ss (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot read subheader from %s\n", oldname);
+		return (ERROR);
+	}
+	dtype = (DataSetType) file->mh->filetype;
+	if (dtype != Short3dSinogram) {
+		fprintf (stderr, "ERROR [rmattn7]: Not a sinogram file %s\n", oldname);
+		return (ERROR);
+	}
+	if ((sino = f3tensor (0, numpln - 1, 0, numang - 1, 0, numray - 1)) == NULL) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot malloc sino\n");
+		return (ERROR);
+	}
+	if ((smatrix = (short *) calloc (numang * numray, sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot calloc smatrix\n");
+		return (ERROR);
+	}
+	for (p = 0; p < numpln; p++) {
+		indx.pln = p + 1;
+		smatrix = rdscan7 (file, indx);
+		if (smatrix == NULL) {
+			fprintf (stderr, "ERROR [rmattn7]: Cannot read plane %d of %s\n",
+				 (int) p + 1, oldname);
+			return (ERROR);
+		}
+		k = 0;
+		for (i = 0; i < numang; i++) {
+			for (j = 0; j < numray; j++) {
+				sino[p][i][j] = smatrix[k];
+				k++;
+			}
+		}
+	}
+	close_imgfile (file);
+
+
+/*	Create Output sinogram	*/
+
+	(void) strcpy (file->name, fname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot open %s\n", fname);
+		return (ERROR);
+	}
+	if (put_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot write MainHeader to %s\n", fname);
+		return (ERROR);
+	}
+	indx.frm = frm;
+	for (p = 0; p < numpln; p++) {
+		k = 0;
+		indx.pln = p + 1;
+		for (j = 0; j < numang; j++) {
+			for (i = 0; i < numray; i++) {
+				tmp = attn[p][j][i];
+				if (tmp > 0)
+					smatrix[k] = (short) (sino[p][j][i] / tmp);
+				else
+					smatrix[k] = 0;
+				k++;
+			}
+		}
+		if (p == 0) {
+			if (put_ss7 (file, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [rmattn7]: Cannot write file subheader to %s\n", fname);
+				return (ERROR);
+			}
+		}
+		if (wrscan (file, indx, smatrix) == ERROR) {
+			fprintf (stderr, "ERROR [rmattn7]: Cannot write plane %d of %s\n",
+				 (int) p + 1, fname);
+			return (ERROR);
+		}
+	}
+
+	free (attn);
+	free (sino);
+	free (smatrix);
+	free (fmatrix);
+
+/*  Pad the end of the sinogram file (CAPP will not import the file without this) */
+
+	if ((smatrix = (short *) calloc (64, sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [rmattn7]: Cannot calloc smatrix\n");
+		return (ERROR);
+	}
+	if ((stat = fwrite (smatrix, sizeof (short), 64, file->fp)) != 64) {
+		fprintf (stderr, "ERROR [rmattn7]: during write; status = %d\n", stat);
+		return (ERROR);
+	}
+	free (smatrix);
+
+	close_imgfile (file);
+	free_imgfile (file);
+	return (OK);
+}
+@

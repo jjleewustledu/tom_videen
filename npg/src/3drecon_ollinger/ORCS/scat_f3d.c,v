@@ -1,0 +1,1430 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	95.02.22.19.49.38;	author jmo;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.02.14.23.28.37;	author jmo;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.02.11.16.55.31;	author jmo;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.01.20.23.13.52;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial checking in, working version.
+@
+
+
+1.5
+log
+@Process scatter photons only if nscat > 1.e-5.  This eliminates processing
+of photons scattered by attenuation coefficients not equal to 0 because
+of roundoff errors in rotate_attn()
+@
+text
+@/*$Id: scat_f3d.c,v 1.4 1995/02/14 23:28:37 jmo Exp jmo $*/
+/*$Log: scat_f3d.c,v $
+ * Revision 1.4  1995/02/14  23:28:37  jmo
+ * Fix bug in naming corrected sinogram file.
+ *
+ * Revision 1.3  1995/02/11  16:55:31  jmo
+ * *** empty log message ***
+ *
+ * Revision 1.2  1995/01/20  23:13:52  ty7777
+ * Deleted _corr.
+ *
+ * Revision 1.1  1995/01/19  22:40:20  ty7777
+ * Initial revision
+ **/
+
+/*------------------------------------------------------------------
+
+Program: scat_f3d
+
+Purpose: Calculate scatter distribution for either a fully 3d or septa
+	 extended acquisition, depending on compilation flags.
+
+Date: August 26, 1992
+
+By: John Ollinger
+
+------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <math.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include <petutil/matrix.h>
+#include "cube.h"
+#include "cti_proto.h"
+#include "scatter.h"
+
+static char rcsid [] = "$Header: /home/usrb/jmo/tmp/RCS/scat_f3d.c,v 1.4 1995/02/14 23:28:37 jmo Exp jmo $";
+
+/* CUB_WR(filnam,image,xdim,ydim,type,id)*/
+#define CUB_WR(A,B,C,D,E) PutCubePlaneZero(A,B,C,D,E,A);
+
+float 	**emis,			/* Volume of emission data.		*/
+	**mu,			/* Volume of survival probabilities.	*/
+	**scat_dsamp,		/* Reduced dimension scatter estimate.	*/
+	**mult_dsamp,
+	**scat_dsampm1,		/* Reduced dimension scatter estimate.	*/
+	*scatter[NUM_PLANE],	/* Scatter estimate.			*/
+	*rotemis,		/* Plane through emission volume.	*/
+	*rotmu,			/* Plane through survival prob volume.	*/
+	tmpimg[IMGSQ],
+	*tmp;			/* Temporary array for interpolations.  */
+
+short	***atten;		/* Attenuation correction table.	*/
+
+int	plane,		/* Plane being processed.			*/
+	lcinit,		/* True: recompute tables in sc structure. 	*/
+        num_psi_factor, /* Factor for sampling frequency of psi.        */
+	imgdim_final,	/* Image dimension to use for final estimate. 	*/
+	numang_final,	/* Number of angles to use for final estimate.  */
+	theta_step,	/* Step size for processing transverse angles. 	*/
+	quiet=FALSE,	/* TRUE: Minimal output to screen.		*/
+	savescat,	/* TRUE: Save scatter estimates to disc.	*/
+	scale_tails,	/* TRUE: Scale scatter estimate to force zero
+			         error in regions not sampling subject. */
+	correct,	/* TRUE: Correct emission data for scatter. 	*/
+	pln_step=1,pln_cti,
+	rings[NUM_RINGS] = RING_LIST;
+
+char	*datapath,id[MAXNAME],*matchfile=NULL,outfil[MAXNAME],
+	emisfile[MAXNAME],tranfile[MAXNAME],
+	tran_body[MAXNAME],blankfile[MAXNAME],nrmtrfil[MAXNAME],
+	nrmscfil[MAXNAME],
+	filnam[MAXNAME],*imgpath,*getenv(),emisbody[MAXNAME],
+	ring_option[MAXNAME],
+	*ptr,*septa_model,
+	scat_dsamp_id[MAX_PLANE_3D][MAXNAME];
+
+FILE	*fp,*fopen();
+
+/*************/
+main(argc,argv)
+/*************/
+
+int	argc;
+char	*argv[];
+
+{
+
+struct scatter_tab *sc;
+
+Norm_subheader *shnrm;
+
+float	*getimg(),
+	*interp(),
+	*norm,
+	distance,distance_1,x;
+
+int	scat_init(),init_read(),
+	i,j,joff,iang,iter,ring,iring,stat,
+	ring1,ring2,k,idir,isc,offset,ioff,numray_norm;
+
+long	time0,time1,time2;
+
+void	calc_scat(),process_args(),getmem(),read_images(),write_scatter(),
+	calc_atten(),time(),scatcor(),scale_scat();
+
+char	tag[MAXNAME],*tag1;
+
+time(&time0);
+if( argc < 4) {
+    printf("Usage: scat_3d emis_file tran_file blank_file -id output_id -pln plane\n");
+    printf("       -psi num_psi_fctr -cutoff emis_cutoff tran_cutoff -theta_step step_size [-init]\n");
+    printf("       -pln_step plane_increment -rings all/one/one_dir/one_scat\n");
+    printf("       -frame frame_number -mult_frac mult/single -mult_sig mult_sigma\n");
+    printf("       -ethrsh energy_threshold -match match_file -imgdim_iter imgdim -numang_iter numang\n");
+    printf("       -imgdim_final imgdim -numang_final numang -iter_type (ss or em)\n");
+    printf("       -numiter number_iterations -relax relax_param -attpsi psi_att_factor [-quiet]\n");
+    printf("       -ext_tran_up dist_mm -ext_tran_dwn dist_mm -normtrue image_norm_file\n");
+    printf("       -ext_emis_up dist_mm -ext_emis_dwn dist_mm -normscat scatter_norm_file\n");
+    printf("       -correct_data -nosave -scale_tails\n");
+    exit(ERROR);
+    }
+
+if(NULL == (sc = (struct scatter_tab *)
+        malloc((unsigned)sizeof(struct scatter_tab)))) {
+    printf("Could not malloc memory for sc, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+
+/* Process command-line arguments. */
+sc->imgdim = NUMRAY;
+sc->numang = NUMANG;
+process_args(sc,argc,argv);
+
+sc->numray = NUMRAY;
+sc->ang_inc = PI/sc->numang;
+sc->ang_step = sc->numang*OUTPUT_MODULUS/NUMANG;
+sc->lensin = sc->numray*sc->numang;
+sc->img_step = sc->imgdim*OUTPUT_MODULUS/IMGDIM;
+sc->imgsq  = sc->imgdim*sc->imgdim;
+sc->pixsiz = RAYSIZ*sc->numray/sc->imgdim;
+sc->raysiz = RAYSIZ*NUMRAY/sc->numray;
+sc->ray_step = sc->numray/sc->imgdim;
+printf("Computing lookup tables.\n");
+
+if((stat = scat_init(sc,num_psi_factor,nrmtrfil)) == ERROR) {
+    fprintf(stderr,"Error during initialization.\n");
+    exit(ERROR);
+    }
+printf("Pixel size: %6.2f mm\n",sc->pixsiz);
+printf("Number of oblique angles for calculation of incident flux: %d\n",sc->num_psi);
+printf("Number of oblique angles for attenuation table: %d\n",sc->num_psi_att);
+
+/* Allocate memory. */
+getmem(sc);
+
+time1 = time0;
+for(iter=1;iter<=sc->num_iter;iter++) {
+    
+    if(iter == sc->num_iter) {
+	sc->imgdim = imgdim_final;
+	sc->numang = numang_final;
+	sc->lensin = sc->numray*sc->numang;
+	sc->imgsq  = sc->imgdim*sc->imgdim;
+	sc->ang_inc = PI/sc->numang;
+	sc->ang_step = sc->numang*OUTPUT_MODULUS/NUMANG;
+	sc->img_step = sc->imgdim*OUTPUT_MODULUS/IMGDIM;
+	sc->pixsiz = RAYSIZ*sc->numray/sc->imgdim;
+	sc->raysiz = RAYSIZ*NUMRAY/sc->numray;
+	sc->ray_step = sc->numray/sc->imgdim;
+	scat_reinit(sc);
+	}
+
+    /* Read transmission and emission images from disc. */
+    recon (emisfile,tranfile,blankfile,matchfile,nrmtrfil,nrmscfil,
+				sc,&emis,&mu,iter,scatter,quiet);
+
+    if(iter == 1) /* Calculate table of attenuation corrections.*/
+	calc_atten(sc);
+
+    /* Calculate scatter distribution. */
+    calc_scat(sc,iter);
+
+    for(ring=0;ring<sc->num_dir_rings*sc->num_scat_rings;ring++) {
+	if(iter > 1)
+	    free(scatter[ring]);
+	scatter[ring] = interp(ring,scat_dsamp);
+	}
+
+    if(quiet == FALSE) {
+        sprintf(tag,"s%d",iter);
+        write_scatter(sc,tag);
+        }
+
+    for(idir=0;idir<sc->num_dir_rings;idir++) {
+        for(isc=0;isc<sc->num_scat_rings;isc++) {
+	    sprintf(scat_dsamp_id[idir*sc->num_scat_rings+isc],
+			"r%x-%x",sc->phys_ring[sc->dir_ring_list[idir]]-1,
+		  	 sc->phys_ring[sc->scat_ring_list[isc]]-1);
+	    }
+	}
+
+    time(&time2);
+    printf("Iteration %d required %6.2f minutes.\n",iter,(time2-time1)/60.);
+    time1 = time2;
+
+    if(iter > 1) {
+	/* Calculate distance from last iteration. */
+        distance = 0.;
+	for(iring=0;iring<sc->num_dir_rings*sc->num_scat_rings;iring++) {
+	    for(i=0;i<LENSIN_OUT;i++) {
+		x = scat_dsamp[iring][i] - scat_dsampm1[iring][i];
+		scat_dsampm1[iring][i] = scat_dsamp[iring][i];
+		distance += x*x;
+	        }
+	    }
+	if(iter == 2)
+	     distance_1 = distance;
+	distance = distance/distance_1;
+	printf("Distance from last iteration: %g\n",distance);
+	}
+    else if(iter < sc->num_iter) {
+	/* Skip last iteration since number of rings changes. */
+	for(iring=0;iring<sc->num_dir_rings*sc->num_scat_rings;iring++)
+            for(i=0;i<LENSIN_OUT;i++)
+                scat_dsampm1[iring][i] = scat_dsamp[iring][i];
+	} 
+
+    }
+
+/* Correct the data. */
+if(correct == TRUE )
+    scatcor(sc);
+else if(scale_tails == TRUE)
+    scale_scat(sc);
+
+/* Write to disk. */
+if(savescat == TRUE) {
+    strcpy(tag,"flux");
+    write_scatter(sc,tag);
+    tag1 = NULL;
+    write_scatter(sc,tag1);
+    for(i=0,joff=0;i<sc->num_dir_rings;i++,joff+=sc->num_scat_rings) {
+        for(j=0;j<sc->num_scat_rings;j++) {
+	    ring  = i*sc->num_scat_rings + j;
+	    ring1 = sc->phys_ring[sc->dir_ring_list[i]];
+	    ring2 = sc->phys_ring[sc->scat_ring_list[j]];
+    	    pln_cti = plnnum_f3d(ring1,ring2);
+    	    if((shnrm = (Norm_subheader *)getsbhdr(nrmscfil,pln_cti,1,1,0,0)) == NULL) {
+	        printf("Error in getsbhdr while reading %s.\n",nrmscfil);
+	        exit(ERROR);
+	        }
+    	    if((norm=rdimg(nrmscfil,pln_cti,1,1,0,0)) == NULL) {
+    	        printf("Error while reading %s in rdimg.\n",nrmscfil);
+     	         return(NULL);
+                }
+	    numray_norm = shnrm->dimension_1;
+	    offset = (numray_norm - sc->numray)/2;
+  	    for(iang=0,ioff=0,joff=offset;iang<NUMANG;
+	    		iang++,ioff+=sc->numray,joff+=numray_norm) {
+	        for(k=0;k<sc->numray;k++) 
+		    if(norm[k+joff] > 0)
+	                scatter[ring][k+ioff]*=shnrm->scale_factor/norm[k+joff];
+		    else
+			scatter[ring][k+ioff]*=shnrm->scale_factor;
+	        }
+	    free(norm);
+	    free(shnrm);
+	    }
+        }
+    strcpy(tag,"final_nonorm");
+    write_scatter(sc,tag);
+    }
+
+printf("\nTotal computation time: %6.2f minutes.\n\n",(time2-time0)/60.);
+
+for(ring=0;ring<sc->num_dir_rings*sc->num_scat_rings;ring++) {
+    scatter[ring] = interp(ring,mult_dsamp);
+    }
+strcpy(tag,"mult");
+write_scatter(sc,tag);
+
+exit(NULL);
+
+}
+
+/************************/
+void write_scatter(sc,tag)
+/************************/
+
+struct  scatter_tab *sc;
+char	*tag;
+
+{
+
+int 	i,j,joff,ring;
+
+static struct cube_header *outhdr;
+
+outhdr = MakeCubeHeader(NUMRAY,NUMANG,
+		sc->num_scat_rings*sc->num_dir_rings,BYTE);
+if(tag == NULL)
+    sprintf(outfil,"%s_scat.cub",emisbody);
+else
+    sprintf(outfil,"%s/scat_%dx%d_%d_psi%d_psiatt%d_h%3.2f_%s.cub",
+	datapath,sc->imgdim,sc->imgdim,sc->numang,sc->num_psi,
+	sc->num_psi_att,sc->emis_cutoff,tag);
+for(i=0,joff=0;i<sc->num_dir_rings;i++,joff+=sc->num_scat_rings) {
+    for(j=0;j<sc->num_scat_rings;j++) {
+	ring = j + joff;
+	strcpy(outhdr->id,scat_dsamp_id[ring]);
+        PutCubePlane(outfil,outhdr,ring,scatter[ring]);
+	}
+    }
+printf("Scatter estimate written to \n%s\n",outfil);
+PutCubeHeader(outfil,outhdr);
+CloseCube(outfil);
+free(outhdr);
+
+}
+
+/*****************************/
+void process_args(sc,argc,argv)
+/*****************************/
+
+/* Process command-line arguments. */
+
+struct scatter_tab *sc;
+int	argc;
+char	*argv[];
+
+{
+
+int	i;
+
+char	cutoff_str_tr[MAXNAME],cutoff_str_em[MAXNAME];
+
+sc->iter_type = SS;
+strcpy(emisfile,argv[1]);
+matchfile = argv[1];
+strcpy(tranfile,argv[2]);
+strcpy(blankfile,argv[3]);
+
+sc->num_psi_att = MAXPSI_ATTEN_OVER_MAXPSI;
+sc->num_iter = 1;
+sc->relax = 1.;
+sc->frame = 1;
+sc->ext_tran_up  = 0.;
+sc->ext_tran_dwn = 0.;
+sc->ext_emis_up  = 0.;
+sc->ext_emis_dwn = 0.;
+sc->line_source  = FALSE;
+sc->mult_frac = MULT_FRAC;
+sc->mult_sigma = MULT_SIG;
+savescat = TRUE;
+scale_tails = FALSE;
+correct = FALSE;
+nrmscfil[0] = NULL;
+for(i=0;i<argc;i++) {
+    if(!strcmp(argv[i],"-id") && argc > i+1) {
+	strcpy(id,argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-normtrue") && argc > i+1) {
+	strcpy(nrmtrfil,argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-normscat") && argc > i+1) {
+	strcpy(nrmscfil,argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-pln") && argc > i+1) {
+	plane = atoi(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-psi") && argc > i+1) {
+	num_psi_factor = atoi(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-frame") && argc > i+1)
+	sc->frame = atoi(argv[i+1]);
+    if(!strcmp(argv[i],"-iter_type") && argc > i+1) {
+	if(!strcmp(argv[i+1],"em"))
+	    sc->iter_type = EM;
+	else if(!strcmp(argv[i+1],"ss"))
+	    sc->iter_type = SS;
+	else
+	    fprintf(stderr,"*** Invalid iteration type ***\n");
+	}
+    if(!strcmp(argv[i],"-cutoff") && argc > i+2) {
+	sc->emis_cutoff = atof(argv[i+1]);
+	sc->tran_cutoff = atof(argv[i+2]);
+	strcpy(cutoff_str_em,argv[i+1]);
+	strcpy(cutoff_str_tr,argv[i+2]);
+	}
+    if(!strcmp(argv[i],"-pln_step") && argc > i+1) {
+	pln_step = atoi(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-theta_step") && argc > i+1) {
+	theta_step = atoi(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-rings") && argc > i+1) {
+	strcpy(ring_option,argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-ethrsh") && argc > i+1) {
+	sc->energy_thresh = atof(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-match") && argc > i+1) {
+	matchfile = argv[i+1];
+	}
+    if(!strcmp(argv[i],"-imgdim_iter") && argc > i+1) {
+	sc->imgdim = atoi(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-numang_iter") && argc > i+1) {
+	sc->numang = atoi(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-imgdim_final") && argc > i+1) {
+	imgdim_final = atoi(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-numang_final") && argc > i+1) {
+	numang_final = atoi(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-numiter") && argc > i+1) {
+	sc->num_iter = atoi(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-relax") && argc > i+1) {
+	sc->relax = atof(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-quiet"))
+	quiet = TRUE;
+    if(!strcmp(argv[i],"-correct_data"))
+	correct = TRUE;
+    if(!strcmp(argv[i],"-nosave"))
+	savescat = FALSE;
+    if(!strcmp(argv[i],"-scale_tails"))
+	scale_tails = TRUE;
+    if(!strcmp(argv[i],"-ext_tran_up") && argc > i+1) {
+	sc->ext_tran_up  = atof(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-ext_tran_dwn") && argc > i+1) {
+	sc->ext_tran_dwn  = atof(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-ext_emis_up") && argc > i+1) {
+	sc->ext_emis_up  = atof(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-ext_emis_dwn") && argc > i+1) {
+	sc->ext_emis_dwn  = atof(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-mult_frac") && argc > i+1) {
+	sc->mult_frac  = atof(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-mult_sig") && argc > i+1) {
+	sc->mult_sigma  = atof(argv[i+1]);
+	}
+    if(!strcmp(argv[i],"-line_source")) {
+	sc->line_source  = TRUE;
+	}
+    if(!strcmp(argv[i],"-attpsi") && argc > i+1) {
+	sc->num_psi_att = atoi(argv[i+1]);
+	if(sc->num_psi_att < 2) {
+	    fprintf(stderr,"*** Number of oblique angles in atten table must be at least twice\nthe number used in the emission calculation (num_psi_factor).  ***\n");
+	    exit(ERROR);
+	    }
+	}
+    }
+
+if(nrmscfil[0] == NULL)
+    strcpy(nrmscfil,nrmtrfil);
+if(sc->energy_thresh < 0) {
+    fprintf(stderr," *** Energy threshold must be specified. ***\n");
+    exit(ERROR);
+    }
+plane = (plane-1)/pln_step + 1;
+
+strcpy(tran_body,tranfile);
+ptr = strstr(tran_body,".");
+*ptr = 0;
+strcpy(emisbody,emisfile);
+ptr = strstr(emisbody,".");
+*ptr = 0;
+
+lcinit = FALSE;
+for(i=1;i<argc;i++) {
+    if(!strcmp(argv[i],"-init")) {
+	lcinit = TRUE;
+	break;
+	}
+    }
+
+printf("\nEmission file: %s\n",emisfile);
+printf("Transmission file: %s\n",tranfile);
+printf("Blank file: %s\n",blankfile);
+printf("Trues normalization file: %s\n",nrmtrfil);
+printf("Scatter normalization file: %s\n",nrmscfil);
+/*printf("Output ID: %s\n",id);*/
+/*printf("Maximum oblique angle: %6.2f\n",RAD2DEG*MAXPSI);*/
+printf("Oblique sampling factor: %d\n",num_psi_factor);
+printf("Slice thickness for reconstructed images: %6.2f mm\n",SLCTHK);
+printf("Cutoff frequency for emission images: %s\n",cutoff_str_em);
+printf("Cutoff frequency for transmission images: %s\n",cutoff_str_tr);
+printf("Reconstructed image dimension: %dx%d\n",sc->imgdim,sc->imgdim);
+printf("Number of angles used in computation: %d\n",sc->numang);
+printf("Number of iterations: %d\n",sc->num_iter);
+printf("Multiple scattering kernel FWHM: %6.2f cm.\n",sc->mult_sigma*SG2FWHM/10.);
+printf("Energy threshold: %6.1f\n",sc->energy_thresh);
+if(sc->iter_type == SS)
+    printf("Iterate using successive substitution.\n");
+else
+    printf("Iterate using the EM algorithm.\n");
+printf("Processing frame #%d\n",sc->frame);
+printf("Extend transmission volume up by %4.0f mm, down by %4.0f mm.\n",
+		sc->ext_tran_up,sc->ext_tran_dwn);
+printf("Extend emission volume up by %4.0f mm, down by %4.0f mm.\n",
+		sc->ext_emis_up,sc->ext_emis_dwn);
+if(correct == TRUE)
+    printf("Save corrected emission sinogram.\n");
+if(scale_tails == TRUE)
+    printf("Scale estimates for zero error outside the object.\n");
+if(sc->line_source == TRUE)
+    printf("Assuming source is a line source, modify ray tracing and omit tail scaling.\n");
+
+#if(SCANNER == cti953b)
+    sprintf(sc->table_name,"%s","953B");
+#endif
+
+if((imgpath =  getenv("SCATTER_EST")) == NULL)
+    imgpath = ".";
+if((datapath = getenv("SCATTER_DATA")) == NULL)
+    datapath = ".";
+
+    /* Compute list of coincident rings to be processed. */
+    if(NULL == (sc->ring_psio = (float *)
+		    	malloc((unsigned)(2*NUM_RINGS*sizeof(float))))) {
+        printf("Could not malloc memory for ring_psio, \"scat_3d\".\n");
+        exit(ERROR);
+        }
+    sc->ring_psio += NUM_RINGS-1;
+    for(i=-NUM_RINGS+1;i<NUM_RINGS;i++) {
+	sc->ring_psio[i] = (float)atan((double)
+			  (SLCTHK*(float)i/(2.*RADIUS_DET)));
+        }
+
+    /* Setup tables of ring-differences to compute. */
+    if(!strcmp(ring_option,"all")) {
+        /* Compute scatter for all possible ring-differences. */
+        sc->num_dir_rings = LEN_RING_LIST;
+        sc->num_scat_rings = LEN_RING_LIST;
+        for(i=0;i<LEN_RING_LIST;i++) {
+    	    sc->dir_ring_list[i] = rings[i];
+	    sc->scat_ring_list[i] = rings[i];
+	    }
+        }
+    else if(!strcmp(ring_option,"one")) {
+        /* Compute scatter for one ring-differences. */
+        sc->num_dir_rings = 1;
+        sc->num_scat_rings = 1;
+        sc->dir_ring_list[0] = plane;
+        sc->scat_ring_list[0] = plane;
+        }
+    else if(!strcmp(ring_option,"one_dir")) {
+        /* Compute scatter for one ring-differences. */
+        sc->num_dir_rings = 1;
+        sc->num_scat_rings = LEN_RING_LIST;
+        sc->dir_ring_list[0] = rings[LEN_RING_LIST/2-1];
+        for(i=0;i<LEN_RING_LIST;i++) {
+	    sc->scat_ring_list[i] = rings[i];
+	    }
+        }
+    else if(!strcmp(ring_option,"one_scat")) {
+        /* Compute scatter for ring-differences of zero. */
+        sc->num_dir_rings = LEN_RING_LIST;
+        sc->num_scat_rings = 1;
+        for(i=0;i<LEN_RING_LIST;i++) {
+            sc->dir_ring_list[i] = rings[i];
+	    sc->scat_ring_list[i] = rings[i];
+	    }
+        }
+
+}
+
+
+
+/*************/
+void getmem(sc)
+/*************/
+
+struct scatter_tab *sc;
+
+{
+
+int	i,k,nrings;
+
+/* Malloc memory for output arrays. */
+if(NULL == (scat_dsamp = (float **)malloc
+	((unsigned)(sc->num_dir_rings*sc->num_scat_rings*sizeof(float **))))) {
+    printf("Could not malloc memory for scat_dsamp, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+if(NULL == (scat_dsampm1 = (float **)malloc
+	((unsigned)(sc->num_dir_rings*sc->num_scat_rings*sizeof(float **))))) {
+    printf("Could not malloc memory for scat_dsamp, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+nrings = sc->num_dir_rings*sc->num_scat_rings;
+if(NULL == (scat_dsamp[0] = (float *)
+    	malloc((unsigned)(LENSIN2_OUT*nrings*sizeof(float))))) {
+    printf("Could not malloc memory for scat_dsamp, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+if(NULL == (scat_dsampm1[0] = (float *)
+    	malloc((unsigned)(LENSIN2_OUT*nrings*sizeof(float))))) {
+    printf("Could not malloc memory for scat_dsamp, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+if(NULL == (mult_dsamp = (float **)malloc
+	((unsigned)(sc->num_dir_rings*sc->num_scat_rings*sizeof(float **))))) {
+    printf("Could not malloc memory for mult_dsamp, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+if(NULL == (mult_dsamp[0] = (float *)
+    	malloc((unsigned)(LENSIN2_OUT*nrings*sizeof(float))))) {
+    printf("Could not malloc memory for mult_dsamp, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+for(i=1;i<nrings;i++) {
+    scat_dsamp[i] = scat_dsamp[i-1] + LENSIN2_OUT;
+    scat_dsampm1[i] = scat_dsampm1[i-1] + LENSIN2_OUT;
+    mult_dsamp[i] = mult_dsamp[i-1] + LENSIN2_OUT;
+    }
+for(i=0;i<nrings;i++) {
+    for(k=0;k<LENSIN2_OUT;k++)
+        scat_dsamp[i][k] = 0.;
+    }
+
+if(NULL == (rotemis = (float *)
+    malloc((unsigned)(IMGSQ*sizeof(float))))) {
+    printf("Could not malloc memory for rotemis, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+if(NULL == (rotmu = (float *)
+    malloc((unsigned)(IMGSQ*sizeof(float))))) {
+    printf("Could not malloc memory for rotmu, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+for(i=0;i<IMGSQ;i++) {
+    rotmu[i] = 1.;
+    rotemis[i] = 0.;
+    }
+
+if(NULL == (tmp = (float *)
+    malloc((unsigned)(LENSIN*sizeof(float))))) {
+    printf("Could not malloc memory for tmp, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+
+}
+
+/***************************/
+float *interp(ring,scatdsamp)
+/***************************/
+
+/* Interpolate down-sampled sinograms up to full size and write to disc.*/
+
+int	ring;
+float	**scatdsamp;
+
+{
+
+int	i,j,k,iang,ioff,joff,koff,m;
+
+float   eps,del,*scat_interp;
+
+if(NULL == (scat_interp=(float *)
+			malloc((unsigned)(LENSIN*sizeof(float))))) {
+    printf("Could not malloc memory for scat_interp, \"interp\".\n");
+    exit(ERROR);
+    }
+for(i=0;i<LENSIN;i++)
+    scat_interp[i] = 0.;
+
+/* Interpolate result to original sinogram dimensions. 
+   First, store output in temporary array of larger dimension and "wrap" 
+   first angle around 180 degrees so last angle can be interpolated. */
+for(i=0;i<LENSIN_OUT;i++)
+    tmp[i] = scatdsamp[ring][i];
+for(i=0;i<NUMRAY_OUT-1;i++)
+    tmp[LENSIN_OUT+NUMRAY_OUT-i-1] = tmp[i];
+tmp[LENSIN_OUT] = tmp[NUMRAY_OUT-1];
+
+/* Now interpolate using array with first and last angles "wrapped". */
+for(iang=0,ioff=0,joff=0;iang<NUMANG;iang+=OUTPUT_MODULUS,
+    	                ioff+=OUTPUT_MODULUS*NUMRAY,joff+=NUMRAY_OUT) {
+    for(i=OUTPUT_MODULUS/2,j=0;i<NUMRAY-OUTPUT_MODULUS/2;i+=OUTPUT_MODULUS,j++) {
+	for(k=0,koff=0;k<OUTPUT_MODULUS;k++,koff+=NUMRAY) {
+	    del = (float)k/(float)OUTPUT_MODULUS;
+	    for(m=0;m<OUTPUT_MODULUS;m++) {
+	    	eps = (float)m/(float)OUTPUT_MODULUS;
+		if(j+1 < NUMRAY_OUT) {
+		    scat_interp[i+m+ioff+koff] = 
+		             eps *   del *tmp[j+joff+NUMRAY_OUT+1]
+		        +    eps *(1-del)*tmp[j+joff+1]
+		        + (1-eps)*   del *tmp[j+joff+NUMRAY_OUT]
+		        + (1-eps)*(1-del)*tmp[j+joff];
+		    }
+		else if(j == NUMRAY_OUT-1) {
+		    scat_interp[i+ioff+koff] = tmp[j+joff];
+		    }
+		else {
+		    scat_interp[i+m+ioff+koff] = 0;
+		    }
+		}
+	    }
+	}
+    }
+return(scat_interp);
+
+}
+
+/*****************/
+void calc_atten(sc)
+/*****************/
+
+struct scatter_tab *sc;
+
+{
+
+float	surv,theta,cpsi;
+
+static float attnfill=0.;
+
+int	i,ioff,joff,ray,jpsi,jtht,ring,iring;
+
+static int first=TRUE,imgdimm1=-1,alloc_mem=TRUE;
+
+void	rotate_3d();
+
+if(sc->imgdim != imgdimm1 && first == FALSE) {
+    first = TRUE;
+    imgdimm1 = sc->imgdim;
+    for(iring=0;iring<sc->num_dir_rings;iring++) {
+	ring = sc->dir_ring_list[iring];
+        for(i=0;i<sc->num_psi_att;i++)
+	    free(atten[ring][i]);
+	free(atten[ring]);
+	}
+    free(atten);
+    alloc_mem = TRUE;
+    }
+
+if(alloc_mem == TRUE) {
+    alloc_mem = FALSE;
+    attnfill = (float)exp((double)(-MU_H2O*sc->pixsiz));
+    if(NULL == (atten = (short ***)
+        malloc((unsigned)((3*NUM_RINGS)*sizeof(short **))))) {
+        printf("Could not malloc memory for ***atten, \"scat_3d\".\n");
+        exit(ERROR);
+        }
+    for(iring=0;iring<sc->num_dir_rings;iring++) {
+        ring = sc->scat_ring_list[iring];
+        if(NULL == (atten[ring] = (short **)
+            malloc((unsigned)((sc->num_psi_att)*sizeof(short *))))) {
+            printf("Could not malloc memory for **atten, \"scat_3d\".\n");
+            exit(ERROR);
+            }
+        for(i=0;i<sc->num_psi_att;i++) {
+            if(NULL == (atten[ring][i] = (short *)malloc((unsigned)
+	 	     ((NUMANG2_OUT*NUMRAY_OUT*sc->imgdim)*sizeof(short))))) {
+                printf("Could not malloc memory for *atten, \"scat_3d\".\n");
+                exit(ERROR);
+	        }
+            }
+        }
+    }
+
+/* Find attenuation. */
+for(iring=0;iring<sc->num_dir_rings;iring++) {
+    ring = sc->dir_ring_list[iring];
+    for(jpsi=0;jpsi<sc->num_psi_att;jpsi++) {
+	cpsi = cos((double)sc->psi_att[jpsi]);
+        for(jtht=0;jtht<NUMANG2_OUT;jtht++) {
+	    theta = PI*THETA_DIR*(float)jtht/(float)NUMANG_OUT+THETA_START;
+	    for(i=0;i<sc->imgsq;i++) rotmu[i] = 1.;
+	    rotate_3d(theta,sc->psi_att[jpsi],&mu,rotmu,sc->tran_plnmin,
+					sc->tran_plnmax,ring,attnfill,sc);
+	    joff = sc->imgdim*OUTPUT_MODULUS/(2*sc->ray_step);
+	    for(ray=0,ioff=jtht*NUMRAY_OUT*sc->imgdim;ray<NUMRAY_OUT;
+		ioff+=sc->imgdim,joff+=sc->imgdim*sc->img_step,ray++) {
+	        surv = cpsi; /* Correct for obliquity here. */
+	        for(i=0;i<sc->imgdim;i++) {
+	            atten[ring][jpsi][ioff+i] = (int)(surv*ATTEN_RATE + .5);
+	            surv *= rotmu[joff+i];
+	            }
+	        }
+	    }
+        }
+    }
+
+}
+
+/*********************/
+void calc_scat(sc,iter)
+/*********************/
+
+struct scatter_tab *sc;
+int	iter;
+
+{
+
+float	photons,delpsi_max,
+	nscat,det_eff,
+	prsurv_l1,atten_totl,
+	s0,s1,snm1,snm2,x,
+	xl1,
+	xl2,xl20,xdtht,
+	psi,delpsi,theta;
+
+int	i,j,joff,koff,m,ray,angoff,d2out,
+	loc_scat_ring_list[NUM_RINGS],iring,jring,kring,mring,iang,ioff,
+	L,Lp,dthtpp,raypix,
+	l1overL,
+	l2overL,
+	l1poverL,l1poverLp,
+	l2poverLp,
+	lxoverL,
+	l3overl2,
+	l1ppoverL,
+	l2ppoverL,
+	psic_p_psio,
+	l1p,
+	l1,
+	l2,
+	att_ls=0,
+	atten_511=0,
+	thetas,
+	psic,
+	psis,
+	psio_tab[LEN_RING_LIST],
+	psi_minus_psio[LEN_RING_LIST],
+	psio,
+	upsilons,
+	npsic,
+	theta_diff,
+	ds,
+	scat_indx,
+	atten_indx=0,
+	ithts,
+	ipsi,jpsi,
+	itht,modtht,att_scl,whichpi,
+	det,idtht,id2,ring_diff,
+	loff,ell,psiopp,
+	dir_ring,scat_ring,idir_ring,iscat_ring,
+	ring_out_tab[LEN_RING_LIST][2];
+
+float	xpsio,xL,xl1p,xl1overL,xl1poverL,xl2poverL,xlxoverL,xl2overL,
+	xthetas,xpsic,xpsis,xupsilons,xtheta_diff,xatten_511,
+	xl1ppoverL,xl2ppoverL,xpsic_p_psio,xdthtpp,xl1poverLp,xl2poverLp,
+	xpsi_minus_psio,xpsiopp,sum,sum1,xl1m1,
+	xatt_scl,xl3overl2,stats[10];
+
+char	logfile[MAXNAME];
+
+void	rotate_3d(),rotate_wedge(),rotate_attn();
+ 
+sprintf(logfile,"scat_log_p%d.txt",plane);
+
+for(i=0;i<sc->num_dir_rings*sc->num_scat_rings;i++) {
+    for(j=0;j<LENSIN2_OUT;j++)
+        scat_dsamp[i][j] = 0.;
+    }
+
+delpsi_max = -1.e20;
+for(i=0;i<sc->num_psi;i++) {
+    if(sc->delpsi[i] > delpsi_max)
+	delpsi_max = sc->delpsi[i];
+    }
+for(i=0;i<sc->imgsq;i++)
+    rotmu[i] = 1.;
+raypix = sc->imgdim/NUMRAY_OUT;
+
+for(idir_ring=0;idir_ring<sc->num_dir_rings;idir_ring++) {
+  /* Loop over each ring for which scatter is computed. */
+  dir_ring = sc->dir_ring_list[idir_ring];
+
+  /* Build list of scatter rings to be computed. */
+    if(iter < sc->num_iter) {
+	/* Only correcting straight planes. */
+        loc_scat_ring_list[0] = dir_ring; 
+        sc->num_scat_rings = 1;
+        }
+    else {
+        for(i=0;i<sc->num_dir_rings;i++) 
+	    loc_scat_ring_list[i] = sc->dir_ring_list[i];
+        sc->num_scat_rings = sc->num_dir_rings;
+        }
+  for(ipsi=0;ipsi<sc->num_psi;ipsi++) {
+    psi  = sc->psi[ipsi];
+    delpsi = sc->delpsi[ipsi];
+    jpsi = (int)((psi - PSI_MIN)*PSI_RATE + .5);
+    /* Outer loop ranges over the oblique angle. */
+    for(iscat_ring=0;iscat_ring<sc->num_scat_rings;iscat_ring++) {
+	ring_out_tab[iscat_ring][0] = iscat_ring+sc->num_scat_rings*idir_ring;
+	ring_out_tab[iscat_ring][1] = idir_ring +sc->num_dir_rings*iscat_ring;
+	sprintf(scat_dsamp_id[ring_out_tab[iscat_ring][0]],
+			"r%x-%x",sc->phys_ring[sc->dir_ring_list[idir_ring]]-1,
+		  	 sc->phys_ring[loc_scat_ring_list[iscat_ring]]-1);
+	scat_ring = loc_scat_ring_list[iscat_ring];
+	psi_minus_psio[iscat_ring] = (int)
+		((psi-sc->ring_psio[scat_ring - dir_ring] - 
+		PSI_DIFF_MIN)*PSI_DIFF_RATE + .5);
+	psio_tab[iscat_ring] = (int)((sc->ring_psio[scat_ring - dir_ring] 
+		     		- PSIO_MIN)*PSIO_RATE + .5);
+	}
+    for(itht=0;itht<2*sc->numang;itht++) {
+	modtht = itht - sc->ang_step*(itht/sc->ang_step);
+	whichpi = itht/sc->numang;
+	theta = PI*THETA_DIR*(float)itht/(float)sc->numang + THETA_START;
+	rotate_wedge(theta,psi,delpsi,emis,rotemis,sc->emis_plnmin,
+				sc->emis_plnmax,dir_ring,sc,delpsi_max);
+	rotate_attn(theta,psi,delpsi,mu,rotmu,sc->tran_plnmin,
+				sc->tran_plnmax,dir_ring,sc,delpsi_max);
+	for(ray=0,loff=0;ray<sc->numray;ray+=sc->ray_step,loff+=sc->imgdim) {
+	  if(sc->coords.entry[ray][modtht].N > 0) {
+	    photons = 0.;
+	    prsurv_l1 = 1;
+	    xl1m1 = sc->xl10[jpsi][ray];
+	    for(ell=sc->lmin[ray],xl1=xl1m1;
+			ell<sc->lmax[ray];ell++,xl1+=sc->pixsiz) {
+	        l1 = (int)((xl1 - L1_MIN)*L1_RATE + .5);
+		photons += rotemis[loff+ell]*prsurv_l1*
+						sc->septal_pen_l1[ipsi][l1];
+		photons *= rotmu[loff+ell]*(xl1m1/xl1);
+		nscat = photons*(1 - rotmu[loff+ell]);
+		prsurv_l1 *= rotmu[loff+ell];
+		if(nscat > 1.e-5) {
+		 /* Loop through detectors in coincidence with this one. */ 
+		 for(det=0;det<sc->coords.entry[ray][modtht].N;det++) {
+		   /* Loop through output detectors. */
+		   idtht    = sc->coords.entry[ray][modtht].deltht[det];
+		   DTHT_FP(idtht,xdtht);
+		   /*dtht     = (float)idtht*sc->ang_inc;*/
+		   id2      =  sc->coords.entry[ray][modtht].d2[det];
+		  for(iscat_ring=0;iscat_ring<sc->num_scat_rings;iscat_ring++) {
+		    scat_ring = loc_scat_ring_list[iscat_ring];
+		    psio = psio_tab[iscat_ring];
+		    PSIO_FP(psio,xpsio);
+		    PSI_DIFF_FP(psi_minus_psio[iscat_ring],xpsi_minus_psio);
+		    Lp       = sc->Lp[id2];
+		    L        = sc->L[psio][id2];
+		    L_FP(L,xL);
+		    l1p      = sc->l1p[jpsi][l1];
+		    L1P_FP(l1p,xl1p);
+		    l1overL   = sc->loverL[l1][L];
+		    LOVERL_FP(l1overL,xl1overL);
+		    l1poverLp  = sc->loverL[l1p][Lp];
+		    LOVERL_FP(l1poverLp,xl1poverLp);
+		    l2poverLp = sc->l2poverL[idtht+sc->numang][l1poverLp];
+		    LOVERL_FP(l2poverLp,xl2poverLp);
+		    thetas   = sc->thetas[idtht+sc->numang][l2poverLp];
+		    THETAS_FP(thetas,xthetas);
+		    lxoverL  = sc->lxoverL[l1overL][psi_minus_psio[iscat_ring]];
+		    LXOVERL_FP(lxoverL,xlxoverL);
+		    l1ppoverL = sc->l1ppoverL[l1overL]
+						[psi_minus_psio[iscat_ring]];
+		    LOVERL_FP(l1ppoverL,xl1ppoverL);
+		    dthtpp    = sc->dthtpp[idtht][psio];
+		    THETAS_FP(dthtpp,xdthtpp);
+		    l2ppoverL = sc->l2ppoverL[dthtpp][l1ppoverL];
+		    LOVERL_FP(l2ppoverL,xl2ppoverL);
+		    l2overL   = sc->l2overL[lxoverL][l2ppoverL];
+		    LOVERL_FP(l2overL,xl2overL);
+		    psic_p_psio=sc->psic_p_psio[lxoverL][l2overL];
+		    PSIC_PSIO_FP(psic_p_psio,xpsic_p_psio);
+		    l3overl2  = sc->l3ppoverl2pp[l1ppoverL][l2ppoverL];
+		    L3OVERL2_FP(l3overl2,xl3overl2);
+		    psiopp    = sc->psiopp[psio][l3overl2];
+		    PSIO_FP(psiopp,xpsiopp);
+		    psic      = sc->psic[psic_p_psio][psiopp];
+		    PSIC_FP(psic,xpsic);
+		    psis      = sc->psis[psic][jpsi];
+		    PSIS_FP(psis,xpsis);
+		    upsilons = sc->upsilons[psis][thetas];
+		    UPS_FP(upsilons,xupsilons);
+		    npsic    = sc->npsic[psic];
+		    theta_diff= sc->theta_diff[thetas][idtht];
+		    THT_DIFF_FP(theta_diff,xtheta_diff);
+		    ds      = sc->ds[theta_diff][id2];
+		    l2      = sc->l2[L][l2overL];
+		    L2_FP(l2,xl2);
+		    L20_FP(sc->l20[psic][ds],xl20);
+		    att_ls  = sc->l2_att[psic][l2-sc->l20[psic][ds]];
+		    ithts = sc->thts_cvt[thetas];
+		    atten_indx= sc->angle_wrap_atten[itht+ithts][ds];
+	 	    atten_511= atten[scat_ring][npsic][atten_indx+att_ls];
+		    ATTEN_FP(atten_511,xatten_511);
+		    /* Correct attenuation correction factor for lower
+		       energy of scattered photon. */
+		    att_scl  = sc->energy_corr[upsilons];
+		    ATT_SCL_FP(att_scl,xatt_scl);
+		    atten_totl= sc->pow[atten_511][att_scl];
+		    det_eff  = sc->energy_frac[upsilons];
+		    d2out = sc->coords.entry[ray][modtht].idout[det];
+		    scat_indx=sc->angle_wrap_scat[itht+idtht+sc->numang/2][d2out];
+		    scat_dsamp[ring_out_tab[iscat_ring][whichpi]][scat_indx]+= 
+			nscat*sc->prthts[upsilons][l2]*det_eff*atten_totl;
+		    }
+		   }
+		  }
+		  xl1m1 = xl1;
+		}
+	    }
+	  }
+	}
+    }
+  }
+
+/* Fold second 180 degrees into first 180 degrees. */
+for(i=0,joff=0;i<sc->num_dir_rings;i++,joff+=sc->num_scat_rings) {
+    for(j=0;j<sc->num_scat_rings;j++) {
+	ring_diff = j + joff;
+	for(itht=0,angoff=0;itht<NUMANG_OUT;itht++,angoff+=NUMRAY_OUT) {
+	    for(ray=0;ray<NUMRAY_OUT;ray++)
+		scat_dsamp[ring_diff][ray+angoff] 
+       	          += scat_dsamp[ring_diff][angoff+LENSIN_OUT+NUMRAY_OUT-ray-1];
+    	    }
+	}
+    }
+
+/* Compute convolutional model for multiple scatters. */
+for(iring=0;iring<sc->num_dir_rings;iring++) {
+  for(jring=0;jring<sc->num_scat_rings;jring++) {
+    kring = iring*sc->num_scat_rings + jring;
+    mring = iring*LEN_RING_LIST + jring;
+    for(i=0;i<LENSIN_OUT;i++) tmp[i] = 0.;
+    for(iang=0,ioff=0;iang<NUMANG_OUT;iang++,ioff+=NUMRAY_OUT) {
+/*        sum = 0.;
+        sum1 = 0.;*/
+        for(i=0;i<NUMRAY_OUT;i++) {
+	    tmp[i+ioff] = sc->mult_krnl[0]*scat_dsamp[kring][i+ioff];
+	    for(j=1;j<sc->mult_len;j++) {
+		if((i-j) < 0) {
+		    s0 = scat_dsamp[kring][ioff];
+		    s1 = scat_dsamp[kring][ioff+1];
+		    x = s0 + (s0 - s1)*(float)(j-i);
+		    if(x > 0)
+		    	tmp[i+ioff] += 
+			    sc->mult_krnl[j]*(x + scat_dsamp[kring][i+j+ioff]);
+		    else
+		    	tmp[i+ioff] += 
+			    sc->mult_krnl[j]*scat_dsamp[kring][i+j+ioff];
+		    }
+		else if((i+j) > NUMRAY_OUT-1) {
+		    snm1 = scat_dsamp[kring][ioff+NUMRAY_OUT-1];
+		    snm2 = scat_dsamp[kring][ioff+NUMRAY_OUT-2];
+		    x = snm1 + (snm1 - snm2)*(float)(i+j-NUMRAY_OUT+1);
+		    if(x > 0)
+		    	tmp[i+ioff] += 
+			    sc->mult_krnl[j]*(x + scat_dsamp[kring][i-j+ioff]);
+		    else
+		    	tmp[i+ioff] += 
+			    sc->mult_krnl[j]*scat_dsamp[kring][i-j+ioff];
+		    }
+		else
+		    tmp[i+ioff] +=sc->mult_krnl[j]*(scat_dsamp[kring][i-j+ioff] 
+					 + scat_dsamp[kring][i+j+ioff]);
+		}
+/*	    sum1 += scat_dsamp[kring][i+ioff];*/
+	    tmp[i+ioff] *= sc->mult_scl[mring][iang];
+/*	    sum += tmp[i+ioff];*/
+	    }
+	}
+/*    scl = sc->mult_frac*sum1/sum;*/
+    for(i=0;i<LENSIN_OUT;i++) {
+	scat_dsamp[kring][i] += tmp[i];
+        mult_dsamp[kring][i]  = tmp[i];
+/*        scat_dsamp[kring][i] += scl*tmp[i];*/
+	}
+    }
+  }
+
+}
+
+/**************/
+void scatcor(sc)
+/**************/
+
+struct scatter_tab *sc;
+
+{
+
+int     i,j,plane,ring1,ring2,outfrm=1,stat,
+        gate=1,data=0,bed=0,idir,ipln,iscat;
+
+float   *scatpln,*sino,*normtr,*normsc,sum1,sum2,sumtot=0,
+        sumscat=0,*scat_interp(),scl,sclsum=0;
+
+Scan_subheader  *sh;
+Norm_subheader  *shntr,*shnsc;
+Main_header     *mh;
+
+struct ringinfo *rng;
+
+float	scatscl();
+
+void	ringnum();
+
+char	corrfil[MAXNAME];
+
+sprintf(corrfil,"%s_corr.scn",emisbody);
+if( (mh = getmhdr(emisfile)) == NULL) {
+    printf("Error in getmhdr.\n");
+    exit(ERROR);
+    }
+if((sh = (Scan_subheader *)getsbhdr(emisfile,1,1,gate,data,bed)) == NULL) {
+    printf("Error reading scan subheader, plane 1.\n");
+    exit(ERROR);
+    }
+
+/* Store info defining sampling into a structure. */
+rng = (struct ringinfo *)malloc(sizeof(struct ringinfo));
+rng->xdim = NUMRAY;
+rng->ydim = NUMANG;
+rng->nringpair = LEN_RING_LIST*LEN_RING_LIST;
+rng->minring = 100000;
+rng->maxring = 0;
+rng->nring = 0;
+for(idir=0,ipln=0;idir<sc->num_dir_rings;idir++) {
+    for(iscat=0;iscat<sc->num_scat_rings;iscat++,ipln++) {
+	ring1 = sc->dir_ring_list[idir];
+	ring2 = sc->scat_ring_list[iscat];
+        rng->ringdef[ipln].ring1 = ring1;
+	rng->ringdef[ipln].ring2 = ring2;
+        rng->ringdef[ipln].ringdiff = ring2 - ring1;
+        if(ring1 < rng->minring)
+            rng->minring = ring1;
+        if(ring1 > rng->maxring)
+            rng->maxring = ring1;
+        for(j=0;j<rng->nring;j++) {
+            if(ring1 == rng->rings[j])
+            break;
+            }
+        if(j == rng->nring || rng->nring == 0) {
+            rng->rings[rng->nring] = ring1;
+            ++rng->nring;
+            }
+        }
+    }
+
+/* Now loop through all the planes in the sinogram. */
+for(plane=1;plane<=mh->num_planes;plane++) {
+    if((sh = (Scan_subheader *)getsbhdr(emisfile,plane,sc->frame,gate,data,bed)) == NULL) {
+        printf("Error reading scan subheader.\n");
+        exit(ERROR);
+        }
+    if((sino=rdimg(emisfile,plane,sc->frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",emisfile,plane);
+        exit(ERROR);
+        }
+    if((shntr = (Norm_subheader *)getsbhdr(nrmtrfil,plane,1,gate,data,bed)) == NULL) {
+        printf("Error reading normtr subheader, plane %d.\n",plane);
+        exit(ERROR);
+        }
+    if((normtr=rdimg(nrmtrfil,plane,1,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",nrmtrfil,plane);
+        exit(ERROR);
+        }
+    if((shnsc = (Norm_subheader *)getsbhdr(nrmscfil,plane,1,gate,data,bed)) == NULL) {
+        printf("Error reading normsc subheader, plane %d.\n",plane);
+        exit(ERROR);
+        }
+    if((normsc=rdimg(nrmscfil,plane,1,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",nrmscfil,plane);
+        exit(ERROR);
+        }
+
+    /* Get interpolated scatter sinogram. */
+    scatpln = scat_interp(scatter,rng,plane);
+
+    /* Denormalize the scatter estimate. */
+    for(i=0;i<LENSIN_CTI;i++) {
+	if(normsc[i] > 0)
+	    scatpln[i] *= shnsc->scale_factor/normsc[i];
+	}
+
+    /* Get scale factor that forces scatter in tails to match. */
+    scl = scatscl(sc,plane,scatpln,sino,NUMANG);
+    sclsum += scl;
+    if(scale_tails == FALSE) {
+	scl = 1.;
+	}
+
+    /* Calculate statistics for scatter fraction. */
+    for(i=0,sum1=0;i<LENSIN_CTI;i++)
+        sum1+= sino[i];
+    for(i=0,sum2=0;i<LENSIN_CTI;i++)
+            sum2 += scl*scatpln[i];
+    sumtot += sum1;
+    sumscat += sum2;
+
+    for(i=0;i<LENSIN_CTI;i++) {
+        sino[i] = shntr->scale_factor*normtr[i]*(sino[i] - scl*scatpln[i]);
+        }
+
+    mh->num_frames = 1;
+    mh->num_planes = NUM_RINGPAIR;
+    sh->loss_correction_fctr = 1.;
+    if((stat=wrimg(corrfil,sino,mh,sh,plane,outfrm,gate,data,bed))==ERROR) {
+        fprintf(stderr,"Error writing to %s\n",corrfil);
+        exit(ERROR);
+        }
+    free(sino);
+    free(sh);
+    free(normtr);
+    free(normsc);
+    free(shntr);
+    free(shnsc);
+    free(scatpln);
+
+    }
+
+printf("Scatter corrected data written to %s\n",corrfil);
+printf("Scatter fraction: %6.2f%%\n",100.*sumscat/sumtot);
+printf("Average scale factor derived from scatter outside the subject: %f\n",
+	sclsum/(float)mh->num_planes);
+if(scale_tails == FALSE)
+    printf("Scale factors not applied to scatter estimates.\n");
+
+}
+
+
+/*****************/
+void scale_scat(sc)
+/*****************/
+
+struct scatter_tab *sc;
+
+{
+
+int     i,j,plane,ring1,ring2,outfrm=1,stat,
+        gate=1,data=0,bed=0,idir,ipln,iscat;
+
+float   *scatpln,*sino,*tmpscat,*normsc,sum1,sum2,sumtot=0,
+        sumscat=0,*scat_interp(),scl,sclsum=0;
+
+Scan_subheader  *sh;
+Norm_subheader  *shnsc;
+Main_header     *mh;
+
+struct ringinfo *rng;
+
+float	scatscl();
+
+void	ringnum();
+
+char	corrfil[MAXNAME];
+
+if( (mh = getmhdr(emisfile)) == NULL) {
+    printf("Error in getmhdr.\n");
+    exit(ERROR);
+    }
+if((sh = (Scan_subheader *)getsbhdr(emisfile,1,1,gate,data,bed)) == NULL) {
+    printf("Error reading scan subheader, plane 1.\n");
+    exit(ERROR);
+    }
+
+tmpscat = (float *)malloc(LENSIN_CTI*sizeof(float));
+
+/* Now loop through all the planes in the sinogram. */
+for(idir=0,ipln=0;idir<sc->num_dir_rings;idir++) {
+  for(iscat=0;iscat<sc->num_scat_rings;iscat++,ipln++) {
+    plane = plnnum_f3d(idir+1,iscat+1);
+    if((sh = (Scan_subheader *)getsbhdr(emisfile,plane,sc->frame,gate,data,bed)) == NULL) {
+        printf("Error reading scan subheader.\n");
+        exit(ERROR);
+        }
+    if((sino=rdimg(emisfile,plane,sc->frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",emisfile,plane);
+        exit(ERROR);
+        }
+    if((shnsc = (Norm_subheader *)getsbhdr(nrmscfil,plane,1,gate,data,bed)) == NULL) {
+        printf("Error reading normsc subheader, plane %d.\n",plane);
+        exit(ERROR);
+        }
+    if((normsc=rdimg(nrmscfil,plane,1,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",nrmscfil,plane);
+        exit(ERROR);
+        }
+
+    for(i=0;i<LENSIN_CTI;i++)
+	tmpscat[i] = shnsc->scale_factor*scatter[ipln][i]/normsc[i];
+
+    /* Get scale factor that forces scatter in tails to match. */
+    scl = scatscl(sc,plane,tmpscat,sino,NUMANG);
+    sclsum += scl;
+    if(scale_tails == FALSE) {
+	scl = 1.;
+	}
+
+    for(i=0;i<LENSIN_CTI;i++) 
+        scatter[ipln][i] *= scl;
+
+    free(sino);
+    free(sh);
+    free(normsc);
+    free(shnsc);
+
+    }
+  }
+printf("Scatter fraction: %6.2f%%\n",100.*sumscat/sumtot);
+printf("Average scale factor derived from scatter outside the subject: %f\n",
+	sclsum/(float)(sc->num_dir_rings*sc->num_scat_rings));
+if(scale_tails == FALSE)
+    printf("Scale factors not applied to scatter estimates.\n");
+
+}
+@
+
+
+1.4
+log
+@Fix bug in naming corrected sinogram file.
+@
+text
+@d1 1
+a1 1
+/*$Id: scat_f3d.c,v 1.3 1995/02/11 16:55:31 jmo Exp jmo $*/
+d3 3
+d40 1
+a40 1
+static char rcsid [] = "$Header: /home/usrb/jmo/tmp/RCS/scat_f3d.c,v 1.3 1995/02/11 16:55:31 jmo Exp jmo $";
+d932 1
+a932 1
+		if(nscat > 0.) {
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*$Id: scat_f3d.c,v 1.2 1995/01/20 23:13:52 ty7777 Exp jmo $*/
+d3 3
+d37 1
+a37 1
+static char rcsid [] = "$Header: /home/usrb/jmo/tmp/RCS/scat_f3d.c,v 1.2 1995/01/20 23:13:52 ty7777 Exp jmo $";
+d1103 1
+a1103 1
+sprintf(corrfil,"%s.scn",emisbody);
+d1202 1
+a1202 1
+        fprintf(stderr,"Error writing to %s\n",outfil);
+@
+
+
+1.2
+log
+@Deleted _corr.
+@
+text
+@d1 1
+a1 1
+/*$Id: scat_f3d.c,v 1.1 1995/01/19 22:40:20 ty7777 Exp ty7777 $*/
+d3 3
+d34 1
+a34 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/ollinger/new/RCS/scat_f3d.c,v 1.1 1995/01/19 22:40:20 ty7777 Exp ty7777 $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d31 1
+a31 1
+static char rcsid [] = "$Header$";
+d1097 1
+a1097 1
+sprintf(corrfil,"%s_corr.scn",emisbody);
+@

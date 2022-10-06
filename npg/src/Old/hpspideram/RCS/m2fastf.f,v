@@ -1,0 +1,256 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.23.15.42.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   M2FASTF.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         21-Aug-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This subroutine allows rapid entry of scan files into the
+C     scan file list.  It does not use full screen entry options
+C     available in M2FILES.FTN, nor does it allow changing any of
+C     the factors in the file list.  It does check the existence of
+C     each file and reads the number of slices, date processed,
+C     and initials of the person who processed the file
+C     from the file header and writes them to the terminal.
+C
+C  History:
+C     Modified 11-Sep-87 by TOV to add messages for overriding
+C        non-blank file extensions.
+C     Modified 01-Feb-90 by TOV to assign SLCNUM = 1.
+C
+C  Common Blocks from SPIDERAM.INC
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **FILES    - scan file list                 (write)
+C
+C  Local Variables:
+C     Q - question writen to terminal;
+C     A - answer;
+C     STR - string to write to terminal;
+C     FNM - file number;
+C     LASTFNM - last non-blank file in list;
+C     HOME,CLEAR - values passed to TCONTROL to home the cursor and
+C        clear the terminal screen;
+C     BELL - character which sounds terminal bell;
+C     BLANK - character string of blanks;
+C     HDRONLY = true--> read the header only; ***
+C               false--> read the header and image;
+C     ERRTYPE = type of error in processing images:
+C       0 = no errors in processing;
+C       6 = cannot read FILE(1);
+C       7 = cannot read FILE(2);
+C       8 = cannot read FILE(3);
+C       9 = cannot read FILE(4);
+C      10 = cannot read FILE(5);
+C      17 = illegal scanner = SCANRERR;
+C      18 = illegal number of slices in image = SLICERR;
+C      -1 = error in local processing;
+C
+C  Uses Subroutines:
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     D2GETIMG - read image file header (HDRONLY=true);
+C
+C  TERMINAL.LIB
+C     GTSTRING - get a character string;
+C     UPPERCAS - sets all characters in a string to upper case;
+C     YESNO
+C
+C  Called by:  SPIDERAM
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE M2FASTF
+C
+      INTEGER*4    HOME,CLEAR,ERRTYPE,FNM,LASTFNM,SLCNUM,L,L2,I
+      LOGICAL*1    HDRONLY,A
+      CHARACTER*1  BELL
+      CHARACTER*2  NUM
+      CHARACTER*3  EXT
+      CHARACTER*20 BLANK,TEMPNAME
+      CHARACTER*80 Q,STR
+      character*256 rcsheader
+C
+      INCLUDE 'spideram.inc'
+      rcsheader = "$Id: m2fastf.f,v 1.3 1993/10/04 21:55:32 tom Exp $"
+
+      DATA HOME,CLEAR /1,2/
+C
+      BLANK = ' '
+      BELL = CHAR(7)
+      EXT = ' '
+      HDRONLY = .TRUE.
+      SLCNUM = 1
+C
+C  Get last file in list
+C
+      CALL TCONTROL(HOME,0,0)
+      CALL TCONTROL(CLEAR,0,0)
+      LASTFNM = 0
+      DO 100 I=1,20
+        IF (FILENAME(I).NE.BLANK) LASTFNM=I
+100   CONTINUE
+C
+C  If list is not empty, does user want to erase it?
+C
+      IF (LASTFNM.NE.0) THEN
+        Q = 'Erase scan file list'
+        A = .TRUE.
+        CALL YESNO(Q,A)
+        IF (A) THEN
+          LASTFNM = 0
+          PETTNUM = 0
+          NMSLICES = 0
+          DO 120 I=1,20
+            FILENAME(I) = ' '
+            PROCDATE(I) = '00/00/00'
+            PROCBY(I)   = ' '
+            MULTFACT(I) = 1.0
+            ADDFACT(I)  = 0
+            HOFILE(I)   = 0
+            COFILE(I)   = 0
+120       CONTINUE
+        END IF
+      END IF
+      FNM = LASTFNM+1
+C
+C  Default HDR volume (can be changed only if no files in scan list)
+C
+      IF (LASTFNM.EQ.0) THEN
+        Q = 'HDR volume (disk volume on which to look for .HDR files)'
+        STR = ' '
+        STR = HDRVOL
+        CALL GTSTRING(Q,STR)
+        HDRVOL = STR(1:4)
+        L = IANYL(HDRVOL,':')
+        IF (L.NE.0) THEN
+          HDRVOL(L:L) = ' '
+        END IF
+      END IF
+C
+C  Default IMG volume
+C
+      Q = 'Default volume for image files'
+      STR = ' '
+      STR = IMGVOL
+      CALL GTSTRING(Q,STR)
+      IMGVOL = STR(1:4)
+      L = IANYL(IMGVOL,':')
+      IF (L.NE.0) THEN
+        IMGVOL(L:L) = ' '
+      END IF
+C
+C  Default file extension
+C
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'To change a non-blank default extension ',
+     2  'to a blank extension,'
+      WRITE(USEROUT,*) '   enter  ESC RETURN  or  * RETURN'
+      WRITE(USEROUT,*) 'To override a non-blank default extension ',
+     2  'with a blank extension,'
+      WRITE(USEROUT,*) '   enter a period at the end of each file ',
+     2  'name.'
+      WRITE(USEROUT,*)
+      Q = 'Default file extension for all files'
+      STR = ' '
+      STR = EXT
+      CALL GTSTRING(Q,STR)
+      IF (STR(1:1).NE.'*') THEN
+        EXT = STR(1:3)
+      ELSE
+        EXT = ' '
+      END IF
+C
+C  Get new scan files up to file #20 or filename=blank
+C
+200   IF (FNM.GT.20) RETURN
+      WRITE(NUM,8000) FNM
+      Q = 'File #'//NUM
+      STR = ' '
+      CALL GTSTRING(Q,STR)
+      FILENAME(FNM) = STR(1:20)
+      IF (FILENAME(FNM).EQ.BLANK) RETURN
+      CALL UPPERCAS(FILENAME(FNM),20)
+C
+C    If a volume name was not specified, then
+C    assign default image volume to filename
+C
+      L2 = IANYL(FILENAME(FNM),':')
+      IF (L2.EQ.0) THEN
+        L2 = INANYR(IMGVOL,' ')
+        IF (L2.NE.0) THEN
+          TEMPNAME = FILENAME(FNM)
+          FILENAME(FNM) = IMGVOL(1:L2)//':'//TEMPNAME
+        END IF
+      END IF
+C
+C    If an extension was not specified, then
+C    assign default extension to filename
+C
+      L2 = IANYR(FILENAME(FNM),'.')
+      IF (L2.EQ.0) THEN
+        TEMPNAME = FILENAME(FNM)
+        L = INANYR(TEMPNAME,' ')
+        FILENAME(FNM) = TEMPNAME(1:L)//'.'//EXT
+      END IF
+C
+C    Check existence of image file
+C
+8000  FORMAT(I2)
+      CALL D2GETIMG(1,SLCNUM,FNM,ERRTYPE,HDRONLY)
+      IF (ERRTYPE.NE.0) THEN
+        FILENAME(FNM) = ' '
+        LASTFNM = FNM
+        IF (ERRTYPE.EQ.17) THEN
+          IF (PETTNUM.EQ.6) THEN
+            STR = '*** ERROR:  this is not a PETT VI file *** '//BELL
+          ELSE IF (PETTNUM.EQ.7) THEN
+            STR = '*** ERROR:  this is not a Super PETT I file'//BELL
+          ELSE
+            STR='*** ERROR:  this is not a Super PETT IIH file'//BELL
+          END IF
+        ELSE IF (ERRTYPE.EQ.18) THEN
+          WRITE(NUM,8000) NMSLICES
+          STR = '*** ERROR:  other scan files have '//NUM//
+     2      ' slices'//BELL
+        ELSE
+          STR = '*** ERROR:  cannot read this file *** '//BELL
+        END IF
+        WRITE(USEROUT,*) STR
+        GO TO 200
+      ELSE
+        MULTFACT(FNM) = 1.0
+        ADDFACT(FNM)  = 0
+        HOFILE(FNM)   = 0
+        COFILE(FNM)   = 0
+        WRITE(USEROUT,8100) PROCDATE(FNM),PROCBY(FNM),NMSLICES
+      END IF
+      FNM = FNM + 1
+      GO TO 200
+8100  FORMAT(1X,A8,2X,A4,2X,I2,' slices')
+C
+      END
+@

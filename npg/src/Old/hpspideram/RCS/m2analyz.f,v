@@ -1,0 +1,456 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.23.15.42.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   M2ANALYZ.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         04-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This subroutine is the menu for automated regions analysis.
+C  It presents a list of either all scan files which have been
+C  processed or the current scan file list in the upper half
+C  of the display.  When the current scan file list is displayed,
+C  those scan files selected for region processing are indicated
+C  by an asterisk.
+C     In the lower half of the display is an options menu, displayed
+C  in two columns.
+C     All computations from automated processing are stored in arrays.
+C  These can hold up to 20 scan files and may be printed out at any time
+C  or stored in a disk file.  The arrays are added to each time processing
+C  is initiated, and should be cleared (one of the options) when a new
+C  set of regions is processed.
+C
+C     Full screen editing techniques are used.
+C
+C  History:
+C     Modified 15-Sep-87 by TOV so option 'X' sets SELECT(N) = ' '.
+C     Modified 06-Oct-87 by TOV to allow processing for tissue activity
+C        either with or without decay correction; (PROCESS may be 0-5)
+C     Modified 27-Sep-91 by TOV for XSPIDERAM.
+C     Modified 08-Oct-91 by Tom Yang for printing region analysis data.
+C
+C  Common Blocks from SPIDERAM:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (write)
+C     **FILES    - scan file list                 (read only)
+C     **REGION   - region analysis parameters     (write)
+C     **REGCOMP  - region analysis parameters     (write)
+C
+C  Local Variables:
+C     TITLE - title of this menu;
+C     MENU - menu options;
+C     MENUSET - set of characters allowed for menu options;
+C     CH - input character for selecting a menu option;
+C     ROWCH,COLCH - location of the field for entering CH;
+C     ROW(I),COL(I) = location of each field in the files lists at the
+C        top of the display;
+C     WARNLINE - line on which warnings will be written;
+C     NEXT - logical variables required by some function calls but
+C        which is not used in this calling program;
+C     Q,A - question and answer;
+C     HOME,CLEAR - values passed to TCONTROL to home the cursor and
+C        clear the terminal screen;
+C     NUM - number of scan file selected for processing;
+C     SELECT - '*' if a file has been selected; ' ' if not;
+C     PFILE - file number selected to process (one at a time);
+C     ERROR - error flag in calls to R2GET;
+C     ERRTYPE = type of error in processing images;
+C
+C  Uses Subroutines:
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     A2ANALYZ - analyze all selected scans with all regions;
+C     A2PRINT  - print output list;
+C     A2PURGE  - clear output list;
+C     A2SAVE   - write output list to a disk file;
+C     D2ERROR  - gets appropriate error message for an ERRTYPE;
+C     R2GET    - get a region file from disk;
+C
+C  FIELDS.LIB - terminal I/O routines using fields:
+C     CHFIELD  - get a character from terminal;
+C     ERSFIELD - erase a field;
+C     INTFIELD - get an integer from a field;
+C     QUERY    - write a question and get a Y or N response;
+C     WRITEINT - write an integer to a field;
+C     WRTFIELD - write a character string to a field;
+C
+C  Called by:  SPIDERAM
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE M2ANALYZ
+C
+C
+      INTEGER*4    WARNLINE,ROWCH,COLCH,NUM,HOME,CLEAR,ROW(20),COL(20),
+     &             PFILE,ERRTYPE,L,L1
+      CHARACTER*1  CH,BELL,SELECT(20)
+      CHARACTER*3  NSTR
+      CHARACTER*10 BLANK
+      CHARACTER*20 TITLE,DASH,TEMPOUT
+      CHARACTER*80 Q,MENU(6),MENUSET,STR,ERRMSG
+      LOGICAL*1    A,NEXT,ERROR
+      LOGICAL*4    PRINTON
+      character*256 rcsheader
+C
+      INCLUDE 'spideram.inc'
+      rcsheader = "$Id: m2analyz.f,v 1.3 1993/10/04 21:55:32 tom Exp $"
+ 
+      DATA HOME,CLEAR /1,2/
+      DATA BLANK /' '/
+      DATA TITLE /'Regions Analysis:'/
+      DATA DASH  /'---------------- '/
+      DATA MENU(1)(1:39)  /'A = Process ALL selected (*) files'/
+      DATA MENU(2)(1:39)  /'N = Number of scan file to process'/
+      DATA MENU(3)(1:39)  /'X = Cancel a scan number'/
+      DATA MENU(4)(1:39)  /'O = Process ONE file at a time'/
+      DATA MENU(5)(1:39)  /'T = Type of processing'/
+      DATA MENU(6)(1:39)  /'                                  '/
+C
+      DATA MENU(1)(40:80) /'P = Save output as Printable file'/
+      DATA MENU(2)(40:80) /'W = Write RGT file'/
+      DATA MENU(3)(40:80) /'C = Clear output list'/
+      DATA MENU(4)(40:80) /'L = List current scan files'/
+      DATA MENU(5)(40:80) /'F = Files processed in output list'/
+      DATA MENU(6)(40:80) /'M = Exit to Main Menu'/
+      DATA MENUSET  /'ANXOTPWCLFManxotpwclfm'/
+      DATA ROWCH,COLCH,WARNLINE /22,1,24/
+      DATA ROW /4,5,6,7,8,9,10,4,5,6,7,8,9,10,4,5,6,7,8,9/
+      DATA COL /7*1,7*27,6*53/
+      BELL = CHAR(7)
+C
+      ERROR = .FALSE.
+      ERRTYPE = 0
+10    DO 50 I=1,20
+        IF (PROC(I)) THEN
+          SELECT(I) = '*'
+        ELSE
+          SELECT(I) = ' '
+        END IF
+50    CONTINUE
+C
+C--------------------------------------------------------------------
+C
+C  Clear the screen and write the current scan file list
+C
+8010  FORMAT(A20)
+8020  FORMAT(A20)
+8030  FORMAT('Type of Processing = ',A)
+8080  FORMAT(A80)
+8090  FORMAT(A1,I2,1X,A20,2X,A1,I2,1X,A20,2X,A1,I2,1X,A20)
+C
+100   CALL TCONTROL(HOME,0,0)
+      CALL TCONTROL(CLEAR,0,0)
+      WRITE (USEROUT,8010) TITLE
+      WRITE (USEROUT,8020) DASH
+      WRITE (USEROUT,8020) BLANK
+C
+      DO 120 I=1,6
+        WRITE (USEROUT,8090) SELECT(I),I,FILENAME(I),
+     2                       SELECT(I+7),I+7,FILENAME(I+7),
+     3                       SELECT(I+14),I+14,FILENAME(I+14)
+120   CONTINUE
+      I = 7
+      WRITE (USEROUT,8090) SELECT(I),I,FILENAME(I),
+     2                     SELECT(I+7),I+7,FILENAME(I+7)
+C
+130   WRITE (USEROUT,*)
+      IF (PROCESS.EQ.0) THEN
+        WRITE (USEROUT,8030) 'PETT Numbers'
+      ELSE IF (PROCESS.EQ.1) THEN
+        WRITE (USEROUT,8030) 'CBF or CBV'
+      ELSE IF (PROCESS.EQ.2) THEN
+        WRITE (USEROUT,8030) 'OEF'
+      ELSE IF (PROCESS.EQ.3) THEN
+        WRITE (USEROUT,8030) 'CMRO2'
+      ELSE IF (PROCESS.EQ.4) THEN
+        WRITE (USEROUT,8030) 'Decay-corrected Tissue Activity'
+      ELSE IF (PROCESS.EQ.5) THEN
+        WRITE (USEROUT,8030) 'Non-decay-corrected Tissue Activity'
+      END IF
+      WRITE (USEROUT,*)
+      DO 140 I=1,6
+        WRITE (USEROUT,8080) MENU(I)
+140   CONTINUE
+C
+C ===================================================================
+C
+C  Get the options selected by the user and execute it
+C
+200   IF (ERROR .OR. ERRTYPE.NE.0) CALL WRTFIELD(ERRMSG,70,WARNLINE,1)
+      CALL CHFIELD(CH,MENUSET,ROWCH,COLCH,0)
+      IF (ERROR .OR. ERRTYPE.NE.0) THEN
+        CALL ERSFIELD(80,WARNLINE,1)
+        ERROR = .FALSE.
+        ERRTYPE = 0
+      END IF
+C
+C -------------------------------------------------------
+C  #1 = Process all scan files selected (PROC(I) = TRUE);
+C
+8003  FORMAT(I3)
+      IF (CH.EQ.'A' .OR. CH.EQ.'a') THEN
+        Q = 'Process all selected (*) scan files'
+        CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (.NOT.A) GO TO 100
+        IF (NSCANS.GE.20) THEN
+          ERROR = .TRUE.
+          ERRMSG = '** 20 files processed -- must be saved before '//
+     2             'processing can continue **'//BELL
+          GO TO 100
+        END IF
+        WRITE(USEROUT,*)
+        CALL R2GET(ERROR)
+        IF (ERROR) THEN
+          ERRMSG = '** Did not read a region file **'//BELL
+          GO TO 100
+        END IF
+        IF (NSCANS.EQ.0) THEN
+          RGTATLAS = REGATLAS
+        ELSE IF (RGTATLAS.NE.REGATLAS) THEN
+          ERROR = .TRUE.
+          ERRMSG = '** Atlas Name is different for this region '//
+     2      'file **'//BELL
+          GO TO 100
+        END IF
+        IF (PROCNREG.EQ.0) THEN
+          PROCNREG = NREGS
+        ELSE IF (NREGS.NE.PROCNREG) THEN
+          ERROR = .TRUE.
+          WRITE(NSTR,8003) PROCNREG
+          ERRMSG = '** Previous files were processed with '//NSTR//
+     2             ' regions **'//BELL
+          GO TO 100
+        END IF
+        PFILE = 0
+        CALL A2ANALYZ(PFILE,ERRTYPE)
+        IF (ERRTYPE.NE.0) THEN
+          IF (ERRTYPE.EQ.20) THEN
+            ERRMSG = '** 20 files processed -- must be saved before '//
+     2               'processing can continue **'//BELL
+          ELSE
+            CALL D2ERROR(ERRTYPE,ERRMSG)
+          END IF
+        END IF
+        GO TO 100
+C
+C -------------------------------------------------------
+C  #2 = Denote a scan file number for processing
+C
+      ELSE IF (CH.EQ.'N' .OR. CH.EQ.'n') THEN
+        NUM = 0
+        Q = 'Scan File Number to Process'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+1010    IF (NUM.LT.20) NUM = NUM+1
+        CALL INTFIELD(NUM,0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (NUM.NE.0) THEN
+          IF (FILENAME(NUM).EQ.BLANK) THEN
+            CALL WRTFIELD(BELL,1,ROWCH,COLCH)
+          ELSE
+            PROC(NUM) = .TRUE.
+            SELECT(NUM) = '*'
+            CALL WRTFIELD('*',1,ROW(NUM),COL(NUM))
+          END IF
+          GO TO 1010
+        END IF
+C
+C -------------------------------------------------------
+C  #3 = Cancel a scan file number from being processed
+C
+      ELSE IF (CH.EQ.'X' .OR. CH.EQ.'x') THEN
+        Q = 'File number to eliminate from processing list'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        CALL INTFIELD(NUM,0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (NUM.NE.0 .AND. PROC(NUM)) THEN
+          PROC(NUM) = .FALSE.
+          SELECT(NUM) = ' '
+          CALL WRTFIELD(BLANK,1,ROW(NUM),COL(NUM))
+        END IF
+C
+C -------------------------------------------------------
+C  #4 = Process one scan file with a  specified region file;
+C
+      ELSE IF (CH.EQ.'O' .OR. CH.EQ.'o') THEN
+        IF (NSCANS.GE.20) THEN
+          ERROR = .TRUE.
+          ERRMSG = '** 20 files processed -- must be saved before '//
+     2             'processing can continue **'//BELL
+          GO TO 200
+        END IF
+        Q = 'Scan file to process'
+        CALL GETINT(Q,PFILE,1,20)
+        IF (FILENAME(PFILE).NE.' ') THEN
+          WRITE(USEROUT,*) FILENAME(PFILE)
+          CALL R2GET(ERROR)
+          IF (ERROR) THEN
+            ERRMSG = '** Did not read a region file **'//BELL
+            GO TO 100
+          END IF
+          IF (PROCNREG.EQ.0) THEN
+            PROCNREG = NREGS
+          ELSE IF (NREGS.NE.PROCNREG) THEN
+            ERROR = .TRUE.
+            WRITE(NSTR,8003) PROCNREG
+            ERRMSG = '** Previous files were processed with '//NSTR//
+     2               ' regions **'//BELL
+            GO TO 100
+          END IF
+          IF (NSCANS.EQ.0) THEN
+            RGTATLAS = REGATLAS
+          ELSE
+            IF (RGTATLAS.NE.REGATLAS) THEN
+              ERROR = .TRUE.
+              ERRMSG = '** Atlas Name is different for this region '//
+     2          'file **'//BELL
+              GO TO 100
+            END IF
+          END IF
+        END IF
+        CALL A2ANALYZ(PFILE,ERRTYPE)
+        IF (ERRTYPE.NE.0) THEN
+          IF (ERRTYPE.EQ.20) THEN
+            ERRMSG = '** 20 files processed -- must be saved before '//
+     2               'processing can continue **'//BELL
+          ELSE
+            CALL D2ERROR(ERRTYPE,ERRMSG)
+          END IF
+        END IF
+        GO TO 100
+C
+C -------------------------------------------------------
+C  #5 = Type of processing
+C
+      ELSE IF (CH.EQ.'T' .OR. CH.EQ.'t') THEN
+        WRITE (USEROUT,*)
+        WRITE (USEROUT,*) '0 = PETT Numbers'
+        WRITE (USEROUT,*) '1 = CBF or CBV'
+        WRITE (USEROUT,*) '2 = OEF'
+        WRITE (USEROUT,*) '3 = CMRO2'
+        WRITE (USEROUT,*) '4 = Decay-corrected Tissue Activity'
+        WRITE (USEROUT,*) '5 = Non-decay-corrected Tissue Activity'
+        WRITE (USEROUT,*)
+        Q = 'Type of processing'
+        CALL GETINT(Q,PROCESS,0,5)
+        GO TO 100
+C
+C -------------------------------------------------------
+C  #6 = Print current output list
+C
+      ELSE IF (CH.EQ.'P' .OR. CH.EQ.'p') THEN
+        Q = 'Print output list'
+        CALL QUERY(Q,A,ROWCH,COLCH)
+        WRITE(USEROUT,*)
+        IF (A) THEN
+          Q = 'File name'
+          L = INANYR(OUTFILE,' ')
+          TEMPOUT = OUTFILE(1:L)
+          TEMPOUT (L+1:L+1) = '~'
+          CALL GETSTRNG (Q, TEMPOUT)
+          L1 = INANYR(TEMPOUT, ' ')
+          IF (L1 .LE. L + 1) TEMPOUT (L+1:L+1) = ' '
+C
+          IF (TEMPOUT .NE. OUTFILE) THEN
+            INQUIRE (PRINTER, OPENED = PRINTON)
+            IF (PRINTON) CLOSE (PRINTER)
+            L1 = INANYL(TEMPOUT,' ')
+            L = INANYR(TEMPOUT,' ~')
+            OUTFILE = TEMPOUT(L1:L)
+            INQUIRE (PRINTER, OPENED = PRINTON)
+            IF (.NOT.PRINTON) OPEN (PRINTER,FILE=OUTFILE,TYPE='DEVICE')
+          END IF
+       	  CALL A2PRINT
+	END IF
+	GO TO 100
+C
+C -------------------------------------------------------
+C  #7 = Write current output list to a disk file
+C
+      ELSE IF (CH.EQ.'W' .OR. CH.EQ.'w') THEN
+        Q = 'Save output list in a disk file'
+        CALL QUERY(Q,A,ROWCH,COLCH)
+        WRITE(USEROUT,*)
+        IF (A) CALL A2SAVE
+        GO TO 100
+C
+C -------------------------------------------------------
+C  #8 = Clear current output
+C
+      ELSE IF (CH.EQ.'C' .OR. CH.EQ.'c') THEN
+        Q = '*** Clear the current output list ***'//BELL
+        CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) CALL A2PURGE
+        GO TO 10
+C
+C -------------------------------------------------------
+C  #9 = Display the current scan file list
+C
+      ELSE IF (CH.EQ.'L' .OR. CH.EQ.'l') THEN
+        GO TO 100
+C
+C -------------------------------------------------------
+C  #10 = Display all scan files that have been processed
+C
+      ELSE IF (CH.EQ.'F' .OR. CH.EQ.'f') THEN
+        IF (NSCANS.GT.0) THEN
+          CALL TCONTROL(HOME,0,0)
+          CALL TCONTROL(CLEAR,0,0)
+          WRITE (USEROUT,8010) TITLE
+          WRITE (USEROUT,8020) DASH
+          WRITE (USEROUT,8020) BLANK
+          DO 1090 I=1,6
+            WRITE (USEROUT,8100) I,REGFID(I),REGFNAME(I),
+     2         I+7,REGFID(I+7),REGFNAME(I+7),
+     3         I+14,REGFID(I+14),REGFNAME(I+14)
+1090      CONTINUE
+          I = 7
+          WRITE (USEROUT,8100) I,REGFID(I),REGFNAME(I),
+     2       I+7,REGFID(I+7),REGFNAME(I+7)
+          GO TO 130
+        ELSE
+          ERROR = .TRUE.
+          ERRMSG = '** No scans have been processed **'//BELL
+        END IF
+8100    FORMAT(1X,3(I2,1X,A8,' [',A8,'] '))
+C
+C -------------------------------------------------------
+C  #11 = Exit to Main Menu
+C
+      ELSE IF (CH.EQ.'M' .OR. CH.EQ.'m') THEN
+        GO TO 9000
+      END IF
+C
+C -------------------------------------------------------
+      CALL ERSFIELD(80,ROWCH,COLCH)
+      GO TO 200
+C
+9000  RETURN
+      END
+@

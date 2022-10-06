@@ -1,0 +1,615 @@
+head	2.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.7
+date	2008.08.21.17.51.34;	author tom;	state Exp;
+branches;
+next	2.6;
+
+2.6
+date	2008.08.07.19.51.46;	author tom;	state Exp;
+branches;
+next	2.5;
+
+2.5
+date	2004.08.31.14.44.06;	author tom;	state Exp;
+branches;
+next	2.4;
+
+2.4
+date	2004.02.20.16.06.24;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	2004.02.18.19.56.33;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	2004.02.12.22.04.10;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2004.01.02.18.40.48;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	2003.08.21.15.28.46;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	2003.07.01.19.14.19;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	2002.12.17.21.55.15;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2002.05.30.13.58.03;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2000.09.27.19.03.28;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2000.07.12.19.50.51;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.12.13.17.45.50;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.04.07.16.30.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@restore
+@
+
+
+2.7
+log
+@no signif change
+@
+text
+@/*  $Id: rdimg7.c,v 2.6 2008/08/07 19:51:46 tom Exp $
+    $Log: rdimg7.c,v $
+ * Revision 2.6  2008/08/07  19:51:46  tom
+ * *** empty log message ***
+ *
+ * Revision 2.5  2004/08/31  14:44:06  tom
+ * Focus 220
+ *
+ * Revision 2.4  2004/02/20  16:06:24  tom
+ * Feb 2004
+ *
+ * Revision 2.3  2004/02/18  19:56:33  tom
+ * Feb 18 (interfile)
+ *
+ * Revision 2.2  2004/02/12  22:04:10  tom
+ * sync Feb 2004
+ *
+ * Revision 2.0  2004/01/02  18:40:48  tom
+ * splint cleanup
+ *
+ * Revision 1.12  2003/08/21  15:28:46  tom
+ * 21Aug2003
+ *
+ * Revision 1.11  2003/07/01  19:14:19  tom
+ * *** empty log message ***
+ *
+ * Revision 1.10  2002/12/17  21:55:15  tom
+ * fix pointer/cast errors found with gcc
+ *
+    Revision 1.9  2002/05/30 13:58:03  tom
+    use REVNSCALE for non-calibrated images
+
+ * Revision 1.8  2000/09/27  19:03:28  tom
+ * *** empty log message ***
+ *
+ * Revision 1.7  2000/07/12  19:50:51  tom
+ * *** empty log message ***
+ *
+ * Revision 1.6  1999/12/13  17:45:50  tom
+ * tov revision
+ *
+ * Revision 1.5  1999/04/07  16:30:12  tom
+ * Initial revision
+ *
+ * Revision 1.4  1997/11/24  17:56:45  tom
+ * update sh start_time and duration
+ *
+ * Revision 1.3  1996/08/05  14:13:27  tom
+ * move scaling from readtensor & rdtensor to this function
+ *
+ * Revision 1.2  1996/05/24  17:18:23  tom
+ * divide pixels by decay_corr_fctr and set this to 1
+ *
+ * Revision 1.1  1996/04/19  19:33:20  tom
+ * Initial revision
+ *
+ */
+/* =============================================================================
+ *	Function:		rdimg7
+ *  Date:           Mar 2003
+ *  Author:         Tom Videen
+ *	Description:	Get image data from Version 7 file.
+ *					Divide by decay_corr_fctr but maintain subheader factor
+ * =============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 2.6 2008/08/07 19:51:46 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <endian.h>
+
+float          *rdimg7 (file, indx)
+	ImageFile      *file;
+	Index          *indx;
+{
+	DataSetType     dtype;
+	Main_header7   *mh7;
+	Image_subheader7 *sh7;
+	float          *matrix, scaler, scl;
+	short          *simg;
+	long            dptr;
+	long            xdim, ydim, zdim;
+	int             matnum, begrec, endrec;
+	long            nrec = NUMREC_ISHDR;
+	long            len;
+	int             calibrated;
+	int             scatter_corrected;
+	int             i;
+	int             pln1 = 1;
+
+	dtype = (DataSetType) file->m7->mh->file_type;
+	if (dtype != PetVolume) {
+		(void) fprintf (stderr, "ERROR [rdimg7]: Unsupported file type %d for %s\n", dtype, file->name);
+		return (NULL);
+	}
+	if (file->fp == NULL) {
+		(void) fprintf (stderr, "ERROR [rdimg7]: Could not get file pointer for %s\n", file->name);
+		return (NULL);
+	}
+	if ((matnum = numcode7 (indx->frm, pln1, indx->gate, indx->data, indx->bed)) == 0) {
+		(void) fprintf (stderr, "ERROR [rdimg7]: Could not get matrix number for %s\n", file->name);
+		return (NULL);
+	}
+	if ((get_sh7 (file, indx)) == ERROR) {
+		(void) fprintf (stderr, "ERROR [rdimg7]: Could not get subheader for %s\n", file->name);
+		return (NULL);
+	}
+	mh7 = file->m7->mh;
+	sh7 = file->m7->sh;
+	xdim = sh7->x_dimension;
+	ydim = sh7->y_dimension;
+	zdim = sh7->z_dimension;
+
+	if (mh7->calibration_factor == 1)
+		calibrated = 0;
+	else
+		calibrated = 1;
+
+	if ((sh7->filter_scatter_fraction > 0) && (sh7->filter_scatter_slope > 0)
+	    || ((sh7->processing_code & 64) > 0) || ((sh7->processing_code & 128) > 0))
+		scatter_corrected = 1;
+	else
+		scatter_corrected = 0;
+
+	if ((begrec = getmatpos (file, matnum, &endrec)) == ERROR) {
+		(void) fprintf (stderr, "ERROR [rdimg7]: Matrix #%x not found\n", (unsigned) matnum);
+		return (NULL);
+	}
+	if (indx->pln > 0) {
+		len = xdim * ydim;
+		dptr = (long) (begrec + nrec - 1) * LENREC +
+			(long) ((indx->pln - 1) * len * sizeof (short));
+	} else {
+		len = xdim * ydim * zdim;
+		dptr = (long) (begrec - 1) * LENREC;
+	}
+	if ((fseek (file->fp, dptr, SEEK_SET)) != 0)
+		return (NULL);
+
+	simg = (short *) calloc (len, sizeof (short));
+	if (simg == NULL) {
+		(void) fprintf (stderr, "ERROR [rdimg7]: calloc simg\n");
+		return (NULL);
+	}
+	if (fread (simg, sizeof (short), len, file->fp) != len) {
+		(void) fprintf (stderr, "ERROR [rdimg7]: fread\n");
+		free (simg);
+		return (NULL);
+	}
+	/* CONSTCOND  */
+	if (__BYTE_ORDER == __LITTLE_ENDIAN)
+		swap_byte ((char *) simg, len * (long) sizeof (short));
+
+	matrix = (float *) calloc (len, sizeof (float));
+	if (matrix == NULL) {
+		(void) fprintf (stderr, "ERROR [rdimg7]: calloc matrix\n");
+		free (simg);
+		return (NULL);
+	}
+	if (calibrated == 0 || scatter_corrected == 0)
+		scl = REV7NSCALE;		 /* non-quantitative image; Ver 7 reconstruction */
+	else
+		scl = REV7SCALER;		 /* quantitative image; Ver 7 reconstruction */
+
+    if (mh7->system_type == 220)
+		scaler = mh7->calibration_factor * sh7->scale_factor / sh7->decay_corr_fctr;
+	else if (sh7->frame_duration == 0)
+		scaler = ATNSCALER * sh7->scale_factor;
+	else if (strncmp (mh7->data_units, "1/cm", 4) == 0)
+		scaler = ATNSCALER * sh7->scale_factor;
+	else
+		scaler = (scl * mh7->calibration_factor * sh7->scale_factor *
+			  (float) sh7->frame_duration) / sh7->decay_corr_fctr;
+
+	for (i = 0; i < len; i++) 
+		matrix[i] = scaler * simg[i];
+	
+	file->sh->decay_corr = sh7->decay_corr_fctr;
+	file->sh->start_time = sh7->frame_start_time;
+	file->sh->duration = sh7->frame_duration;
+	free (simg);
+	return (matrix);
+}
+@
+
+
+2.6
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 2.5 2004/08/31 14:44:06 tom Exp $
+d3 3
+d68 1
+a68 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 2.5 2004/08/31 14:44:06 tom Exp $";
+d88 1
+a88 1
+	int             xdim, ydim, zdim;
+d138 1
+a138 1
+			(long) (indx->pln - 1) * (long) len *(long) sizeof (short);
+d143 1
+a143 1
+	if ((fseek (file->fp, (long) dptr, SEEK_SET)) != 0)
+d152 1
+a152 1
+		(void) fprintf (stderr, "ERROR [rdimg7]: During read\n");
+d162 1
+a162 1
+		(void) fprintf (stderr, "ERROR [rdimg7]: Could not calloc memory for matrix\n");
+d181 1
+a181 1
+	for (i = 0; i < len; i++)
+@
+
+
+2.5
+log
+@Focus 220
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 2.4 2004/02/20 16:06:24 tom Exp $
+d3 3
+d60 1
+d65 1
+a65 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 2.4 2004/02/20 16:06:24 tom Exp $";
+d181 1
+a181 4
+/*	Set decay_corr_fctr to 1 after restoring input pixels */
+
+	sh7->decay_corr_fctr = 1.0;
+	file->sh->decay_corr = 1.0;
+@
+
+
+2.4
+log
+@Feb 2004
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 2.3 2004/02/18 19:56:33 tom Exp tom $
+d3 3
+d61 1
+a61 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 2.3 2004/02/18 19:56:33 tom Exp tom $";
+d164 3
+a166 1
+	if (sh7->frame_duration == 0)
+a173 4
+/*
+	if (sh7->scale_factor == 1)		 fix for images with 0 counts
+		scaler = 1;
+*/
+d176 1
+a176 1
+
+@
+
+
+2.3
+log
+@Feb 18 (interfile)
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 2.2 2004/02/12 22:04:10 tom Exp tom $
+d3 3
+d58 1
+a58 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 2.2 2004/02/12 22:04:10 tom Exp tom $";
+@
+
+
+2.2
+log
+@sync Feb 2004
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 2.0 2004/01/02 18:40:48 tom Exp tom $
+d3 3
+d55 1
+a55 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 2.0 2004/01/02 18:40:48 tom Exp tom $";
+@
+
+
+2.0
+log
+@splint cleanup
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 1.12 2003/08/21 15:28:46 tom Exp tom $
+d3 3
+d52 1
+a52 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 1.12 2003/08/21 15:28:46 tom Exp tom $";
+d76 2
+d104 11
+d150 2
+a151 3
+	if (mh7->calibration_factor == 1 || sh7->filter_scatter_fraction == 0
+	    || sh7->filter_scatter_slope == 0)
+		scl = REV7NSCALE;		 /* non-quantitative image and 7.0 release file */
+d153 1
+a153 1
+		scl = REV7SCALER;		 /* quantitative image */
+d164 1
+a164 1
+	if (sh7->scale_factor == 1)		 fix for images with 0 counts 
+@
+
+
+1.12
+log
+@21Aug2003
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 1.11 2003/07/01 19:14:19 tom Exp tom $
+d3 3
+d47 1
+a47 1
+
+d49 1
+a49 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 1.11 2003/07/01 19:14:19 tom Exp tom $";
+d100 1
+a100 1
+		(void) fprintf (stderr, "ERROR [rdimg7]: Matrix #%x not found\n", matnum);
+d115 4
+d121 1
+d131 1
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 1.10 2002/12/17 21:55:15 tom Exp tom $
+d3 3
+d46 1
+a46 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 1.10 2002/12/17 21:55:15 tom Exp tom $";
+d139 2
+a140 1
+	if (sh7->scale_factor == 1)		/* fix for images with 0 counts */
+d142 1
+@
+
+
+1.10
+log
+@fix pointer/cast errors found with gcc
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 1.9 2002/05/30 13:58:03 tom Exp tom $
+d3 3
+d36 1
+a36 1
+ *  Date:           Mar-96
+d43 1
+a43 2
+static char     rcsid[] = "$Header: /home/tom/src/libimage/RCS/rdimg7.c,v 1.9 2002/05/30 13:58:03 tom Exp tom $";
+
+d51 1
+d64 4
+a67 1
+	int             matnum, begrec, endrec, nrec_shdr, len;
+a68 1
+	int             i;
+a91 1
+	nrec_shdr = NUMREC_ISHDR;
+d99 1
+a99 1
+		dptr = (long) (begrec + nrec_shdr - 1) * LENREC +
+d113 4
+d136 2
+@
+
+
+1.9
+log
+@use REVNSCALE for non-calibrated images
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 1.8 2000/09/27 19:03:28 tom Exp tom $
+d3 3
+d40 1
+a40 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 1.8 2000/09/27 19:03:28 tom Exp tom $";
+d74 1
+a74 1
+	if ((matnum = numcode7 (indx->frm, pln1, indx->gate, indx->data, indx->bed)) == NULL) {
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 1.7 2000/07/12 19:50:51 tom Exp tom $
+d3 3
+d37 1
+a37 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 1.7 2000/07/12 19:50:51 tom Exp tom $";
+d111 2
+a112 2
+	if (mh7->calibration_factor == 1 && sh7->filter_scatter_fraction == 0
+	    && sh7->filter_scatter_slope == 0)
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 1.6 1999/12/13 17:45:50 tom Exp tom $
+d3 3
+d34 1
+a34 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 1.6 1999/12/13 17:45:50 tom Exp tom $";
+d98 1
+a98 1
+	simg = (short *) malloc (len * sizeof (short));
+d103 1
+a103 1
+	matrix = (float *) malloc (len * sizeof (float));
+d105 1
+a105 1
+		(void) fprintf (stderr, "ERROR [rdimg7]: Could not malloc memory for matrix\n");
+@
+
+
+1.6
+log
+@tov revision
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 1.5 1999/04/07 16:30:12 tom Exp tom $
+d3 3
+d31 1
+a31 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 1.5 1999/04/07 16:30:12 tom Exp tom $";
+d37 1
+a37 1
+#include <strings.h>
+@
+
+
+1.5
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+/*  $Id: rdimg7.c,v 1.4 1997/11/24 17:56:45 tom Exp tom $
+d3 3
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/RCS/rdimg7.c,v 1.4 1997/11/24 17:56:45 tom Exp tom $";
+d34 1
+a34 1
+#include <unistd.h>
+d55 1
+a55 1
+		fprintf (stderr, "ERROR [rdimg7]: Unsupported file type %d for %s\n", dtype, file->name);
+d59 1
+a59 1
+		fprintf (stderr, "ERROR [rdimg7]: Could not get file pointer for %s\n", file->name);
+d63 1
+a63 1
+		fprintf (stderr, "ERROR [rdimg7]: Could not get matrix number for %s\n", file->name);
+d67 1
+a67 1
+		fprintf (stderr, "ERROR [rdimg7]: Could not get subheader for %s\n", file->name);
+d78 1
+a78 1
+		fprintf (stderr, "ERROR [rdimg7]: Matrix #%x not found\n", matnum);
+d94 1
+a94 1
+		fprintf (stderr, "ERROR [rdimg7]: During read\n");
+d99 1
+a99 1
+		fprintf (stderr, "ERROR [rdimg7]: Could not malloc memory for matrix\n");
+@

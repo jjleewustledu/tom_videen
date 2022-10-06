@@ -1,0 +1,268 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.2
+date	93.12.22.16.59.53;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.11.17.20.14.33;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@X window version, first release.
+@
+
+
+1.2
+log
+@Moved output from LOGOUT2 to LOGOUT.
+@
+text
+@C$Id: t1unpair.f,v 1.1 1993/11/17 20:14:33 ty7777 Exp ty7777 $
+C$Log: t1unpair.f,v $
+c Revision 1.1  1993/11/17  20:14:33  ty7777
+c Initial revision
+c
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   T1UNPAIR.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         28-Sep-90
+C  Written For:  RAPTURE
+C
+C  History:
+C     Modified 17-Oct-90 to compute power for 2,3,5,10,15%
+C     Modified 26-Nov-90 to pass OUTPUT as parameter.
+C     Modified 04-Dec-90 to write ALPHA to LOGOUT.
+C     Modified 07-Dec-90 to reduce power output to terminal by 1 line
+C        (eliminate NT=19) and to allow interupt with GETCNW.
+C     Modified 24-Jan-91 to allow a single list of UNPAIRED data to be entered
+C        with N2=0 so as to compute mean regional values but not t-values.
+C     Modified 27-Jun-91 to eliminate interupt with GETCNW.
+C     Modified 05-Nov-91 to alter LOGOUT and LOGOUT2 output.
+C     Modified 13-Dec-91 to send some LOGOUT2 output to LOGOUT.
+C     Modified 17-Nov-93 by Tom Yang to port to UNIX workstations.
+C     Modified 22-Dec-93 by Tom Yang send all LOGOUT2 output to LOGOUT.
+C
+C  Description:
+C     Process a set of files to compute t for unpaired data.
+C     Both standard error of difference and degrees of freedom
+C     are computed with corrections for unequal variance in 2 samples.
+C
+C  Calling:
+C     T1SUM
+C     T1UPOWER
+C     TTABLE
+C     VTABLE
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE T1UNPAIR(T,OUTPUT)
+C
+      INCLUDE 'rapture.inc'
+C
+      REAL*4        VAL(200)  ! mean value for region in 1 image
+      REAL*4        MEAN1     ! mean for control set
+      REAL*4        MEAN2     ! mean for test set
+      REAL*4        VAR1      ! variance for control set
+      REAL*4        VAR2      ! variance for test set
+      REAL*4        SEMSQ1    ! stand error of mean squared for control set
+      REAL*4        SEMSQ2    ! stand error of mean squared for test set
+      REAL*4        SDIFF     ! standard error of difference of means
+      REAL*4        T         ! t-value
+      REAL*4        P1        ! probability that MEAN2=MEAN1 (1-tailed)
+      REAL*4        P2        ! probability that MEAN2=MEAN1 (2-tailed)
+      REAL*4        SUM       ! sum of mean values
+      REAL*4        SUMSQR    ! sum of squares of mean values
+      REAL*4        TEMP1,TEMP2 ! local reals
+      REAL*4        SUMTEST   ! total test values > control values
+      REAL*4        MIDDLE    ! N1*N2*0.5 = middle value
+      REAL*4        V         ! Mann-Whitney V = U - NM/2
+      REAL*4        VCRIT     ! critical v
+C
+      INTEGER*4     DF        ! degrees of freedom
+      INTEGER*4     NT        ! test values of N1 for estimating power
+C
+      LOGICAL*1     OUTPUT    ! T--> write user messages
+      LOGICAL*1     TWOTAIL   ! true--> 2-tailed probability
+      LOGICAL*1     RETURNP   ! true--> return P for given T
+      LOGICAL*1     ERROR     ! error reading image
+      CHARACTER*256 RCSHEADER
+C
+      RCSHEADER = '$Id: t1unpair.f,v 1.1 1993/11/17 20:14:33 ty7777 Exp ty7777 $'
+      ERROR = .FALSE.
+      T = 0.
+C
+C  Compute mean and variance for control data set (N1)
+C
+      SUM = 0.
+      SUMSQR = 0.
+      SUMTEST = 0.
+      MIDDLE = N1*N2*0.5
+      DO 100 FNUM=1,N1
+        CFNAME = FNAME(FNUM)
+        CALL T1SUM(VAL(FNUM),ERROR)
+        IF (ERROR) RETURN
+        IF (OUTPUT) THEN
+          WRITE(USEROUT,8500) FNUM,CFNAME,VAL(FNUM)
+          WRITE(LOGOUT,8500)  FNUM,CFNAME,VAL(FNUM)
+        END IF
+        SUM = SUM + VAL(FNUM)
+        SUMSQR = SUMSQR + VAL(FNUM)**2
+100   CONTINUE
+8500  FORMAT(1X,I3,3X,A20,F10)
+C
+      MEAN1 = SUM/FLOAT(N1)
+      VAR1 = (SUMSQR - (SUM**2/FLOAT(N1)))/FLOAT(N1-1)
+C
+C  If N2=0, this list is for regional processing only.  Do not compute t.
+C
+      IF (N2.EQ.0) THEN
+        IF (OUTPUT) THEN
+          WRITE(USEROUT,8100) N1,MEAN1,SQRT(VAR1)
+          WRITE(LOGOUT,8100)  N1,MEAN1,SQRT(VAR1)
+        END IF
+        RETURN
+      END IF
+C
+C  Compute mean and variance for test set (N2)
+C
+      SUM = 0.
+      SUMSQR = 0.
+      DO 200 FNUM=N1+1,N1+N2
+        CFNAME = FNAME(FNUM)
+        CALL T1SUM(VAL(FNUM),ERROR)
+        IF (ERROR) RETURN
+        IF (OUTPUT) THEN
+          WRITE(USEROUT,8500) FNUM,CFNAME,VAL(FNUM)
+          WRITE(LOGOUT,8500) FNUM,CFNAME,VAL(FNUM)
+        END IF
+        SUM = SUM + VAL(FNUM)
+        SUMSQR = SUMSQR + VAL(FNUM)**2
+200   CONTINUE
+C
+      MEAN2 = SUM/FLOAT(N2)
+      VAR2 = (SUMSQR - (SUM**2/FLOAT(N2)))/FLOAT(N2-1)
+C
+      SEMSQ1 = VAR1/FLOAT(N1)
+      SEMSQ2 = VAR2/FLOAT(N2)
+      SDIFF = SQRT(SEMSQ1 + SEMSQ2)
+      T = (MEAN2-MEAN1)/SDIFF
+      TEMP1 = (SEMSQ1**2)/FLOAT(N1+1)
+      TEMP2 = (SEMSQ2**2)/FLOAT(N2+1)
+      DF = INT(((SEMSQ1+SEMSQ2)**2)/(TEMP1+TEMP2) - 2.0)
+C
+C  Get upper bound on probability (i.e., probability < P1)
+C
+      RETURNP = .TRUE.
+      TWOTAIL = .FALSE.
+      CALL TTABLE(T,P1,DF,TWOTAIL,RETURNP)
+      TWOTAIL = .TRUE.
+      CALL TTABLE(T,P2,DF,TWOTAIL,RETURNP)
+C
+      IF (OUTPUT) THEN
+        WRITE(USEROUT,8100) N1,MEAN1,SQRT(VAR1)
+        WRITE(USEROUT,8150) N2,MEAN2,SQRT(VAR2)
+        WRITE(USEROUT,8200) MEAN2-MEAN1,SDIFF,DF,ALPHA
+        WRITE(USEROUT,8250) T,P1,P2
+      END IF
+      WRITE(LOGOUT,8000) RNAME
+      WRITE(LOGOUT,8100) N1,MEAN1,SQRT(VAR1)
+      WRITE(LOGOUT,8150) N2,MEAN2,SQRT(VAR2)
+      WRITE(LOGOUT,8200) MEAN2-MEAN1,SDIFF,DF,ALPHA
+      WRITE(LOGOUT,8250) T,P1,P2
+C
+8000  FORMAT(1X,'Region File: ',A)
+8100  FORMAT(1X,'N1=',I3,'  Mean1= ',F8,' SD1= ',F8)
+8150  FORMAT(1X,'N2=',I3,'  Mean2= ',F8,' SD2= ',F8)
+8200  FORMAT(1X,'Diff(2-1)= ',F8,' SEDiff= ',F8,' dF=',I3,' a=',F6.3)
+8250  FORMAT(1X,'    T =',F8.3,'  p(1-tail) <= ',F6.4,
+     &  '  P(2-tail) <= ',F6.4)
+8280  FORMAT(1X,'    V =',F8.3,'  N1 =',I3,'  N2 =',I3,
+     &  '  critical V (2-tailed) = ',F4.1)
+8281  FORMAT(1X,'    V =',F8.3,'  N1 =',I3,'  N2 =',I3,
+     &  '  sample too small for significance test')
+8282  FORMAT(1X,'    V =',F8.3,'  N1 =',I3,'  N2 =',I3,
+     &  '  sample too large for tables')
+8300  FORMAT(1X,'1- and 2-tailed power given N, p, SD1, SD2, and ',
+     &  'possible differences of means:')
+8400  FORMAT(1X,'N1  N  dF    p         2%          3%          5%',
+     &  '          10%         15%')
+C
+C  SPED-format output to second log file
+C
+      WRITE(LOGOUT,8450) XSEED,YSEED,ZSEED,THRESH,RPIXELS,
+     &   MEAN2-MEAN1,SDIFF,T,P1,P2
+8450  FORMAT(4I4,I5,2X,F8,2X,F8,F10.3,2F8.4)
+C
+C  Compute Mann-Whitney V
+C
+      DO 400 J=1,N1
+        DO 300 I=N1+1,N1+N2
+          IF (VAL(I).GT.VAL(J)) THEN
+            SUMTEST = SUMTEST + 1.
+          ELSE IF (VAL(I).EQ.VAL(J)) THEN
+            SUMTEST = SUMTEST + 0.5
+          END IF
+300     CONTINUE
+400   CONTINUE
+      V = SUMTEST-MIDDLE
+      CALL VTABLE(VCRIT,N1,N2)
+      IF (VCRIT.EQ.9999.) THEN
+        IF (OUTPUT) WRITE(USEROUT,8281) V,N1,N2
+        WRITE(LOGOUT,8281)  V,N1,N2
+      ELSE IF (VCRIT.EQ.-9999.) THEN
+        IF (OUTPUT) WRITE(USEROUT,8282) V,N1,N2
+        WRITE(LOGOUT,8282)  V,N1,N2
+      ELSE
+        IF (OUTPUT) WRITE(USEROUT,8280) V,N1,N2,VCRIT
+        WRITE(LOGOUT,8280)  V,N1,N2,VCRIT
+      END IF
+C
+C  Power Analysis if alpha > 0.0
+C
+      IF (ALPHA.GT.0.0) THEN
+        IF (OUTPUT) WRITE(USEROUT,8300)
+        WRITE(LOGOUT,8300)
+        IF (OUTPUT) WRITE(USEROUT,8400)
+        WRITE(LOGOUT,8400)
+        DO 500 NT=3,18
+          CALL T1UPOWER(NT,VAR1,VAR2)
+500     CONTINUE
+        NT = 20
+        CALL T1UPOWER(NT,VAR1,VAR2)
+        WRITE(LOGOUT,*)
+      END IF
+C
+      RETURN
+      END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d27 1
+d74 1
+a74 1
+      RCSHEADER = '$Id$'
+d176 1
+a176 1
+      WRITE(LOGOUT2,8450) XSEED,YSEED,ZSEED,THRESH,RPIXELS,
+@

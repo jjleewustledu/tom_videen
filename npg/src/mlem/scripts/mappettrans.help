@@ -1,0 +1,311 @@
+###################
+# mappettrans.com #
+###################
+SYNTAX
+  mappettrans.com -bl blank  -tr trans [-n norm]
+  [-c contamination -cw contamweight [-cf contamframe] [-cb contambed]]
+  [-i nr_iterations -j subiterations] [-i nr_iterations -j subiterations] ...
+  [-V version] [-SP] [-sa axialsmooth] [-scan scanner]
+  [-p plane] [-f frame] [-g gate] [-b bed]
+  [-R arc_radius] [-sumd sumdet] [-rel rel] [-v] [-lik]
+  [-z zoom] [-X image_size] [-x x_offset] [-y y_offset]
+  [-r rotation] 
+  [-priorw priorweight] [-prior priormean priorstd priorwidth] [-prior ...] ...
+  [-markovf function] [-markovd delta] [-markovw weight]
+  [-markovn neighborhood]
+
+
+PARAMETERS
+   -bl      blankname
+        File name of the blankscan. Accepts version 7.0, 6 and older
+        (.s or .scn).
+
+   -tr      transname
+        File name of the transmission scan. Accepts version 7.0, 6 and older
+        (.s or .scn).
+
+   -n       normname
+        File name of the normalization file. This is only required if the
+        normalization is sinogram-dependent. On the Ecat 931 it is not.
+        On the Ecat 962 (HR+) it is: the normalization file (detector
+        sensitivity and geometry) is unfolded and combined with sinogram
+        singles to include dead time. Accepts version 7.0, 6 and older
+        (.n or .nrm).
+
+   -orecon  reconname
+        File name  of the original reconstruction. It contains linear
+        attenuation coefficients per pixel, is not zoomed, shifted or
+        rotated. The pixel size equals the sinogram pixel size multiplied
+        with sumdet (see below). Useful for reprojection with other software.
+        No file is created if -orecon is not provided.
+        Produces version 6 or 7.0 (.img or .v).
+
+   -oacf    attenname
+        Attenuation correction file name. Pixel size and sinogram size
+        is the same as that of the transmission file.
+        No file is created if -oacf is not provided.
+        Produces version 6 or 7.0 (.atn or .a).
+
+   -oimg    imgname
+        Image file name. It contains linear attenuation coefficients per cm.
+        It is affected by the options -z, -X, -x, -y and -r, in exactly
+        the same way as emission images reconstructed with mlempetv7.
+        This allows exact registration of emission and transmission image
+        reconstructions.
+        No file is created if -oimg is not provided.
+        Produces version 6 or 7.0 (.img or .v).
+
+   -c       contamname
+        File name of emission scan that serves as an estimate of unwanted
+        emission contribution in the transmission scan. The estimated is
+        included in the iterations, assuming that the estimate is noise free
+        and that the contaminated transmission value is a Poisson realization.
+        In reality, the estimate is not noise free. However, the emission
+        scan usually contains far more counts than the unwanted emission
+        contribution (because of windowed acquisition), so the assumption is
+        reasonable. The program corrects the estimate
+        for decay (using half life from emission header), for differences in
+        normalization and frame duration and for the effect of windowed
+        acquisition.
+
+   -cd      dwellprofile
+        Ascii file with one value per line, representing the detector
+        sensitivity for emission activity during windowed transmission
+        measurements. Can be measured with a transmission scan without rods.
+        The number of points should equal the number of detectors in the
+        blank and transmission sinogram. We assume that a single profile is
+        valid for all angles and all planes.
+
+   -cw      contamweight
+        Average sensitivity of the transmission measurement to emission
+        activity, i.e.: use a constant value instead of a dwell profile.
+        Ignored when dwellprofile is provided. For the HR+, we measured
+        a value of 0.03. For the 931, the value is 1.
+
+   -cf      contamframe
+        Allows to select a frame from a dynamic emission scan as the
+        estimate of the emission contamination.
+        Default: frame 1.
+
+   -cb      contambed (or range of beds)
+        Allows to select a bed position in the emission scan different from
+        that in the transmission scan. If a range of beds is specified, it
+        should have the same amount of bed positions as in the transmission
+        scan. A range is specified as <-cb bed1-bed2>. Do not put blanks
+        in the range spec. The range may count up or count down.
+        
+   -i       nr_iterations
+   -j       nr_subiterations
+        The sequence <-i i1 -j j1   -i i2 -j j2 ...> causes the program to
+        apply i1 iterations with j1 subiterations, followed by i2 iterations
+        of j2 subsets and so on. Implementation is similar to OSEM in
+        MLEM for emission. We find that the use of priors makes the program
+        more robust: many subsets can be used when priors are active, but
+        when pure ML is applied (-priorw 0 -markovw 0), noise increases with
+        increasing number of subsets.
+
+   -V       version
+        Version of the output files: 6 or 70 (for 7.0). The program reads
+        older versions (e.g. version 2 from Vax) but does not produce them.
+        Default is version 7.0 for 7.0 input files, and 6 for all others.
+
+   -SP
+        Single Plane flag. When set, the program produces output files of
+        a single plane. Useful if the reconstruction is distributed over
+        multiple hosts: they produce separate files (so they do not attempt
+        to write in the same file), which must be combined afterwards.
+
+   -sa      axialsmooth
+        The program computes a linear combination of the selected plane with
+        the previous and the next (if they exist): 
+        finaldata = data(plane) + axialsmooth * data(plane - 1)
+                                + axialsmooth * data(plane + 1)
+        If axialsmooth equals 1 or 0, the result is still Poisson distributed.
+        Otherwise, the data are no longer Poisson distributed, but this
+        violation causes no problems since it is similar for all pixels.
+        Before combining the data, blank and emission scans are normalized
+        and divided by the transmission normalization. For the transmission,
+        the raw sinogram data are added.
+        Default is 0.
+        
+   -scan    scanner
+        When supplied, the program uses preset values for the arcradius,
+        sumdet, the iteration scheme, the contamination weight, the
+        smoothing (for the HR+, detectors are combined axially and
+        transaxially) and for the sensitivity to the emission counts
+        (using a dwell-profile for the HR+).
+        These values are overwritten with the user values when supplied.
+        Scanners supported are 931 and 962 (or hrplus).
+        On the HR+, we acquire sinograms of 288 detectors x144 angles,
+        for the HR+, the default sumdet is <-sumd 2>, reducing the sinogram
+        to 144 x 144. In addition, axial smoothing is applied (-sa 1),
+        reducing the noise.
+
+   -p       plane (or range of planes)
+        Planes numbering starts from 1. A range is specified as
+        <-p plane1-plane2>. Do not put blanks in the range spec. 
+
+   -f       frame (or range of frames)
+        Frames numbering starts from 1. A range is specified as
+        <-f frame1-frame2>. Do not put blanks in the range spec. 
+
+   -g       gate (or range of gates)
+        Gates numbering starts from 1. A range is specified as
+        <-g gate1-gate2>. Do not put blanks in the range spec. 
+
+   -b       bed (or range of beds)
+        Beds numbering starts from 0. A range is specified as
+        <-b bed1-bed2>. Do not put blanks in the range spec. 
+
+   -R       arc_radius
+        Radius of the scanner in cm, including mean depth of interaction.
+        For the 931 we use 52 cm, for the HR+ we use 42.2 cm. The value
+        is required for arc-correction, which is included in the projection/
+        backprojection operation.
+        Default is <-R 0>, resulting in no arc-correction.
+
+   -sumd    sumdet
+        Integer value, specifying how many neighboring detectors must
+        be summed. Sumdet should be a divider of the number of columns
+        in the sinogram.
+
+   -rel     relaxation
+        Relaxation value, multiplied with the update in every iteration.
+        When set to 1, convergence is no problem. Higher values may result
+        in acceleration, but oscillations are possible. Default 1.
+
+   -v
+        Verbose flag.
+
+   -lik
+        When set, calculates and reports likelihood, at the cost of increased
+        processing time. When subsets are used, the likelihood is computed
+        using all most recent available reprojections. This resuls in an
+        underestimation. The likelihood is normalized to its maximum value.
+
+   -z       zoom
+        Zoom of reconstruction image specified with -oimg. Default is 1.
+
+   -X       image_size
+        Number of rows and columns of image specified with -oimg.
+        Default 128.
+
+   -x       x_offset
+        Horizontal translation in cm. Default is 0.
+
+   -y       y_offset
+        Vertical translation in cm. Default is 0.
+
+   -r       rotation
+        Rotation in degrees. Default is 0. Can also be used to correct
+        for intrinsic tilt.
+
+   -priorw  priorweight
+        The weight of the absolute prior distribution. A weight of 1
+        is reasonable, 10 is high, 0.1 is low.
+        The prior is distribution is defined with a sequence of
+        <-prior mean std width> options (see below).
+        The posterior is the product of prior and likelihood (the sum
+        of log likelihoods). The weight controls the balance between the
+        two.
+        A scan with fewer counts has smaller likelihood, so the prior
+        will have a stronger effect. Multiplying the entire sinogram with
+        a constant will affect the balance!
+        If more than two iterations are applied, the program will apply
+        a weight of 0.1 x priorweigth in the first iteration,
+        and         0.5 x priorweight in the second,
+        to encourage convergence towards a global maximum.
+
+   -prior   priormean priorstd priorwidth
+        <-prior mean std width> specifies one mode of a multimodal 
+        absolute intensity prior distribution.
+        The mode has a Gaussian shape, with standard deviation std.
+        This implies that the weight of a mode is proportional to 1/std^2.
+        Its relative extent along the intensity axis is defined by width:
+        the point where one mode ends and the next begins is defined by
+        the relative widths of neighboring modes.
+        
+
+        |                                       *
+        |               *                    *     *
+        |             *   *                *         *
+        |            *     *              *           *
+        |           *       *            *             *
+        |         *           *        *                 *
+        |      *               *    *                       *
+        |  *                     *                             *
+        ----------------+------------------------+--------------> intensity
+        position      mean1                    mean2
+        strength     1/std1^2                 1/std2^2
+
+        width         ----------><---------------------------------->
+                     width1                   width2
+
+        The algorithm users the gradient of the log of the prior.
+        A piecewise Gaussian distribution has a simple piecewise linear
+        gradient with zero crossings at the means, slopes defined by std
+        and relative length of the pieces defined by width.
+        Obviously, application of this prior produces a posterior with
+        local maxima. The gradual increasing weight helps convergence
+        towards a maximum close to the maximum of the likelihood.
+
+
+   -markovf function
+        The Markov prior encourages local smoothness, by assigning a
+        "cost" to pairs of neighboring pixels, that increases with
+        increasing intensity difference. Three energy functions are
+        supported:
+        <-markovf q>: quadratic,
+            the squared difference is devided by 2 * delta^2, so delta
+            can be regarded as a standard deviation.
+        <-markovf h>: huber: quadratic if difference < delta
+                             linear    if difference > delta
+        <-markovf g>: geman: quadratic if difference < delta
+                             converges to constant if difference >> delta.
+        Consequently, for differences << delta, the three functions
+        coincide.
+        Quadratic strongly penalizes large differences.
+        Huber applies constant penalization if difference > delta, so
+              it is more tolerant to large differences.
+        Geman applies decreasing penalization if difference >> delta,
+              so it preserves egdes very well.
+        Quadratic and Huber are convex functions, Geman is not so it
+        produces local maxima in the posterior.
+
+        For the quadratic case, the prior can be regarded as a Gaussian
+        with standard deviation delta. When a reasonable delta is chosen,
+        the weight should be close to unity.
+
+   -markovd delta
+        Parameter of the energy function. See -markovf.
+
+   -markovw weight
+        Global weight. If the Geman function is selected and three or more
+        main iterations are applied, then the weight is decreased in the
+        first two iterations to encourage convergence towards a solution
+        close to the maximum of the likelihood.
+
+   -markovn neighborhood
+        With <-markovn 8>, every pixel has 8 neighbors,
+        with <-markovn 4>, every pixel has 4 neighbors.
+        In our experience, a 4-pixel neighborhood results in similar
+        images, but computation time is shorter.
+
+
+Defaults for the absolute and markov priors are:
+  -markovw 2 -markovf h -markovd 0.014 -markovn 4
+
+                         (mean)  (std) (rel width)
+  -priorw  2   -prior   0.0000   0.019    6   air.
+               -prior   0.0236   0.06     6   lung.
+               -prior   0.0510   0.06     2   bed (and lung).
+               -prior   0.0950   0.019    1   tissue
+               -prior   0.1400    999     1   much higher than tissue.
+
+This absolute prior uses strong attraction near air or tissue values,
+and weaker attraction near lung (and bed), allowing the lungs to be
+more inhomogeneous. The highest prior has very high std, so vanishing
+attraction. This effectively turns off the priors allowing reconstruction
+of metal prostheses.
+
+

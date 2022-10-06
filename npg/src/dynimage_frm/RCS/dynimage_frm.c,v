@@ -1,0 +1,128 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2008.08.07.19.51.04;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/* ===============================================================================
+ *	Module:			dynimage_frm.c
+ *	Date:			Aug 2008
+ *	Author:			Tom Videen
+ *	Description:	Read one frame of a dynamic image file for IDL
+ *	Notes:
+ *		If error, write -1 followed by string message to stdout
+ *	Otherwise write:
+ *		file_format (integer)
+ *		first and last frames (2 integers)
+ *		first and last planes (2 integers)
+ *		dim1, dim2, dim3 (3 integers)
+ *	if (file_format eq 1)
+ *		mh6		sizeof (Main_header)
+ *		sh6		sizeof (Image_subheader)
+ *	if (file_format eq 2)
+ *		mh7		sizeof (Main_header7)
+ *		sh7		sizeof (Image_subheader7)
+ *	then write 1 plane of each as dim1 x dim2 floats
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_frm/RCS/dynimage_frm.c,v 2.3 2005/10/05 16:08:58 tom Exp $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+#include <pettable.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	float          *img;
+	char           *fname;
+	int             frm, reverse;
+	int             nplanes; 
+	long            pln, sizepln;
+	unsigned long   dim1, dim2, dim3;
+
+	fname = argv[1];
+	frm = atoi (argv[2]);
+	indx.frm = frm;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stdout, "-1  opening %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stdout, "-1  reading MainHeader in %s\n", fname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stdout, "-1  reading subheader in %s\n", fname);
+		return (ERROR);
+	}
+	dim1 = (unsigned long) file->sh->dim1;
+	dim2 = (unsigned long) file->sh->dim2;
+	dim3 = (unsigned long) file->sh->dim3;
+	nplanes = file->mh->nplane;
+	sizepln = dim1 * dim2;
+	reverse = file->mh->orientation;
+
+	fprintf (stdout, "%d\n", file->mh->file_format);
+	fprintf (stdout, "%d %d %d\n", (int) dim1, (int) dim2, (int) dim3);
+
+	if (file->mh->file_format == MATRIX_REV6) {
+		(void) fwrite (file->m6->mh, sizeof (Main_header), 1, stdout);
+		(void) fwrite (file->m6->sh, sizeof (Image_subheader), 1, stdout);
+	} else if (file->mh->file_format == MATRIX_REV7) {
+		(void) fwrite (file->m7->mh, sizeof (Main_header7), 1, stdout);
+		(void) fwrite (file->m7->sh, sizeof (Image_subheader7), 1, stdout);
+	} else if (file->mh->file_format == PETT6) {
+		(void) fwrite (file->p6, sizeof (PETT6HDR), 1, stdout);
+	}
+	for (pln = 1; pln <= nplanes; pln++) {
+		indx.pln = pln;
+		if ((img = rdimg (file, &indx)) == NULL) {
+			fprintf (stdout, "-1  Cannot read frame %d plane %d of %s\n",
+				 indx.frm, indx.pln, fname);
+			return (ERROR);
+		}
+		if (reverse != 0)
+			img = flipimg (file, img);
+		(void) fwrite (img, sizeof (float), sizepln, stdout);
+		free (img);
+	}
+	if (reverse != 0)
+		file->mh->orientation = 0;
+
+	close_imgfile (file);
+	free_imgfile (file);
+	return (OK);
+}
+@

@@ -1,0 +1,459 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	2009.05.29.14.36.47;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2004.02.16.20.18.23;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.11.27.15.20.23;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2001.07.11.17.32.18;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.02.08.16.57.47;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.02.08.16.32.46;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@accept dimensions = 3
+@
+text
+@/*	$Log: maskand.c,v $
+ * Revision 1.7  2004/02/16  20:18:23  tom
+ * Feb 2004
+ *
+ * Revision 1.4  2002/11/27  15:20:23  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  2001/07/11  17:32:18  tom
+ * fprint to stdout
+ *
+ * Revision 1.2  1999/02/08  16:57:47  tom
+ * *** empty log message ***
+ * */
+/*	===============================================================================
+ *	Module:			maskand.c
+ *	Date:			Jan 1999
+ *	Author:			Tom Videen
+ *	Description:	Set to val all pixels which are >= min AND <= max.
+ *					If seed != [0,0,0] mask only pixels connected to it.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskand/RCS/maskand.c,v 1.7 2004/02/16 20:18:23 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			maskand
+ *	----------------------------
+ */
+int	main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	void            mask_and ();
+	void            mask_and_all ();
+	FILE           *fp;				 /* file pointer */
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	long            dim1, dim2, dim3; /* dimensions of image */
+	long            x, y, z;
+	long            i, j, k;
+	long            pln;
+	long            xmin, xmax, ymin, ymax;
+	short           min, max;		 /* include all <= or >= these pixel values */
+	short           val;			 /* set pixels to this value */
+	short        ***img;			 /* image */
+	short        ***set;			 /* pixels set if in skull */
+	short          *row;			 /* single row of input image */
+	long            npixels = 0;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 8 && argc != 11) {
+		fprintf (stderr, "Usage: maskand img1 hdr1 img2 hdr2 min max val [x y z]\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	min = atoi (argv[5]);
+	max = atoi (argv[6]);
+	val = atoi (argv[7]);
+	x = atoi (argv[8]);
+	y = atoi (argv[9]);
+	z = atoi (argv[10]);
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fp = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [maskand]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [maskand]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [maskand]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [maskand]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [maskand]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fp);
+
+	if (x > dim1 || y > dim2 || z > dim3 || x < 0 || y < 0 || z < 0) {
+		fprintf (stderr, "ERROR [maskand]: seed point not in image: [%ld %ld %ld]\n", x, y, z);
+		return (ERROR);
+	}
+
+/*	Read img */
+
+	if ((fp = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [maskand]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [maskand]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if (NULL == (row = (short *) calloc (dim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [maskand]: Cannot malloc memory for row\n");
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			if ((fread (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [maskand]: Reading: %s\n", img1);
+				return (ERROR);
+			}
+			for (k = 1; k <= dim1; k++)
+				img[i][j][dim1 - (k - 1)] = row[k - 1];
+		}
+	}
+	(void) fclose (fp);
+
+/*	Mask it */
+
+	if (z > 0) {
+		if (img[z][y][x] < min || img[z][y][x] > max) {
+			fprintf (stderr, "ERROR [maskand]: seed value (%i) is not with range [%i : %i]\n",
+				 img[z][y][x], min, max);
+			return (ERROR);
+		}
+		if ((set = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+			fprintf (stderr, "ERROR [maskand]: Cannot calloc set\n");
+			return (ERROR);
+		}
+		set[z][y][x] = 1;
+		xmin = x;
+		xmax = x;
+		ymin = y;
+		ymax = y;
+		pln = z;
+		mask_and (img, set, val, min, max, dim1, dim2, dim3, pln, &xmin, &xmax, &ymin, &ymax, &npixels);
+	} else {
+		mask_and_all (img, val, min, max, dim1, dim2, dim3, &npixels);
+	}
+	fprintf (stdout, "Total Masked Pixels = %li\n", npixels);
+
+/* Write output */
+
+	if ((fp = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [maskand]: Unable to create ANALYZE header %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [maskand]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+	if ((fp = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [maskand]: Unable to create ANALYZE image %s\n", img2);
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			for (k = 1; k <= dim1; k++)
+				row[k - 1] = img[i][j][dim1 - (k - 1)];
+			if ((fwrite (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [maskand]: Writing: %s\n", img2);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fp);
+
+	fprintf (stdout, "Converted: %s to %s\n", img1, img2);
+	free_s3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+	if (z > 0)
+		free_s3tensor (set, 1, dim3, 1, dim2, 1, dim1);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.7
+log
+@Feb 2004
+@
+text
+@d2 3
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskand/RCS/maskand.c,v 1.4 2002/11/27 15:20:23 tom Exp tom $";
+d39 1
+a39 1
+main (argc, argv)
+d93 1
+a93 1
+	if (hdr.dime.dim[0] != 4) {
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d13 1
+a13 1
+ *	Date:			Jan-99
+d19 1
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskand/RCS/maskand.c,v 1.3 2001/07/11 17:32:18 tom Exp tom $";
+d108 1
+a108 1
+	fclose (fp);
+d139 1
+a139 1
+	fclose (fp);
+d175 1
+a175 1
+	fclose (fp);
+d191 1
+a191 1
+	fclose (fp);
+@
+
+
+1.3
+log
+@fprint to stdout
+@
+text
+@d2 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskand/RCS/maskand.c,v 1.2 1999/02/08 16:57:47 tom Exp tom $";
+d21 2
+a22 2
+#include <string.h>
+#include <fcntl.h>
+a23 1
+#include <libimage.h>
+a25 1
+#include <matrixlib.h>
+d107 1
+a107 1
+		fprintf (stderr, "ERROR [maskand]: seed point not in image: [%d %d %d]\n", x, y, z);
+d135 1
+a135 1
+	close (fp);
+d159 1
+a159 1
+	fprintf (stdout, "Total Masked Pixels = %i\n", npixels);
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskand/RCS/maskand.c,v 1.1 1999/02/01 20:13:51 tom Exp $";
+d59 1
+a59 1
+		printf ("Usage: maskand img1 hdr1 img2 hdr2 min max val [x y z]\n");
+d158 1
+a158 1
+	printf ("Total Masked Pixels = %i\n", npixels);
+d188 1
+a188 1
+	printf ("Converted: %s to %s\n", img1, img2);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d11 1
+a11 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskand/RCS/maskand.c,v 1.1 1999/01/12 15:44:41 tom Exp tom $";
+d34 6
+a39 8
+	int             mask_and ();
+	int             mask_and_all ();
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	int             fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;		 /* input file */
+	char           *img2, *hdr2;		 /* output file */
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+	int             flag;
+d43 1
+a43 2
+	long            xmin, xmax;
+	long            ymin, ymax;
+d55 2
+a56 2
+	if (argc != 8 && argc != 12) {
+		printf ("Usage: maskand img1 hdr1 img2 hdr2 min max val x y z flag\n");
+d63 6
+a68 7
+	min = (short) (atoi (argv[5]));
+	max = (short) (atoi (argv[6]));
+	val = (short) (atoi (argv[7]));
+	x = (long) (atoi (argv[8]));
+	y = (long) (atoi (argv[9]));
+	z = (long) (atoi (argv[10]));
+	flag = atoi (argv[11]);
+d74 1
+a74 1
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+d78 1
+a78 1
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+d100 1
+a100 1
+	fclose (fd_hdr);
+d102 3
+a104 5
+	if (z > 0) {
+		if (x > dim1 || y > dim2 || z > dim3 || x < 1 || y < 1 || z < 1) {
+			fprintf (stderr, "ERROR [maskand]: seed point not in image: [%d %d %d]\n", x, y, z);
+			return (ERROR);
+		}
+a105 3
+/*
+ *	Read img
+ */
+d107 3
+a109 1
+	if ((fd_img = open (img1, O_RDONLY, 0444)) < 0) {
+d123 4
+a126 1
+			read (fd_img, row, dim1 * 2);
+d131 1
+a131 1
+	close (fd_img);
+d133 3
+a135 1
+    if (z > 0) {
+d137 2
+a138 2
+			fprintf (stderr, "ERROR [maskand]: seed value (%i) is not outside the specified range [%i : %i]\n",
+			 	img[z][y][x], min, max);
+d151 1
+a151 5
+		if ((mask_and (img, set, val, flag, min, max, dim1, dim2, dim3, pln,
+		       &xmin, &xmax, &ymin, &ymax, &npixels)) == ERROR) {
+			fprintf (stderr, "ERROR [maskand]: in mask_and\n");
+			return (ERROR);
+		}
+d153 1
+a153 4
+		if ((mask_and_all (img, val, min, max, dim1, dim2, dim3, &npixels)) == ERROR) {
+			fprintf (stderr, "ERROR [maskand]: in mask_and_all\n");
+			return (ERROR);
+		}
+d155 1
+a155 1
+	printf ("Total Pixels Masked = %i\n", npixels);
+d157 1
+a157 3
+/*
+ * Write to output file
+ */
+d159 1
+a159 1
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+d163 7
+a169 1
+	if ((fd_img = open (img2, O_CREAT | O_RDWR, 0666)) == 0) {
+d177 4
+a180 1
+			write (fd_img, (char *) row, dim1 * 2);
+d183 1
+a184 5
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [maskand]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+
+@

@@ -1,0 +1,591 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.20.16.23.04;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	2003.08.15.17.26.18;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	2003.04.03.21.46.38;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2001.05.31.19.45.12;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	99.12.17.14.53.08;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.07.15.15.46.59;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.06.02.20.57.22;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.03.19.22.34.59;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.10.03.20.43.40;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.04.26.15.52.53;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.25.16.16.01;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial release
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: average.c,v $
+ * Revision 1.11  2003/08/15  17:26:18  tom
+ * use localmean
+ *
+ * Revision 1.10  2003/04/03  21:46:38  tom
+ * *** empty log message ***
+ *
+ * Revision 1.9  2001/05/31  19:45:12  tom
+ * *** empty log message ***
+ *
+ * Revision 1.8  1999/12/17  14:53:08  tom
+ * lint cleaning
+ *
+ * Revision 1.7  1999/07/15  15:46:59  tom
+ * *** empty log message ***
+ *
+ * Revision 1.6  1997/06/02  20:57:22  tom
+ * add voi_zero_chk in average and readprm
+ *
+ * Revision 1.5  1997/03/19  22:34:59  tom
+ * add mapfile matrix
+ *
+ * Revision 1.4  1996/10/03  20:43:40  tom
+ * test for negative values in computing SD
+ *
+ * Revision 1.3  1996/04/26  15:52:53  tom
+ * changed structure of rgtlist
+ *
+ * Revision 1.1  1996/04/25  16:16:01  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			average.c
+ *	Date:			Apr 1996
+ *	Author:			Tom Yang (02/25/94)
+ *	Description:	Compute mean VOI values.
+ *	History:
+ *		Apr 1996	TOV	revised to process tensors
+ *		Mar 1997	TOV	revised to process map files
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.11 2003/08/15 17:26:18 tom Exp tom $";
+#endif
+
+#include <math.h>
+#include <imgutil.h>
+#include <voistat.h>
+#include <nrutil.h>
+#include <matrixlib.h>				 /* vector_mult */
+
+#define	CRIT	0.1
+
+void            average (voidata, img, pdim, adim, usemap, map, z0, mean, sd, nvoxels, prm)
+	VOIDATA         voidata;		 /* VOI data */
+	float        ***img;			 /* image on which to compute VOIs */
+	int            *pdim;			 /* image dimension in pixels */
+	float          *adim;			 /* voxel dimension in mm */
+	int		        usemap;			 /* use map file matrix to adjust VOI */
+	float         **map;			 /* transformation matrix */
+	int             z0;				 /* z-origin used to create map file */
+	float          *mean;			 /* returned */
+	float          *sd;				 /* returned */
+	int            *nvoxels;		 /* returned */
+	PARAMETER_DATA  prm;
+{
+	double          sumsqrs;
+	double          sum;
+	double          value;
+	double          val1, val2, val3;
+	float 			localmean;
+	float          *a;			 /* vector in ATL-space; a[4] */
+	float          *p;			 /* vector in PET-space; p[4] */
+	float           dx, dy, dz;
+	float           dist1, dist2;
+	float           rx, ry, rz;
+	float           xc, yc, zc;
+	int             x, y, z;
+	int             xmin, xmax;
+	int             ymin, ymax;
+	int             zmin, zmax;
+
+/*
+ * Define a volume that contains the 3D voi.
+ */
+	xc = voidata.center.x;
+	yc = voidata.center.y;
+	zc = voidata.center.z;
+	dx = voidata.dimension.x / adim[0];		/* pixels */
+	dy = voidata.dimension.y / adim[1];
+	dz = voidata.dimension.z / adim[2];
+	rx = dx / 2.0;							/* pixels */
+	ry = dy / 2.0;
+	rz = dz / 2.0;
+
+/*
+ *	Reform voi using map matrix
+ *	Note: vector_mult used 0-based indexing; img uses 1-based indexing
+ */
+
+	if (usemap) {
+		a = vector (1, 4);
+		p = vector (1, 4);
+		a[1] = 64.5 - xc - 1;
+		a[2] = 64.5 - yc - 1;
+		a[3] = (float) z0 - zc - 1;
+		a[4] = 1.0;
+		vector_mult (map, a, p, 4, 4);
+		xc = p[1] + 1;
+		yc = p[2] + 1;
+		zc = p[3] + 1;
+	}
+/*
+ * Move the center if necessary to make dimensions unchanged.
+ */
+	x = (int) dx;
+	y = (int) dy;
+	z = (int) dz;
+
+	if (dx > 0 && xc - ((int) (xc)) == 0.0 && dx - x == 0.0 && x % 2 == 0)
+		xc += 0.5;
+	if (dy > 0 && yc - ((int) (yc)) == 0.0 && dy - y == 0.0 && y % 2 == 0)
+		yc += 0.5;
+	if (dz > 0 && zc - ((int) (zc)) > 0.3 && dz - z == 0.0 && z % 2 == 0)
+		zc += 0.5;
+	if (dx >= 0.0 && dx < 1.0)
+		xc = ROUND (xc);
+	if (dy >= 0.0 && dy < 1.0)
+		yc = ROUND (yc);
+	if (dz >= 0.0 && dz < 1.0)
+		zc = ROUND (zc);
+
+	xmin = ROUND (xc - rx);
+	xmax = ROUND (xc + rx);
+	ymin = ROUND (yc - ry);
+	ymax = ROUND (yc + ry);
+	zmin = ROUND (zc - rz);
+	zmax = ROUND (zc + rz);
+
+	*mean = 0.0;
+	*sd = 0.0;
+	*nvoxels = 0;
+	sum = 0.0;
+	sumsqrs = 0.0;
+	if (xmin >= 1 && xmax <= pdim[0]
+	    && ymin >= 1 && ymax <= pdim[1]
+	    && zmin >= 1 && zmax <= pdim[2]) {
+		if (voidata.voi_shape == VOI_CUBE) {
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						if ((fabs (x - xc) <= rx) && (fabs (y - yc) <= ry) && (fabs (z - zc) <= rz)) {
+							if (prm.voi_zero_chk == 1 && img[z][y][x] == 0) {
+								*mean = MEAN_UNDEFINED;
+								*sd = 0.0;
+								*nvoxels = 0;
+								return;
+							} else {
+								value = (double) img[z][y][x];
+								sum += value;
+								sumsqrs += DSQR(value);
+								(*nvoxels)++;
+							}
+						}
+					}
+				}
+			}
+
+		} else if (voidata.voi_shape == VOI_OLD_SPHERE) {
+			dist1 = rx * rx;
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						dist2 = (x - xc) * (x - xc) + (y - yc) * (y - yc) + (z - zc) * (z - zc);
+						if (dist2 <= dist1) {
+							if (prm.voi_zero_chk == 1 && img[z][y][x] == 0) {
+								*mean = MEAN_UNDEFINED;
+								*sd = 0.0;
+								*nvoxels = 0;
+								return;
+							} else {
+								value = (double) img[z][y][x];
+								sum += value;
+								sumsqrs += DSQR(value);
+								(*nvoxels)++;
+							}
+						}
+					}
+				}
+			}
+
+		} else if (voidata.voi_shape == VOI_NEW_SPHERE) {
+			dist1 = DSQR(0.5 * voidata.dimension.x);		/* mm */
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						val1 = DSQR((double) (x - xc)*adim[0]);
+						val2 = DSQR((double) (y - yc)*adim[1]);
+						val3 = DSQR((double) (z - zc)*adim[2]);
+						dist2 = val1 + val2 + val3;
+						/* dist2 = DSQR((x - xc)*adim[0]) + DSQR((y - yc)*adim[1]) + DSQR((z - zc)*adim[2]);*/
+						if (dist2 <= dist1) {
+							if (prm.voi_zero_chk == 1 && img[z][y][x] == 0) {
+								*mean = MEAN_UNDEFINED;
+								*sd = 0.0;
+								*nvoxels = 0;
+								return;
+							} else {
+								value = (double) img[z][y][x];
+								sum += value;
+								sumsqrs += DSQR(value);
+								(*nvoxels)++;
+							}
+						}
+					}
+				}
+			}
+
+		} else if (voidata.voi_shape == VOI_CYLINDER) {
+			dist1 = rx * rx;
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						dist2 = (x - xc) * (x - xc) + (y - yc) * (y - yc);
+						if (dist2 <= dist1 && (fabs (z - zc) <= rz)) {
+							if (prm.voi_zero_chk == 1 && img[z][y][x] == 0) {
+								*mean = MEAN_UNDEFINED;
+								*sd = 0.0;
+								*nvoxels = 0;
+								return;
+							} else {
+								value = (double) img[z][y][x];
+								sum += value;
+								sumsqrs += DSQR(value);
+								(*nvoxels)++;
+							}
+						}
+					}
+				}
+			}
+		}
+		if (*nvoxels > 0)
+			*mean = (float) sum / *nvoxels;
+		else
+			*mean = (float) MEAN_UNDEFINED;
+	} else {
+		*mean = MEAN_UNDEFINED;
+	}
+
+	if (fabs (*mean - MEAN_UNDEFINED) < CRIT)
+		*sd = MEAN_UNDEFINED;
+	else if (*nvoxels > 1) {
+		localmean = *mean;
+		value = ((sumsqrs - *nvoxels * DSQR(localmean)) / (*nvoxels - 1.0));
+		if (value < 0.0)
+			*sd = 0.0;
+		else
+			*sd = sqrt (value);
+	}
+}
+@
+
+
+1.11
+log
+@use localmean
+@
+text
+@d2 3
+d34 1
+a34 1
+ *	Date:			Apr-96
+d38 2
+a39 2
+ *		Apr-96	TOV	revised to process tensors
+ *		Mar-97	TOV	revised to process map files
+d42 1
+d44 1
+a44 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.10 2003/04/03 21:46:38 tom Exp tom $";
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d40 1
+a40 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.9 2001/05/31 19:45:12 tom Exp tom $";
+d68 1
+d250 2
+a251 1
+		value = ((sumsqrs - *nvoxels * DSQR(*mean)) / (*nvoxels - 1.0));
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d37 1
+a37 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.8 1999/12/17 14:53:08 tom Exp tom $";
+d236 1
+a236 1
+			*mean = sum / *nvoxels;
+d238 1
+a238 1
+			*mean = MEAN_UNDEFINED;
+@
+
+
+1.8
+log
+@lint cleaning
+@
+text
+@d2 3
+d34 1
+a34 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.7 1999/07/15 15:46:59 tom Exp tom $";
+d61 1
+d187 5
+a191 1
+						dist2 = DSQR((x - xc)*adim[0]) + DSQR((y - yc)*adim[1]) + DSQR((z - zc)*adim[2]);
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d31 1
+a31 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.6 1997/06/02 20:57:22 tom Exp $";
+d47 1
+a47 1
+	BOOLEAN         usemap;			 /* use map file matrix to adjust VOI */
+@
+
+
+1.6
+log
+@add voi_zero_chk in average and readprm
+@
+text
+@d2 3
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.5 1997/03/19 22:34:59 tom Exp tom $";
+a30 1
+#include <stdio.h>
+a33 3
+#include <image.h>
+#include <libimage.h>
+#include <nr.h>
+d72 1
+a72 1
+	dx = voidata.dimension.x / adim[0];
+d75 1
+a75 1
+	rx = dx / 2.0;
+d144 1
+a144 1
+								sumsqrs += value * value;
+d151 2
+a152 1
+		} else if (voidata.voi_shape == VOI_SPHERE) {
+d167 1
+a167 1
+								sumsqrs += value * value;
+d174 24
+d213 1
+a213 1
+								sumsqrs += value * value;
+d232 1
+a232 1
+		value = ((sumsqrs - *nvoxels * *mean * *mean) / (*nvoxels - 1.0));
+@
+
+
+1.5
+log
+@add mapfile matrix
+@
+text
+@d2 3
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.4 1996/10/03 20:43:40 tom Exp tom $";
+d36 1
+a36 1
+#include <matrixlib.h>       /* vector_mult */
+d40 12
+a51 11
+void     average (voidata, img, pdim, adim, usemap, map, z0, mean, sd, nvoxels)
+	VOIDATA         voidata;	/* VOI data */
+	float        ***img;		/* image on which to compute VOIs */
+	int			   *pdim;		/* image dimension in pixels */
+	float	 	   *adim;		/* voxel dimension in mm */
+	BOOLEAN         usemap;		/* use map file matrix to adjust VOI */
+    float         **map;        /* transformation matrix */
+	int 		    z0;			/* z-origin used to create map file */
+	float          *mean;		/* returned */
+	float          *sd;			/* returned */
+	int            *nvoxels;	/* returned */
+d56 2
+a57 2
+    float          *a;           /* vector in ATL-space; a[4] */
+    float          *p;           /* vector in PET-space; p[4] */
+d87 1
+a87 1
+    	p = vector (1, 4);
+a96 1
+
+d104 1
+a104 1
+	if (dx > 0 && xc - ((int) (xc)) == 0.0 && dx - x == 0.0 && x % 2 == 0) 
+d130 2
+a131 2
+			&& ymin >= 1 && ymax <= pdim[1]
+			&& zmin >= 1 && zmax <= pdim[2]) {
+d137 11
+a147 4
+							value = (double) img[z][y][x];
+							sum += value;
+							sumsqrs += value * value;
+							(*nvoxels)++;
+d159 11
+a169 4
+							value = (double) img[z][y][x];
+							sum += value;
+							sumsqrs += value * value;
+							(*nvoxels)++;
+d181 11
+a191 4
+							value = (double) img[z][y][x];
+							sum += value;
+							sumsqrs += value * value;
+							(*nvoxels)++;
+d205 1
+a205 1
+	if (fabs (*mean - MEAN_UNDEFINED) < CRIT) 
+d209 1
+a209 1
+		if (value < 0.0)	
+@
+
+
+1.4
+log
+@test for negative values in computing SD
+@
+text
+@d2 3
+d18 1
+d22 1
+a22 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.3 1996/04/26 15:52:53 tom Exp tom $";
+d31 3
+d37 1
+a37 1
+void     average (voidata, img, pdim, adim, mean, sd, nvoxels)
+d42 3
+d52 2
+d77 18
+@
+
+
+1.3
+log
+@changed structure of rgtlist
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/voistat/RCS/average.c,v 1.1 1996/04/25 16:16:01 tom Exp tom $";
+d40 2
+a44 2
+	float           sum;
+	float           value;
+d104 1
+a104 1
+							value = img[z][y][x];
+d119 1
+a119 1
+							value = img[z][y][x];
+d134 1
+a134 1
+							value = img[z][y][x];
+d153 7
+a159 2
+	else if (*nvoxels > 1)
+		*sd = sqrt ((sumsqrs - *nvoxels * *mean * *mean) / (*nvoxels - 1.0));
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/gauss/RCS/gauss.c,v 2.4 1996/02/22 15:34:38 tom Exp tom $";
+@

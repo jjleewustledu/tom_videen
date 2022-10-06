@@ -1,0 +1,495 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.10.09.16.46.11;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* 
+// sccsid = "%W%  UCL-TOPO    %E%"
+/*
+ *  Copyright (C) 1995 University of Louvain, Louvain-la-Neuve, Belgium
+ *
+ *  Author : <Merence Sibomana> Sibomana@@topo.ucl.ac.be
+ *
+ *      Positron Emission Tomography Laboratory
+ *      Universite Catholique de Louvain
+ *      Ch. du Cyclotron, 2
+ *      B-1348 Louvain-la-Neuve
+ *          Belgium
+ *
+ *  This program may be used free of charge by the members
+ *  of all academic and/or scientific institutions.
+ *       ANY OTHER USE IS PROHIBITED.
+ *  It may also be included in any package
+ *      -  provided that this text is not removed from
+ *      the source code and that reference to this original
+ *      work is done ;
+ *      - provided that this package is itself available
+ *      for use, free of charge, to the members of all
+ *      academic and/or scientific institutions.
+ *  Nor the author, nor the Universite Catholique de Louvain, in any
+ *  way guarantee that this program will fullfill any particular
+ *  requirement, nor even that its use will always be harmless.
+ *
+ *
+ */
+
+#include <time.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include "matrix.h"
+
+#define ERROR   -1
+#define OK 0
+
+typedef enum {
+	VERION_OF_KEYS,
+	IMAGE_MODALITY,
+	ORIGINAL_INSTITUTION,
+	ORIGINATING_SYSTEM,
+	NAME_OF_DATA_FILE,
+	PATIENT_ID,
+	PATIENT_DOB,		/* date format is YYYY:MM:DD */
+	PATIENT_SEX,
+	STUDY_ID,
+	EXAM_TYPE,
+	DATA_COMPRESSION,
+	DATA_ENCODE,
+	ATLAS_ORIGIN_1,
+	ATLAS_ORIGIN_2,
+	ATLAS_ORIGIN_3,
+	TYPE_OF_DATA,
+	STUDY_DATE,
+	STUDY_TIME,		/* Time Format is hh:mm:ss */
+	IMAGEDATA_BYTE_ORDER,
+	NUMBER_OF_FRAME_GROUPS,
+	NUMBER_FORMAT,
+	NUMBER_OF_BYTES_PER_PIXEL,
+	NUMBER_OF_DIMENSIONS,
+	MATRIX_SIZE_1,
+	MATRIX_SIZE_2,
+	MATRIX_SIZE_3,
+	SCALE_FACTOR_1,
+	SCALE_FACTOR_2,
+	SCALE_FACTOR_3,
+	IMAGE_DURATION,
+	PAUSE_BETWEEN_IMAGES,
+	PAUSE_BETWEEN_FRAMES,
+/*
+ My Extensions
+*/
+	QUANTIFICATION_UNITS,	/* scale_factor units; eg 10e-3 counts/seconds */
+	COLORTAB,
+
+	END_OF_INTERFILE
+} InterfileKeys;
+
+typedef enum {
+	STATIC,
+	DYNAMIC,
+	GATED,
+	TOMOGRAPHIC,
+	CURVE,
+	ROI,
+	OTHER,
+/* My Externsion */
+	CLICHE			/* with a fixed colormap */
+}	TypeOfData;
+
+typedef enum {
+	UNSIGNED_INTEGER,
+	SIGNED_INTEGER,
+	SHORT_FLOAT,
+	LONG_FLOAT,
+/* My Externsion */
+	COLOR_PIXEL
+} NumberFormat;
+
+typedef struct _InterfileItem {
+	int key;
+	char* value;
+} InterfileItem;
+
+static InterfileItem used_keys[] = {
+	VERION_OF_KEYS, "version of keys",
+	IMAGE_MODALITY, "image modality",
+/*
+ Main Header
+*/
+	ORIGINAL_INSTITUTION, "original institution",
+	ORIGINATING_SYSTEM, "originating system",
+	NAME_OF_DATA_FILE, "name of data file",
+	PATIENT_ID, "patient ID",
+	PATIENT_DOB, "patient dob",
+	PATIENT_SEX, "patient sex",
+	STUDY_ID, "study ID",
+	EXAM_TYPE, "exam type",
+	DATA_COMPRESSION, "data compression",
+	DATA_ENCODE, "data encode",
+	ATLAS_ORIGIN_1, "atlas origin [1]",
+	ATLAS_ORIGIN_2, "atlas origin [2]",
+	ATLAS_ORIGIN_3, "atlas origin [3]",
+	TYPE_OF_DATA, "type of data",
+	STUDY_DATE, "study date",
+	STUDY_TIME, "study time",
+	IMAGEDATA_BYTE_ORDER, "image data byte order",
+/*
+ For Dynamic studies
+*/
+	NUMBER_OF_FRAME_GROUPS,	"number of frame groups",
+/*
+Frame Header
+*/
+	NUMBER_FORMAT, "number format",
+	NUMBER_OF_BYTES_PER_PIXEL, "number of bytes per pixel",
+	NUMBER_OF_DIMENSIONS, "number of dimensions",
+	MATRIX_SIZE_1, "matrix size [1]",
+	MATRIX_SIZE_2, "matrix size [2]",
+	MATRIX_SIZE_3, "matrix size [3]",
+	SCALE_FACTOR_1, "scaling factor (mm/pixel) [1]",
+	SCALE_FACTOR_2, "scaling factor (mm/pixel) [2]",
+	SCALE_FACTOR_3, "scaling factor (mm/pixel) [3]",
+	IMAGE_DURATION, "image duration",
+	PAUSE_BETWEEN_IMAGES, "pause between images",
+	PAUSE_BETWEEN_FRAMES, "pause between frames",
+	QUANTIFICATION_UNITS, "quantification units",
+/*
+quantification units key is not standard. It is added
+by Sibomana@@topo.ucl.ac.be : it is expressed as scale units;
+e.g 10e-6 counts/second
+*/
+	COLORTAB, "colortab",
+	END_OF_INTERFILE,0
+};
+
+static char* magicNumber = "interfile";
+static char  line[256];
+
+static clean_eol(line) 
+char *line;
+{
+	int len = strlen(line);
+	if (len > 80) {
+		fprintf(stderr,"line too long :\n %s",line);
+		exit(1);
+	}
+	line[len-1] = ' ';
+}
+
+char* get_clut (fp, str)
+FILE *fp;
+char *str;
+{
+	int	end_of_table = 0;
+	char	*p, *ret, **lines;
+	int	i, line_count = 0, cc = 0;
+	
+	if ((p = strchr (str,'<')) != NULL) 
+		p++;
+	else 
+		return NULL;
+	lines	= (char **) calloc (256, sizeof (char*));
+	cc	+= strlen (p);
+	lines [line_count++] = strdup (p);
+	while (!end_of_table && fgets (line, 82, fp) != NULL) 
+	{
+		clean_eol (line);
+		if ((p = strchr (line, ';')) != NULL) 
+			*p = ' ';
+		if ((p = strchr (line,'>')) != NULL) {		/* end of table */
+			*p = '\0';
+			end_of_table = 1;
+		}
+		/*
+		cc += strlen (i);	Modified by Tom Yang on 09/29/95.
+		*/
+		cc += strlen (line);
+		lines [line_count++] = strdup (line);
+	}
+	ret = malloc (cc + 1);
+	strcpy (ret, lines [0]); 
+	free (lines [0]);
+	for (i = 1; i < line_count; i++) {
+		strcat(ret, lines[i]); free(lines[i]);
+	}
+	return ret;
+}
+
+static InterfileItem  *get_next_item(fp)
+FILE *fp;
+{
+	char *key_str, *val_str, *end;
+	InterfileItem* item;
+	static InterfileItem ret;
+
+	while (fgets(line,82,fp) != NULL) {
+		clean_eol(line);
+		key_str = line;
+		while (*key_str && isspace(*key_str)) key_str++;
+		if (*key_str == ';') {
+			if (key_str[1] != '\\') continue;  /* comment line */
+			else key_str += 2;				 /* My extrenstion */
+		}
+		if ( (val_str = strchr(key_str,':')) == NULL )
+			continue; /* invalid line; skip */
+		*val_str++ = '\0';
+		if (*val_str == '=') val_str++;
+
+/* clean up key_str and val_str */
+		end = key_str + strlen(key_str)-1;
+		while (isspace(*end)) *end-- = '\0';
+		while (isspace(*val_str)) val_str++;
+		end = val_str + strlen(val_str)-1;
+		while (isspace(*end)) *end-- = '\0';
+		for (end=key_str; *end != '\0'; end++)
+			*end = tolower(*end);		/* to lower case */
+	
+/* find key */
+		for (item=used_keys; item->value!=NULL; item++)
+			if (strcmp(key_str, item->value) == 0) {
+				ret.key = item->key;
+				if (ret.key == COLORTAB) ret.value = get_clut(fp, val_str);
+				else ret.value = strdup(val_str);
+				return &ret;
+			}
+	}
+	return NULL;
+}
+
+int is_interfile(fname) 
+char *fname;
+{
+	int c;
+	FILE *fp;
+	char *p = magicNumber;
+	
+	if ( (fp = fopen(fname, "r")) == NULL) return 0;
+
+/* skip spaces */
+	while ( (c = fgetc(fp)) != EOF)
+		if (!isspace(c)) break;
+
+/*  check magic */
+	if (c != EOF) {
+		if (c != '!' && *p++ != tolower(c)) {
+			fclose(fp);
+			return 0;
+		}
+		while ( (c = fgetc(fp)) != EOF) {
+			if (*p++ != tolower(c)) break;
+			if (*p == '\0') {				/* OK */
+				fclose(fp);
+				return 1;
+			}
+		}
+	}
+	fclose(fp);
+	return 0;
+}
+
+int interfile_open(mptr)
+MatrixFile *mptr;
+{
+	InterfileItem* item;
+	FILE *fp;		
+	Main_header *mh;
+	time_t now;
+	struct tm tm;
+	char dup[80];
+	char *year, *month, *day, *hour, *minute, *second;
+	int this_year;
+
+	now = time(0);
+	this_year = 1900 + (localtime(&now))->tm_year;
+	if ((fp = fopen(mptr->fname, "r")) == NULL) return 0;
+	mh = mptr->mhptr;
+	strcpy(mh->magic_number,magicNumber);
+	mh->sw_version = 70;
+	mh->file_type = InterfileImage;
+	mptr->interfile_header = (char**)calloc(END_OF_INTERFILE,sizeof(char*));
+	mh->num_frames = mh->num_gates = 1;
+	while ((item=get_next_item(fp)) != NULL) {
+		mptr->interfile_header[item->key] = item->value;
+		switch(item->key) {
+		case ORIGINATING_SYSTEM:
+			mh->system_type = atoi(item->value);
+			break;
+		case ORIGINAL_INSTITUTION:
+			strncpy(mh->facility_name,item->value, 20);
+			mh->facility_name[19] = '\0';
+			break;
+		case PATIENT_ID:
+			strncpy(mh->patient_id,item->value,16);
+			mh->patient_id[15] = '\0';
+			break;
+		case PATIENT_DOB:
+			strcpy(dup,item->value);
+			if ( (year = strtok(dup,":")) == NULL) break;
+			mh->patient_age = this_year - atoi(year);
+			if ( (month = strtok(NULL,":")) == NULL) break;
+			if ( (day = strtok(NULL,":")) == NULL) break;
+			memset(&tm,0,sizeof(tm));
+			tm.tm_year = atoi(year) - 1900;
+			tm.tm_mon = atoi(month);
+			tm.tm_mday = atoi(day);
+#ifdef sun
+			mh->patient_birth_date = timelocal(&tm);
+#else
+			mh->patient_birth_date = mktime(&tm);
+#endif
+			break;
+		case PATIENT_SEX:
+			mh->patient_sex[0] = item->value[0];
+			break;
+		case STUDY_ID:
+			strncpy(mh->study_name,item->value,12);
+			mh->study_name[11] = '\0';
+		case STUDY_DATE:
+			strcpy(dup,item->value);
+			if ( (year = strtok(dup,":")) == NULL) break;	
+			if ( (month = strtok(NULL,":")) == NULL) break;
+			if ( (day = strtok(NULL,":")) == NULL) break;
+			memcpy(&tm,localtime(&mh->scan_start_time), sizeof(tm));
+			tm.tm_year = atoi(year) - 1900;
+			tm.tm_mon = atoi(month);
+			tm.tm_mday = atoi(day);
+#ifdef sun
+			mh->scan_start_time = timelocal(&tm);
+#else 
+			mh->scan_start_time = mktime(&tm);
+#endif
+			break;
+			
+		case STUDY_TIME:
+			strcpy(dup,item->value);
+			if ( (hour = strtok(dup,":")) == NULL) break;	
+			if ( (minute = strtok(NULL,":")) == NULL) break;
+			if ( (second = strtok(NULL,":")) == NULL) break;
+			memcpy(&tm,localtime(&mh->scan_start_time), sizeof(tm));
+			tm.tm_hour = atoi(hour);
+			tm.tm_min = atoi(minute);
+			tm.tm_sec = atoi(second);
+#ifdef sun
+			mh->scan_start_time = timelocal(&tm);
+#else 
+			mh->scan_start_time = mktime(&tm);
+#endif
+			break;
+		case MATRIX_SIZE_3 :
+			mh->num_planes = atoi(item->value);
+			break;
+		case SCALE_FACTOR_3:
+			mh->plane_separation = atof(item->value);
+			break;
+		}
+	}
+	fclose(fp);
+	mptr->fname = mptr->interfile_header[NAME_OF_DATA_FILE];
+	if (mptr->interfile_header[NAME_OF_DATA_FILE] != NULL) {
+		mptr->fname = strdup(mptr->interfile_header[NAME_OF_DATA_FILE]);
+		if ( (mptr->fptr = fopen(mptr->fname, "r")) == NULL)   return 0;
+	}
+	return 1;
+}
+
+static interfile_error(message) 
+char *message;
+{
+	fprintf(stderr,"Interfile error : %s\n",message);
+	return ERROR;
+}
+
+int interfile_read(mptr, matnum, data, dtype) 
+MatrixFile    *mptr ;
+MatrixData    *data ;
+int   matnum, dtype;
+{
+	Image_subheader *imagesub ;
+	int  sx, sy, sz=1, dim = 2, elem_size = 2;
+	char *p, **ifh = mptr->interfile_header;
+
+	if (matnum != mat_numcod(1,1,1,0,0))
+		return interfile_error("multi frame format not supported");
+		
+	imagesub = (Image_subheader*)data->shptr;
+
+	imagesub->scale_factor = 1;
+	if (ifh[NUMBER_OF_DIMENSIONS] == NULL || 
+		sscanf(ifh[NUMBER_OF_DIMENSIONS],"%d",&dim) != 1)
+	    return interfile_error("number of dimensions  not specified");
+	if (dim != 2 && dim != 3)
+		return interfile_error("number of dimensions must be = 2 or 3");
+	if (ifh[NUMBER_OF_BYTES_PER_PIXEL] == NULL ||
+		sscanf(ifh[NUMBER_OF_BYTES_PER_PIXEL],"%d",&elem_size) != 1)
+		return interfile_error("number of bytes per pixel not specified");
+	if (elem_size != 1 && elem_size != 2)
+		return interfile_error("byte and integer 2 images are supported");
+	if (elem_size == 1) imagesub->data_type = ByteData;
+	else {
+		imagesub->data_type = SunShort;
+		if ( (p=ifh[IMAGEDATA_BYTE_ORDER]) != NULL && (*p=='l' || *p=='L'))
+			imagesub->data_type = VAX_Ix2;
+	}
+	if (ifh[MATRIX_SIZE_1] == NULL ||
+        sscanf(ifh[MATRIX_SIZE_1],"%d",&sx) != 1)
+		return interfile_error("matrix size [1] not specified");
+	if (ifh[MATRIX_SIZE_2] == NULL ||
+        sscanf(ifh[MATRIX_SIZE_2],"%d",&sy) != 1)
+	    return interfile_error("matrix size [2] not specified");
+	if (dim == 3)  {
+		if (ifh[MATRIX_SIZE_3] == NULL ||
+			sscanf(ifh[MATRIX_SIZE_3],"%d",&sz) != 1)
+			return interfile_error("matrix size [3] not specified");
+	}
+	data->matnum = matnum;
+	imagesub->num_dimensions = dim;
+	data->xdim = imagesub->x_dimension = sx;
+	data->ydim = imagesub->y_dimension = sy;
+	data->zdim = imagesub->z_dimension = sz;
+    if (ifh[ATLAS_ORIGIN_1] != NULL)
+		sscanf(ifh[ATLAS_ORIGIN_1], "%g", &imagesub->x_offset);
+    if (ifh[ATLAS_ORIGIN_2] != NULL)
+		sscanf(ifh[ATLAS_ORIGIN_2], "%g", &imagesub->y_offset);
+    if (ifh[ATLAS_ORIGIN_3] != NULL)
+		sscanf(ifh[ATLAS_ORIGIN_3], "%g", &imagesub->z_offset);
+	if (ifh[QUANTIFICATION_UNITS] != NULL)
+		sscanf(ifh[QUANTIFICATION_UNITS], "%g", &imagesub->scale_factor);
+	imagesub->image_min = imagesub->image_max = -1;
+    if (ifh[SCALE_FACTOR_1] != NULL)
+		sscanf(ifh[SCALE_FACTOR_1], "%g", &imagesub->x_pixel_size);
+    if (ifh[SCALE_FACTOR_2] != NULL)
+		sscanf(ifh[SCALE_FACTOR_2], "%g", &imagesub->y_pixel_size);
+    if (ifh[SCALE_FACTOR_3] != NULL)
+		sscanf(ifh[SCALE_FACTOR_3], "%g", &imagesub->z_pixel_size);
+	data->data_type = imagesub->data_type ;
+	data->scale_factor = imagesub->scale_factor ;
+	if (dtype == MAT_SUB_HEADER) return OK;
+	data->data_size = data->xdim * data->ydim * data->zdim * elem_size;
+	data->data_ptr = (caddr_t) malloc(data->data_size);
+	rewind(mptr->fptr);
+	if (fread(data->data_ptr,1,data->data_size, mptr->fptr) < data->data_size)
+	{
+		free_matrix_data(data);
+		return interfile_error("data fread error");
+	}
+	return OK;
+}
+@

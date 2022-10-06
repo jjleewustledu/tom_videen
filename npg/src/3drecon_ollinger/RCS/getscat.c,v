@@ -1,0 +1,1093 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: getscat.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $*/
+/*$Log: getscat.c,v $
+ * Revision 3.1  1998/03/24  23:43:10  jmo
+ * ..
+ *
+ * Revision 3.0  1997/10/29  19:26:43  jmo
+ * Support Exact HR.
+ *
+ * Revision 2.6  1997/08/06  18:22:04  jmo
+ * Last version before adding CTI rev 7 support.
+ *
+ * Revision 2.5  1997/04/04  20:52:52  jmo
+ * Version prior to mods for multiple bed positions.
+ *
+ * Revision 2.4  1996/06/19  11:19:57  jmo
+ * *** empty log message ***
+ *
+ * Revision 2.3  1996/04/23  15:02:05  jmo
+ * Version released April 23, 1996
+ *
+ * Revision 2.1  1996/04/23  14:56:14  jmo
+ * Version Released on Web site, April 23, 1996
+ *
+ * Revision 2.0  1996/01/27  13:44:36  jmo
+ * Version installed at Neuro-imaging group, January 1996
+ *
+ * Revision 1.2  1996/01/18  16:09:57  jmo
+ * Modified file formats, Interfile and Matrix Rev 7.0 support.
+ *
+ * Revision 1.1  1996/01/12  18:09:07  jmo
+ * Initial revision
+ *
+ * Revision 1.11  1995/10/25  16:36:01  jmo
+ * *** empty log message ***
+ *
+ * Revision 1.10  1995/10/24  10:31:20  jmo
+ * Add scatscl_lowcount for low count scatter scaling.
+ *
+ * Revision 1.1  1995/10/24  10:28:28  jmo
+ * Initial revision
+ *
+ * Revision 1.9  95/08/16  16:56:22  jmo
+ * *** empty log message ***
+ * 
+ * Revision 1.8  95/06/19  16:46:14  jmo
+ * Modify method for mashed sinograms.
+ * 
+ * Revision 1.7  95/06/17  09:12:43  jmo
+ * Last version before modification to fix mashing
+ * 
+ * Revision 1.6  95/05/31  10:07:47  jmo
+ * No change
+ * 
+ * Revision 1.5  95/05/26  14:29:31  jmo
+ * Version sent to Pittsburgh, 5/26/95
+ * 
+ * Revision 1.4  95/05/04  10:36:57  jmo
+ * Modified normalization files.
+ * 
+ * Revision 1.3  95/04/27  17:42:09  jmo
+ * Version used for 3d95
+ * 
+ * Revision 1.2  95/03/03  16:24:08  jmo
+ * Modified for cti951
+ * 
+ * Revision 1.1  95/01/19  22:40:20  ty7777
+ * Initial revision
+ * */
+
+/*--------------------------------------------------------------------
+
+Program: scat_interp
+
+Purpose: Get interpolated scatter sinogram.
+
+Perpetrator: John Ollinger
+
+Date: October 7, 1993
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <fcntl.h>
+#include <imagio.h>
+#include <cti_proto.h>
+#include <scatter.h>
+
+#define TRUE 1
+#define FALSE 0
+
+int	num_z_elements[LEN_Z_ELEMENTS] = NUM_Z_ELEMENTS;
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/getscat.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+/********************************************/
+float *scat_interp(scat,rng,plane,scanner_type)
+/********************************************/
+
+float	**scat;		/* 3D scatter sinogram. */
+struct 	ringinfo *rng;	/* Info about scatter sampling. */
+int	plane;
+int	scanner_type;	/* Scanner type as stored in main header. */
+
+{
+
+int	i,j,rings[2],ring1,ring2,ringdiff,
+	pln1,pln2,r11,r12,r21,r22,pad,ioff,koff,
+	numray,numang;
+
+float	pseudo_ring,*scatpln,d1,d2,alpha;
+
+numray = NUMRAY_CTI;
+numang = NUMANG;
+scatpln = (float *)malloc(numray*numang*sizeof(float));
+for(i=0;i<numray*numang;i++)
+    scatpln[i] = 0.;
+
+    ringnum(plane,rings,scanner_type);
+    ring1 = rings[0]; ring2 = rings[1];
+    ringdiff = ring2 - ring1;
+    pseudo_ring = (float)(ring1 + ring2)/2.;
+
+    if(ringdiff < 3 && ringdiff > -3) {
+	if(pseudo_ring < rng->minring) {
+	    /* Outside region sampled. */
+	    r11 = rng->minring;
+	    r21 = rng->minring;
+	    r12 = r11;
+	    r22 = r12;
+	    }
+	else if(pseudo_ring > rng->maxring) {
+	    /* Outside region sampled. */
+	    r11 = rng->maxring;
+	    r21 = rng->maxring;
+	    r12 = r11;
+	    r22 = r12;
+	    }
+	else {
+	    if(rng->rings[0]==(int)(pseudo_ring+.4999)) {
+		r11 = rng->rings[0];
+		r12 = r11;
+		r21 = r11;
+		r22 = r12;
+		}
+	    for(i=1;i<rng->nring;i++) {
+		if(rng->rings[i]== (int)(pseudo_ring+.4999)) {
+		    r11 = rng->rings[i];
+		    r12 = r11;
+		    r21 = r11;
+		    r22 = r12;
+		    }
+		else if(rng->rings[i-1]<pseudo_ring&&rng->rings[i]>pseudo_ring) {
+		    r11 = rng->rings[i-1];
+		    r21 = rng->rings[i];
+	    	    r12 = r11;
+	            r22 = r21;
+		    }
+		
+		}
+	    }
+	pln1 = getpln(r11,r12,rng);
+	pln2 = getpln(r21,r22,rng);
+	}
+    else if((ringdiff >= 3 && ringdiff < 7) || 
+       (ringdiff > -7 && ringdiff <=-3)) {
+	if(pseudo_ring < rng->minring) {
+	    /* Outside region sampled. */
+	    r11 = rng->minring;
+	    r21 = rng->minring;
+	    r12 = rng->minring;
+	    r22 = rng->minring;
+	    }
+	else if(pseudo_ring > rng->maxring) {
+	    /* Outside region sampled. */
+	    r11 = rng->maxring;
+	    r21 = rng->maxring;
+	    r12 = rng->maxring;
+	    r22 = rng->maxring;
+	    }
+	else if(pseudo_ring <= .50001*(rng->rings[0]+rng->rings[1])) {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[0];
+	        r12 = rng->rings[0];
+	        r21 = rng->rings[0];
+	        r22 = rng->rings[1];
+		}
+	    else {
+	        r11 = rng->rings[0];
+	        r12 = rng->rings[0];
+	        r21 = rng->rings[1];
+	        r22 = rng->rings[0];
+		}
+	    }
+	else if(pseudo_ring >= 
+		   .49999*(rng->rings[rng->nring-1]+rng->rings[rng->nring-2])) {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[rng->nring-2];
+	        r12 = rng->rings[rng->nring-1];
+	        r21 = rng->rings[rng->nring-2];
+	        r22 = rng->rings[rng->nring-1];
+		}
+	    else {
+	        r11 = rng->rings[rng->nring-1];
+	        r12 = rng->rings[rng->nring-2];
+	        r21 = rng->rings[rng->nring-1];
+	        r22 = rng->rings[rng->nring-2];
+		}
+	    }
+	else {
+	    for(i=1;i<rng->nring;i++) {
+		if(ringdiff > 0) {
+		    if(rng->rings[i-1]<=pseudo_ring && 
+						rng->rings[i]>pseudo_ring) {
+		        r11 = rng->rings[i-1];
+		        r12 = rng->rings[i];
+			if(i < rng->nring-1) {
+		            r21 = rng->rings[i];
+		            r22 = rng->rings[i+1];
+			    }
+			else { /* Use last direct ring. */
+		            r21 = rng->rings[i];
+		            r22 = rng->rings[i];
+			    }
+		        break;
+		        }
+		    }
+		else {
+		    if(rng->rings[i-1]<=pseudo_ring && 
+						rng->rings[i]>pseudo_ring) {
+		        r21 = rng->rings[i];
+		        r22 = rng->rings[i-1];
+			if(i > 1) {
+		            r11 = rng->rings[i-1];
+		            r12 = rng->rings[i-2];
+			    }
+			else { /* Use first direct ring. */
+		            r11 = rng->rings[i-1];
+		            r12 = rng->rings[i-1];
+			    }
+		        break;
+		        }
+		    }
+		}
+	    if(i == rng->nring) { /* Use first direct and first oblique. */
+	        if(ringdiff > 0) {
+	            r11 = rng->rings[0];
+	            r12 = rng->rings[0];
+	            r21 = rng->rings[0];
+	            r22 = rng->rings[1];
+	            }
+	        else {
+	            r11 = rng->rings[0];
+	            r12 = rng->rings[0];
+	            r21 = rng->rings[1];
+	            r22 = rng->rings[0];
+	            }
+		}
+	    }
+        if(r22 > rng->maxring)
+            r22 = rng->maxring;
+        pln1 = getpln(r11,r12,rng);
+        pln2 = getpln(r21,r22,rng);
+	}
+    else if((ringdiff >= 7 && ringdiff < 11) || 
+       (ringdiff > -11 && ringdiff <=-7)) {
+	if(pseudo_ring <= .50001*(rng->rings[0]+rng->rings[2])) {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[0];
+	        r12 = rng->rings[2];
+	        r21 = rng->rings[0];
+	        r22 = rng->rings[2];
+		}
+	    else {
+	        r11 = rng->rings[2];
+	        r12 = rng->rings[0];
+	        r21 = rng->rings[2];
+	        r22 = rng->rings[0];
+		}
+	    }
+	else if(pseudo_ring >=
+		   .49999*(rng->rings[rng->nring-1]+rng->rings[rng->nring-3])) {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[rng->nring-3];
+	        r12 = rng->rings[rng->nring-1];
+	        r21 = rng->rings[rng->nring-3];
+	        r22 = rng->rings[rng->nring-1];
+		}
+	    else {
+	        r11 = rng->rings[rng->nring-1];
+	        r12 = rng->rings[rng->nring-3];
+	        r21 = rng->rings[rng->nring-1];
+	        r22 = rng->rings[rng->nring-3];
+		}
+	    }
+	else {
+	    if(ringdiff > 0) {
+	        r11 = rng->rings[0];
+	        r12 = rng->rings[2];
+	        r21 = rng->rings[1];
+	        r22 = rng->rings[3];
+		}
+	    else {
+	        r11 = rng->rings[2];
+	        r12 = rng->rings[0];
+	        r21 = rng->rings[3];
+	        r22 = rng->rings[1];
+		}
+	    }
+        pln1 = getpln(r11,r12,rng);
+        pln2 = getpln(r21,r22,rng);
+	}
+    else { /* Must be very large ring difference. */
+	if(ringdiff > 0) {
+	    r11 = rng->rings[0];
+	    r12 = rng->rings[3];
+	    r21 = rng->rings[0];
+	    r22 = rng->rings[3];
+	    }
+	else {
+	    r11 = rng->rings[3];
+	    r12 = rng->rings[0];
+	    r21 = rng->rings[3];
+	    r22 = rng->rings[0];
+	    }
+        pln1 = getpln(r11,r12,rng);
+        pln2 = getpln(r21,r22,rng);
+	}
+    d1 = (float)sqrt((double)(ring1-r11)*(ring1-r11)+(ring2-r12)*(ring2-r12));
+    d2 = (float)sqrt((double)(ring1-r21)*(ring1-r21)+(ring2-r22)*(ring2-r22));
+    if((d1+d2) > 0) 
+        alpha = d1/(d1+d2);
+    else
+	alpha = 0.;
+    pad = (numray - rng->xdim)/2;
+    for(j=0,ioff=0,koff=0;j<numang;j++,ioff+=numray,koff+=rng->xdim) {
+	/* Normalize data, then subtract estimates. */
+	for(i=0;i<rng->xdim;i++) {
+	    scatpln[i+ioff+pad] = 
+		((1-alpha)*scat[pln1][i+koff] + alpha *scat[pln2][i+koff]);
+	    }
+	}
+
+return(scatpln);
+	
+}
+
+
+/*************************/
+int getpln(ring1,ring2,rng)
+/*************************/
+
+int	ring1,
+	ring2;
+struct ringinfo *rng;
+
+{
+
+int	ipln;
+
+for(ipln=0;ipln<rng->nringpair;ipln++) {
+    if(rng->ringdef[ipln].ring1 == ring1 &&
+       rng->ringdef[ipln].ring2 == ring2)
+	return(ipln);
+    }
+
+return(-1);
+
+}
+
+/*****************************/
+void loadscat(scatfil,scat,rng)
+/*****************************/
+
+char	*scatfil;	/* Scatter estimate. */
+float	***scat;		/* 3D scatter sinogram. */
+struct ringinfo *rng;	/* Info about scatter data. */
+
+{
+
+int	j,ipln,ring1,ring2;
+
+MainHeader	*mh;
+SubHeader	*sh;
+
+if((mh=getmhdr(scatfil)) == NULL) {
+    fprintf(stderr,"Could not read subheader, %s\n",scatfil);
+    exit(ERROR);
+    }
+if((*scat = (float **)malloc(mh->nplane*sizeof(float *))) == NULL) {
+    fprintf(stderr,"Could not malloc array in \"loadscat\"\n");
+    exit(ERROR);
+    }
+
+rng->nringpair = mh->nplane;
+rng->minring = 100000;
+rng->maxring = 0;
+rng->nring = 0;
+for(ipln=0;ipln<mh->nplane;ipln++) {
+    if(((*scat)[ipln]=rdimg(scatfil,ipln+1,1,1,0,0)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",scatfil,ipln+1);
+        exit(ERROR);
+        }
+    if((sh=getsbhdr(scatfil,ipln+1,1,1,0,0)) == NULL) {
+        fprintf(stderr,"Could not read subheader, %s\n",scatfil);
+        exit(ERROR);
+        }
+    sscanf(sh->comment,"r%x-%x",&ring1,&ring2);
+    
+    /* Store ring info in structure. */
+    rng->ringdef[ipln].ring1 = ring1;
+    rng->ringdef[ipln].ring2 = ring2;
+    rng->ringdef[ipln].ringdiff = ring2 - ring1;
+    if(ring1 < rng->minring)
+	rng->minring = ring1;
+    if(ring1 > rng->maxring)
+	rng->maxring = ring1;
+    for(j=0;j<rng->nring;j++) {
+	if(ring1 == rng->rings[j])
+	    break;
+	}
+    if(j == rng->nring || rng->nring == 0) {
+	rng->rings[rng->nring] = ring1;
+	++rng->nring;
+	}
+    }
+rng->xdim = sh->dim1;
+rng->ydim = sh->dim2;
+
+close_img(scatfil);
+
+}
+
+/****************************************************************************/
+float scatscl(plane,scatpln,sino,numang,scanner_type,numray,numang_dsamp,
+						tran_sup,sclcnts,rings)
+/****************************************************************************/
+
+int	plane;
+float	*scatpln,
+	*sino;
+int	numang;		/* Number of angles in sino and scatpln. */
+int	scanner_type;	/* Scanner type as stored in main header. */
+int	numray;		/* Number of rays in CTI sinogram.	*/
+int	numang_dsamp;	/* Number of angles after downsampling. */
+int	***tran_sup;	/* Array giving support of transmission image. */
+float	*sclcnts;	/* Number of counts in region on measured data. */
+float	*rings;		/* Rings that for plane. */
+
+{
+
+int     i,ioff,dsamp_fctr,iang,jang,lb,ub,i1,i2,rnums[2];
+
+float   sum1,sum2,scl;
+
+dsamp_fctr = numang/numang_dsamp;
+rnums[0] = rings[0]; rnums[1] = rings[1];
+/* Note: We implicitly assume that the number of detector rings 
+   is equal to the number of recontructed images. */
+sum1 = 0.; sum2 = 0.;
+for(iang=0,ioff=0;iang<numang;iang++,ioff+=numray) {
+    jang = iang/dsamp_fctr;
+    /* Find lowest lower bound for transmission sinogram support. */
+    if(tran_sup[rnums[0]][jang][0] < tran_sup[rnums[1]][jang][0])
+        lb = tran_sup[rnums[0]][jang][0];
+    else
+        lb = tran_sup[rnums[1]][jang][0];
+
+    /* Find highest upper bound for transmission sinogram support. */
+    if(tran_sup[rnums[0]][jang][1] > tran_sup[rnums[1]][jang][1])
+        ub = tran_sup[rnums[0]][jang][1];
+    else
+        ub = tran_sup[rnums[1]][jang][1];
+
+    i1 = lb - SCATROI_SEP - SCATROI_WIDTH;
+    i2 = i1 + SCATROI_WIDTH;
+    if(i1 < MINSCATBIN)
+        i1 = MINSCATBIN;
+    if(i2 < MINSCATBIN)
+        i2 = MINSCATBIN;
+    for(i=i1;i<i2;i++) {
+        sum1 += scatpln[i+ioff];
+        sum2 += sino[i+ioff];
+        }
+    i1 = ub + SCATROI_SEP + 1;
+    i2 = i1 + SCATROI_WIDTH;
+    if(i1 > MAXSCATBIN)
+        i1 = MAXSCATBIN;
+    if(i2 > MAXSCATBIN)
+        i2 = MAXSCATBIN;
+    for(i=i1;i<i2;i++) {
+        sum1 += scatpln[i+ioff];
+        sum2 += sino[i+ioff];
+        }
+    }
+if(sum1 > 0)
+    scl = sum2/sum1;
+else
+    scl = 1.;
+*sclcnts = sum2;
+
+return(scl);
+
+}
+
+/***************************/
+float **inflate_norm(nrm,geo)
+/***************************/
+
+NormData *nrm;
+float	*geo;
+{
+
+int iang,deta,detb,i,ray,jang,joff,ioff;
+
+float **norm,norm1;
+
+norm = (float **)malloc(2*sizeof(float *));
+norm[0] = (float *)malloc(LENSIN*sizeof(float));
+norm[1] = (float *)malloc(LENSIN*sizeof(float));
+
+for(i=0;i<LENSIN;i++) {
+    norm[0][i] = 0.;
+    norm[1][i] = 0.;
+    }
+
+for (iang=0;iang<NUMANG*MASH;iang+=DET_STRIDE) {
+  for(jang=0,joff=0;jang<DET_STRIDE;jang++,joff+=NUMRAY) {
+    for(i=0,ray=-NUMRAY/2;i<NUMRAY;i++,ray++) {
+        get_dets(iang+jang,ray,&deta,&detb);
+/*        norm1 = (nrm->detsum_bank[deta] + nrm->detsum_bank[detb] 
+		- nrm->detsum[deta] - nrm->detsum[detb])/
+			(nrm->detsum[deta]*nrm->detsum[detb]);*/
+        norm1 = 1./(nrm->detsum[deta]*nrm->detsum[detb]);
+        norm[0][i+NUMRAY*((iang+jang)/MASH)] += norm1;
+        norm[1][i+NUMRAY*((iang+jang)/MASH)] += norm1;
+	}
+    }
+  }
+for (iang=0,ioff=0;iang<NUMANG;iang+=DET_STRIDE) {
+    for(jang=0,joff=0;jang<DET_STRIDE;jang++,joff+=NUMRAY,ioff+=NUMRAY) {
+        for(i=0;i<NUMRAY;i++) {
+            if(norm[0][i+ioff] > 0)
+		/* Apply crystal interference and geometric factors. */
+                norm[0][i+ioff]=nrm->true_scale*MASH*geo[i+joff]*
+			(geo[i+GEOFF]+geo[i+GEOFF+NUMRAY])/norm[0][i+ioff];
+            else
+                norm[0][i+ioff] = 1.;
+            if(norm[1][i+ioff] > 0)
+		/* Apply only crystal interference factors. */
+                norm[1][i+ioff] = nrm->scat_scale*MASH*geo[i+joff]*
+			      geo[i+GEOFF+2*NUMRAY]/norm[1][i+ioff];
+            else
+                norm[1][i+ioff] = 1.;
+	    }
+        }
+    }
+    
+return(norm);
+
+}
+
+/******************************/
+void get_dets( iang,d,deta,detb)
+/******************************/
+
+int     iang,           /* Angle in sinogram.   */
+        d,              /* Distance from center in sinogram bins. */
+        *deta,          /* Detector a.          */
+        *detb;          /* Detector b.          */
+
+{
+int i;
+ 
+
+if(d < 0)
+    i = -d%2;
+else
+    i = d%2;
+*deta = (NCRYSTALS   + (d - i)/2 + iang)%NCRYSTALS;
+*detb = (NCRYSTALS/2 - (d + i)/2 + iang)%NCRYSTALS;
+
+/*dp = d + NUMRAY/2;
+*deta = (NCRYSTALS/2 + d/2 + iang + dp%2)%NCRYSTALS;
+*detb = (NCRYSTALS   - d/2 + iang + dp%2)%NCRYSTALS;*/
+
+}
+
+/***********************************************************/
+int ***get_tran_support(tran_sino_dsamp,numray,numang,numpln)
+/***********************************************************/
+
+/* Get support of transmission data. Results are approximate, and
+   are intended for use in determining ROIs that do not sample the
+   subject and for parameter determination in the multiple scatter
+   model. */
+
+float	**tran_sino_dsamp;	/* Transmission strip integrals. */
+
+int 	numray,
+	numang,
+	numpln;
+
+{
+
+int	i,ioff,iang,plane,ray,lb,ub,
+	***tran_sup;
+
+float	*tmpsino,max,mean;
+
+tmpsino = (float *)malloc(numray*sizeof(float));
+for(i=0;i<numray;i++)
+    tmpsino[i] = 0.;
+tran_sup = (int ***)malloc(numpln*sizeof(int **));
+for(plane=0;plane<numpln;plane++) {
+    tran_sup[plane] = (int **)malloc(numang*sizeof(int *));
+    tran_sup[plane][0] = (int *)malloc(2*numang*sizeof(int));
+    for(iang=1;iang<numang;iang++)
+	tran_sup[plane][iang] = tran_sup[plane][iang-1] + 2;
+    }
+
+for(plane=1;plane<=numpln;plane++) {
+    for(iang=0,ioff=0;iang<numang;ioff+=numray,iang++) {
+        /* First smooth transaxially with a boxcar filter. */
+        for(ray=1;ray<numray-2;ray++)   
+	    tmpsino[ray] = (tran_sino_dsamp[plane][ioff+ray-1] + 
+			    tran_sino_dsamp[plane][ioff+ray]   + 
+			    tran_sino_dsamp[plane][ioff+ray-1])/3.;
+        max = 0.;
+        for(ray=1;ray<numray-2;ray++) {
+	    if(tmpsino[ray] > max)
+		max = tmpsino[ray];
+	    }
+
+        /* Get approximate value by thresholding at percentage of max. */
+        for(ray=1;ray<numray-2;ray++) {
+	    if(tmpsino[ray] > .2*max && 
+	       tmpsino[ray]>tmpsino[ray-1]&&tmpsino[ray]<tmpsino[ray+2]) {
+		lb = ray;
+		break;
+	    	}
+	    }
+	for(ray=numray-3;ray>0;ray--) {
+	    if(tmpsino[ray] > .2*max && 
+	       tmpsino[ray]<tmpsino[ray-2]&&tmpsino[ray]>tmpsino[ray+1]) {
+		ub = ray;
+		break;
+	    	}
+	    }
+
+        /* Get better value by thresholding at percentage of average. */
+	for(mean=0,ray=lb;ray<=ub;ray++)
+	    mean += tmpsino[ray];
+	mean /= (float)(ub-lb+1);
+        for(ray=2;ray<numray-3;ray++) {
+	    if(tmpsino[ray] > .2*mean && 
+	       tmpsino[ray]>tmpsino[ray-1]&&tmpsino[ray]<tmpsino[ray+2]) {
+		tran_sup[plane-1][iang][0] = ray;
+		break;
+	    	}
+	    }
+	for(ray=numray-2;ray>1;ray--) {
+	    if(tmpsino[ray] > .2*mean && 
+	       tmpsino[ray]<tmpsino[ray-2]&&tmpsino[ray]>tmpsino[ray+1]) {
+		tran_sup[plane-1][iang][1] = ray;
+		break;
+	    	}
+	    }
+	}
+    }
+
+free(tmpsino);
+return(tran_sup);
+
+}
+
+
+/******************************************************************************/
+float scatscl_lowcount(sc,rng,emisfile,plane,scatter,scale_counts,nrmfil,geofil)
+/******************************************************************************/
+
+struct scatter_tab *sc;
+struct ringinfo *rng;
+char 	*emisfile;
+int	plane;  	/* 3d plane to be scaled. */
+float	**scatter,	/* Scatter estimate. */
+	*scale_counts; 	/* Number of counts used to compute scale factor. */
+char	*nrmfil,
+	*geofil;
+
+{
+
+static int first=TRUE;
+
+int	i,pln,rings[2],numang_save,
+ 	dsamp_factor=2,pln_f3d,gate=1,data=0,ibed=0;
+
+float	**norm,*duration,*geo,**norm_dummy,rnums[2];
+
+static float	**emis_sino,**emis_sino_dsamp,*scale,*sclcnts,
+		*scatpln,scale_out;
+
+NormData *nrm;
+
+char	*nrmfil_dummy=NULL,*geofil_dummy=NULL;
+
+ringnum(plane,rings,sc->scanner_type);
+rnums[0] = rings[0]; rnums[1] = rings[1];
+if(first == TRUE) {
+    /* Read summed planes equivalent to septa-extended acquisition. */
+    first = FALSE;
+    numang_save = sc->numang;
+    sc->numang = NUMANG;
+    sc->lensin = sc->numang*sc->numray;
+    emis_sino = (float **)malloc((sc->numvpln+1)*sizeof(float *));
+    norm_dummy = (float **)malloc((sc->numvpln+1)*sizeof(float *));
+    emis_sino_dsamp = (float **)malloc((sc->numpln+1)*sizeof(float *));
+    scale = (float *)malloc((sc->numpln+1)*sizeof(float));
+    sclcnts = (float *)malloc((sc->numpln+1)*sizeof(float));
+    for(pln=1;pln<=sc->numvpln;pln++) {
+	norm_dummy[pln] = (float *)malloc(sc->lensin*sizeof(float));
+	for(i=0;i<sc->lensin;i++) 
+	    norm_dummy[pln][i] = 1.;
+ 	emis_sino[pln] = get_emis_sino(emisfile,nrmfil_dummy,geofil_dummy,
+                          norm_dummy[pln],norm_dummy[pln],pln,duration,sc);
+	}
+    for(pln=1;pln<=sc->numpln;pln++)
+	emis_sino_dsamp[pln] = (float *)malloc(sc->lensin*sizeof(float));
+    sino_axl_dsamp(emis_sino,emis_sino_dsamp,sc,dsamp_factor);
+    sc->numang = numang_save;
+    sc->lensin = sc->numang*sc->numray;
+    for(pln=1;pln<=sc->numpln;pln++) { /*pln=ring number for dsamp_factor=2 */
+	pln_f3d = plnnum_f3d(pln,pln,sc->scanner_type);
+	if((nrm = read_norm(nrmfil,pln_f3d)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",geofil,pln_f3d);
+            exit(ERROR);
+	    }
+        if((geo=rdimg(geofil,pln_f3d,1,gate,data,ibed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",geofil,pln_f3d);
+            exit(ERROR);
+            }
+	norm = inflate_norm(nrm,geo);
+	scatpln = scat_interp(scatter,rng,pln_f3d,sc->scanner_type);
+   	/* Denormalize the scatter estimate. */
+        for(i=0;i<LENSIN;i++) {
+            if(norm[1][i] > 0)
+                scatpln[i] *= nrm->scat_plane_eff/norm[1][i];
+            }
+        scale[pln-1] = scatscl(pln_f3d,scatpln,emis_sino_dsamp[pln],NUMANG,
+		     sc->scanner_type,sc->numray,sc->numang,
+		     sc->tran_sup,&sclcnts[pln-1],rnums);
+printf("Plane: %d, Scale factor: %f, Scale counts: %f\n",pln,scale[pln-1],sclcnts[pln-1]);
+	free(nrm);
+	free(norm[0]); free(norm[1]); free(norm);
+	free(geo);
+	}
+    for(pln=1;pln<=sc->numvpln;pln++) {
+        free(emis_sino[pln]);
+        free(norm_dummy[pln]);
+        }
+    }
+
+
+/* Use smallest scale factor since variation is due to shielding of
+   scatter from outside the FOV by the end-shields.  If one photon is
+   shielded, scatter cannot occur, so use the scale factor for the 
+   most heavily shielded plane. */
+if(scale[rings[0]] < scale[rings[1]]) {
+    scale_out = scale[rings[0]];
+    *scale_counts =  7*sclcnts[rings[0]];
+    }
+else {
+    scale_out = scale[rings[1]];
+    *scale_counts =  7*sclcnts[rings[1]];
+    }
+
+return(scale_out);
+
+}
+
+/******************************/
+int write_norm(filnam,nrm,plane)
+/******************************/
+
+char	*filnam;
+NormData *nrm;
+int	plane;
+
+{
+
+FILE	*fp;
+
+int	stat,dskptr;
+
+float	tmp[4];
+
+if((fp = fopen(filnam,"r+b")) == NULL) {
+    if((fp = fopen(filnam,"wb")) == NULL) {
+	fprintf(stderr,"Could not write to %s in write_norm.\n",filnam);
+	return(NULL);
+	}
+    }
+
+dskptr = (plane-1)*(NCRYSTALS + 4)*sizeof(float);
+if((stat=fseek(fp,(long)dskptr,SEEK_SET)) != NULL) {
+    fprintf(stderr,"Did not seek correctly in %s in write_norm.\n",filnam);
+    return(NULL);
+    }
+
+tmp[0] = nrm->true_plane_eff;
+tmp[1] = nrm->scat_plane_eff;
+tmp[2] = nrm->true_scale;
+tmp[3] = nrm->scat_scale;
+
+if((stat=fwrite(tmp,sizeof(float),4,fp)) != 4) {
+    fprintf(stderr,"Could not write to %s in write_norm.\n",filnam);
+    return(-1);
+    }
+
+if((stat=fwrite(nrm->detsum,sizeof(float),NCRYSTALS,fp)) != NCRYSTALS) {
+    fprintf(stderr,"Could not write to %s in write_norm.\n",filnam);
+    return(-1);
+    }
+/*if((stat=fwrite(nrm->detsum_bank,sizeof(float),NCRYSTALS,fp)) != NCRYSTALS) {
+    fprintf(stderr,"Could not write to %s in write_norm.\n",filnam);
+    return(-1);
+    }*/
+
+fflush(fp);
+fclose(fp);
+
+return(NULL);
+
+}
+
+/*******************************************/
+int write_true_plane_eff(filnam,scale,nplane)
+/*******************************************/
+
+char	*filnam;
+float   *scale;
+int	nplane;
+
+{
+
+FILE	*fp;
+
+int	stat,dskptr,plane;
+
+fp = fopen(filnam,"r+b");
+
+for(plane=1;plane<=nplane;plane++) {
+    dskptr = (plane-1)*(NCRYSTALS + 4)*sizeof(float);
+    if((stat=fseek(fp,(long)dskptr,SEEK_SET)) != NULL) {
+        fprintf(stderr,"Did not seek correctly in %s in write_true_plane_eff.\n",filnam);
+        return(NULL);
+        }
+
+    if((stat=fwrite(&scale[plane],sizeof(float),1,fp)) != 1) {
+        fprintf(stderr,"Could not write to %s in write_true_plane_eff.\n",filnam);
+        return(-1);
+        }
+    }
+
+fflush(fp); /* Make sure disk current when scatter correction program  */
+fclose(fp); /* starts during normalization. */
+
+return(NULL);
+
+}
+
+/*******************************/
+NormData *read_norm(filnam,plane)
+/*******************************/
+
+char	*filnam;
+int	plane;
+
+{
+
+FILE	*fp;
+NormData *nrm;
+
+int	stat,dskptr;
+
+float	tmp[4];
+
+nrm = (NormData *)malloc(sizeof(NormData));
+if((fp = fopen(filnam,"rb")) == NULL) {
+    fprintf(stderr,"Could not open %s in read_norm.\n",filnam);
+    return(NULL);
+    }
+
+dskptr = (plane-1)*(NCRYSTALS + 4)*sizeof(float);
+if((stat=fseek(fp,(long)dskptr,SEEK_SET)) != NULL) {
+    fprintf(stderr,"Did not seek correctly in %s in read_norm.\n",filnam);
+    return(NULL);
+    }
+
+if((stat=fread(tmp,sizeof(float),4,fp)) != 4) {
+    fprintf(stderr,"Could not read from %s in read_norm.\n",filnam);
+    return(NULL);
+    }
+
+nrm->true_plane_eff = tmp[0];
+nrm->scat_plane_eff = tmp[1];
+nrm->true_scale = tmp[2];
+nrm->scat_scale = tmp[3];
+
+if((stat=fread(nrm->detsum,sizeof(float),NCRYSTALS,fp)) != NCRYSTALS) {
+    fprintf(stderr,"Could not read to %s in read_norm.\n",filnam);
+    return(NULL);
+    }
+/*if((stat=fread(nrm->detsum_bank,sizeof(float),NCRYSTALS,fp)) != NCRYSTALS) {
+    fprintf(stderr,"Could not read to %s in read_norm.\n",filnam);
+    return(NULL);
+    }*/
+fclose(fp);
+
+return(nrm);
+
+}
+
+/****************************/
+float *ringnum_rev7(int plane)
+/****************************/
+ 
+{
+ 
+int     slice,group=0,segment,ring_diff,z_elements;
+ 
+float   *rings;
+ 
+segment = -1;
+rings = (float *)malloc(2*sizeof(float));
+slice = plane;
+while((slice -= num_z_elements[group]) > 0)
+    ++group;
+slice += num_z_elements[group];
+z_elements = num_z_elements[group];
+if(group > 0)
+    z_elements /= 2;
+ 
+if(group > 0) {
+    if(slice > z_elements-1) {
+        slice -= num_z_elements[group]/2;
+        segment = 1;
+        }
+    else
+        segment = -1;
+    }
+ 
+ring_diff = group*SPAN;
+rings[0] = NUM_RINGS - 1 - (z_elements-1)/2 + slice/2. - 1.;
+if(rings[0] < ring_diff)
+    rings[0] = ring_diff;
+if(rings[0] > NUM_RINGS-1)
+    rings[0] = NUM_RINGS-1;
+ 
+if(segment > 0) {
+    rings[1] = rings[0] - ring_diff;
+    }
+else {
+    rings[1] = rings[0];
+    rings[0] = rings[1] - ring_diff;
+    }
+
+return(rings);
+
+}
+
+
+/**************************************************/
+void ringnum_if(int plane,int *ring,int system_type)
+/**************************************************/
+
+/* Ring numbers numbered as 0,1,2,... */
+/* System type as stored in the main header. */
+
+{
+
+static int first=TRUE,*ring_code;
+int	i,ringcode,index,phys_plane,r1,r2;
+
+if(first == TRUE) {
+    first = FALSE;
+    switch(system_type) {
+        case 953:
+            ring_code = (int *)malloc(256*sizeof(int));
+	    for(i=0;i<256;i++)
+	        ring_code[i] = 0.;
+	    phys_plane = 0;
+    	    for(r1=0;r1<16;r1++) {
+                for(r2=0;r2<16;r2++) {
+                    index = ((r1 & 0x1f) << 5) | (r2 & 0x1f);
+	            ring_code[phys_plane] = index;
+                    ++phys_plane;
+                    }
+                }
+             break;
+         default:
+	    fprintf(stderr,"Invalid system type %d in plnnum_f3d\n",system_type);
+	    ringcode = 0;
+         }
+    }
+
+
+ringcode = ring_code[plane-1];
+ring[0] = (ringcode >> 5) & 0x1f;
+ring[1] =  ringcode & 0x1f;
+
+}
+
+/**********************************************/
+int ringnum(int plane,int *ring,int system_type)
+/**********************************************/
+
+/* Ring numbers numbered as 0,1,2,... */
+/* System type as stored in the main header. */
+
+{
+
+int	pln;
+float	*frings;
+
+pln = plane-1;
+if((system_type == 953) || (system_type == 951)) {
+    ring[0] = ((pln & 0x100) >> 4) | ((pln & 0x78) >> 3);
+    ring[1] = ((pln & 0x200) >> 5) | ((pln & 0x80) >> 4) | (pln & 0x07);
+    }
+else if((system_type == 961)) {
+/*    if(first == TRUE) {
+        mat_xlate = (int*) malloc(576*sizeof(int));
+        for(i=plane=0;i<576;i++) {
+            mat_xlate[i] = -1;
+	    if(i>=0 && i < 320)
+		mat_xlate[i] = plane++;
+	    else if(i >= 320 && i < 384) {
+		mat_xlate[i] = plane + 64;
+		++plane;
+		}
+	    else if(i >= 384 && i < 512) {
+		mat_xlate[i] = plane + 128;
+		++plane;
+		}
+	    else if(i >= 512 && i < 576) {
+		mat_xlate[i] = plane + 256;
+		++plane;
+		}
+            }
+        }
+    pln = mat_xlate[plane-1];
+    ring[0] = ((pln & 0x100) >> 4) | (pln & 0x78) >> 3;
+    ring[1] = ((pln & 0x200) >> 5) | ((pln & 0x80) >> 4) | pln & 0x07;*/
+    frings = ringnum_rev7(plane);
+    ring[0] = (int)frings[0];
+    ring[1] = (int)frings[1];
+    }
+else {
+    fprintf(stderr,"Invalid system type: %d\n",system_type);
+    plane = -1;
+    }
+
+return;
+
+}
+@

@@ -1,0 +1,221 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.5
+date	99.03.11.15.31.46;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.03.10.23.07.41;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.07.28.20.35.15;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.05.13.19.55.05;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.03.10.20.41.35;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@modify printout
+@
+text
+@;+
+; NAME:
+;	IMGCONVOL
+;
+; PURPOSE:
+;   Filter an image in 3D to specified final resolution.
+;   Filter an Analyze image with 2-D gaussian.
+;
+; CATEGORY:
+;	Image processing
+;
+; CALLING SEQUENCE:
+;   IMGCONVOL
+;
+; INPUTS:	(passed as environmental variables)
+;	Infile:		input filename for PET
+;	Outfile:	output filename
+;	Resolution:	resolution of output file FWHM in mm
+;	Axial_resolution: axial resolution of output file FWHM in mm
+;
+; OUTPUTS:
+;	Filtered image
+;
+; RESTRICTIONS:
+;	All images in Analyze format.
+;
+; MODIFICATION HISTORY:
+;	Tom Videen, March 1998.
+;	Tom Videen, May 1998 (permit different axial resolution)
+;-
+
+PRO IMGCONVOL
+
+   on_error,2
+   
+   infile = ''
+   outfile = ''
+   fwhm = 0.0
+   infile = getenv('INFILE')
+   outfile = getenv('OUTFILE')
+   fwhm = getenv('RESOLUTION')
+   afwhm = getenv('AXIAL_RESOLUTION')
+   
+   IF (fwhm LE 0) THEN message,'Resolution is undefined ' + fwhm
+   IF (afwhm LE 0) THEN message,'Axial Resolution is undefined ' + afwhm
+
+; Determine image array size & type
+
+   asize = intarr(3)
+   pixsize = fltarr(3)
+   analyze_dim, infile, asize, dsize, pixsize
+   
+   IF (pixsize[0] LE 0 OR pixsize[1] LE 0 OR pixsize[2] LE 0) THEN BEGIN
+      message,'Pixel sizes of '+infile+' must not be zero!'
+      help, pixsize
+      return 
+   ENDIF ELSE BEGIN
+      xwidth = fwhm/pixsize[0]
+      ywidth = fwhm/pixsize[1]
+      zwidth = afwhm/pixsize[2]
+      print, FORMAT = '("Filtering ",A,"   FWHM =",F6.2," mm  Axial FWHM =",F6.2)', $
+		infile, fwhm, afwhm
+      print, "-------------------------------------------------------------"
+      print, FORMAT = '("Matrix size: ",3I8)', asize
+      print, FORMAT = '("Pixel size:  ",3F8.3," mm")', pixsize
+      print, FORMAT = '("Halfwidth:   ",3F8.3)', xwidth, ywidth, zwidth
+   ENDELSE
+      
+   IF (dsize EQ 8) THEN BEGIN
+      type = 1
+      data = bytarr(asize(0), asize(1), asize(2))
+   ENDIF ELSE BEGIN
+      type = 2
+      data = intarr(asize(0), asize(1), asize(2))
+   ENDELSE
+
+; Read array 
+
+   get_lun,lu
+   openr,lu,infile
+   readu,lu,data,TRANSFER_COUNT=count
+   close,lu
+
+; Convolve xy
+   
+   IF (xwidth EQ ywidth) THEN BEGIN
+      halfwidth = xwidth
+      sigma = halfwidth/2.354
+      print, FORMAT = '("Filtering XY   Sigma =",F8.4)', sigma
+      FOR i=0, asize(2)-1 DO BEGIN
+         slice = i+1
+         newdata = PLANE_CONVOL(float(data(*,*,i)), halfwidth, slice)
+         IF (type EQ 1) THEN BEGIN
+            data(*,*,i) = byte(newdata)
+         ENDIF ELSE BEGIN
+            data(*,*,i) = fix(newdata)
+         ENDELSE
+      ENDFOR 
+      print
+   ENDIF ELSE BEGIN 
+      LINE_CONVOL, data, xwidth, 0
+      IF (type EQ 1) THEN BEGIN
+         data = byte(data)
+      ENDIF ELSE BEGIN
+         data = fix(data)
+      ENDELSE
+      LINE_CONVOL, data, ywidth, 1
+      IF (type EQ 1) THEN BEGIN
+         data = byte(data)
+      ENDIF ELSE BEGIN
+         data = fix(data)
+      ENDELSE
+   ENDELSE
+
+; Convolve z
+
+   LINE_CONVOL, data, zwidth, 2
+   IF (type EQ 1) THEN BEGIN
+      data = byte(data)
+   ENDIF ELSE BEGIN
+      data = fix(data)
+   ENDELSE
+
+; Write to outfile
+   
+   openw, lu, outfile
+   writeu, lu, data
+   close, lu
+   free_lun,lu
+
+end
+@
+
+
+1.4
+log
+@add print XY
+@
+text
+@d99 1
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d88 2
+@
+
+
+1.2
+log
+@change messages
+@
+text
+@d19 1
+d29 1
+d42 1
+d45 1
+d60 4
+a63 3
+      zwidth = fwhm/pixsize[2]
+      print, FORMAT = '("Filtering ",A,"   FWHM =",F6.2," mm")', infile, fwhm
+      print, "-----------------------------------------------"
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d84 2
+a85 2
+         print,"Slice = ",i+1
+         newdata = PLANE_CONVOL(float(data(*,*,i)), halfwidth)
+@

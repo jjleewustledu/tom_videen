@@ -1,0 +1,235 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*--------------------------------------------------------------------
+
+Program: fit_ctrs
+
+Purpose: Find center of phantom in sinogram of cylindrical flood phantom.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string.h>
+#include <imagio.h>
+#include <petutil.h>
+#include <cti_proto.h>
+#include <scatter.h>
+
+#define LEN_DETSUM (((NCRYSTALS+2)/128 + 1)*128)
+#define NUMPAR 2
+#define DIFFMIN .0001
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/fit_ctrs.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+/**********************************/
+fit_ctrs(centers,sino,numray,numang)
+/**********************************/
+
+float	*centers,
+	*sino;
+int	numray;
+int	numang;
+
+{
+
+int     i,iter,
+	iang,rayoff,num,ray,
+        *ivector();
+
+static int first=TRUE,
+	init = TRUE,
+        *lista, /* Ordering of ma.                      */
+        ndata,  /* Number of input data points.         */
+        ma,     /* Number of parameters.                */
+        mfit;   /* Number of parameters to be fit.      */
+
+float   *vector(),lowerbndry,uprbndry,
+        **matrix();
+
+static float
+        *x,     /* Data points, independent variable.   */
+        *y,     /* Data points, dependent variable.     */
+        *sig,   /* Standard deviation of y.             */
+        *a,     /* Parameter array.                     */
+	*a0,
+        *am1,   /* Parameter array at last iteration.   */
+        **covar,/* Output covariance.                   */
+        **alpha;/* Curvature function.                  */
+
+float   chisq,  /* Squared error.                       */
+        alamda, /* Interpolation between Gauss-Newton and Steepest descent. */
+        diff,chisqm1,theta,A,phi,xxx,sum,max,thresh,tmp[1000],
+	xmax,xmin,min;
+
+void    funcs(); /* Function that computes function.    */
+
+if(first == TRUE) {
+    first = FALSE;
+    x = vector(1,numang);
+    y = vector(1,numang);
+
+    a = vector(1,NUMPAR);
+    am1 = vector(1,NUMPAR);
+    a0 = vector(1,NUMPAR);
+    sig = vector(1,numang);
+    lista = ivector(1,numang);
+    covar = matrix(1,NUMPAR,1,NUMPAR);
+    alpha = matrix(1,NUMPAR,1,NUMPAR);
+    }
+
+tmp[0] = 0.;
+tmp[numray-1] = 0.;
+
+for(iang=0,rayoff=0;iang<numang;iang++,rayoff+=numray) {
+    lowerbndry = -1; uprbndry = -1; sum = 0.; num = 0;
+    max = -1.e20;
+    for(ray=1;ray<numray-1;ray++) 
+       tmp[ray] = (sino[ray+rayoff-1] + sino[ray+rayoff] 
+    					  + sino[ray+rayoff+1])/3.;
+    for(ray=0;ray<numray;ray++) {
+        if(tmp[ray] > max) max = tmp[ray];
+        }
+    thresh = .4*max;
+    for(ray=0;ray<numray;ray++) {
+        if(tmp[ray] > thresh) {
+    	    sum += tmp[ray];
+    	    ++num;
+    	    }
+        }
+    thresh = .5*sum/(float)num;
+    for(ray=1;ray<numray;ray++) {
+        if(lowerbndry < 0 && (tmp[ray-1] < thresh) 
+			  && (tmp[ray] >= thresh))
+    	        lowerbndry = ray;
+	}
+    for(ray=numray-1;ray>=0;ray--) {
+    	if((uprbndry < 0) && (tmp[ray-1] >= thresh)
+    			  && (tmp[ray  ] <  thresh))
+    	    uprbndry = ray - 1;
+        }
+    centers[iang] = (lowerbndry + uprbndry)/2.;
+    }
+
+if(init == TRUE) {
+    max = -1.e-20;
+    min = 1.e20;
+    for(i=0,theta=0;i<numang;i++,theta+=PI/numang) {
+        y[i+1] = centers[i] - numray/2;
+        x[i+1] = theta;
+	if(y[i+1] > max) {
+	    max = y[i+1];
+	    xmax = x[i+1];
+	    }
+	if(y[i+1] < min) {
+	    min = y[i+1];
+	    xmin = x[i+1];
+	    }
+/*printf("%f %f\n",x[i+1],y[i+1]);*/
+        }
+    if(max > -min) {
+        a[1] = max;
+        a[2] = -(xmax - PI/2);
+        }
+    else {
+        a[1] = -min; /* Magnitude. */
+        a[2] = -(xmin + PI/2); /* Phase. */
+        }
+    ndata = numang;
+    ma = 2;
+    mfit = 2;
+    lista[1] = 1;
+    lista[2] = 2;
+    for(i=1;i<=numang;i++) {
+        sig[i] = 1;
+        }
+    }
+
+am1[1] = a[1];
+am1[2] = a[2];
+a0[1] = a[1];
+a0[2] = a[2];
+alamda = -1.;
+chisqm1 = 1.e20;
+for(iter=0;iter<100;iter++) {
+    mrqmin(x,y,sig,ndata,a,ma,lista,mfit,covar,alpha,&chisq,*funcs,&alamda);
+    if(a[1] == a0[1] || a[2] == a0[2]) {
+	fprintf(stderr,"*** Could not fit centers in fit_ctr, program aborted. ***\n");
+	exit(-1);
+	}
+    diff = 0.;
+    for(i=1;i<=NUMPAR;i++) {
+        diff += (a[i] - am1[i])*(a[i] - am1[i]);
+        am1[i] = a[i];
+        }
+    diff = (float)sqrt((double)diff);
+    if(((diff < DIFFMIN) | (chisq >= chisqm1)) && iter > 1)
+        break;
+    chisqm1 = chisq;
+/*    fprintf(stdout,"    Iteration #%d, A: %f, phi: %f, chisq: %f\n",iter,a[1],a[2]*57.29,chisq);
+    fflush(stdout);*/
+    }
+A = a[1];
+phi = a[2];
+for(i=0,theta=0;i<numang;i++,theta+=PI/numang) {
+    xxx = a[1]*sin(theta + a[2]);
+/*    printf("%f %f %f\n",theta,centers[i]-numray/2,xxx);*/
+    centers[i] = xxx;
+    }
+
+}
+
+/*******************************/
+void funcs(theta,a,yfit,dyda,ma)
+/*******************************/
+
+float   theta,
+        *a,
+        *yfit,
+        *dyda;
+int	ma;
+
+{
+
+float   tbar_tmp,t0_tmp,x,z;
+
+tbar_tmp = a[1];
+t0_tmp = a[2];
+
+*yfit = a[1]*sin(theta + a[2]);
+
+dyda[1] = sin(theta + a[2]);
+dyda[2] = a[1]*cos(theta + a[2]);
+*yfit = a[1]*dyda[1];
+
+
+}
+@

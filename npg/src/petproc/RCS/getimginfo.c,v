@@ -1,0 +1,615 @@
+head	2.30;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.30
+date	2010.08.05.14.13.29;	author tom;	state Exp;
+branches;
+next	2.29;
+
+2.29
+date	2005.10.06.17.05.07;	author tom;	state Exp;
+branches;
+next	2.28;
+
+2.28
+date	2005.08.08.16.29.32;	author tom;	state Exp;
+branches;
+next	2.25;
+
+2.25
+date	2004.11.03.14.28.30;	author tom;	state Exp;
+branches;
+next	2.24;
+
+2.24
+date	2004.11.02.16.40.33;	author tom;	state Exp;
+branches;
+next	2.21;
+
+2.21
+date	2004.07.08.14.39.29;	author tom;	state Exp;
+branches;
+next	2.20;
+
+2.20
+date	2004.02.17.15.09.00;	author tom;	state Exp;
+branches;
+next	2.13;
+
+2.13
+date	2002.11.27.17.06.58;	author tom;	state Exp;
+branches;
+next	2.12;
+
+2.12
+date	99.12.15.19.31.02;	author tom;	state Exp;
+branches;
+next	2.11;
+
+2.11
+date	99.12.15.19.24.33;	author tom;	state Exp;
+branches;
+next	2.10;
+
+2.10
+date	97.03.27.17.56.03;	author tom;	state Exp;
+branches;
+next	2.9;
+
+2.9
+date	97.03.10.17.24.33;	author tom;	state Exp;
+branches;
+next	2.8;
+
+2.8
+date	97.03.10.16.23.20;	author tom;	state Exp;
+branches;
+next	2.7;
+
+2.7
+date	97.01.20.19.23.24;	author tom;	state Exp;
+branches;
+next	2.6;
+
+2.6
+date	96.10.14.21.18.34;	author tom;	state Exp;
+branches;
+next	2.5;
+
+2.5
+date	96.04.25.16.09.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@release Apr-96
+@
+
+
+2.30
+log
+@update to recognize 962
+@
+text
+@/*	$Id: getimginfo.c,v 2.29 2005/10/06 17:05:07 tom Exp tom $
+	$Log: getimginfo.c,v $
+ * Revision 2.29  2005/10/06  17:05:07  tom
+ * use PID instead of scandate for determining PIE
+ *
+ * Revision 2.28  2005/08/08  16:29:32  tom
+ * add pie Aug 2005
+ *
+ * Revision 2.25  2004/11/03  14:28:30  tom
+ * add getpie_961
+ *
+ * Revision 2.24  2004/11/02  16:40:33  tom
+ * set 961 pies based on scandate, acquisition, software
+ *
+ * Revision 2.21  2004/07/08  14:39:29  tom
+ * update getpie for 961
+ *
+ * Revision 2.20  2004/02/17  15:09:00  tom
+ * Feb 2004
+ *
+ * Revision 2.13  2002/11/27  17:06:58  tom
+ * *** empty log message ***
+ *
+ * Revision 2.12  1999/12/15  19:31:02  tom
+ * lint cleaning
+ *
+ * Revision 2.11  1999/12/15  19:24:33  tom
+ * lint cleaning
+ *
+ * Revision 2.10  1997/03/27  17:56:03  tom
+ * correct parameter in call to firstimgfrm
+ *
+ * Revision 2.9  1997/03/10  17:24:33  tom
+ * firstimgfrm
+ *
+ * Revision 2.8  1997/03/10  16:23:20  tom
+ * read frame 1,2 or 3
+ *
+ * Revision 2.7  1997/01/20  19:23:24  tom
+ * distinguish 3d from wobbled and stationary images
+ *
+ * Revision 2.6  1996/10/14  21:18:34  tom
+ * solaris
+ *
+ * Revision 2.0  1996/10/14  20:55:48  tom
+ * solaris
+ *
+ * Revision 1.1  1995/12/20  04:31:02  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			getimginfo.c
+ *	Date:			Dec 1995
+ *	Author:			Tom Videen
+ *	Return:
+ *		wobbled	-	0 if stationary 2D; 1 if wobbled scan; 3 if 3D acquisition
+ *		oldnrm	-	true if scan date < April 12, 1993
+ *		scatcor	-	true if filter_params 5&6 are both non-zero
+ *		err		-	1: if cannot open file, or cannot read slice
+ * ===============================================================================
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+
+int             getimginfo (fname, wobbled, oldnrm, scatcor)
+	char           *fname;
+	int            *wobbled;
+	int            *oldnrm;
+	int            *scatcor;
+
+{
+	ImageFile      *file;
+	Index           indx;
+	FILE           *fp;
+	MainHeader     *mh;
+	SubHeader      *sh;
+	char           *ptr;
+	int             petnum;
+
+	char           *scandate, *str;
+	int             year, month, day;
+
+	*oldnrm = FALSE;
+	*scatcor = FALSE;
+	*wobbled = 0;
+
+	ptr = strstr (fname, " ");
+	*ptr = NULL;
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	if ((fp = fopen (fname, "r")) == NULL)
+		return (0);
+	(void) fclose (fp);
+
+	file = make_imgfile (fname);
+	(void) strcpy (file->mode, "r");
+	if (open_imgfile (file) == ERROR)
+		return (0);
+	if (get_mh (file) == ERROR)
+		return (0);
+	mh = file->mh;
+	indx.frm = firstimgfrm (file);
+	if (indx.frm <= 0)
+		return (0);
+	if (get_sh (file, &indx) == ERROR)
+		return (0);
+	sh = file->sh;
+
+
+	petnum = mh->scanner_type;
+
+	if (mh->wobble_speed > 0)
+		*wobbled = 1;
+	if (strncmp (mh->acquisition, "3d", 2) == 0)
+		*wobbled = 3;
+
+	scandate = (char *) malloc (12 * sizeof (char));
+	if (scandate == NULL) return (0);
+	str = (char *) malloc (5 * sizeof (char));
+	if (str == NULL) return (0);
+
+	(void) strncpy (scandate, mh->date_time, 11);
+	ptr = strstr (scandate, "/");
+	*ptr = NULL;
+	(void) strncpy (str, scandate, 2);
+	month = atoi (str);
+
+	(void) strncpy (scandate, mh->date_time, 11);
+	scandate = strstr (scandate, "/") + 1;
+	ptr = strstr (scandate, "/");
+	*ptr = NULL;
+	(void) strncpy (str, scandate, 2);
+	day = atoi (str);
+
+	(void) strncpy (scandate, mh->date_time, 11);
+	scandate = strstr (scandate, "/") + 1;
+	scandate = strstr (scandate, "/") + 1;
+	ptr = strstr (scandate, ",");
+	*ptr = NULL;
+	(void) strncpy (str, scandate, 4);
+	(void) strncpy (str, scandate, 4);
+	year = atoi (str);
+
+	if (year == 0 || month == 0 || day == 0)
+		return (0);
+	if (year > 1990) {
+		if (year < 1993 || (year == 1993 && (month < 4 || (month == 4 && day < 12))))
+			*oldnrm = TRUE;
+	} else {
+		if (year < 93 || (year == 93 && (month < 4 || (month == 4 && day < 12))))
+			*oldnrm = TRUE;
+	}
+
+	if (sh->filter_scatter_fraction > 0 && sh->filter_scatter_slope > 0)
+		*scatcor = TRUE;
+
+	free_imgfile (file);
+	free (file->name);
+	return (petnum);
+}
+@
+
+
+2.29
+log
+@use PID instead of scandate for determining PIE
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.28 2005/08/08 16:29:32 tom Exp tom $
+d3 3
+@
+
+
+2.28
+log
+@add pie Aug 2005
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.25 2004/11/03 14:28:30 tom Exp tom $
+d3 3
+@
+
+
+2.25
+log
+@add getpie_961
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.24 2004/11/02 16:40:33 tom Exp tom $
+d3 3
+@
+
+
+2.24
+log
+@set 961 pies based on scandate, acquisition, software
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.21 2004/07/08 14:39:29 tom Exp tom $
+d3 3
+@
+
+
+2.21
+log
+@update getpie for 961
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.20 2004/02/17 15:09:00 tom Exp tom $
+d3 3
+@
+
+
+2.20
+log
+@Feb 2004
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.13 2002/11/27 17:06:58 tom Exp tom $
+d3 3
+@
+
+
+2.13
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.12 1999/12/15 19:31:02 tom Exp tom $
+d3 3
+d35 1
+a35 1
+ *	Date:			Dec-95
+d108 1
+d110 1
+@
+
+
+2.12
+log
+@lint cleaning
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.11 1999/12/15 19:24:33 tom Exp tom $
+d3 3
+d80 1
+a80 1
+	fclose (fp);
+d83 1
+a83 1
+	strcpy (file->mode, "r");
+d107 1
+a107 1
+	strncpy (scandate, mh->date_time, 11);
+d110 1
+a110 1
+	strncpy (str, scandate, 2);
+d113 1
+a113 1
+	strncpy (scandate, mh->date_time, 11);
+d117 1
+a117 1
+	strncpy (str, scandate, 2);
+d120 1
+a120 1
+	strncpy (scandate, mh->date_time, 11);
+d125 2
+a126 2
+	strncpy (str, scandate, 4);
+	strncpy (str, scandate, 4);
+@
+
+
+2.11
+log
+@lint cleaning
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.10 1997/03/27 17:56:03 tom Exp tom $
+d3 3
+a37 4
+#ifndef lint
+static char	rcsid[] = "$Header$";
+#endif
+
+@
+
+
+2.10
+log
+@correct parameter in call to firstimgfrm
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.9 1997/03/10 17:24:33 tom Exp tom $
+d3 3
+d35 4
+a43 1
+#include <libnrimg.h>
+@
+
+
+2.9
+log
+@firstimgfrm
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.8 1997/03/10 16:23:20 tom Exp tom $
+d3 3
+d81 1
+a81 1
+	indx.frm = firstimgfrm (fname);
+@
+
+
+2.8
+log
+@read frame 1,2 or 3
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.7 1997/01/20 19:23:24 tom Exp tom $
+d3 3
+d78 3
+a80 12
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (indx.frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR)
+					return (0);
+			}
+		} else {
+			return (0);
+		}
+	}
+@
+
+
+2.7
+log
+@distinguish 3d from wobbled and stationary images
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.6 1996/10/14 21:18:34 tom Exp tom $
+d3 3
+d40 7
+a46 7
+    ImageFile      *file;
+    Index           indx;
+    FILE           *fp;
+    MainHeader     *mh;
+    SubHeader      *sh;
+    char           *ptr;
+    int             petnum;
+d55 2
+a56 33
+    ptr = strstr (fname, " ");
+    *ptr = NULL;
+ 
+    indx.frm = 1;
+    indx.pln = 1;
+    indx.gate = 1;
+    indx.data = 0;
+    indx.bed = 0;
+ 
+    if ((fp = fopen (fname, "r")) == NULL)
+        return (0);
+    fclose (fp);
+ 
+    file = make_imgfile (fname);
+    strcpy (file->mode, "r");
+    if (open_imgfile (file) == ERROR)
+        return (0);
+    if (get_mh (file) == ERROR)
+        return (0);
+    mh = file->mh;
+    if (existimgfrm (file, &indx) == ERROR) {
+        if (indx.frm == 1) {
+            indx.frm = 2;
+            if (existimgfrm (file, &indx) == ERROR)
+                return (0);
+        } else {
+            return (0);
+        }
+    }
+    if (get_sh (file, &indx) == ERROR)
+        return (0);
+    sh = file->sh;
+ 
+d58 34
+d96 1
+a96 1
+	if (strncmp (mh->acquisition,"3d", 2) == 0)
+d137 2
+a138 2
+    free_imgfile (file);
+    free (file->name);
+@
+
+
+2.6
+log
+@solaris
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 2.0 1996/10/14 20:55:48 tom Exp $
+d3 3
+d17 1
+a17 1
+ *		wobbled	-	true if wobbled scan
+d50 1
+a50 1
+	*wobbled = FALSE;
+d89 3
+a91 1
+		*wobbled = TRUE;
+@
+
+
+2.5
+log
+@release Apr-96
+@
+text
+@d1 1
+a1 1
+/*	$Id: getimginfo.c,v 1.1 1995/12/20 04:31:02 tom Exp $
+d3 3
+d11 1
+a11 1
+ *	Date:			Apr-96
+a19 4
+#ifndef lint
+static char     rcsid[] = "$Header$";
+#endif
+
+d25 1
+d34 8
+a41 5
+	ImageFile      *file;
+	Index           indx;
+	MainHeader     *mh;
+	SubHeader      *sh;
+	int             petnum;
+a43 1
+	char           *ptr;
+a47 5
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+d49 33
+a81 22
+	file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [getimagetype]: Could not open %s\n", fname);
+		return (0);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [getimagetype]: Could not get MainHeader from %s\n", fname);
+		return (0);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [getimagetype]: cannot find %s frame 1 or 2\n", file);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [getimagetype]: Could not read file subheader in %s\n", file);
+		return (ERROR);
+	}
+	mh = file->mh;
+	sh = file->sh;
+d126 2
+a127 2
+	free (file->name);
+	free_imgfile (file);
+@

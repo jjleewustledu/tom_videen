@@ -1,0 +1,137 @@
+#!/bin/csh
+#	Module:	align_mpr2fd_mask
+#	Author:	Tom Videen
+#	Date:	Mar 2009
+#	Use:	Align MPRAGE to PET FDOPA image.
+#	Creates:
+#		rp3000_mprage.img	- coregistered MPRAGE
+#		p3000_mpr2fd.air
+#		align_mpr2fd.log
+#	Uses:
+#		p3000_mprage.img	- original MPRAGE
+#		rp3000fd_f1to10.v	- sum of first 20 minutes of FDOPA
+
+# Parameters for alignlinear which may affect accuracy of the coregistration
+
+if ($#argv < 3) then
+	echo "Usage: align_mpr2fd_mask mpr pet mask [-mb 2] [-pb 2]"
+	echo " e.g., align_mpr2fd_mask p6000_mprage1 rp6000fdsum p6000_mask"
+	echo "  or,  align_mpr2fd_mask p6000_mprage1 rp6000fdsum p6000_mask -mb 5 -pb 5"
+	echo "where"
+	echo "  mb = MR blur (default = 2)"
+	echo "  pb = PET blur (default = 2)"
+	exit 1
+endif
+
+set MPR  = $1
+set FD   = $2
+set MASK = $3
+
+set AIR  = ${MPR}_to_${FD}
+set LOGFILE = align_mpr2fd_mask.log
+set INIT = air_init
+set PTS  = 1024
+set MB   = 2
+set PB   = 2
+
+checkfiles r$MPR.v $FD.v $INIT $MASK.img $MASK.hdr
+if ($status != 0) exit 1
+
+set MPRMAX = `imghdr r$MPR.v | grep Max | cut -f2 -d= | cut -f1 -d.`
+set PETMAX = `imghdr $FD.v | grep Max | cut -f2 -d= | cut -f1 -d.`
+set THR = `echo $MPRMAX \* 0.2 | bc -l | cut -f1 -d.`
+
+shift argv
+shift argv
+shift argv
+top:
+	if ($#argv > 0) then
+		switch ("$argv[1]")
+		case -mb:
+			shift argv
+			if ($#argv > 0) then
+				set MB = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_mpr2fd_mask]: missing number following -mb"
+				exit 1
+			endif
+			goto top
+		case -pb:
+			shift argv
+			if ($#argv > 0) then
+				set PB = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_mpr2fd_mask]: missing number following -pb"
+				exit 1
+			endif
+			goto top
+		case -ps:
+			shift argv
+			if ($#argv > 0) then
+				set PS = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_mpr2fd_mask]: missing number following -ps"
+				exit 1
+			endif
+			goto top
+		case -t:
+			shift argv
+			if ($#argv > 0) then
+				set THR = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_mpr2fd_mask]:
+				echo "Usage: align_mpr2fd_mask mpr pet pnum [-mb 3] [-pb 6]"
+				exit 1
+			endif
+			goto top
+		case -?*:
+			echo "ERROR [align_mpr2fd_mask]: illegal parameter $argv[1]"
+			echo "Usage: align_mpr2fd_mask mpr pet pnum [-mb 3] [-pb 6]"
+			exit 1
+		default:
+			echo "ERROR [align_mpr2fd_mask]: extra parameter $argv[1]"
+			echo "Usage: align_mpr2fd mpr pet pnum [-mb 3] [-pb 6]"
+			exit 1
+		endsw
+	endif
+endif
+echo;echo MPRAGE max = $MPRMAX;echo MPR Thresh = $THR;echo
+set MBLUR = "$MB $MB $MB"
+set PBLUR = "$PB $PB $PB"
+
+set t1 = `t`
+
+img2analyze $FD.v a$FD
+setanamin $MPR 0
+setanamin a$FD 0
+setanamin $MASK 0
+set PRM = "-m 6 -p1 0 -p2 $PTS -t2 $THR -e2 $MASK -b1 $PBLUR -b2 $MBLUR -f $INIT -x 1 -v"
+echo "Aligning $MPR to a$FD ..."
+alignlinear a$FD $MPR $AIR.air $PRM >! log
+
+echo alignlinear a$FD $MPR $AIR.air $PRM >! $LOGFILE
+tail -6 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo $ERROR >> $LOGFILE
+	exit 1
+endif
+
+imgreslice $MPR $AIR
+analyze2img r$MPR r$MPR.v
+rm a$FD.i?? a$FD.hdr
+rm r$MPR.hdr r$MPR.img
+scanair $AIR.air | tail -6 | head -3
+set t2 = `t`
+echo "[align_mpr2fd_mask] Complete at" `date` "   Elapsed time: " `echo "$t2 - $t1" | bc` " sec"
+echo "----------------------------------"
+echo "Check coregistration using vidi:"
+echo "   Image 1 = r$MPR.v"
+echo "   Image 2 = $FD.v"
+

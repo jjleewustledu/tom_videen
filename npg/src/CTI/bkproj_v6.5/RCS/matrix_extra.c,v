@@ -1,0 +1,2120 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.04.10.18.17.47;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.04.10.17.44.59;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@original v6.5 from CTI
+@
+
+
+1.2
+log
+@initial 961 version
+@
+text
+@/*
+$Id$
+$Log$
+*/
+
+static char     rcsid[] = "$Header$";
+
+/* $Revision:   1.0  $ $Date:   12/12/94 17:27:38  $  */
+/* Copyright (c) 1993 CTI PET Systems, Inc.           */
+
+static char     whatInfo[] = "@@(#) $Workfile:   matrix_extra.c  $ $Revision:   1.0  $ $Date:   12/12/94 17:27:38  $ Copyright (c) 1994 CTI PET Systems, Inc.";
+
+#include	<stdio.h>
+#include	<fcntl.h>
+#include	<string.h>
+#include	"matrix.h"
+
+MatrixFile     *
+                matrix_open (fname, mode)
+	char           *fname, *mode;
+
+{
+	FILE           *fptr;
+	MatrixFile     *matfile;
+	MatDirList     *mat_read_directory ();
+	Main_header    *mhead;
+	int             status;
+
+/* allocate space for matfile data structure and initialize */
+	matfile = (MatrixFile *) malloc (sizeof (MatrixFile));
+	if (matfile == NULL) {
+		perror ("matrix_open : matfile malloc error");
+		return (NULL);
+	}
+	bzero ((char *) matfile, sizeof (MatrixFile));
+/* allocate space for main header data structure and initialize */
+	mhead = (Main_header *) malloc (sizeof (Main_header));
+	if (mhead == NULL) {
+		perror ("matrix_open : main header malloc error");
+		return (NULL);
+	}
+	bzero ((char *) mhead, sizeof (Main_header));
+	matfile->mode = file_access_code (fname, mode);
+	strcpy (matfile->fname, fname);
+	switch (matfile->mode) {
+	case SUN_READ:
+	case SUN_WRITE:
+		fptr = mat_open (fname, mode);
+		if (fptr != NULL) {
+			matfile->fptr = fptr;
+			mat_read_main_header (fptr, mhead);
+			matfile->mhptr = mhead;
+			matfile->dirlist = mat_read_directory (fptr);
+			return (matfile);
+		} else {
+			matrix_close (matfile);
+			return (NULL);
+		}
+		break;
+	default:
+		perror ("matrix_open: unknown file type and/or file acess mode");
+		matrix_close (matfile);
+		return (NULL);
+	}
+}
+
+int             matrix_close (matfile)
+	MatrixFile     *matfile;
+{
+	if (matfile == NULL)
+		return (OK);
+	if (matfile->mhptr != NULL)
+		free (matfile->mhptr);
+	if (matfile->mode == SUN_READ || matfile->mode == SUN_WRITE)
+		matrix_freelist (matfile->dirlist);
+	mat_close (matfile->fptr);
+	free (matfile);
+	return (OK);
+}
+
+MatrixFile     *
+                matrix_create (fname, mhead)
+	char           *fname;
+	Main_header    *mhead;
+{
+	FILE           *fptr, *mat_create ();
+	MatrixFile     *mfp;
+
+	fptr = mat_create (fname, mhead);
+	if (fptr != NULL) {
+		mfp = (MatrixFile *) malloc (sizeof (MatrixFile));
+		bzero ((char *) mfp, sizeof (MatrixFile));
+		if (mfp == NULL)
+			return (NULL);
+		strcpy (mfp->fname, fname);
+		mfp->mode = file_access_code (fname, "r+");
+		mfp->fptr = fptr;
+		mfp->mhptr = mhead;
+		mfp->dirlist = NULL;
+	}
+	return (mfp);
+}
+
+MatrixData     *
+                matrix_read (mfp, matnum)
+	MatrixFile     *mfp;
+	int             matnum;
+{
+	MatrixData     *data;
+	int             status;
+
+	if (mfp == NULL)
+		return (NULL);
+	if (mfp->mhptr == NULL)
+		return (NULL);
+/* allocate space for MatrixData structure */
+	data = (MatrixData *) malloc (sizeof (MatrixData));
+	if (data == NULL) {
+		perror ("matrix_read : matdata structure malloc error");
+		return (NULL);
+	}
+/* initialize MatrixData structure */
+	data->mat_type = -1;
+	data->shptr = NULL;
+	data->data_ptr = NULL;
+	data->nviews = 0;
+	data->nelements = 0;
+	data->data_type = -1;
+	data->matnum = matnum;
+/* allocate space for subheader and initialize */
+	data->shptr = (char *) malloc (MatBLKSIZE);
+	if (data->shptr == NULL) {
+		perror ("matrix_read : subheader malloc error");
+		return (NULL);
+	}
+	bzero ((char *) data->shptr, MatBLKSIZE);
+	if (mfp->mode == SUN_READ || mfp->mode == SUN_WRITE) {
+		status = read_sun_data (mfp, matnum, data);
+		if (status == OK)
+			return (data);
+		else
+			return (NULL);
+	} else {
+		perror ("file opened in unknown mode");
+		return (NULL);
+	}
+}
+
+int             read_sun_data (mfp, matnum, data)
+	MatrixFile     *mfp;
+	MatrixData     *data;
+	int             matnum;
+{
+	struct MatDir  *matdir, *matrix_find ();
+	int             nblks, status;
+	Scan_subheader *scansub;
+	Image_subheader *imagesub;
+	Attn_subheader *attnsub;
+	Norm_subheader *normsub;
+
+	matdir = matrix_find (matnum, mfp);
+	if (matdir == NULL)
+		return (ERROR);
+	nblks = matdir->endblk - matdir->strtblk;
+	data->data_ptr = (char *) malloc (512 * nblks);
+	if (data->data_ptr == NULL) {
+		perror ("matrix_read : data buffer malloc error");
+		return (ERROR);
+	}
+	bzero ((char *) data->data_ptr, 512 * nblks);
+	data->nblks = nblks;
+	switch (mfp->mhptr->file_type) {
+	case 1:
+		mat_read_scan_subheader (mfp->fptr, matdir->strtblk, data->shptr);
+		scansub = (Scan_subheader *) data->shptr;
+		read_matrix_data (mfp->fptr, matdir->strtblk + 1, nblks,
+				  data->data_ptr, scansub->data_type);
+		data->data_type = scansub->data_type;
+		data->nelements = scansub->dimension_1;
+		data->nviews = scansub->dimension_2;
+		break;
+	case 2:
+		mat_read_image_subheader (mfp->fptr, matdir->strtblk, data->shptr);
+		imagesub = (Image_subheader *) data->shptr;
+		read_matrix_data (mfp->fptr, matdir->strtblk + 1, nblks,
+				  data->data_ptr, imagesub->data_type);
+		data->data_type = imagesub->data_type;
+		data->nelements = imagesub->dimension_1;
+		data->nviews = imagesub->dimension_2;
+		break;
+	case 3:
+		mat_read_attn_subheader (mfp->fptr, matdir->strtblk, data->shptr);
+		attnsub = (Attn_subheader *) data->shptr;
+		read_matrix_data (mfp->fptr, matdir->strtblk + 1, nblks,
+				  data->data_ptr, attnsub->data_type);
+		data->data_type = attnsub->data_type;
+		data->nelements = attnsub->dimension_1;
+		data->nviews = attnsub->dimension_2;
+		break;
+	case 4:
+		mat_read_norm_subheader (mfp->fptr, matdir->strtblk, data->shptr);
+		normsub = (Norm_subheader *) data->shptr;
+		read_matrix_data (mfp->fptr, matdir->strtblk + 1, nblks,
+				  data->data_ptr, normsub->data_type);
+		data->data_type = normsub->data_type;
+		data->nelements = normsub->dimension_1;
+		data->nviews = normsub->dimension_2;
+		break;
+	default:
+		return (ERROR);
+		break;
+	}
+	data->mat_type = mfp->mhptr->file_type;
+	return (OK);
+}
+
+int             matrix_data_init (data)
+	MatrixData     *data;
+{
+	data->mat_type = -1;
+	data->shptr = NULL;
+	data->data_ptr = NULL;
+	data->nviews = 0;
+	data->nelements = 0;
+	data->data_type = -1;
+	return (OK);
+}
+
+
+int             matrix_write (mfp, matnum, data)
+	MatrixFile     *mfp;
+	int             matnum;
+	MatrixData     *data;
+{
+	FILE           *mat_create ();
+	int             status = OK;
+
+	if (mfp == NULL)
+		return (ERROR);
+	if (mfp->mhptr == NULL)
+		return (ERROR);
+	if (data == NULL)
+		return (ERROR);
+	if (data->nblks <= 0)
+		return (ERROR);
+	if (data->data_ptr == NULL)
+		return (ERROR);
+	if (data->shptr == NULL)
+		return (ERROR);
+	switch (mfp->mode) {
+	case SUN_WRITE:
+		status = write_sun_data (mfp, matnum, data);
+		break;
+	default:
+		status = ERROR;
+		break;
+	}
+	return (status);
+}
+
+int             write_sun_data (mfp, matnum, data)
+	MatrixFile     *mfp;
+	MatrixData     *data;
+	int             matnum;
+{
+	struct MatDir  *matdir, *matrix_find (), dir_entry;
+	Scan_subheader *scansub;
+	Image_subheader *imagesub;
+	Attn_subheader *attnsub;
+	Norm_subheader *normsub;
+	int             status, blkno;
+
+	status = OK;
+	matdir = matrix_find (matnum, mfp);
+	if (matdir == NULL) {
+		blkno = mat_enter (mfp->fptr, matnum, data->nblks);
+		dir_entry.matnum = matnum;
+		dir_entry.strtblk = blkno;
+		dir_entry.endblk = dir_entry.strtblk + data->nblks - 1;
+		dir_entry.matstat = 1;
+		insert_mdir (dir_entry, mfp->dirlist);
+		matdir = &dir_entry;
+	} else {
+		if (data->nblks > matdir->endblk - matdir->strtblk + 1)
+			return (ERROR);
+	}
+
+	switch (mfp->mhptr->file_type) {
+	case 1:
+		scansub = (Scan_subheader *) data->shptr;
+		mat_write_scan_subheader (mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data (mfp->fptr, matdir->strtblk + 1,
+					    data->nblks, data->data_ptr, scansub->data_type);
+		break;
+	case 2:
+		imagesub = (Image_subheader *) data->shptr;
+		mat_write_image_subheader (mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data (mfp->fptr, matdir->strtblk + 1,
+					    data->nblks, data->data_ptr, imagesub->data_type);
+		break;
+	case 3:
+		attnsub = (Attn_subheader *) data->shptr;
+		mat_write_attn_subheader (mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data (mfp->fptr, matdir->strtblk + 1,
+					    data->nblks, data->data_ptr, attnsub->data_type);
+		break;
+	case 4:
+		normsub = (Norm_subheader *) data->shptr;
+		mat_write_norm_subheader (mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data (mfp->fptr, matdir->strtblk + 1,
+					    data->nblks, data->data_ptr, normsub->data_type);
+		break;
+	default:				 /* default treated as sinogram */
+		scansub = (Scan_subheader *) data->shptr;
+		mat_write_scan_subheader (mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data (mfp->fptr, matdir->strtblk + 1,
+					    data->nblks, data->data_ptr, scansub->data_type);
+		break;
+	}
+	return (status);
+}
+
+int             read_matrix_data (fptr, strtblk, nblks, dptr, dtype)
+	FILE           *fptr;
+	int             strtblk, nblks, dtype;
+	char           *dptr;
+{
+	int             i, j;
+	float           get_vax_float ();
+
+	mat_rblk (fptr, strtblk, dptr, nblks);
+	switch (dtype) {
+	case 1:				 /* byte format...no translation necessary */
+		break;
+	case 2:				 /* Vax I*2 */
+		swab (dptr, dptr, 512 * nblks);
+		break;
+	case 3:				 /* Vax I*4 */
+		swab (dptr, dptr, 512 * nblks);
+		swaw (dptr, dptr, 256 * nblks);
+		break;
+	case 4:				 /* Vax R*4 */
+		swab (dptr, dptr, 512 * nblks);
+		for (i = 0; i < nblks * 128; i++) {
+			j = (i - 1) * 4;
+			((float *) dptr)[i] = get_vax_float ((short *) dptr, i * 2);
+		}
+		break;
+	case 5:				 /* IEEE R*4 */
+		break;
+	case 6:				 /* 68K I*2 */
+		break;
+	case 7:				 /* 68K I*4 */
+		break;
+	default:				 /* something else...treat as Vax I*2 */
+		swab (dptr, dptr, 512 * nblks);
+		break;
+	}
+	return (OK);
+}
+
+int             write_matrix_data (fptr, strtblk, nblks, dptr, dtype)
+	FILE           *fptr;
+	int             strtblk, nblks, dtype;
+	char           *dptr;
+{
+	int             err, i;
+
+	switch (dtype) {
+	case 1:				 /* byte format...no translation necessary */
+		mat_wblk (fptr, strtblk, dptr, nblks);
+		break;
+	case 2:				 /* Vax I*2 */
+		err = mat_write_idata (fptr, strtblk, dptr, 512 * nblks);
+		if (err < 0)
+			return (-1);
+		break;
+	case 4:				 /* Vax R*4 */
+		mat_write_fdata (fptr, strtblk, dptr, 512 * nblks);
+		break;
+	case 5:				 /* IEEE R*4 */
+		mat_wblk (fptr, strtblk, dptr, nblks);
+		break;
+	case 6:				 /* 68K I*2 */
+		mat_wblk (fptr, strtblk, dptr, nblks);
+		break;
+	case 7:				 /* 68K I*4 */
+		mat_wblk (fptr, strtblk, dptr, nblks);
+		break;
+	default:				 /* something else...treat as Vax I*2 */
+		mat_write_idata (fptr, strtblk, dptr, 512 * nblks);
+		break;
+	}
+	return (OK);
+}
+
+struct MatDir  *
+                matrix_find (matnum, matfile)
+	int             matnum;
+	MatrixFile     *matfile;
+
+{
+	MatDirNode     *node;
+	struct MatDir  *matdir;
+	int             size;
+
+	if (matfile == NULL)
+		return (NULL);
+	if (matfile->dirlist == NULL)
+		return (NULL);
+	size = sizeof (struct MatDir);
+	matdir = (struct MatDir *) malloc (sizeof (struct MatDir));
+	matdir->matnum = 0;
+	matdir->strtblk = 0;
+	matdir->endblk = 0;
+	matdir->matstat = 0;
+	node = matfile->dirlist->first;
+	while (node != NULL) {
+/*	   printf("node.matnum %x matnum %x\n", node->matnum, matnum); */
+		if (node->matnum == matnum) {
+			matdir->matnum = node->matnum;
+			matdir->strtblk = node->strtblk;
+			matdir->endblk = node->endblk;
+			matdir->matstat = node->matstat;
+			break;
+		}
+		node = node->next;
+	}
+/*
+	printf("node : %x %d %d %d\n", node->matnum, node->strtblk,
+				node->endblk, node->matstat) ;
+	printf("matdir : %x %d %d %d\n", matdir->matnum, matdir->strtblk,
+				matdir->endblk, matdir->matstat) ;
+*/
+	if (node != NULL)
+		return (matdir);
+	else
+		return (NULL);
+}
+
+
+int             matrix_freelist (matdirlist)
+	MatDirList     *matdirlist;
+{
+	MatDirNode     *node, *next;
+
+	if (matdirlist == NULL)
+		return (OK);
+	if (matdirlist->first != NULL) {
+		node = matdirlist->first;
+		do {
+			next = node->next;
+			free (node);
+			node = next;
+		}
+		while (next != NULL);
+	}
+	free (matdirlist);
+	return (OK);
+}
+
+int             mat_make_dir (fptr, nf, np, ng, nb, nd, acqm, size)
+	FILE           *fptr;
+	int             nf, np, ng, nb, nd, acqm, size;
+{
+	int             bufr[32][4];
+	int             count, dirblk, numdirblks, blkptr;
+	int             fr, pl, ga, da, be, ac, total, index, na, nac;
+	int             status;
+
+	na = 1;
+	if (acqm == 2)
+		na = 2;
+	else if (acqm == 3)
+		na = 4;
+	else if (acqm == 5)
+		na = 6;
+	nac = 0;
+	if (na > 1)
+		nac = 1;
+	if (ng == 0)
+		ng = 1;
+	numdirblks = (nf * np * ng * (nb + 1) * (nd + 1) * (nac + 1) + 30) / 31;
+	total = nf * np * ng * (nb + 1) * (nd + 1) * (nac + 1);
+	dirblk = 2;
+	blkptr = 1 + numdirblks;
+	count = 0;
+	index = 0;
+
+	bzero ((char *) bufr, 512);		 /** initialize directory block to zero */
+	bufr[0][1] = 2;				 /** first block back link points to itself */
+	bufr[0][2] = 0;				 /** first block forward link initialize to NIL */
+
+	for (fr = 1; fr <= nf; fr++)
+		for (pl = 1; pl <= np; pl++)
+			for (ga = 1; ga <= ng; ga++)
+				for (be = 0; be <= nb; be++)
+					for (da = 0; da <= nd; da++)
+						for (ac = 0; ac <= nac; ac++) {
+							count++;
+							index++;
+							bufr[0][0] = 31 - index;
+							bufr[0][3] = index;
+							bufr[index][0] =
+								mat_numcod (fr, pl, ga, da + ac * 4, be);
+							bufr[index][1] = ++blkptr;
+							bufr[index][2] = (blkptr += size);
+							bufr[index][3] = 1;
+							if (index == 31 || count == total) {
+								if (count == total)
+									bufr[0][1] = 2;	/* forward link */
+								else
+									bufr[0][1] = dirblk + 1;
+								swaw (bufr, bufr, 256);
+								swab (bufr, bufr, 512);
+								status = mat_wblk (fptr, dirblk,
+										   bufr, 1);
+								if (status == ERROR) {
+									printf ("mat_wblk: lseek error\n");
+									return (ERROR);
+								}
+								if (count != total) {	/* new directory block */
+									bzero ((char *) bufr, 512);
+									bufr[0][2] = dirblk++;	/* back link */
+									bufr[0][0] = 31;
+									bufr[0][3] = 0;
+									index = 0;
+								}
+							}
+						}
+	return (OK);
+}
+
+int             mat_mlist (dirlist)
+	MatDirList     *dirlist;
+{
+	MatDirNode     *node;
+	int             i;
+
+	if (dirlist == NULL)
+		printf ("dirlist is NULL\n");
+	else if (dirlist->nmats == 0)
+		printf ("dirlist is empty\n");
+	else {
+		printf ("A total of %d directory entries\n", dirlist->nmats);
+		node = dirlist->first;
+		i = 0;
+		while (node != NULL) {
+			i++;
+			printf ("%x %d %d %d\n", node->matnum, node->strtblk, node->endblk,
+				node->matstat);
+			node = node->next;
+		}
+		printf ("\nA Total of %d entries listed\n", i);
+	}
+	return (OK);
+}
+
+int             insert_mdir (matdir, dirlist)
+	MatDirList     *dirlist;
+	struct MatDir   matdir;
+{
+	MatDirNode     *node;
+
+	if (dirlist == NULL) {
+		dirlist = (MatDirList *) malloc (sizeof (MatDirList));
+		if (dirlist == NULL)
+			return (ERROR);
+		dirlist->nmats = 0;
+		dirlist->first = NULL;
+		dirlist->last = NULL;
+	}
+	node = (MatDirNode *) malloc (sizeof (MatDirNode));
+	if (node == NULL)
+		return (ERROR);
+	node->matnum = matdir.matnum;
+	node->strtblk = matdir.strtblk;
+	node->endblk = matdir.endblk;
+	node->matstat = matdir.matstat;
+	node->next = NULL;
+	if (dirlist->first == NULL) {		 /* if list was empty, add first node */
+		dirlist->first = node;
+		dirlist->last = node;
+		dirlist->nmats = 1;
+	} else {
+		(dirlist->last)->next = node;
+		dirlist->last = node;
+		++(dirlist->nmats);
+	}
+	return (OK);
+}
+
+MatDirBlk      *
+                mat_rdirblk (fptr, blknum)
+	FILE           *fptr;
+	int             blknum;
+{
+	MatDirBlk      *matdirblk;
+	int             i, j, err, ndirs;
+	int             dirbufr[MatBLKSIZE / 4];
+	char            bytebufr[MatBLKSIZE];
+
+/*	printf("subroutine mat_rdirblk...\n") ; */
+	bzero (bytebufr, MatBLKSIZE);
+	matdirblk = (MatDirBlk *) malloc (MatBLKSIZE);
+	if (matdirblk == NULL)
+		return (NULL);
+
+/*	printf("memory space allocated for dir block...\n") ; */
+	err = mat_rblk (fptr, blknum, bytebufr, 1);
+	if (err < 0)
+		return (NULL);
+	swab (bytebufr, dirbufr, MatBLKSIZE);
+	swaw (dirbufr, dirbufr, MatBLKSIZE / 2);
+/*	printf("buffer swapped...\n") ; */
+	matdirblk->nfree = dirbufr[0];
+	matdirblk->nextblk = dirbufr[1];
+	matdirblk->prvblk = dirbufr[2];
+	matdirblk->nused = dirbufr[3];
+	ndirs = (MatBLKSIZE / 4 - 4) / 4;
+	for (i = 0; i < ndirs; i++) {
+		matdirblk->matdir[i].matnum = 0;
+		matdirblk->matdir[i].strtblk = 0;
+		matdirblk->matdir[i].endblk = 0;
+		matdirblk->matdir[i].matstat = 0;
+	}
+/*	printf("structure initialized, %d entries set to 0\n", i+1) ; */
+/*	printf("Number of entries : %d\n", matdirblk->nused) ; */
+	for (i = 0; i < matdirblk->nused; i++) {
+		j = i + 1;
+		matdirblk->matdir[i].matnum = dirbufr[j * 4 + 0];
+		matdirblk->matdir[i].strtblk = dirbufr[j * 4 + 1];
+		matdirblk->matdir[i].endblk = dirbufr[j * 4 + 2];
+		matdirblk->matdir[i].matstat = dirbufr[j * 4 + 3];
+	}
+
+/*	printf("directory block copied...\n") ; */
+	return (matdirblk);
+}
+
+
+MatDirList     *
+                mat_read_directory (fptr)
+	FILE           *fptr;
+{
+	struct MatDir   matdir;
+	MatDirList     *dirlist;
+	MatDirBlk      *matdirblk, *mat_rdirblk ();
+	int             i, blknum;
+
+	dirlist = (MatDirList *) malloc (sizeof (MatDirList));
+	if (dirlist == NULL)
+		return (NULL);
+	bzero ((char *) dirlist, sizeof (MatDirList));
+	blknum = MatFirstDirBlk;
+	do {
+		matdirblk = mat_rdirblk (fptr, blknum);
+		if (matdirblk == NULL)
+			return (NULL);
+		for (i = 0; i < matdirblk->nused; i++) {
+			matdir.matnum = matdirblk->matdir[i].matnum;
+			matdir.strtblk = matdirblk->matdir[i].strtblk;
+			matdir.endblk = matdirblk->matdir[i].endblk;
+			matdir.matstat = matdirblk->matdir[i].matstat;
+			insert_mdir (matdir, dirlist);
+		}
+		blknum = matdirblk->nextblk;
+		free ((char *) matdirblk);
+	}
+	while (blknum != MatFirstDirBlk);
+/*	mat_mlist(dirlist) ; */
+	return (dirlist);
+}
+
+static int      matrixCounter = 0;
+
+void            resetMatrixCounter ()
+{
+	matrixCounter = 0;
+	return;
+}
+
+struct MatDir  *
+                get_next_dir_entry (mfp)
+	MatrixFile     *mfp;
+
+{
+	int             i, size;
+	MatDirNode     *node;
+	struct MatDir  *matdir;
+
+/*	printf("count = %d, num matrices = %d\n",
+			matrixCounter, mfp->dirlist->nmats) ;
+*/
+	if (mfp == NULL)
+		return (NULL);
+	if (mfp->dirlist == NULL)
+		return (NULL);
+	if (matrixCounter == mfp->dirlist->nmats) {
+		matrixCounter = 0;
+		return (NULL);
+	}
+	size = sizeof (struct MatDir);
+	matdir = (struct MatDir *) malloc (sizeof (struct MatDir));
+	node = mfp->dirlist->first;
+	for (i = 0; i < matrixCounter; i++)
+		node = node->next;
+	matrixCounter++;
+	matdir->matnum = node->matnum;
+	matdir->strtblk = node->strtblk;
+	matdir->endblk = node->endblk;
+	matdir->matstat = node->matstat;
+	return (matdir);
+}
+
+int             mat_duplicate (outfile, mp)
+	char           *outfile;
+	MatrixFile     *mp;
+{
+	FILE           *fptr, *mat_open ();
+	char            buf[512];
+	MatDirBlk      *dirblk;
+	int             err, blkno, count;
+
+	if (mp == NULL)
+		return (0);
+	if (mp->mhptr == NULL)
+		return (0);
+	fptr = mat_open (outfile, "w");
+	if (fptr == NULL)
+		return (0);
+	err = mat_write_main_header (fptr, mp->mhptr);
+	if (err < 0) {
+		mat_close (fptr);
+		return (0);
+	}
+	blkno = 2;
+	count = 0;
+	do {
+		err = mat_rblk (mp->fptr, blkno, buf, 1);
+		if (err < 0)
+			break;
+		err = mat_wblk (fptr, blkno, buf, 1);
+		if (err < 0)
+			return (0);
+		swab (buf, buf, 512);
+		swaw (buf, buf, 256);
+		dirblk = (MatDirBlk *) buf;
+		blkno = dirblk->nextblk;
+		count++;
+	}
+	while (blkno != 2);
+	mat_close (fptr);
+	return (count);
+}
+
+
+int             free_matrix_data (data)
+	MatrixData     *data;
+{
+	if (data != NULL) {
+		if (data->data_ptr != NULL)
+			free (data->data_ptr);
+		if (data->shptr != NULL)
+			free (data->shptr);
+		free (data);
+	}
+	return (OK);
+}
+
+
+#include	<sys/types.h>
+#include	<sys/stat.h>
+
+file_size (fname)
+	char           *fname;
+{
+	struct stat     stbuf;
+
+	if (stat (fname, &stbuf) == -1)
+		return (-1);
+	return (stbuf.st_size);
+}
+
+
+/* subroutine to see if file exists or not */
+
+#include	<sys/types.h>
+#include	<sys/stat.h>
+
+int             file_exists (filename)
+	char           *filename;
+{
+	struct stat     stbuf;
+
+	if (stat (filename, &stbuf) == -1)
+		return (0);
+	return (1);
+}
+
+/* function to determine file open and access code for acs/sun matrix files */
+
+int             file_access_code (fname, mode)
+	char           *fname, *mode;
+{
+	int             access_code, i, acs, wr, rd;
+
+	acs = 0;
+	wr = 0;
+	rd = 0;
+	i = strindex (fname, "/sd");
+	if (i == 0)
+		acs = 1;
+	if (strchr (mode, 'w') != NULL || strindex (mode, "r+") != -1)
+		wr = 1;
+	if (strchr (mode, 'r') != NULL)
+		rd = 1;
+	if (acs && wr)
+		access_code = ACS_WRITE;
+	else if (acs && rd)
+		access_code = ACS_READ;
+	else if (!acs && wr)
+		access_code = SUN_WRITE;
+	else if (!acs && rd)
+		access_code = SUN_READ;
+	else
+		access_code = 0;
+	return (access_code);
+}
+
+/* subroutine to return starting position of substring within string */
+/* return index of t in s, -1 if none */
+
+int             strindex (s, t)
+	char            s[], t[];
+{
+	int             i, j, k;
+
+	for (i = 0; s[i] != '\0'; i++) {
+		for (j = i, k = 0; t[k] != '\0' && s[j] == t[k]; j++, k++);
+		if (k > 0 && t[k] == '\0')
+			return i;
+	}
+	return -1;
+}
+
+int             is_acs (fname)
+	char           *fname;
+
+{
+	if (strindex (fname, "/sd") == 0)	 /* allows access to multiple ACS disks */
+		return (1);
+	return (0);
+}
+
+int             read_scan_subheader (fp, matnum, ssub)
+	MatrixFile     *fp;
+	int             matnum;
+	Scan_subheader *ssub;
+{
+	int             status;
+	char            buff[512];
+	struct MatDir   entry;
+
+	if (fp->mhptr->file_type != 1)
+		return (ERROR);
+	switch (fp->mode) {
+	case SUN_READ:
+	case SUN_WRITE:
+		if (!mat_lookup (fp->fptr, matnum, &entry))
+			return (ERROR);
+		mat_read_scan_subheader (fp->fptr, entry.strtblk, ssub);
+		break;
+	default:
+		return (ERROR);
+	}
+	return (OK);
+}
+
+
+int             read_norm_subheader (fp, matnum, nsub)
+	MatrixFile     *fp;
+	int             matnum;
+	Norm_subheader *nsub;
+{
+	int             status;
+	char            buff[512];
+	struct MatDir   entry;
+
+	if (fp->mhptr->file_type != 4)
+		return (ERROR);
+	switch (fp->mode) {
+	case SUN_READ:
+	case SUN_WRITE:
+		if (!mat_lookup (fp->fptr, matnum, &entry))
+			return (ERROR);
+		mat_read_norm_subheader (fp->fptr, entry.strtblk, nsub);
+		break;
+	default:
+		return (ERROR);
+	}
+	return (OK);
+}
+
+int             read_attn_subheader (fp, matnum, asub)
+	MatrixFile     *fp;
+	int             matnum;
+	Attn_subheader *asub;
+{
+	int             status;
+	char            buff[512];
+	struct MatDir   entry;
+
+	if (fp->mhptr->file_type != 3)
+		return (ERROR);
+	switch (fp->mode) {
+	case SUN_READ:
+	case SUN_WRITE:
+		if (!mat_lookup (fp->fptr, matnum, &entry))
+			return (ERROR);
+		mat_read_attn_subheader (fp->fptr, entry.strtblk, asub);
+		break;
+	default:
+		return (ERROR);
+	}
+	return (OK);
+}
+
+int             read_image_subheader (fp, matnum, isub)
+	MatrixFile     *fp;
+	int             matnum;
+	Image_subheader *isub;
+{
+	int             status;
+	char            buff[512];
+	struct MatDir   entry;
+
+	if (fp->mhptr->file_type != 2)
+		return (ERROR);
+	switch (fp->mode) {
+	case SUN_READ:
+	case SUN_WRITE:
+		if (!mat_lookup (fp->fptr, matnum, &entry))
+			return (ERROR);
+		mat_read_image_subheader (fp->fptr, entry.strtblk, isub);
+		break;
+	default:
+		return (ERROR);
+	}
+	return (OK);
+}
+
+int             update_main_header (fp, mhead)
+	MatrixFile     *fp;
+	Main_header    *mhead;
+{
+	int             status;
+
+	status = mat_write_main_header (fp->fptr, mhead);
+	return (status);
+}
+
+
+
+int             write_main_header (fp, mhead)
+	MatrixFile     *fp;
+	Main_header    *mhead;
+{
+	int             status;
+
+	status = mat_write_main_header (fp->fptr, mhead);
+	return (status);
+}
+
+int             read_main_header (fp, mhead)
+	MatrixFile     *fp;
+	Main_header    *mhead;
+{
+	int             status;
+
+	status = mat_read_main_header (fp->fptr, mhead);
+	return (status);
+}
+
+int             write_norm_subheader (fp, matnum, nsub)
+	MatrixFile     *fp;
+	int             matnum;
+	Norm_subheader *nsub;
+{
+	int             status;
+	char            buff[512];
+	struct MatDir   entry;
+
+	if (fp->mhptr->file_type != 4)
+		return (ERROR);
+	switch (fp->mode) {
+	case SUN_READ:
+	case SUN_WRITE:
+		if (!mat_lookup (fp->fptr, matnum, &entry))
+			return (ERROR);
+		mat_write_norm_subheader (fp->fptr, entry.strtblk, nsub);
+		break;
+	default:
+		return (ERROR);
+	}
+	return (OK);
+}
+int             write_sino_subheader (fp, matnum, ssub)
+	MatrixFile     *fp;
+	int             matnum;
+	Scan_subheader *ssub;
+{
+	int             status;
+	char            buff[512];
+	struct MatDir   entry;
+
+	if (fp->mhptr->file_type != 1)
+		return (ERROR);
+	switch (fp->mode) {
+	case SUN_READ:
+	case SUN_WRITE:
+		if (!mat_lookup (fp->fptr, matnum, &entry))
+			return (ERROR);
+		mat_write_scan_subheader (fp->fptr, entry.strtblk, ssub);
+		break;
+	default:
+		return (ERROR);
+	}
+	return (OK);
+}
+
+
+int             write_image_subheader (fp, matnum, isub)
+	MatrixFile     *fp;
+	int             matnum;
+	Image_subheader *isub;
+{
+	int             status;
+	char            buff[512];
+	struct MatDir   entry;
+
+	if (fp->mhptr->file_type != 2)
+		return (ERROR);
+	switch (fp->mode) {
+	case SUN_READ:
+	case SUN_WRITE:
+		if (!mat_lookup (fp->fptr, matnum, &entry))
+			return (ERROR);
+		mat_write_image_subheader (fp->fptr, entry.strtblk, isub);
+		break;
+	default:
+		return (ERROR);
+	}
+	return (OK);
+}
+
+
+int             write_attn_subheader (fp, matnum, asub)
+	MatrixFile     *fp;
+	int             matnum;
+	Attn_subheader *asub;
+{
+	int             status;
+	char            buff[512];
+	struct MatDir   entry;
+
+	if (fp->mhptr->file_type != 3)
+		return (ERROR);
+	switch (fp->mode) {
+	case SUN_READ:
+	case SUN_WRITE:
+		if (!mat_lookup (fp->fptr, matnum, &entry))
+			return (ERROR);
+		mat_write_attn_subheader (fp->fptr, entry.strtblk, asub);
+		break;
+	default:
+		return (ERROR);
+	}
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 12
+a12 5
+/* $Revision:   1.0  $ $Date:   12/12/94 17:27:38  $                                            */
+/* Copyright (c) 1993 CTI PET Systems, Inc.                     */
+ 
+static char whatInfo[] = "@@(#) $Workfile:   matrix_extra.c  $ $Revision:   1.0  $ $Date:   12/12/94 17:27:38  $ Copyright (c) 1994 CTI PET Systems, Inc.";
+ 
+d18 3
+a20 4
+MatrixFile *
+matrix_open(fname, mode)
+char *fname,
+    *mode;
+d23 5
+a27 5
+	FILE *fptr;
+	MatrixFile *matfile;
+	MatDirList *mat_read_directory();
+	Main_header *mhead;
+	int status;
+d30 3
+a32 4
+	matfile = (MatrixFile *) malloc(sizeof(MatrixFile));
+	if (matfile == NULL)
+	{
+		perror("matrix_open : matfile malloc error");
+d35 1
+a35 1
+	bzero((char *) matfile, sizeof(MatrixFile));
+d37 3
+a39 4
+	mhead = (Main_header *) malloc(sizeof(Main_header));
+	if (mhead == NULL)
+	{
+		perror("matrix_open : main header malloc error");
+d42 8
+a49 10
+	bzero((char *) mhead, sizeof(Main_header));
+	matfile->mode = file_access_code(fname, mode);
+	strcpy(matfile->fname, fname);
+	switch (matfile->mode)
+	{
+	    case SUN_READ:
+	    case SUN_WRITE:
+		fptr = mat_open(fname, mode);
+		if (fptr != NULL)
+		{
+d51 1
+a51 1
+			mat_read_main_header(fptr, mhead);
+d53 1
+a53 1
+			matfile->dirlist = mat_read_directory(fptr);
+d55 2
+a56 3
+		} else
+		{
+			matrix_close(matfile);
+d60 3
+a62 3
+	    default:
+		perror("matrix_open: unknown file type and/or file acess mode");
+		matrix_close(matfile);
+d67 2
+a68 3
+int 
+matrix_close(matfile)
+MatrixFile *matfile;
+d73 1
+a73 1
+		free(matfile->mhptr);
+d75 3
+a77 3
+		matrix_freelist(matfile->dirlist);
+	mat_close(matfile->fptr);
+	free(matfile);
+d81 4
+a84 4
+MatrixFile *
+matrix_create(fname, mhead)
+char *fname;
+Main_header *mhead;
+d86 2
+a87 3
+	FILE *fptr,
+	    *mat_create();
+	MatrixFile *mfp;
+d89 4
+a92 5
+	fptr = mat_create(fname, mhead);
+	if (fptr != NULL)
+	{
+		mfp = (MatrixFile *) malloc(sizeof(MatrixFile));
+		bzero((char *) mfp, sizeof(MatrixFile));
+d95 2
+a96 2
+		strcpy(mfp->fname, fname);
+		mfp->mode = file_access_code(fname, "r+");
+d104 4
+a107 4
+MatrixData *
+matrix_read(mfp, matnum)
+MatrixFile *mfp;
+int matnum;
+d109 2
+a110 2
+	MatrixData *data;
+	int status;
+d117 3
+a119 4
+	data = (MatrixData *) malloc(sizeof(MatrixData));
+	if (data == NULL)
+	{
+		perror("matrix_read : matdata structure malloc error");
+d131 3
+a133 4
+	data->shptr = (char *) malloc(MatBLKSIZE);
+	if (data->shptr == NULL)
+	{
+		perror("matrix_read : subheader malloc error");
+d136 3
+a138 4
+	bzero((char *) data->shptr, MatBLKSIZE);
+	if (mfp->mode == SUN_READ || mfp->mode == SUN_WRITE)
+	{
+		status = read_sun_data(mfp, matnum, data);
+d143 2
+a144 3
+	} else
+	{
+		perror("file opened in unknown mode");
+d149 4
+a152 5
+int 
+read_sun_data(mfp, matnum, data)
+MatrixFile *mfp;
+MatrixData *data;
+int matnum;
+d154 2
+a155 4
+	struct MatDir *matdir,
+	      *matrix_find();
+	int nblks,
+	    status;
+d161 1
+a161 1
+	matdir = matrix_find(matnum, mfp);
+d165 3
+a167 4
+	data->data_ptr = (char *) malloc(512 * nblks);
+	if (data->data_ptr == NULL)
+	{
+		perror("matrix_read : data buffer malloc error");
+d170 1
+a170 1
+	bzero((char *) data->data_ptr, 512 * nblks);
+d172 3
+a174 4
+	switch (mfp->mhptr->file_type)
+	{
+	    case 1:
+		mat_read_scan_subheader(mfp->fptr, matdir->strtblk, data->shptr);
+d176 2
+a177 2
+		read_matrix_data(mfp->fptr, matdir->strtblk + 1, nblks,
+			data->data_ptr, scansub->data_type);
+d182 2
+a183 2
+	    case 2:
+		mat_read_image_subheader(mfp->fptr, matdir->strtblk, data->shptr);
+d185 2
+a186 2
+		read_matrix_data(mfp->fptr, matdir->strtblk + 1, nblks,
+			data->data_ptr, imagesub->data_type);
+d191 2
+a192 2
+	    case 3:
+		mat_read_attn_subheader(mfp->fptr, matdir->strtblk, data->shptr);
+d194 2
+a195 2
+		read_matrix_data(mfp->fptr, matdir->strtblk + 1, nblks,
+			data->data_ptr, attnsub->data_type);
+d200 2
+a201 2
+	    case 4:
+		mat_read_norm_subheader(mfp->fptr, matdir->strtblk, data->shptr);
+d203 2
+a204 2
+		read_matrix_data(mfp->fptr, matdir->strtblk + 1, nblks,
+			data->data_ptr, normsub->data_type);
+d209 1
+a209 1
+	    default:
+d217 2
+a218 3
+int 
+matrix_data_init(data)
+MatrixData *data;
+d230 4
+a233 5
+int 
+matrix_write(mfp, matnum, data)
+MatrixFile *mfp;
+int matnum;
+MatrixData *data;
+d235 2
+a236 2
+	FILE *mat_create();
+	int status = OK;
+d250 3
+a252 4
+	switch (mfp->mode)
+	{
+	    case SUN_WRITE:
+		status = write_sun_data(mfp, matnum, data);
+d254 1
+a254 1
+	    default:
+d261 4
+a264 5
+int 
+write_sun_data(mfp, matnum, data)
+MatrixFile *mfp;
+MatrixData *data;
+int matnum;
+d266 1
+a266 3
+	struct MatDir *matdir,
+	      *matrix_find(),
+	       dir_entry;
+d271 1
+a271 2
+	int status,
+	    blkno;
+d274 3
+a276 4
+	matdir = matrix_find(matnum, mfp);
+	if (matdir == NULL)
+	{
+		blkno = mat_enter(mfp->fptr, matnum, data->nblks);
+d281 1
+a281 1
+		insert_mdir(dir_entry, mfp->dirlist);
+d283 1
+a283 2
+	} else
+	{
+d288 2
+a289 3
+	switch (mfp->mhptr->file_type)
+	{
+	    case 1:
+d291 3
+a293 3
+		mat_write_scan_subheader(mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data(mfp->fptr, matdir->strtblk + 1,
+			data->nblks, data->data_ptr, scansub->data_type);
+d295 1
+a295 1
+	    case 2:
+d297 3
+a299 3
+		mat_write_image_subheader(mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data(mfp->fptr, matdir->strtblk + 1,
+			data->nblks, data->data_ptr, imagesub->data_type);
+d301 1
+a301 1
+	    case 3:
+d303 3
+a305 3
+		mat_write_attn_subheader(mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data(mfp->fptr, matdir->strtblk + 1,
+			data->nblks, data->data_ptr, attnsub->data_type);
+d307 1
+a307 1
+	    case 4:
+d309 3
+a311 3
+		mat_write_norm_subheader(mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data(mfp->fptr, matdir->strtblk + 1,
+			data->nblks, data->data_ptr, normsub->data_type);
+d313 1
+a313 2
+	    default:	/* default treated as
+			 * sinogram */
+d315 3
+a317 3
+		mat_write_scan_subheader(mfp->fptr, matdir->strtblk, data->shptr);
+		status = write_matrix_data(mfp->fptr, matdir->strtblk + 1,
+			data->nblks, data->data_ptr, scansub->data_type);
+d323 4
+a326 7
+int 
+read_matrix_data(fptr, strtblk, nblks, dptr, dtype)
+FILE *fptr;
+int strtblk,
+    nblks,
+    dtype;
+char *dptr;
+d328 2
+a329 3
+	int i,
+	    j;
+	float get_vax_float();
+d331 3
+a333 5
+	mat_rblk(fptr, strtblk, dptr, nblks);
+	switch (dtype)
+	{
+	    case 1:	/* byte format...no
+			 * translation necessary */
+d335 2
+a336 2
+	    case 2:	/* Vax I*2 */
+		swab(dptr, dptr, 512 * nblks);
+d338 3
+a340 3
+	    case 3:	/* Vax I*4 */
+		swab(dptr, dptr, 512 * nblks);
+		swaw(dptr, dptr, 256 * nblks);
+d342 3
+a344 4
+	    case 4:	/* Vax R*4 */
+		swab(dptr, dptr, 512 * nblks);
+		for (i = 0; i < nblks * 128; i++)
+		{
+d346 1
+a346 1
+			((float *) dptr)[i] = get_vax_float((short *) dptr, i * 2);
+d349 1
+a349 1
+	    case 5:	/* IEEE R*4 */
+d351 1
+a351 1
+	    case 6:	/* 68K I*2 */
+d353 1
+a353 1
+	    case 7:	/* 68K I*4 */
+d355 2
+a356 4
+	    default:	/* something
+			 * else...treat as Vax
+			 * I*2 */
+		swab(dptr, dptr, 512 * nblks);
+d362 4
+a365 7
+int 
+write_matrix_data(fptr, strtblk, nblks, dptr, dtype)
+FILE *fptr;
+int strtblk,
+    nblks,
+    dtype;
+char *dptr;
+d367 1
+a367 2
+	int err,
+	    i;
+d369 3
+a371 5
+	switch (dtype)
+	{
+	    case 1:	/* byte format...no
+			 * translation necessary */
+		mat_wblk(fptr, strtblk, dptr, nblks);
+d373 2
+a374 2
+	    case 2:	/* Vax I*2 */
+		err = mat_write_idata(fptr, strtblk, dptr, 512 * nblks);
+d378 2
+a379 2
+	    case 4:	/* Vax R*4 */
+		mat_write_fdata(fptr, strtblk, dptr, 512 * nblks);
+d381 2
+a382 2
+	    case 5:	/* IEEE R*4 */
+		mat_wblk(fptr, strtblk, dptr, nblks);
+d384 2
+a385 2
+	    case 6:	/* 68K I*2 */
+		mat_wblk(fptr, strtblk, dptr, nblks);
+d387 2
+a388 2
+	    case 7:	/* 68K I*4 */
+		mat_wblk(fptr, strtblk, dptr, nblks);
+d390 2
+a391 4
+	    default:	/* something
+			 * else...treat as Vax
+			 * I*2 */
+		mat_write_idata(fptr, strtblk, dptr, 512 * nblks);
+d397 4
+a400 4
+struct MatDir *
+matrix_find(matnum, matfile)
+int matnum;
+MatrixFile *matfile;
+d403 3
+a405 3
+	MatDirNode *node;
+	struct MatDir *matdir;
+	int size;
+d411 2
+a412 2
+	size = sizeof(struct MatDir);
+	matdir = (struct MatDir *) malloc(sizeof(struct MatDir));
+d418 1
+a418 2
+	while (node != NULL)
+	{
+d420 1
+a420 2
+		if (node->matnum == matnum)
+		{
+d442 2
+a443 3
+int 
+matrix_freelist(matdirlist)
+MatDirList *matdirlist;
+d445 1
+a445 2
+	MatDirNode *node,
+	          *next;
+d449 1
+a449 2
+	if (matdirlist->first != NULL)
+	{
+d451 1
+a451 2
+		do
+		{
+d453 1
+a453 1
+			free(node);
+d458 1
+a458 1
+	free(matdirlist);
+d462 3
+a464 10
+int 
+mat_make_dir(fptr, nf, np, ng, nb, nd, acqm, size)
+FILE *fptr;
+int nf,
+    np,
+    ng,
+    nb,
+    nd,
+    acqm,
+    size;
+d466 4
+a469 16
+	int bufr[32][4];
+	int count,
+	    dirblk,
+	    numdirblks,
+	    blkptr;
+	int fr,
+	    pl,
+	    ga,
+	    da,
+	    be,
+	    ac,
+	    total,
+	    index,
+	    na,
+	    nac;
+	int status;
+d490 3
+a492 3
+	bzero((char *) bufr, 512);	/** initialize directory block to zero */
+	bufr[0][1] = 2;	/** first block back link points to itself */
+	bufr[0][2] = 0;	/** first block forward link initialize to NIL */
+d499 1
+a499 2
+						for (ac = 0; ac <= nac; ac++)
+						{
+d504 2
+a505 2
+							bufr[index][0] = 
+								mat_numcod(fr, pl, ga, da + ac * 4, be);
+d509 1
+a509 2
+							if (index == 31 || count == total)
+							{
+d514 6
+a519 7
+								swaw(bufr, bufr, 256);
+								swab(bufr, bufr, 512);
+								status = mat_wblk(fptr, dirblk, 
+									bufr, 1);
+								if (status == ERROR)
+								{
+									printf("mat_wblk: lseek error\n");
+d522 2
+a523 3
+								if (count != total)	/* new directory block */
+								{
+									bzero((char *) bufr, 512);
+d534 2
+a535 3
+int 
+mat_mlist(dirlist)
+MatDirList *dirlist;
+d537 2
+a538 2
+	MatDirNode *node;
+	int i;
+d541 1
+a541 1
+		printf("dirlist is NULL\n");
+d543 3
+a545 4
+		printf("dirlist is empty\n");
+	else
+	{
+		printf("A total of %d directory entries\n", dirlist->nmats);
+d548 1
+a548 2
+		while (node != NULL)
+		{
+d550 1
+a550 1
+			printf("%x %d %d %d\n", node->matnum, node->strtblk, node->endblk,
+d554 1
+a554 1
+		printf("\nA Total of %d entries listed\n", i);
+d559 3
+a561 4
+int 
+insert_mdir(matdir, dirlist)
+MatDirList *dirlist;
+struct MatDir matdir;
+d563 1
+a563 1
+	MatDirNode *node;
+d565 2
+a566 3
+	if (dirlist == NULL)
+	{
+		dirlist = (MatDirList *) malloc(sizeof(MatDirList));
+d573 1
+a573 1
+	node = (MatDirNode *) malloc(sizeof(MatDirNode));
+d581 1
+a581 3
+	if (dirlist->first == NULL)	/* if list was empty,
+					 * add first node */
+	{
+d585 1
+a585 2
+	} else
+	{
+d593 4
+a596 4
+MatDirBlk *
+mat_rdirblk(fptr, blknum)
+FILE *fptr;
+int blknum;
+d598 4
+a601 7
+	MatDirBlk *matdirblk;
+	int i,
+	    j,
+	    err,
+	    ndirs;
+	int dirbufr[MatBLKSIZE / 4];
+	char bytebufr[MatBLKSIZE];
+d604 2
+a605 2
+	bzero(bytebufr, MatBLKSIZE);
+	matdirblk = (MatDirBlk *) malloc(MatBLKSIZE);
+d610 1
+a610 1
+	err = mat_rblk(fptr, blknum, bytebufr, 1);
+d613 2
+a614 2
+	swab(bytebufr, dirbufr, MatBLKSIZE);
+	swaw(dirbufr, dirbufr, MatBLKSIZE / 2);
+d621 1
+a621 2
+	for (i = 0; i < ndirs; i++)
+	{
+d629 1
+a629 2
+	for (i = 0; i < matdirblk->nused; i++)
+	{
+d642 3
+a644 3
+MatDirList *
+mat_read_directory(fptr)
+FILE *fptr;
+d646 4
+a649 6
+	struct MatDir matdir;
+	MatDirList *dirlist;
+	MatDirBlk *matdirblk,
+	         *mat_rdirblk();
+	int i,
+	    blknum;
+d651 1
+a651 1
+	dirlist = (MatDirList *) malloc(sizeof(MatDirList));
+d654 1
+a654 1
+	bzero((char *) dirlist, sizeof(MatDirList));
+d656 2
+a657 3
+	do
+	{
+		matdirblk = mat_rdirblk(fptr, blknum);
+d660 1
+a660 2
+		for (i = 0; i < matdirblk->nused; i++)
+		{
+d665 1
+a665 1
+			insert_mdir(matdir, dirlist);
+d668 1
+a668 1
+		free((char *) matdirblk);
+d675 1
+a675 1
+static int matrixCounter = 0;
+d677 1
+a677 2
+void 
+resetMatrixCounter()
+d683 3
+a685 3
+struct MatDir *
+get_next_dir_entry(mfp)
+MatrixFile *mfp;
+d688 3
+a690 4
+	int i,
+	    size;
+	MatDirNode *node;
+	struct MatDir *matdir;
+d699 1
+a699 2
+	if (matrixCounter == mfp->dirlist->nmats)
+	{
+d703 2
+a704 2
+	size = sizeof(struct MatDir);
+	matdir = (struct MatDir *) malloc(sizeof(struct MatDir));
+d716 3
+a718 4
+int 
+mat_duplicate(outfile, mp)
+char *outfile;
+MatrixFile *mp;
+d720 4
+a723 7
+	FILE *fptr,
+	    *mat_open();
+	char buf[512];
+	MatDirBlk *dirblk;
+	int err,
+	    blkno,
+	    count;
+d729 1
+a729 1
+	fptr = mat_open(outfile, "w");
+d732 3
+a734 4
+	err = mat_write_main_header(fptr, mp->mhptr);
+	if (err < 0)
+	{
+		mat_close(fptr);
+d739 2
+a740 3
+	do
+	{
+		err = mat_rblk(mp->fptr, blkno, buf, 1);
+d743 1
+a743 1
+		err = mat_wblk(fptr, blkno, buf, 1);
+d746 2
+a747 2
+		swab(buf, buf, 512);
+		swaw(buf, buf, 256);
+d753 1
+a753 1
+	mat_close(fptr);
+d758 2
+a759 3
+int 
+free_matrix_data(data)
+MatrixData *data;
+d761 1
+a761 2
+	if (data != NULL)
+	{
+d763 1
+a763 1
+			free(data->data_ptr);
+d765 2
+a766 2
+			free(data->shptr);
+		free(data);
+d775 2
+a776 2
+file_size(fname)
+char *fname;
+d778 1
+a778 1
+	struct stat stbuf;
+d780 1
+a780 1
+	if (stat(fname, &stbuf) == -1)
+d791 2
+a792 3
+int 
+file_exists(filename)
+char *filename;
+d794 1
+a794 1
+	struct stat stbuf;
+d796 1
+a796 1
+	if (stat(filename, &stbuf) == -1)
+d803 2
+a804 4
+int 
+file_access_code(fname, mode)
+char *fname,
+    *mode;
+d806 1
+a806 5
+	int access_code,
+	    i,
+	    acs,
+	    wr,
+	    rd;
+d811 1
+a811 1
+	i = strindex(fname, "/sd");
+d814 1
+a814 1
+	if (strchr(mode, 'w') != NULL || strindex(mode, "r+") != -1)
+d816 1
+a816 1
+	if (strchr(mode, 'r') != NULL)
+d834 2
+a835 4
+int 
+strindex(s, t)
+char s[],
+     t[];
+d837 1
+a837 3
+	int i,
+	    j,
+	    k;
+d839 1
+a839 2
+	for (i = 0; s[i] != '\0'; i++)
+	{
+d847 2
+a848 3
+int 
+is_acs(fname)
+char *fname;
+d851 1
+a851 2
+	if (strindex(fname, "/sd") == 0)	/* allows access to
+						 * multiple ACS disks */
+d856 4
+a859 5
+int 
+read_scan_subheader(fp, matnum, ssub)
+MatrixFile *fp;
+int matnum;
+Scan_subheader *ssub;
+d861 3
+a863 3
+	int status;
+	char buff[512];
+	struct MatDir entry;
+d867 4
+a870 5
+	switch (fp->mode)
+	{
+	    case SUN_READ:
+	    case SUN_WRITE:
+		if (!mat_lookup(fp->fptr, matnum, &entry))
+d872 1
+a872 1
+		mat_read_scan_subheader(fp->fptr, entry.strtblk, ssub);
+d874 1
+a874 1
+	    default:
+d881 4
+a884 5
+int 
+read_norm_subheader(fp, matnum, nsub)
+MatrixFile *fp;
+int matnum;
+Norm_subheader *nsub;
+d886 3
+a888 3
+	int status;
+	char buff[512];
+	struct MatDir entry;
+d892 4
+a895 5
+	switch (fp->mode)
+	{
+	    case SUN_READ:
+	    case SUN_WRITE:
+		if (!mat_lookup(fp->fptr, matnum, &entry))
+d897 1
+a897 1
+		mat_read_norm_subheader(fp->fptr, entry.strtblk, nsub);
+d899 1
+a899 1
+	    default:
+d905 4
+a908 5
+int 
+read_attn_subheader(fp, matnum, asub)
+MatrixFile *fp;
+int matnum;
+Attn_subheader *asub;
+d910 3
+a912 3
+	int status;
+	char buff[512];
+	struct MatDir entry;
+d916 4
+a919 5
+	switch (fp->mode)
+	{
+	    case SUN_READ:
+	    case SUN_WRITE:
+		if (!mat_lookup(fp->fptr, matnum, &entry))
+d921 1
+a921 1
+		mat_read_attn_subheader(fp->fptr, entry.strtblk, asub);
+d923 1
+a923 1
+	    default:
+d929 4
+a932 5
+int 
+read_image_subheader(fp, matnum, isub)
+MatrixFile *fp;
+int matnum;
+Image_subheader *isub;
+d934 3
+a936 3
+	int status;
+	char buff[512];
+	struct MatDir entry;
+d940 4
+a943 5
+	switch (fp->mode)
+	{
+	    case SUN_READ:
+	    case SUN_WRITE:
+		if (!mat_lookup(fp->fptr, matnum, &entry))
+d945 1
+a945 1
+		mat_read_image_subheader(fp->fptr, entry.strtblk, isub);
+d947 1
+a947 1
+	    default:
+d953 3
+a955 4
+int 
+update_main_header(fp, mhead)
+MatrixFile *fp;
+Main_header *mhead;
+d957 1
+a957 1
+	int status;
+d959 1
+a959 1
+	status = mat_write_main_header(fp->fptr, mhead);
+d965 3
+a967 4
+int 
+write_main_header(fp, mhead)
+MatrixFile *fp;
+Main_header *mhead;
+d969 1
+a969 1
+	int status;
+d971 1
+a971 1
+	status = mat_write_main_header(fp->fptr, mhead);
+d975 3
+a977 4
+int 
+read_main_header(fp, mhead)
+MatrixFile *fp;
+Main_header *mhead;
+d979 1
+a979 1
+	int status;
+d981 1
+a981 1
+	status = mat_read_main_header(fp->fptr, mhead);
+d985 4
+a988 5
+int 
+write_norm_subheader(fp, matnum, nsub)
+MatrixFile *fp;
+int matnum;
+Norm_subheader *nsub;
+d990 3
+a992 3
+	int status;
+	char buff[512];
+	struct MatDir entry;
+d996 4
+a999 5
+	switch (fp->mode)
+	{
+	    case SUN_READ:
+	    case SUN_WRITE:
+		if (!mat_lookup(fp->fptr, matnum, &entry))
+d1001 1
+a1001 1
+		mat_write_norm_subheader(fp->fptr, entry.strtblk, nsub);
+d1003 1
+a1003 1
+	    default:
+d1008 4
+a1011 5
+int 
+write_sino_subheader(fp, matnum, ssub)
+MatrixFile *fp;
+int matnum;
+Scan_subheader *ssub;
+d1013 3
+a1015 3
+	int status;
+	char buff[512];
+	struct MatDir entry;
+d1019 4
+a1022 5
+	switch (fp->mode)
+	{
+	    case SUN_READ:
+	    case SUN_WRITE:
+		if (!mat_lookup(fp->fptr, matnum, &entry))
+d1024 1
+a1024 1
+		mat_write_scan_subheader(fp->fptr, entry.strtblk, ssub);
+d1026 1
+a1026 1
+	    default:
+d1033 4
+a1036 5
+int 
+write_image_subheader(fp, matnum, isub)
+MatrixFile *fp;
+int matnum;
+Image_subheader *isub;
+d1038 3
+a1040 3
+	int status;
+	char buff[512];
+	struct MatDir entry;
+d1044 4
+a1047 5
+	switch (fp->mode)
+	{
+	    case SUN_READ:
+	    case SUN_WRITE:
+		if (!mat_lookup(fp->fptr, matnum, &entry))
+d1049 1
+a1049 1
+		mat_write_image_subheader(fp->fptr, entry.strtblk, isub);
+d1051 1
+a1051 1
+	    default:
+d1058 4
+a1061 5
+int 
+write_attn_subheader(fp, matnum, asub)
+MatrixFile *fp;
+int matnum;
+Attn_subheader *asub;
+d1063 3
+a1065 3
+	int status;
+	char buff[512];
+	struct MatDir entry;
+d1069 4
+a1072 5
+	switch (fp->mode)
+	{
+	    case SUN_READ:
+	    case SUN_WRITE:
+		if (!mat_lookup(fp->fptr, matnum, &entry))
+d1074 1
+a1074 1
+		mat_write_attn_subheader(fp->fptr, entry.strtblk, asub);
+d1076 1
+a1076 1
+	    default:
+@

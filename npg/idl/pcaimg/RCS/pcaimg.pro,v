@@ -1,0 +1,488 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.4
+date	2011.04.19.15.25.34;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2010.09.03.15.09.52;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2010.09.03.14.04.27;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2010.08.30.18.03.52;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@;+
+; NAME:
+;	PCAIMG
+;
+; PURPOSE:
+;	Singular Value Decomposition on a set of images
+;
+; CATEGORY:
+;	Image processing
+;
+; MODIFICATION HISTORY:
+;	Tom Videen, Sept 2010
+;-
+
+PRO PCAIMG
+@@IMAGE_UTILS.h
+
+	root = ''
+	mask = ''
+	lst1 = ''
+	lst2 = ''
+	lst3 = ''
+	lst4 = ''
+	msg = ''
+	nam = ''
+	root = getenv('ROOTNAM')
+	mask = getenv('MASKIMG')
+	lst1 = getenv('IMGLIST1')
+	lst2 = getenv('IMGLIST2')
+	lst3 = getenv('IMGLIST3')
+	lst4 = getenv('IMGLIST4')
+	logfile = root + ".log"
+
+;; Read Image Lists
+
+	n1 = 0
+	n2 = 0
+	n3 = 0
+	n4 = 0
+	command = 'wc -l ' + lst1 + ' | cut -c1-8'
+    spawn, command, result
+    reads, result, n1
+
+	command = 'wc -l ' + lst2 + ' | cut -c1-8'
+    spawn, command, result
+    reads, result, n2
+
+	IF (strlen(lst3) GT 1) THEN BEGIN
+		command = 'wc -l ' + lst3 + ' | cut -c1-8'
+    	spawn, command, result
+    	reads, result, n3
+	ENDIF
+
+	IF (strlen(lst4) GT 1) THEN BEGIN
+		command = 'wc -l ' + lst4 + ' | cut -c1-8'
+    	spawn, command, result
+    	reads, result, n4
+	ENDIF
+
+	nimg = n1 + n2 + n3 + n4
+	images = strarr(nimg)
+
+	print, "Input Lists"
+	print, "   ",lst1, n1, " images"
+	OPENR, lu, lst1, /get_lun
+	FOR i=0,n1-1 DO BEGIN
+		readf,lu,nam
+		images[i] = nam
+	ENDFOR
+	CLOSE,lu
+	FREE_LUN,lu
+
+	print, "   ",lst2, n2, " images"
+	OPENR, lu, lst2, /get_lun
+	FOR i=0,n2-1 DO BEGIN
+		readf,lu,nam
+		images[n1+i] = nam
+	ENDFOR
+	CLOSE,lu
+	FREE_LUN,lu
+
+	IF (n3 GT 0) THEN BEGIN
+		print, "   ",lst3, n3, " images"
+		OPENR, lu, lst3, /get_lun
+		FOR i=0,n3-1 DO BEGIN
+			readf,lu,nam
+			images[n1+n2+i] = nam
+		ENDFOR
+		CLOSE,lu
+		FREE_LUN,lu
+	ENDIF
+
+	IF (n4 GT 0) THEN BEGIN
+		print, "   ",lst4, n4, " images"
+		OPENR, lu, lst4, /get_lun
+		FOR i=0,n4-1 DO BEGIN
+			readf,lu,nam
+			images[n1+n2+n3+i] = nam
+		ENDFOR
+		CLOSE,lu
+		FREE_LUN,lu
+	ENDIF
+
+;; Read Mask
+
+	msk = {VIMAGE}
+	msk.fname = mask
+	frm = 1
+	msk.ff = frm
+	msk.lf = frm
+	msk.fp = 1
+	msk.lp = 256
+	IF (getframe(msk, msg) NE 0) THEN BEGIN
+		PRINT,'ERROR [pcaimg]: Reading ',mask
+		RETURN
+	ENDIF
+
+	print, "Mask Image"
+	inmask = where ((*msk.data GE 1), npix)
+	IF (npix EQ 0) THEN BEGIN
+		print,'ERROR [pcaimg]: No pixels in defined mask'
+		RETURN
+	ENDIF ELSE print, npix,' pixels'
+
+
+;; Read images values within mask
+
+	data = fltarr(nimg, npix)
+	img = {VIMAGE}
+	frm = 1
+	img.ff = frm
+	img.lf = frm
+	img.fp = 1
+	img.lp = 256
+
+	FOR i=0,nimg-1 DO BEGIN
+		img.fname = images[i]
+		IF (getframe(img, msg) NE 0) THEN BEGIN
+			PRINT,'ERROR [pcaimg]: Reading ',img.fname
+			RETURN
+		ENDIF
+		image = reform((*img.data)[inmask],npix)
+		data[i,*] = image
+	ENDFOR
+
+;; Adjust data for mean
+
+	mdata = fltarr(nimg, npix)
+	FOR i=0,nimg-1 DO BEGIN
+		mdata[i,*] = data[i,*] - mean(data[i,*])
+	ENDFOR
+
+;; Eigenvectors and values using covariance matrix
+;	covMatrix = Correlate(mdata, /COVARIANCE, /DOUBLE)
+;	eigenvalues = EIGENQL(covMatrix, EIGENVECTORS=eigenvectors, /DOUBLE)
+
+;; Singular Value Decomposition
+;;	W = singular values [nimg]
+;;	S = singular values as diagonal matrix [nimg, nimg]
+;;	U = eigenvectors [nimg, npix] if npix = nimg
+;;	V = [nimg, nimg]
+
+	SVDC, mdata, W, U, V
+	S = fltarr(nimg, nimg)
+	for k = 0,nimg-1 do S[k,k]=W[k]
+
+	help,W		;; singular values (vector of nimg elements)
+	help,U		;; matrix of weights (nimg x npix)
+	help,S		;; diagonal matrix of singular values (nimg x nimg)
+	help,V		;; columns are basis vectors or eigenvectors (nimg x nimg)
+
+;;	To restore original data:
+;;	rdata = U ## S ## transpose(V)
+;;	for i=0,nimg-1
+;;		image[inmask] = rdata[i,*] + mean(data[i,*])
+
+;;	Save 6 Component Images (skipping M##transpose(V) only changes scaling)
+
+	dx = img.dim[0]
+	dy = img.dim[1]
+	dz = img.dim[2]
+	img.ntype = type(0.0)
+	image = fltarr(dx*dy*dz)
+	FOR i=0,5 DO BEGIN
+		nam = root + STRING(i+1)
+		fname = STRCOMPRESS(nam, /REMOVE_ALL)
+		print,fname
+		M = fltarr(nimg, nimg)
+		for k = 0,nimg-1 do M[k,i]=1000.
+		rdata = U ## M ## transpose(V)
+		image[inmask] = rdata[i,*]
+		(*img.data)[*,*,*] = reform(image, dx, dy, dz)
+    	stat = putinterfile(img, fname, msg)
+		print, msg
+	ENDFOR
+
+;;	Indices to 2-3 input data sets
+
+	na1 = 0
+	nb1 = n1
+	nc1 = n1 + n2
+	nd1 = n1 + n2 + n3
+	na2 = nb1 - 1
+	nb2 = nc1 - 1
+	nc2 = nd1 - 1
+	nd2 = nimg - 1
+
+;; Eigenvalues = square of singular values
+
+	ev = W(REVERSE(SORT(W)))/npix
+	for n=0, nimg-1 do begin
+		ev[n] = ev[n]*ev[n]
+	endfor
+
+;; Print eigenvalues and percent contribution to variance
+
+	OPENW, lu, logfile, /get_lun
+	print
+	print, " PC#   Eigenvalue  Variance  Total"
+	printf, lu, " PC#   Eigenvalue  Variance  Total"
+	suma = total(ev)
+	neta = 0.
+	numv = min([nimg-1, 9])
+	for n=0, numv do begin
+		neta = neta + 100*ev[n]/suma
+		print, n+1, ev[n], 100*ev[n]/suma, neta, format='(I3, F14.3, 2(F8.2,"%"))'
+		printf, lu, n+1, ev[n], 100*ev[n]/suma, neta, format='(I3, F14.3, 2(F8.2,"%"))'
+	endfor
+
+	printf, lu, ""
+	printf, lu, "PC1", "PC2", "PC3", "PC4", "PC5", lst1, format='(A8, 4(A10), 5X, A)'
+	printf, lu, v[0:4,na1:na2], format='(5(F10.5))'
+	printf, lu, "----", "----", "----", "----", "----", lst2, format='(A8, 4(A10), 5X, A)'
+	printf, lu, v[0:4,nb1:nb2], format='(5(F10.5))'
+	IF (n3 GT 0) THEN BEGIN
+		printf, lu, "----", "----", "----", "----", "----", lst3, format='(A8, 4(A10), 5X, A)'
+		printf, lu, v[0:4,nc1:nc2], format='(5(F10.5))'
+	ENDIF
+	IF (n4 GT 0) THEN BEGIN
+		printf, lu, "----", "----", "----", "----", "----", lst4, format='(A8, 4(A10), 5X, A)'
+		printf, lu, v[0:4,nd1:nd2], format='(5(F10.5))'
+	ENDIF
+	CLOSE,lu
+	FREE_LUN,lu
+
+;;	Plot pairs of PCs
+
+	!P.Multi = [0,2,2,0,1]
+	Window, XPOS=0, YPOS=1000, XSIZE=1000, YSIZE=1000, colors=10, 0
+    loadct,39	;; 9=white, 8=red, 5=green, 7=yellow, 4=blue
+    			;; PSYM: 6=square, 4=diamond, 5=triangle, 7=X
+	PLOT, v[0,*], v[1,*], color=9, /nodata, xtitle="PC 1", ytitle="PC 2", charsize=1.3, TITLE="Component 2 vs. 1"
+	OPLOT, v[0,0:na2],  v[1,0:na2], color=8, PSYM=6, SYMSIZE=0.8
+	OPLOT, v[0,nb1:nb2], v[1,nb1:nb2], color=5, PSYM=4
+	IF (n3 GT 0) THEN OPLOT, v[0,nc1:nc2], v[1,nc1:nc2], color=7, PSYM=5
+	IF (n4 GT 0) THEN OPLOT, v[0,nd1:nd2], v[1,nd1:nd2], color=3, PSYM=6, SYMSIZE=0.8
+
+	;Window, XPOS=504, YPOS=1000, XSIZE=500, YSIZE=500, colors=10, 1
+	PLOT, v[0,*], v[2,*], color=9, /nodata, xtitle="PC 1", ytitle="PC 3", charsize=1.3, TITLE="Component 3 vs. 1"
+	OPLOT, v[0,0:na2],  v[2,0:na2], color=8, PSYM=6, SYMSIZE=0.8
+	OPLOT, v[0,nb1:nb2], v[2,nb1:nb2], color=5, PSYM=4
+	IF (n3 GT 0) THEN OPLOT, v[0,nc1:nc2], v[2,nc1:nc2], color=7, PSYM=5
+	IF (n4 GT 0) THEN OPLOT, v[0,nd1:nd2], v[2,nd1:nd2], color=3, PSYM=6, SYMSIZE=0.8
+
+	;Window, XPOS=1008, YPOS=1000, XSIZE=500, YSIZE=500, colors=10, 2
+	PLOT, v[0,*], v[3,*], color=9, /nodata, xtitle="PC 1", ytitle="PC 4", charsize=1.3, TITLE="Component 4 vs. 1"
+	OPLOT, v[0,0:na2],  v[3,0:na2], color=8, PSYM=6, SYMSIZE=0.8
+	OPLOT, v[0,nb1:nb2], v[3,nb1:nb2], color=5, PSYM=4
+	IF (n3 GT 0) THEN OPLOT, v[0,nc1:nc2], v[3,nc1:nc2], color=7, PSYM=5
+	IF (n4 GT 0) THEN OPLOT, v[0,nd1:nd2], v[3,nd1:nd2], color=3, PSYM=6, SYMSIZE=0.8
+
+	;Window, XPOS=0, YPOS=178, XSIZE=500, YSIZE=500, colors=10, 3
+	PLOT, v[0,*], v[4,*], color=9, /nodata, xtitle="PC 1", ytitle="PC 5", charsize=1.3, TITLE="Component 5 vs. 1"
+	OPLOT, v[0,0:na2],  v[4,0:na2], color=8, PSYM=6, SYMSIZE=0.8
+	OPLOT, v[0,nb1:nb2], v[4,nb1:nb2], color=5, PSYM=4
+	IF (n3 GT 0) THEN OPLOT, v[0,nc1:nc2], v[4,nc1:nc2], color=7, PSYM=5
+	IF (n4 GT 0) THEN OPLOT, v[0,nd1:nd2], v[4,nd1:nd2], color=3, PSYM=6, SYMSIZE=0.8
+
+	print,"Continue?"
+	command = 'line'
+    spawn, command, result
+    reads, result
+
+END 
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d23 1
+d31 1
+d39 1
+d54 7
+a60 1
+	nimg = n1 + n2 + n3
+d93 11
+d202 1
+d205 2
+a206 1
+	nc2 = nimg - 1
+d239 4
+d250 2
+a251 1
+    loadct,39	;; 9=white, 8=red, 5=green, 7=yellow
+d256 1
+d263 1
+d270 1
+d277 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+;	PCA analysis on set of images
+d24 1
+a33 1
+	nam = ''
+d133 1
+a133 1
+;; Covariance Matrix, Eigen vectors and values (isolate components?)
+a135 10
+;	help,mdata
+;	help,covMatrix
+;	help,eigenvalues
+;	help,eigenvectors
+;	ev = eigenvalues
+;
+;;	FOR n=0,4 DO BEGIN
+;;		percentVariance = eigenvalues[n] / Total(eigenvalues) * 100
+;;		print, FORMAT = '(I2, F6.1,"%")', n+1, percentVariance
+;;	ENDFOR
+d152 4
+a155 2
+	;rdata = U ## S ## transpose(V)		;; restore original mdata
+		;image[inmask] = rdata[i,*] + mean(data[i,*])
+d157 1
+a157 1
+;;	Save 6 Component Images 
+d177 1
+a177 1
+;; Eigenvalues = square of singular values
+d179 1
+a179 5
+	eg = W(REVERSE(SORT(W)))/npix
+	for n=0, nimg-1 do begin
+		eg[n] = eg[n]*eg[n]
+	endfor
+
+d182 1
+a182 1
+	na2 = n1 - 1
+d186 7
+d199 1
+a199 1
+	suma = total(eg)
+d203 3
+a205 3
+		neta = neta + 100*eg[n]/suma
+		print, n+1, eg[n], 100*eg[n]/suma, neta, format='(I3, F14.3, 2(F8.2,"%"))'
+		printf, lu, n+1, eg[n], 100*eg[n]/suma, neta, format='(I3, F14.3, 2(F8.2,"%"))'
+d210 1
+a210 1
+	printf, lu, v[0:4,0:na2], format='(5(F10.5))'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d12 1
+a12 1
+;	Tom Videen, Aug 2010
+d18 1
+d24 1
+d29 1
+d61 2
+a62 2
+	close,lu
+	free_lun,lu
+d70 2
+a71 2
+	close,lu
+	free_lun,lu
+d80 2
+a81 2
+		close,lu
+		free_lun,lu
+d149 1
+a149 1
+;;	WD = singular values as diagonal matrix [nimg, nimg]
+d154 2
+a155 2
+	WD = fltarr(nimg, nimg)
+	for k = 0,nimg-1 do WD[k,k]=W[k]
+d157 4
+a160 7
+	help,U		;; nimg x npix
+	help,W		;; vector of nimg singular values
+	help,V		;; nimg x nimg
+	help,WD		;; singular values as diagonal array
+	;rdata = U ## WD ## transpose(V)		;; restore original mdata
+	P = WD ## transpose(V)
+	pt = transpose(P)
+d162 25
+a186 1
+	;; eigenvalues = square of singular values
+d192 9
+a200 1
+	;; Print eigenvalues and percent contribution to variance
+d203 1
+d210 1
+d213 11
+a223 5
+	nb1 = n1
+	nc1 = n1 + n2
+	na2 = n1 - 1
+	nb2 = nc1 - 1
+	nc2 = nimg - 1
+d225 4
+a228 1
+	Window, XPOS=0, YPOS=1000, XSIZE=500, YSIZE=500, colors=10, 0
+d235 1
+a235 1
+	Window, XPOS=504, YPOS=1000, XSIZE=500, YSIZE=500, colors=10, 1
+d241 1
+a241 1
+	Window, XPOS=1008, YPOS=1000, XSIZE=500, YSIZE=500, colors=10, 2
+d247 1
+a247 1
+	Window, XPOS=0, YPOS=178, XSIZE=500, YSIZE=500, colors=10, 3
+a257 9
+	print, "PC1", "PC2", "PC3", "PC4", "PC5", lst1, format='(A8, 4(A10), 5X, A)'
+	print, v[0:4,0:na2], format='(5(F10.5))'
+	print, "----", "----", "----", "----", "----", lst2, format='(A8, 4(A10), 5X, A)'
+	print, v[0:4,nb1:nb2], format='(5(F10.5))'
+	IF (n3 GT 0) THEN BEGIN
+		print, "----", "----", "----", "----", "----", lst3, format='(A8, 4(A10), 5X, A)'
+		print, v[0:4,nc1:nc2], format='(5(F10.5))'
+	ENDIF
+
+@

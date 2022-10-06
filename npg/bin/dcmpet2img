@@ -1,0 +1,83 @@
+#!/usr/local/bin/tcsh
+#	Name:	dcmpet2img
+#	Date:	Apr 2010
+#	Author:	Tom Videen
+#	Use:	Convert Siemens PETCT files from DICOM to Matrix 7 (ECAT) files
+
+if ($#argv != 2) then
+	echo "Usage:  dcmpet2img series# output"
+	echo " e.g.,  dcmpet2img 4 p5000oo1.v"
+	exit 1
+endif
+
+set PROGRAM = dcmpet2img
+set ser = $1
+set out = $2
+
+# Scan file names will begin with the series number (single digit) followed by 5 digits.
+# ----------------------------------------------------------------------
+set first = `ls ${ser}?????.dcm | head -1 | cut -f1 -d.`
+set second = `echo $first + 1 | bc`
+set last = `ls ${ser}?????.dcm | tail -1 | cut -f1 -d.`
+set plns = `dcm_dump_file -t $first.dcm | grep "Number of Slices" | cut -c60-`
+set frms = `dcm_dump_file -t $first.dcm | grep "Number of Time Slices" | cut -c60-`
+
+# Workaround for failure to include Slices attribute 
+# ----------------------------------------------------------------------
+if ($plns == "" || $frms == "") then
+	echo "WARNING: DICOM elements in header are missing"
+	set nfiles = `echo $last - $first + 1 | bc`
+else
+	set nfiles = `echo $plns \* $frms | bc`
+	set all = `echo $last - $first + 1 | bc`
+	set dif = `echo $nfiles - $all | bc`
+	if ($dif != 0) then
+		echo "ERROR: Expecting $nfiles files and find $all"
+		echo "       First file = $first.dcm"
+		echo "       Last  file = $last.dcm"
+		exit 1
+	endif
+endif
+
+# Use increment in Slice Order attribute for z-order of input files
+# ----------------------------------------------------------------------
+set order = 1
+if ($last >= $second) then
+	set one = `dcm_dump_file -t $first.dcm | grep "REL Slice Location" | cut -c55-`
+	set two = `dcm_dump_file -t $second.dcm | grep "REL Slice Location" | cut -c55-`
+	set sign = `echo $one - $two | bc | cut -f1 -d.`
+	if ($sign < 0) set order = -1
+endif
+
+# Check that all scan files exist
+# ----------------------------------------------------------------------
+set i = $first
+while ($i <= $last)
+	if (! -e $i.dcm) then
+		echo "Cannot find $i.dcm"
+	endif
+	@ i++
+end
+
+echo "Converting $nfiles DICOM files to $out"
+echo "--------------------------------------------"
+set rec = $out.rec
+set now = `date`
+set uid = `whoami`
+echo "rec $out $now $uid" >! ${rec}
+echo "dcmpet2img $1 $2 $3" >> $rec
+ident /usr/local/npg/bin/dcmpet2img.bin | grep dcmpet2img.c | cut -d$ -f2 >> $rec
+set dmp = dcmpet$$.log
+
+dcmpet2img.bin $first $dmp $out $nfiles $sign $now $uid
+
+set endstat = $status
+if ($endstat == 0) then
+    echo "endrec" >> $rec
+else if ($endstat == 3) then
+    rm $rec
+else
+    echo "End of Task Status = $endstat"
+endif
+if (-e $dmp) rm $dmp
+

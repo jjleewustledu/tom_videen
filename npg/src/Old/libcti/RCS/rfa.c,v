@@ -1,0 +1,1110 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	99.12.13.22.02.19;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.09.25.16.28.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.03.03.17.37.01;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.09.13.19.50.31;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Introduce rcsid.
+@
+
+
+1.4
+log
+@partially cleaned up with lint
+@
+text
+@/*$Id: rfa.c,v 1.3 1996/09/25 16:28:32 tom Exp tom $*/
+/*$Log: rfa.c,v $
+ * Revision 1.3  1996/09/25  16:28:32  tom
+ * build in Solaris 2
+ *
+ * Revision 1.2  1994/03/03  17:37:01  ty7777
+ * Change from if to header.
+ **/
+
+/*    @@(#)rfa.c	2.9 6/17/92    */
+/* rfa.c
+* collection of modules to allow rfa commands to be issued to the acquisition
+* server as defined in the defaults database /Ecat/EcatAcqServer
+*
+* rfaDelete(), rfaDir(), rfaRename(), rfaFormat(), rfaMagpie(), rfaCopy(),
+* isThisAnACSFile(), getWildCardList(), parseAcsDirEntry(), wildCardMatches(),
+* star(), getWildCardStatsList()
+*
+* t.w. jansto		10/24/90
+*/
+
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libcti/RCS/rfa.c,v 1.3 1996/09/25 16:28:32 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <rpc/rpc.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include "ecatRfa.h"
+
+int             rfaMagpie (squawk)
+	int             squawk;
+{
+	int             resp;
+	bool_t          doAcsRfaCommand ();
+
+	doAcsRfaCommand (RBUG, xdr_int, &squawk, xdr_int, &resp);
+	return (resp);
+}
+
+int             rfaFormat (device)
+	char           *device;
+{
+	int             resp;
+	bool_t          doAcsRfaCommand ();
+
+	doAcsRfaCommand (RFMT, xdr_wrapstring, &device, xdr_int, &resp);
+	return (resp);
+}
+
+int             rfaRename (oldName, newName)
+	char           *oldName, *newName;
+{
+	int             resp;
+	RREN_args       renArgs;
+	bool_t          doAcsRfaCommand ();
+
+	renArgs.oldName = (char *) malloc (strlen (oldName));
+	renArgs.newName = (char *) malloc (strlen (newName));
+	strcpy (renArgs.oldName, oldName);
+	strcpy (renArgs.newName, newName);
+	doAcsRfaCommand (RREN, xdr_RREN_args, &renArgs, xdr_int, &resp);
+	free (renArgs.oldName);
+	free (renArgs.newName);
+	return (resp);
+}
+
+unsigned long   rfaCopy (oldName, newName, sizeOfFileInBytes)
+	char           *oldName, *newName;
+	unsigned long   sizeOfFileInBytes;
+{
+	unsigned long   resp;
+	RCPY_args       copyArgs;
+	bool_t          doAcsRfaCommand ();
+
+	copyArgs.oldName = (char *) malloc (strlen (oldName));
+	copyArgs.newName = (char *) malloc (strlen (newName));
+	strcpy (copyArgs.oldName, oldName);
+	strcpy (copyArgs.newName, newName);
+	copyArgs.fileSize = sizeOfFileInBytes;
+	doAcsRfaCommand (RCPY, xdr_RCPY_args, &copyArgs, xdr_u_long, &resp);
+	free (copyArgs.oldName);
+	free (copyArgs.newName);
+	return (resp);
+}
+
+int             rfaDelete (deleteFile)
+	char           *deleteFile;
+{
+	int             resp;
+	bool_t          doAcsRfaCommand ();
+
+	doAcsRfaCommand (RDEL, xdr_wrapstring, &deleteFile, xdr_int, &resp);
+	return (resp);
+}
+
+int             rfaDir (dirString, dirLine, entryNo, freeChunk)
+	char           *dirString, *dirLine;
+	int            *entryNo, *freeChunk;
+{
+	RDIR_args       dirArgs;
+	RDIR_resp       dirResp;
+	bool_t          doAcsRfaCommand ();
+
+	dirArgs.dirPath = dirString;
+	dirArgs.currDirNo = *entryNo;
+	dirResp.dirEntry = dirLine;
+	doAcsRfaCommand (RDIR, xdr_RDIR_args, &dirArgs, xdr_RDIR_resp, &dirResp);
+	*entryNo = dirResp.nextDirNo;
+	*freeChunk = dirResp.freeChunk;
+	return (TRUE);
+}
+
+int             isThisAnACSFile (path)
+	char           *path;
+{
+	int             i;
+	char            device[8];
+
+	for (i = 0; i < 7; i++) {
+		sprintf (device, "/sd%d/", i);
+		if (strncmp (path, device, strlen (device)) == 0)
+			return (1);
+	}
+	return (0);
+}
+
+struct acsFileEntry {
+	int             fileSize;
+	char            creationDate[32];
+	char            fileName[64];
+	char            device[8];
+};
+
+int             getWildCardList (wildCard, filesThatMatch)
+	char           *wildCard, *filesThatMatch[];
+{
+	int             numberThatMatch = 0, entryNo = 0, biggestPiece, wildCardLength = 0;
+	char            dirChunk[64], *pathStart, *pathEnd, *path, *targetFile, *wildCardSpec;
+	struct acsFileEntry *acsDirEntry, *parseAcsDirEntry ();
+	DIR            *dirEntry;
+	struct dirent  *dp;
+	struct stat     fStats;
+
+	if (isThisAnACSFile (wildCard)) {	 /** build list from ACS files */
+		if (rfaDir (wildCard, dirChunk, &entryNo, &biggestPiece)) {
+			while (strcmp (dirChunk, "")) {
+				acsDirEntry = parseAcsDirEntry (dirChunk);
+				pathStart = index (wildCard, '/');
+				pathEnd = rindex (wildCard, '/');
+				bzero (acsDirEntry->device, 8);
+				strncpy (acsDirEntry->device, wildCard, pathEnd - pathStart + 1);
+				filesThatMatch[numberThatMatch] = (char *) calloc (1,
+										   (strlen (acsDirEntry->fileName) + strlen (acsDirEntry->device) + 1));
+				strcpy (filesThatMatch[numberThatMatch], acsDirEntry->device);
+				strcat (filesThatMatch[numberThatMatch], acsDirEntry->fileName);
+				if (!(rfaDir (wildCard, dirChunk, &entryNo, &biggestPiece)))
+					break;
+				numberThatMatch += 1;
+			}
+		}
+		return (numberThatMatch);
+	} else
+		/** build list from this side */
+	{
+		pathStart = index (wildCard, '/');
+		pathEnd = rindex (wildCard, '/');
+		if (pathStart == pathEnd) {
+			path = ".";
+			wildCardSpec = wildCard;
+		} else {
+			if (!(path = (char *) malloc (pathEnd - pathStart + 1))) {
+				fprintf (stderr,
+				"getWildCardList:Error...unable to malloc space for file path\n");
+				return (numberThatMatch);
+			}
+			bzero (path, pathEnd - pathStart + 2);
+			strncpy (path, wildCard, pathEnd - pathStart + 1);
+			wildCardLength = strlen (wildCard) - (int) (pathEnd - pathStart + 1);
+			if (!(wildCardSpec = (char *) malloc (wildCardLength))) {
+				fprintf (stderr,
+					 "getWildCardList:Error...unable to malloc space for wild card spec\n");
+				return (numberThatMatch);
+			}
+			bzero (wildCardSpec, wildCardLength + 1);
+			strncpy (wildCardSpec, pathEnd + 1, wildCardLength);
+			/** can we stat the path? */
+			if (!stat (path, &fStats)) {
+				/** is it a directory? */
+				if (!(S_ISDIR (fStats.st_mode))) {
+					free (path);
+					free (wildCardSpec);
+					return (numberThatMatch);	/* no matches, since we
+									 * don't have a directory
+									 * specified */
+				}
+			}
+		}
+		if ((dirEntry = opendir (path)) == NULL) {
+			fprintf (stderr, "getWildCardList:Error...unable to open %s\n", path);
+			free (path);
+			free (wildCardSpec);
+			return (numberThatMatch);
+		}
+		if (!(targetFile = (char *) malloc (256))) {
+			fprintf (stderr, "getWildCardList:Error...unable to malloc space for file spec\n");
+			free (path);
+			free (wildCardSpec);
+			return (numberThatMatch);
+		}
+		for (dp = readdir (dirEntry); dp != NULL; dp = readdir (dirEntry)) {
+			/** skip the . and .. directory entries */
+			if (!strncmp (dp->d_name, ".", strlen (".")) ||
+			    !strncmp (dp->d_name, ".", strlen (".")))
+				continue;
+			if (strncmp (path, "..", strlen ("..")))
+				sprintf (targetFile, "%s/%s", path, dp->d_name);
+			else
+				sprintf (targetFile, "%s", dp->d_name);
+			if (stat (targetFile, &fStats))
+				fprintf (stderr, "getWildCardList:Error...unable to stat file %s\n", targetFile);
+			if (wildCardMatches (dp->d_name, wildCardSpec)) {
+				filesThatMatch[numberThatMatch] = (char *) calloc (1,
+						       (strlen (dp->d_name) + strlen (path) + 1));
+				if (strncmp (path, ".", strlen ("."))) {
+					strcpy (filesThatMatch[numberThatMatch], path);
+					strcat (filesThatMatch[numberThatMatch], dp->d_name);
+				} else
+					strcat (filesThatMatch[numberThatMatch], dp->d_name);
+				numberThatMatch += 1;
+			}
+		}
+		closedir (dirEntry);
+		free (path);
+		free (wildCardSpec);
+		free (targetFile);
+		return (numberThatMatch);
+	}
+}
+
+struct acsFileEntry *
+                parseAcsDirEntry (entry)
+	char           *entry;
+{
+	struct acsFileEntry *file;
+
+	char           *dateStart, *dateEnd;
+
+	if (entry[0] == 0)
+		return ((struct acsFileEntry *) NULL);
+	file = (struct acsFileEntry *) malloc (sizeof (struct acsFileEntry));
+	if (!file) {
+		fprintf (stderr, "parseACSDirEntry:ERROR...unable to malloc space for structure\n");
+		return ((struct acsFileEntry *) NULL);
+	}
+	bzero (file->creationDate, 32);
+	bzero (file->fileName, 64);
+	file->fileSize = atoi (entry);
+	dateStart = index (entry, ' ');
+	dateEnd = rindex (entry, ' ');
+	strcpy (file->fileName, dateEnd + 1);
+	strncpy (file->creationDate, dateStart, dateEnd - dateStart);
+	return (file);
+}
+
+int             wildCardMatches (file, reqfile)
+	char           *file;			 /* file name to be looked at */
+
+	char           *reqfile;		 /* requested file name */
+{
+	int             star ();
+
+	for (; *reqfile; file++, reqfile++) {
+		switch (*reqfile) {
+		default:
+			if (*file != *reqfile)
+				return (FALSE);
+			continue;
+		case '*':
+			return (*++reqfile ? star (file, reqfile) : TRUE);
+		}
+	}
+	return (*file == '\0');
+}
+
+star (s, p)
+	char           *s;			 /* partial file pointer string */
+
+	char           *p;			 /* partial requested file wild carded pattern */
+{
+	while (wildCardMatches (s, p) == FALSE)
+		if (*++s == '\0')
+			return (FALSE);
+	return (TRUE);
+}
+
+struct fileStats {
+	char           *fileName;
+	char           *copyFileName;
+	unsigned long   fileSize;
+};
+
+int             getWildCardStatsList (wildCard, filesThatMatch, outputName)
+	char           *wildCard, *outputName;
+	struct fileStats *filesThatMatch[];
+{
+	int             numberThatMatch = 0, entryNo = 0, biggestPiece, wildCardNewName = 0, wildCardLength = 0;
+	char            dirChunk[64], *pathStart, *pathEnd, *path, *token, *targetFile, *wildCardSpec;
+	struct acsFileEntry *acsDirEntry, *parseAcsDirEntry ();
+	DIR            *dirEntry;
+	struct dirent  *dp;
+	struct stat     fStats;
+
+	if ((token = strpbrk (outputName, "*"))) {	/* check if he wants us to generate the
+							 * name */
+		*token = '\0';			 /* NULL out the '*' */
+		wildCardNewName = 1;
+	}
+	if (isThisAnACSFile (wildCard)) {	 /** build list from ACS files */
+		if (rfaDir (wildCard, dirChunk, &entryNo, &biggestPiece)) {
+			while (strcmp (dirChunk, "")) {
+				acsDirEntry = parseAcsDirEntry (dirChunk);
+				pathStart = index (wildCard, '/');
+				pathEnd = rindex (wildCard, '/');
+				bzero (acsDirEntry->device, 8);
+				strncpy (acsDirEntry->device, wildCard, pathEnd - pathStart + 1);
+				filesThatMatch[numberThatMatch] =
+					(struct fileStats *) calloc (1, sizeof (struct fileStats));
+				filesThatMatch[numberThatMatch]->fileName = (char *) calloc (1,
+								 (strlen (acsDirEntry->fileName) +
+							       strlen (acsDirEntry->device) + 1));
+				strcpy (filesThatMatch[numberThatMatch]->fileName, acsDirEntry->device);
+				strcat (filesThatMatch[numberThatMatch]->fileName, acsDirEntry->fileName);
+				filesThatMatch[numberThatMatch]->fileSize = acsDirEntry->fileSize;
+				if (wildCardNewName) {
+					filesThatMatch[numberThatMatch]->copyFileName =
+						(char *) calloc (1, (strlen (acsDirEntry->fileName) +
+								     strlen (outputName) + 1));
+					sprintf (filesThatMatch[numberThatMatch]->copyFileName, "%s%s",
+						 outputName, acsDirEntry->fileName);
+				} else {
+					filesThatMatch[numberThatMatch]->copyFileName =
+						(char *) calloc (1, strlen (outputName) + 1);
+					strcpy (filesThatMatch[numberThatMatch]->copyFileName,
+						outputName);
+				}
+				if (!(rfaDir (wildCard, dirChunk, &entryNo, &biggestPiece)))
+					break;
+				numberThatMatch += 1;
+			}
+		}
+		return (numberThatMatch);
+	} else
+		/** build list from this side */
+	{
+		pathStart = index (wildCard, '/');
+		pathEnd = rindex (wildCard, '/');
+		if (pathStart == pathEnd) {
+			path = ".";
+			wildCardSpec = wildCard;
+		} else {
+			if (!(path = (char *) malloc (pathEnd - pathStart + 1))) {
+				fprintf (stderr,
+				"getWildCardList:Error...unable to malloc space for file path\n");
+				return (numberThatMatch);
+			}
+			bzero (path, pathEnd - pathStart + 2);
+			strncpy (path, wildCard, pathEnd - pathStart + 1);
+			wildCardLength = strlen (wildCard) - (int) (pathEnd - pathStart + 1);
+			if (!(wildCardSpec = (char *) malloc (wildCardLength))) {
+				fprintf (stderr,
+					 "getWildCardList:Error...unable to malloc space for wild card spec\n");
+				return (numberThatMatch);
+			}
+			bzero (wildCardSpec, wildCardLength + 1);
+			strncpy (wildCardSpec, pathEnd + 1, wildCardLength);
+			/** can we stat the path? */
+			if (!stat (path, &fStats)) {
+				/** is it a directory? */
+				if (!(S_ISDIR (fStats.st_mode))) {
+					free (path);
+					free (wildCardSpec);
+					return (numberThatMatch);	/* no matches, since we
+									 * don't have a directory
+									 * specified */
+				}
+			}
+		}
+		if ((dirEntry = opendir (path)) == NULL) {
+			fprintf (stderr, "getWildCardList:Error...unable to open %s\n", path);
+			free (path);
+			free (wildCardSpec);
+			return (numberThatMatch);
+		}
+		if (!(targetFile = (char *) malloc (256))) {
+			fprintf (stderr, "getWildCardList:Error...unable to malloc space for file spec\n");
+			free (path);
+			free (wildCardSpec);
+			return (numberThatMatch);
+		}
+		for (dp = readdir (dirEntry); dp != NULL; dp = readdir (dirEntry)) {
+			/** skip the . and .. directory entries */
+			if (!strncmp (dp->d_name, ".", strlen (".")) ||
+			    !strncmp (dp->d_name, ".", strlen (".")))
+				continue;
+			if (strncmp (path, "..", strlen ("..")))
+				sprintf (targetFile, "%s/%s", path, dp->d_name);
+			else
+				sprintf (targetFile, "%s", dp->d_name);
+			if (stat (targetFile, &fStats))
+				fprintf (stderr,
+				  "getWildCardList:Error...unable to stat file %s\n", targetFile);
+			if (wildCardMatches (dp->d_name, wildCardSpec)) {
+				filesThatMatch[numberThatMatch] =
+					(struct fileStats *) calloc (1, sizeof (struct fileStats));
+				filesThatMatch[numberThatMatch]->fileName = (char *) calloc (1,
+						       (strlen (dp->d_name) + strlen (path) + 1));
+				if (strncmp (path, ".", strlen ("."))) {
+					strcpy (filesThatMatch[numberThatMatch]->fileName, path);
+					strcat (filesThatMatch[numberThatMatch]->fileName, dp->d_name);
+				} else
+					strcat (filesThatMatch[numberThatMatch]->fileName, dp->d_name);
+				filesThatMatch[numberThatMatch]->fileSize = fStats.st_size;
+				if (wildCardNewName) {
+					filesThatMatch[numberThatMatch]->copyFileName =
+						(char *) calloc (1, (strlen (dp->d_name) +
+								     strlen (outputName) + 1));
+					sprintf (filesThatMatch[numberThatMatch]->copyFileName, "%s%s",
+						 outputName, dp->d_name);
+				} else {
+					filesThatMatch[numberThatMatch]->copyFileName =
+						(char *) calloc (1, strlen (outputName) + 1);
+					strcpy (filesThatMatch[numberThatMatch]->copyFileName,
+						outputName);
+				}
+				numberThatMatch += 1;
+			}
+		}
+		closedir (dirEntry);
+		free (path);
+		free (wildCardSpec);
+		free (targetFile);
+		return (numberThatMatch);
+	}
+}
+@
+
+
+1.3
+log
+@build in Solaris 2
+@
+text
+@d1 1
+a1 1
+/*$Id: rfa.c,v 1.2 1994/03/03 17:37:01 ty7777 Exp tom $*/
+d3 3
+d23 1
+a23 2
+static char     sccsid[] = "@@(#)rfa.c	2.9 6/17/92 Copyright 1989-1992 CTI PET Systems, Inc.";
+
+a25 2
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libcti/RCS/rfa.c,v 1.2 1994/03/03 17:37:01 ty7777 Exp tom $";
+
+d27 1
+a39 1
+
+a49 1
+
+a59 1
+
+a60 1
+
+a74 1
+
+a77 1
+
+a78 1
+
+a95 1
+
+a103 1
+
+a106 1
+
+a107 1
+
+a122 1
+
+a143 1
+
+a144 1
+
+d146 1
+a146 3
+
+	DIR            *dirEntry, *opendir ();
+
+a147 1
+
+d196 2
+a197 2
+					free ((char *) path);
+					free ((char *) wildCardSpec);
+d206 2
+a207 2
+			free ((char *) path);
+			free ((char *) wildCardSpec);
+d212 2
+a213 2
+			free ((char *) path);
+			free ((char *) wildCardSpec);
+d239 3
+a241 3
+		free ((char *) path);
+		free ((char *) wildCardSpec);
+		free ((char *) targetFile);
+a309 1
+
+a312 1
+
+a313 1
+
+d315 1
+a315 3
+
+	DIR            *dirEntry, *opendir ();
+
+a316 1
+
+d386 2
+a387 2
+					free ((char *) path);
+					free ((char *) wildCardSpec);
+d396 2
+a397 2
+			free ((char *) path);
+			free ((char *) wildCardSpec);
+d402 2
+a403 2
+			free ((char *) path);
+			free ((char *) wildCardSpec);
+d445 3
+a447 3
+		free ((char *) path);
+		free ((char *) wildCardSpec);
+		free ((char *) targetFile);
+@
+
+
+1.2
+log
+@Change from if to header.
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d20 2
+a21 1
+static char sccsid[] = "@@(#)rfa.c	2.9 6/17/92 Copyright 1989-1992 CTI PET Systems, Inc.";
+a22 1
+static char rcsid [] = "$Header$";
+d24 2
+d35 2
+a36 3
+int
+rfaMagpie(squawk)
+int squawk;
+d38 1
+a38 2
+	int resp;
+	bool_t doAcsRfaCommand();
+d40 3
+a42 1
+	doAcsRfaCommand(RBUG, xdr_int, &squawk, xdr_int, &resp);
+d46 2
+a47 3
+int
+rfaFormat(device)
+char *device;
+d49 1
+a49 2
+	int resp;
+	bool_t doAcsRfaCommand();
+d51 3
+a53 1
+	doAcsRfaCommand(RFMT, xdr_wrapstring, &device, xdr_int, &resp);
+d57 2
+a58 4
+int
+rfaRename(oldName, newName)
+char *oldName,
+    *newName;
+d60 1
+a60 3
+	int resp;
+	RREN_args renArgs;
+	bool_t doAcsRfaCommand();
+d62 11
+a72 7
+	renArgs.oldName = (char *) malloc(strlen(oldName));
+	renArgs.newName = (char *) malloc(strlen(newName));
+	strcpy(renArgs.oldName, oldName);
+	strcpy(renArgs.newName, newName);
+	doAcsRfaCommand(RREN, xdr_RREN_args, &renArgs, xdr_int, &resp);
+	free(renArgs.oldName);
+	free(renArgs.newName);
+d76 4
+a79 5
+unsigned long
+rfaCopy(oldName, newName, sizeOfFileInBytes)
+char *oldName,
+    *newName;
+unsigned long sizeOfFileInBytes;
+d81 1
+a81 3
+	unsigned long resp;
+	RCPY_args copyArgs;
+	bool_t doAcsRfaCommand();
+d83 8
+a90 4
+	copyArgs.oldName = (char *) malloc(strlen(oldName));
+	copyArgs.newName = (char *) malloc(strlen(newName));
+	strcpy(copyArgs.oldName, oldName);
+	strcpy(copyArgs.newName, newName);
+d92 3
+a94 3
+	doAcsRfaCommand(RCPY, xdr_RCPY_args, &copyArgs, xdr_u_long, &resp);
+	free(copyArgs.oldName);
+	free(copyArgs.newName);
+d98 2
+a99 3
+int
+rfaDelete(deleteFile)
+char *deleteFile;
+d101 1
+a101 2
+	int resp;
+	bool_t doAcsRfaCommand();
+d103 3
+a105 1
+	doAcsRfaCommand(RDEL, xdr_wrapstring, &deleteFile, xdr_int, &resp);
+d109 4
+a112 6
+int
+rfaDir(dirString, dirLine, entryNo, freeChunk)
+char *dirString,
+    *dirLine;
+int *entryNo,
+   *freeChunk;
+d114 1
+a114 3
+	RDIR_args dirArgs;
+	RDIR_resp dirResp;
+	bool_t doAcsRfaCommand();
+d116 4
+d123 1
+a123 1
+	doAcsRfaCommand(RDIR, xdr_RDIR_args, &dirArgs, xdr_RDIR_resp, &dirResp);
+d129 2
+a130 3
+int
+isThisAnACSFile(path)
+char *path;
+d132 1
+a132 2
+	int i;
+	char device[8];
+d134 5
+a138 4
+	for (i = 0; i < 7; i++)
+	{
+		sprintf(device, "/sd%d/", i);
+		if (strncmp(path, device, strlen(device)) == 0)
+d144 5
+a148 6
+struct acsFileEntry
+{
+	int fileSize;
+	char creationDate[32];
+	char fileName[64];
+	char device[8];
+d151 2
+a152 4
+int
+getWildCardList(wildCard, filesThatMatch)
+char *wildCard,
+    *filesThatMatch[];
+d154 1
+a154 16
+	int numberThatMatch = 0,
+	    entryNo = 0,
+	    biggestPiece,
+	    wildCardLength = 0;
+	char dirChunk[64],
+	    *pathStart,
+	    *pathEnd,
+	    *path,
+	    *targetFile,
+	    *wildCardSpec;
+	struct acsFileEntry *acsDirEntry,
+	            *parseAcsDirEntry();
+	DIR *dirEntry,
+	   *opendir();
+	struct dirent *dp;
+	struct stat fStats;
+d156 23
+a178 16
+	if (isThisAnACSFile(wildCard))	/** build list from ACS files */
+	{
+		if (rfaDir(wildCard, dirChunk, &entryNo, &biggestPiece))
+		{
+			while (strcmp(dirChunk, ""))
+			{
+				acsDirEntry = parseAcsDirEntry(dirChunk);
+				pathStart = index(wildCard, '/');
+				pathEnd = rindex(wildCard, '/');
+				bzero(acsDirEntry->device, 8);
+				strncpy(acsDirEntry->device, wildCard, pathEnd - pathStart + 1);
+				filesThatMatch[numberThatMatch] = (char *) calloc(1,
+					(strlen(acsDirEntry->fileName) + strlen(acsDirEntry->device) + 1));
+				strcpy(filesThatMatch[numberThatMatch], acsDirEntry->device);
+				strcat(filesThatMatch[numberThatMatch], acsDirEntry->fileName);
+				if (!(rfaDir(wildCard, dirChunk, &entryNo, &biggestPiece)))
+d185 1
+a185 1
+	/** build list from this side */
+d187 3
+a189 4
+		pathStart = index(wildCard, '/');
+		pathEnd = rindex(wildCard, '/');
+		if (pathStart == pathEnd)
+		{
+d192 4
+a195 7
+		}
+		else
+		{
+			if (!(path = (char *) malloc(pathEnd - pathStart + 1)))
+			{
+				fprintf(stderr,
+					"getWildCardList:Error...unable to malloc space for file path\n");
+d198 6
+a203 7
+			bzero(path, pathEnd - pathStart + 2);
+			strncpy(path, wildCard, pathEnd - pathStart + 1);
+			wildCardLength = strlen(wildCard) - (int) (pathEnd - pathStart + 1);
+			if (!(wildCardSpec = (char *) malloc(wildCardLength)))
+			{
+				fprintf(stderr,
+					"getWildCardList:Error...unable to malloc space for wild card spec\n");
+d206 8
+a213 10
+			bzero(wildCardSpec, wildCardLength + 1);
+			strncpy(wildCardSpec, pathEnd + 1, wildCardLength);
+		/** can we stat the path? */
+			if (!stat(path, &fStats))
+			{
+			/** is it a directory? */
+				if (!(S_ISDIR(fStats.st_mode)))
+				{
+					free((char *) path);
+					free((char *) wildCardSpec);
+d215 2
+a216 2
+									 * don't have a
+									 * directory specified */
+d220 4
+a223 5
+		if ((dirEntry = opendir(path)) == NULL)
+		{
+			fprintf(stderr, "getWildCardList:Error...unable to open %s\n", path);
+			free((char *) path);
+			free((char *) wildCardSpec);
+d226 4
+a229 5
+		if (!(targetFile = (char *) malloc(256)))
+		{
+			fprintf(stderr, "getWildCardList:Error...unable to malloc space for file spec\n");
+			free((char *) path);
+			free((char *) wildCardSpec);
+d232 4
+a235 5
+		for (dp = readdir(dirEntry); dp != NULL; dp = readdir(dirEntry))
+		{
+	/** skip the . and .. directory entries */
+			if (!strncmp(dp->d_name, ".", strlen(".")) ||
+					!strncmp(dp->d_name, ".", strlen(".")))
+d237 2
+a238 2
+			if (strncmp(path, "..", strlen("..")))
+				sprintf(targetFile, "%s/%s", path, dp->d_name);
+d240 11
+a250 13
+				sprintf(targetFile, "%s", dp->d_name);
+			if (stat(targetFile, &fStats))
+				fprintf(stderr, "getWildCardList:Error...unable to stat file %s\n", targetFile);
+			if (wildCardMatches(dp->d_name, wildCardSpec))
+			{
+				filesThatMatch[numberThatMatch] = (char *) calloc(1,
+					(strlen(dp->d_name) + strlen(path) + 1));
+				if (strncmp(path, ".", strlen(".")))
+				{
+					strcpy(filesThatMatch[numberThatMatch], path);
+					strcat(filesThatMatch[numberThatMatch], dp->d_name);
+				} else 
+					strcat(filesThatMatch[numberThatMatch], dp->d_name);
+d254 4
+a257 4
+		closedir(dirEntry);
+		free((char *) path);
+		free((char *) wildCardSpec);
+		free((char *) targetFile);
+d263 2
+a264 2
+parseAcsDirEntry(entry)
+char *entry;
+a266 2
+	char *dateStart,
+	    *dateEnd;
+d268 2
+d272 3
+a274 4
+	file = (struct acsFileEntry *) malloc(sizeof(struct acsFileEntry));
+	if (!file)
+	{
+		fprintf(stderr, "parseACSDirEntry:ERROR...unable to malloc space for structure\n");
+d277 7
+a283 7
+	bzero(file->creationDate, 32);
+	bzero(file->fileName, 64);
+	file->fileSize = atoi(entry);
+	dateStart = index(entry, ' ');
+	dateEnd = rindex(entry, ' ');
+	strcpy(file->fileName, dateEnd + 1);
+	strncpy(file->creationDate, dateStart, dateEnd - dateStart);
+d287 4
+a290 5
+int 
+wildCardMatches(file, reqfile)
+char *file;	/* file name to be
+		 * looked at */
+char *reqfile;	/* requested file name */
+d292 1
+a292 1
+	int star();
+d294 3
+a296 5
+	for (; *reqfile; file++, reqfile++)
+	{
+		switch (*reqfile)
+		{
+		    default:
+d300 2
+a301 2
+		    case '*':
+			return (*++reqfile ? star(file, reqfile) : TRUE);
+d307 4
+a310 6
+star(s, p)
+char *s;		/* partial file pointer
+			 * string */
+char *p;	/* partial requested
+		 * file wild carded
+		 * pattern */
+d312 1
+a312 1
+	while (wildCardMatches(s, p) == FALSE)
+d318 4
+a321 5
+struct fileStats
+{
+	char *fileName;
+	char *copyFileName;
+	unsigned long fileSize;
+d324 4
+a327 5
+int
+getWildCardStatsList(wildCard, filesThatMatch, outputName)
+char *wildCard,
+    *outputName;
+struct fileStats *filesThatMatch[];
+d329 1
+a329 18
+	int numberThatMatch = 0,
+	    entryNo = 0,
+	    biggestPiece,
+	    wildCardNewName = 0,
+	    wildCardLength = 0;
+	char dirChunk[64],
+	    *pathStart,
+	    *pathEnd,
+	    *path,
+	    *token,
+	    *targetFile,
+	    *wildCardSpec;
+	struct acsFileEntry *acsDirEntry,
+	            *parseAcsDirEntry();
+	DIR *dirEntry,
+	   *opendir();
+	struct dirent *dp;
+	struct stat fStats;
+d331 13
+a343 3
+	if ((token = strpbrk (outputName, "*")))	/* check if he wants us to generate the name */
+	{
+		*token = '\0';				/* NULL out the '*' */
+d346 15
+a360 18
+	if (isThisAnACSFile(wildCard))	/** build list from ACS files */
+	{
+		if (rfaDir(wildCard, dirChunk, &entryNo, &biggestPiece))
+		{
+			while (strcmp(dirChunk, ""))
+			{
+				acsDirEntry = parseAcsDirEntry(dirChunk);
+				pathStart = index(wildCard, '/');
+				pathEnd = rindex(wildCard, '/');
+				bzero(acsDirEntry->device, 8);
+				strncpy(acsDirEntry->device, wildCard, pathEnd - pathStart + 1);
+				filesThatMatch[numberThatMatch] = 
+					(struct fileStats *) calloc (1, sizeof(struct fileStats));
+				filesThatMatch[numberThatMatch]->fileName = (char *) calloc(1,
+					(strlen(acsDirEntry->fileName) + 
+					strlen(acsDirEntry->device) + 1));
+				strcpy(filesThatMatch[numberThatMatch]->fileName, acsDirEntry->device);
+				strcat(filesThatMatch[numberThatMatch]->fileName, acsDirEntry->fileName);
+d362 10
+a371 12
+				if (wildCardNewName)
+				{
+					filesThatMatch[numberThatMatch]->copyFileName = 
+						(char *) calloc(1, (strlen(acsDirEntry->fileName) + 
+						strlen(outputName) + 1));
+					sprintf(filesThatMatch[numberThatMatch]->copyFileName, "%s%s",
+						outputName, acsDirEntry->fileName);
+				} else
+				{
+					filesThatMatch[numberThatMatch]->copyFileName = 
+						(char *) calloc(1, strlen(outputName) + 1);
+					strcpy(filesThatMatch[numberThatMatch]->copyFileName, 
+d374 1
+a374 1
+				if (!(rfaDir(wildCard, dirChunk, &entryNo, &biggestPiece)))
+d381 1
+a381 1
+	/** build list from this side */
+d383 3
+a385 4
+		pathStart = index(wildCard, '/');
+		pathEnd = rindex(wildCard, '/');
+		if (pathStart == pathEnd)
+		{
+d388 4
+a391 7
+		}
+		else
+		{
+			if (!(path = (char *) malloc(pathEnd - pathStart + 1)))
+			{
+				fprintf(stderr,
+					"getWildCardList:Error...unable to malloc space for file path\n");
+d394 6
+a399 7
+			bzero(path, pathEnd - pathStart + 2);
+			strncpy(path, wildCard, pathEnd - pathStart + 1);
+			wildCardLength = strlen(wildCard) - (int) (pathEnd - pathStart + 1);
+			if (!(wildCardSpec = (char *) malloc(wildCardLength)))
+			{
+				fprintf(stderr,
+					"getWildCardList:Error...unable to malloc space for wild card spec\n");
+d402 8
+a409 10
+			bzero(wildCardSpec, wildCardLength + 1);
+			strncpy(wildCardSpec, pathEnd + 1, wildCardLength);
+		/** can we stat the path? */
+			if (!stat(path, &fStats))
+			{
+			/** is it a directory? */
+				if (!(S_ISDIR(fStats.st_mode)))
+				{
+					free((char *) path);
+					free((char *) wildCardSpec);
+d411 2
+a412 2
+									 * don't have a
+									 * directory specified */
+d416 4
+a419 5
+		if ((dirEntry = opendir(path)) == NULL)
+		{
+			fprintf(stderr, "getWildCardList:Error...unable to open %s\n", path);
+			free((char *) path);
+			free((char *) wildCardSpec);
+d422 4
+a425 5
+		if (!(targetFile = (char *) malloc(256)))
+		{
+			fprintf(stderr, "getWildCardList:Error...unable to malloc space for file spec\n");
+			free((char *) path);
+			free((char *) wildCardSpec);
+d428 4
+a431 5
+		for (dp = readdir(dirEntry); dp != NULL; dp = readdir(dirEntry))
+		{
+	/** skip the . and .. directory entries */
+			if (!strncmp(dp->d_name, ".", strlen(".")) ||
+					!strncmp(dp->d_name, ".", strlen(".")))
+d433 2
+a434 2
+			if (strncmp(path, "..", strlen("..")))
+				sprintf(targetFile, "%s/%s", path, dp->d_name);
+d436 14
+a449 16
+				sprintf(targetFile, "%s", dp->d_name);
+			if (stat(targetFile, &fStats))
+				fprintf(stderr, 
+					"getWildCardList:Error...unable to stat file %s\n", targetFile);
+			if (wildCardMatches(dp->d_name, wildCardSpec))
+			{
+				filesThatMatch[numberThatMatch] = 
+					(struct fileStats *) calloc (1, sizeof(struct fileStats));
+				filesThatMatch[numberThatMatch]->fileName = (char *) calloc(1,
+					(strlen(dp->d_name) + strlen(path) + 1));
+				if (strncmp(path, ".", strlen(".")))
+				{
+					strcpy(filesThatMatch[numberThatMatch]->fileName, path);
+					strcat(filesThatMatch[numberThatMatch]->fileName, dp->d_name);
+				} else 
+					strcat(filesThatMatch[numberThatMatch]->fileName, dp->d_name);
+d451 10
+a460 12
+				if (wildCardNewName)
+				{
+					filesThatMatch[numberThatMatch]->copyFileName = 
+						(char *) calloc(1, (strlen(dp->d_name) + 
+						strlen(outputName) + 1));
+					sprintf(filesThatMatch[numberThatMatch]->copyFileName, "%s%s",
+						outputName, dp->d_name);
+				} else
+				{
+					filesThatMatch[numberThatMatch]->copyFileName = 
+						(char *) calloc(1, strlen(outputName) + 1);
+					strcpy(filesThatMatch[numberThatMatch]->copyFileName, 
+d466 4
+a469 4
+		closedir(dirEntry);
+		free((char *) path);
+		free((char *) wildCardSpec);
+		free((char *) targetFile);
+a472 1
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 3
+d19 1
+a19 1
+static char rcsid [] = "$Id$";
+@

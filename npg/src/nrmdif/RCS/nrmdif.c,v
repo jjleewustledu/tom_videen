@@ -1,0 +1,237 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	2004.12.21.21.58.51;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2004.12.20.19.24.15;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@/* $Log: nrmdif.c,v $
+ * Revision 1.1  2004/12/20  19:24:15  tom
+ * Initial revision
+ * */
+/*	=========================================================================
+ *	Module:			nrmdif.c
+ *	Author:			Tom Videen
+ *	Description:	Compute normalized difference image with specified.
+ *		out = img2-img1 with mean diff = 0 within voxels of mask
+ *	=================================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: nrmdif.c,v 1.1 2004/12/20 19:24:15 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <imgutil.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <myvalues.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	char           *name1;
+	char           *name2;
+	char           *mskname;
+	char           *difname;
+	float        ***mskimg;
+	float        ***img1;
+	float        ***img2;
+	double          sum2, sum1;
+	double          mean2, mean1;
+	double          scaler;
+	long            npixels;
+	long            dim[3];
+	int             i, j, pln;
+
+	name2 = argv[1];
+	name1 = argv[2];
+	mskname = argv[3];
+	difname = argv[4];
+
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/* Read Mask */
+
+	file = make_imgfile (mskname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Cannot open %s\n", mskname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Cannot get MainHeader from %s\n", mskname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [nrmdif]: cannot find %s frame 1, 2 or 3\n", mskname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Cannot read file subheader in %s\n", mskname);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	if ((mskimg = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	close_imgfile (file);
+	free_imgfile (file);
+
+/* Read IMG1 */
+
+	file = make_imgfile (name1);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Cannot open %s\n", name1);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Cannot get MainHeader from %s\n", name1);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [nrmdif]: cannot find %s frame 1, 2 or 3\n", name1);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Cannot read file subheader in %s\n", name1);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	if ((img1 = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	close_imgfile (file);
+	free_imgfile (file);
+
+/* Read IMG2 */
+
+	indx.pln = 1;
+	file = make_imgfile (name2);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Cannot open %s\n", name2);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Cannot get MainHeader from %s\n", name2);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [nrmdif]: cannot find %s frame 1, 2 or 3\n", name2);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Cannot read file subheader in %s\n", name2);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	if ((img2 = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	close_imgfile (file);
+
+/* Compute mean within mask for IMG2 and IMG1 */
+
+	sum2 = 0.0;
+	sum1 = 0.0;
+	npixels = 0;
+	for (pln = 1; pln <= dim[2]; pln++) {
+		for (j = 1; j <= dim[1]; j++) {
+			for (i = 1; i <= dim[0]; i++) {
+				if (mskimg[pln][j][i] > 0.) {
+					sum1 += img1[pln][j][i];
+					sum2 += img2[pln][j][i];
+					npixels++;
+				}
+			}
+		}
+	}
+	mean1 = sum1;
+	mean2 = sum2;
+	scaler = mean1 / mean2;
+
+	fprintf (stdout, "Scaler =%7.3f\n", scaler);
+
+	for (pln = 1; pln <= dim[2]; pln++) {
+		for (j = 1; j <= dim[1]; j++) {
+			for (i = 1; i <= dim[0]; i++) {
+				if (mskimg[pln][j][i] > 0 && img1[pln][j][i] > 0)
+					img2[pln][j][i] = scaler * img2[pln][j][i] - img1[pln][j][i];
+				else
+					img2[pln][j][i] = 0;
+			}
+		}
+	}
+
+	indx.frm = 1;
+	(void) strcpy (file->name, difname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [nrmdif]: Could not open %s\n", difname);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR)
+		return (ERROR);
+	if (writetensor (file, &indx, img2) == ERROR)
+		return (ERROR);
+	free_f3tensor (mskimg, 1, dim[2], 1, dim[1], 1, dim[0]);
+	free_f3tensor (img2, 1, dim[2], 1, dim[1], 1, dim[0]);
+	free_f3tensor (img1, 1, dim[2], 1, dim[1], 1, dim[0]);
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Id: nrmdif.c,v 1.7 2004/02/17 14:50:47 tom Exp $";
+d50 2
+a51 2
+	difname = argv[3];
+	mskname = argv[4];
+@

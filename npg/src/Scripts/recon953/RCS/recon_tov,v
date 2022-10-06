@@ -1,0 +1,127 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2003.12.18.14.06.34;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#! /bin/csh
+#	Name:	recon_tov
+#	Author:	Tom Videen
+#	Date:	Apr 1999
+#	Intent:	Reconstruct a dynamic wobbled emission scan
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv != 11) then
+	echo "Usage: recon_tov image scn atn nrm filter cutoff zoom firstfrm lastfrm xoffset yoffset"
+	echo "	image    = output image (.img)"
+	echo "	scn      = scan (.scn)"
+	echo "	atn      = attenuation (.atn)"
+	echo "	nrm      = normalization (.nrm)"
+	echo "	filter   = 1-6 (1=ramp)"
+	echo "	cutoff  <= 0.5"
+	echo "	zoom     = image zoom (1.0 - )"
+	echo "	firstfrm = first frame"
+	echo "	lastfrm  = last frame"
+	echo "	xoffset  = x offset"
+	echo "	yoffset  = y offset"
+	echo
+	echo "Specify all files with complete path & name but no extensions."
+	echo "e.g., recon_tov p2000sp1 p2000sp1 p2000tr1_wob normalwob_940130 1 .5 1.5 1 5 0.0 -1.0"
+	exit 1
+endif
+
+unalias rm
+set program = recon_tov
+set imageFile  = $1.img
+set recFile    = ${imageFile}.rec
+set scanFile   = $2.scn
+set attenFile  = $3.atn
+set normFile   = $4.nrm
+set filter = $5
+set cutoff = $6
+set zoom  = $7
+set first = $8
+set last  = $9
+set xoff  = `echo "$10 - 0.204" | bc -l`
+set yoff  = `echo "$11 + 0.592" | bc -l`
+set gate = 1
+set data = 0
+set bed = 0
+set rot = 0.
+set size = 128
+set decayCor = 0
+set debug = 0
+set scatterCor = 1
+set scatdata = ${NPG}/953/scatparms.dat
+set arcCor = 1
+set intrinsicTilt = 1
+set priority  = 0
+set filt_slope = 0
+
+if (! -e ${scanFile}) then
+  echo "ERROR: cannot find ${scanFile}"
+  exit 1
+endif
+if (! -e ${attenFile}) then
+  echo "ERROR: cannot find ${attenFile}"
+  exit 1
+endif
+if (! -e ${normFile}) then
+  echo "ERROR: cannot find ${normFile}"
+  exit 1
+endif
+if (${scatterCor} == 1 && !(-e ${scatdata})) then
+	echo "ERROR: cannot find ${scatdata}"
+	exit 1
+endif
+
+if (-e ${recFile}) rm ${recFile}
+ 
+echo "Reconstruction ${imageFile}"
+
+set frameNumber = $first
+while ( $frameNumber <= $last )
+	echo "Frame ${frameNumber}"
+	set plane = 1
+	while ( $plane <= 31 )
+    set line = `sed -n "$plane","$plane"p $scatdata`
+    set sf    = `echo $line | awk '{print $2}'`
+    set slope = `echo $line | awk '{print $3}'`
+    set ARGS  = (${scanFile},${frameNumber},$plane,${gate},${data},${bed} \
+	    ${size},${zoom},${xoff},${yoff},${rot},${decayCor},${scatterCor},${arcCor},${intrinsicTilt}  \
+	    ${imageFile},${frameNumber},$plane,${gate},${data},${bed}  \
+	    ${filter},${cutoff},0,${filt_slope},0,${sf},${slope} \
+	    -a ${attenFile},1,$plane,${gate},${data},${bed} \
+	    -n ${normFile},1,$plane,${gate},${data},${bed})
+    ${NPG}/bin/bkproj_sun $ARGS
+    @@ plane++
+	end
+	@@ frameNumber++
+end
+
+echo "rec ${imageFile} `date` `whoami` `hostname` `uname`" > ${recFile}
+echo "${program} $1 $2 $3 $4 $5 $6 $7 $8" >> ${recFile}
+ident ${NPG}/bin/bkproj_sun | grep bkproj_sun.c | cut -f2- -d: >> ${recFile}
+if (`echo ${scanFile} | grep rn` == ${scanFile}) then
+    ident ${NPG}/bin/rnwproc | grep rnwproc.c | cut -f2- -d: >> ${recFile}
+endif
+echo "endrec" >> ${recFile}
+exit
+@

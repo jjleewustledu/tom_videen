@@ -1,0 +1,163 @@
+#!/bin/csh
+#   Module: align_oxy
+#   Author: Tom Videen
+#   Date:   Oct 1999
+#   Use:    Align PET images (HO, OO, CO) to create OEF image.
+#	rcsid = $Id: align_oxy,v 1.8 2003/12/17 14:45:02 tom Exp $
+
+if ($#argv != 5) then
+    echo "Usage:  align_oxy pid ho oc oo mask"
+	echo " e.g.,  align_oxy p5000 2 1 1 p5000mask.v"
+    exit 1
+endif
+
+set PID = $1
+set RID = r$PID
+set HO  = ${RID}ho$2
+set OC  = ${PID}oc$3
+set OO  = ${PID}oo$4
+set OEF = ${PID}oef$4
+set OCHO = ${PID}oc${3}_to_ho$2
+set OOHO = ${PID}oo${4}_to_ho$2
+set MASK = $5
+
+set THR   = 50
+set FIL  = _g3
+set HO1  = $HO$FIL
+set OC1  = $OC$FIL
+set OO1  = $OO$FIL
+
+set ROOT = $MASK:r
+set AMASK = a$ROOT
+set MASK2 = ${ROOT}b.v
+set AMASK2 = ${AMASK}b
+
+unalias cp
+unalias rm
+
+# Check existence of files:
+
+set EFILES = "$MASK $HO.v $OO.v $OC.v $HO1.v $OO1.v $OC1.v"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_oxy]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit (1)
+
+# Check the pixel size in PET headers:
+
+set STATUS = 0
+set ORGSIZE = 0
+foreach i ($EFILES)
+	set PIXSIZE = `imghdr $i | grep 'Pixel size' | cut -f4 -d' '`
+	if ($PIXSIZE == 0.208634) echo "Note: pixel size of $i is $PIXSIZE"
+	if ($ORGSIZE == 0) then
+		set ORGSIZE = $PIXSIZE
+		set ORGFILE = $i
+	else if ($PIXSIZE != $ORGSIZE) then
+		echo "ERROR [align_oxy]: different pixel sizes:"
+		echo "  $ORGFILE = $ORGSIZE"
+		echo "  $i = $PIXSIZE"
+		set STATUS = 1
+	endif
+endif
+if ($STATUS != 0) exit (1)
+
+# Setup log file:
+
+set BINFILE = `which align_oxy`
+set VER = `grep rcsid $BINFILE | cut -f2- -d: | cut -f1 -dE | head -1`
+set LOGFILE = ${RID}_align.log
+echo "$OEF alignment:  " `whoami` `date` >! $LOGFILE
+echo "Version: " $VER           >> $LOGFILE
+echo ""                         >> $LOGFILE
+
+# Convert images to Analyze format:
+
+img2analyze $MASK $AMASK
+img2analyze $HO1.v a$HO1
+img2analyze $OO1.v a$OO1
+img2analyze $OC1.v a$OC1
+setanamin $AMASK 0
+setanamin a$HO1 0
+setanamin a$OO1 0
+
+# Align OO to HO, then reslice OO:
+
+echo "Aligning:  $OO1 to $HO1"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK -x 1 -v"
+echo ">> alignlinear oo to ho" >> $LOGFILE
+echo $PRM >> $LOGFILE
+
+alignlinear a$HO1 a$OO1 $OOHO.air $PRM >! log
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOGFILE
+    exit 1
+endif
+imgreslice a$OO1 $OOHO
+analyze2img ra$OO1 r$OO1.v
+if (! -e null.air) alignlinear a$HO1 a$HO1 null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 $OOHO.air null.air $MASK >> $LOGFILE
+echo " " >> $LOGFILE
+
+# Combined resliced OO1 with existing mask
+ 
+maskimg $MASK r$OO1.v $MASK2 10
+img2analyze $MASK2 $AMASK2
+setanamin $AMASK2 0
+
+# Align CO to resliced OO, then reslice CO:
+ 
+echo "Aligning:  $OC1 to r$OO1"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK2 -x 1 -v"
+echo ">> alignlinear oc to oo" >> $LOGFILE
+echo $PRM >> $LOGFILE
+ 
+setanamin ra$OO1 0
+setanamin a$OC1 0
+alignlinear ra$OO1 a$OC1 $OCHO.air $PRM >! log
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOGFILE
+    exit 1
+endif
+imgreslice a$OC1 $OCHO
+analyze2img ra$OC1 r$OC1.v
+airdif1 $OCHO.air null.air $MASK >> $LOGFILE
+
+# Copy hdrs for realigned images
+ 
+cp $OO1.hdr r$OO1.hdr
+cp $OC1.hdr r$OC1.hdr
+
+img2analyze $OO.v a$OO
+imgreslice  a$OO  $OOHO
+analyze2img ra$OO r$OO.v
+
+img2analyze $OC.v a$OC
+imgreslice  a$OC  $OCHO
+analyze2img ra$OC r$OC.v
+
+cp $OO1.hdr r$OO.hdr
+cp $OC1.hdr r$OC.hdr
+
+rm $MASK2
+rm $AMASK2.img
+rm $AMASK2.ifh
+rm $AMASK2.hdr
+
+echo "Complete [align_oxy] ========================="

@@ -1,0 +1,146 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2006.08.16.17.04.51;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* $Log$ */
+/*	===============================================================================
+ *	Module:			nrmhdr.c
+ *	Date:			Aug 2006
+ *	Author:			Tom Videen
+ *	Description:	Read main header of an ECAT normalization file 
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: nrmhdr.c,v 2.1 2005/12/15 19:33:56 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <image.h>
+#include <libimage.h>
+#include <myvalues.h>
+
+#define TESTLEN 28
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	FILE           *fp;
+	MatrixFile     *fptr;
+	Main_header7   *mh7;
+	Main_header    *main_header;
+	char           *fname;
+	int             ftype;
+	struct tm      *ptm;
+	long            scantime;
+	int             year;
+	short           system, data_type, sw_version;
+
+	union conv {
+		short           s[TESTLEN];
+		char            c[2 * TESTLEN];
+	}               test;
+
+	fname = argv[1];
+
+	if ((fp = fopen (fname, "r")) == NULL) {
+		(void) fprintf (stderr, "ERROR [nrmhdr]: Could not open %s\n", fname);
+		return (ERROR);
+	}
+	if (fread (test.s, sizeof (short), TESTLEN, fp) != TESTLEN) {
+		(void) fprintf (stderr, "ERROR [nrmhdr]: Could not read %s\n", fname);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+	test.c[TESTLEN - 1] = (char) NULL;
+
+	data_type = (((test.s[25] & 0xff) << 8) | ((test.s[25] & 0xff00) >> 8));
+	if (data_type > 1 && data_type < 8) {
+		system = (((test.s[26] & 0xff) << 8) | ((test.s[26] & 0xff00) >> 8));
+		sw_version = (((test.s[24] & 0xff) << 8) | ((test.s[24] & 0xff00) >> 8));
+	} else {
+		system = test.s[26];
+		sw_version = test.s[24];
+	}
+
+	if (strncmp (test.c, "MATRIX7", 7) == 0) {
+		ftype = MATRIX_REV7;
+	} else if (((system == 921) || (system == 951) || (system == 953) || (system == 961) ||
+		    (system == 962) || (system == 6) || (system == 1) || (system == 0)) &&
+		   ((sw_version == 64) || (sw_version == 65) || (sw_version == 6))) {
+		ftype = MATRIX_REV6;
+	} else {
+		(void) fprintf (stderr, "This is not an ECAT file: %s\n", fname);
+		return (ERROR);
+	}
+
+	if (ftype == MATRIX_REV7) {
+		file = make_imgfile (fname);
+		if (open_imgfile (file) == ERROR) {
+			fprintf (stderr, "ERROR [nrmhdr]: Could not open %s\n", fname);
+			return (ERROR);
+		}
+		if (get_mh (file) == ERROR) {
+			fprintf (stderr, "ERROR [nrmhdr]: Could not get MainHeader from %s\n", fname);
+			return (ERROR);
+		}
+		mh7 = file->m7->mh;
+		scantime = (long) mh7->dose_start_time;
+		ptm = localtime (&scantime);
+		year = ptm->tm_year;
+		if (year < 1000)
+			year += 1900;
+		printf ("%s   %02d/%02d/%04d, %02d:%02d:%02d\n", fname, ptm->tm_mon + 1, ptm->tm_mday,
+			year, ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
+		if (mh7->septa_state == 0)
+			printf ("ECAT %d   Septa Extended\n", mh7->system_type);
+		else
+			printf ("ECAT %d   Septa Retracted\n", mh7->system_type);
+
+/* Read ECAT 6 data */
+
+	} else {
+		fptr = matrix_open (fname, "r");
+		if (fptr == NULL) {
+			(void) fprintf (stderr, "ERROR [nrmhdr]: Cannot open %s\n", fname);
+			return (ERROR);
+		}
+		main_header = fptr->mhptr;
+		printf ("%s     %d/%d/%d\n", fname, main_header->scan_start_month,
+			main_header->scan_start_day, main_header->scan_start_year);
+		printf ("ECAT %d\n", main_header->system_type);
+		printf ("File type = %d     Data type = %d     Acquisition type = %d\n",
+		   main_header->file_type, main_header->data_type, main_header->acquisition_type);
+		printf ("Wobble speed = %d\n", main_header->wobble_speed);
+		printf ("Isotope =  %s\n", main_header->isotope_code);
+		printf ("%d Frames   %d Planes   Bed Position: %.2f mm\n", main_header->num_frames,
+			main_header->num_planes, main_header->init_bed_position);
+		(void) matrix_close (fptr);
+	}
+	return (OK);
+}
+@

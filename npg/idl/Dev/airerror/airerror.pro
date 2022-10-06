@@ -1,0 +1,135 @@
+; $Id: airerror.pro,v 1.1 2000/05/17 17:01:42 tom Exp $
+;
+;+
+; NAME:
+;   AIRERROR
+;
+; PURPOSE:
+;	Find matrix which aligns 2 images using a set of fiducial points.
+;	and compare to an AIR file alignment over a brain volume.
+;
+; CATEGORY:
+;   Image processing.
+;
+; CALLING SEQUENCE:
+;   AIRERROR, Name, Branch, Flag
+;
+; INPUTS:
+;	[1] air file from aligning pet (reslice) to mri (standard) images (output from alignpettomri16)
+;	[2] fid file from fixed image (MRI) (output from alignfids)
+;	[3] fid file from image to reslice or realign (PET) (output from alignfids)
+;	[4] brain8.hdr file (currently unread)
+;	[5] brain8.img file (8-bit segmented image of brain voxels)
+;
+; OUTPUTS:
+;
+; FUNCTION:
+;
+; EXAMPLE:
+;   AIRERROR
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, Jan 1996
+;-
+
+pro airerror
+
+RESLICE:
+;	reslicefile = " "
+;	read, PROMPT="PET fiducial file: ", reslicefile
+	reslicefile = "n116.fid"
+	if (not exist_file(reslicefile)) then begin
+		print, "ERROR: File ", reslicefile, " not found"
+		goto, RESLICE
+	endif
+
+FIXED:
+;	fixedfile = " "
+;	read, PROMPT="PET fiducial file: ", fixedfile
+ 	fixedfile = "bcr8.fid"
+	if (not exist_file(fixedfile)) then begin
+		print, "ERROR: File ", fixedfile, " not found"
+		goto, FIXED
+	endif
+
+	data = fltarr(6,5)
+	openr, lun, reslicefile, /get_lun
+	readf, lun, data
+	close, lun
+	reslice = [[transpose(data(0:2,*))], [replicate(1., 5)]]	; add column of 1's
+	reslice = transpose(reslice)
+
+	openr, lun, fixedfile
+	readf, lun, data
+	close, lun
+	free_lun, lun
+	fixed = [[transpose(data(0:2,*))], [replicate(1., 5)]]	; add column of 1's
+	fixed = transpose(fixed)
+
+	data = fltarr(4,4)
+	fscale = fltarr(3)
+	rscale = fltarr(3)
+	text = " "
+	airfile = "m556all-mprbcr.air"
+	command = "airmatrix " + airfile
+	spawn, command, list
+	reads, list, data, fscale, text, rscale
+	print, "AIR transformation matrix:"
+	print, data, format = '(4(F10.4,2X))'
+	print
+	
+	matrix_distance, fixed, reslice, data, fscale, dist
+ 	print, "Mean discrepancy of AIR aligned points =", dist, " mm", format='(A,F8.3,A,/)'
+	
+	fitmatrix, fixed, reslice, fit
+	print, "Transformation from Least Squares solution:"
+	print, fit, format = '(4(F10.4,2X))'
+	print
+	matrix_distance, fixed, reslice, fit, fscale, dist
+ 	print, "Mean discrepancy of Least Squares fit =", dist, " mm", format='(A,F8.3,A,/)'
+	
+	print, "Difference between AIR and Least Squares:"
+	print, data - fit, format = '(4(F10.4,2X))'
+
+;	Compute mean difference for points in brain
+;	print, "Brain image dimensions:", x, y, z
+;	print, "Total pixels in brain image =", total
+;	print, "Discrepancy of brain pixels with AIR compared with Least Squares:"
+end
+
+pro fitmatrix, X, Y, M
+
+;	Least squares solution to M # X = Y
+;	is M = inverse(Xt # X) # (Xt # Y)
+;	where Xt = transpose(X)
+;
+;	Note that matrices must be transposed to index row,column before multiplication
+;	which means that Xt = transpose(transpose(X)) = X
+
+	m = (size(X))(1)
+	if (m lt 4) then begin
+		print, "ERROR: cannot fit less than 4 points"
+		stop
+	endif
+	Xrc = transpose(X)
+	Yrc = transpose(Y)
+	M = invert(X # Xrc) # (X # Yrc)		; no need to tranpose on return for IDL
+end
+
+pro matrix_distance, x, y, mat, scale, dist
+
+;	transpose before mult (list of points, x, are already transposed)
+
+	x1 = transpose(mat) # x
+	dist = 0.
+	m = (size(x))(2)
+	for j=0, m do begin
+		sum = 0.
+		for i=0, 2 do begin
+			a = scale(i) * (y(i,*)-x1(i,*))
+			sum = sum + a*a
+		endfor
+		dist = dist + sqrt(sum)
+	endfor
+	dist = (moment(dist))(0)
+end

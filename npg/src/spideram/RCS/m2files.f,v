@@ -1,0 +1,961 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	92.12.08.21.09.23;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	92.10.21.20.03.19;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	92.08.21.19.48.17;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   m2files.f
+C     Author:       Tom O. Videen
+C     Date:         20-May-87
+C     Intent:
+C     .  This subroutine displays the scan file list and allows
+C     .  the user to add to or delete files from the list using
+C     .  full screen editing techniques (for the scan file numbers).
+C     .  As each file is entered in the list, the program check for
+C     .  its existence and reads the number of slices, date processed,
+C     .  and initials of the person who processed the file
+C     .  from the file header and writes them to the terminal.
+C     
+C     History:
+C     .  Modified 20-Aug-87 by TOV to reset PETTNUM and NMSLICES to 0
+C     .     when all files are deleted using deleted.  Checks for
+C     .     remaining files after each delete.
+C     .  Modified 01-Feb-90 by TOV to assign SLCNUM = 1.
+C     .  Modified 27-Sep-91 by TOV for XSPIDERAM.
+C     .  Modified 11-Oct-91 by Tom Yang for changing the default
+C     .     cursor position for Constant, HO, and CO selection.
+C     .  Modified 14-Oct-91 by TOV:
+C     
+C     Common Blocks from SPIDERAM.INC
+C     .  **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .  **FILES    - scan file list                 (write)
+C     
+C     Local Variables:
+C     .  ROW - row number of the heading;
+C     .  OCOL - column number of the options fields;
+C     .  OLEN - length of option fields;
+C     .  CH - input character for selecting a menu option;
+C     .  ROWCH,COLCH - location of the field for entering CH;
+C     .  L,L2 - length passed to write field subroutines;
+C     .  WARNLINE - line on which warnings will be written;
+C     .  Q - question writen to terminal;
+C     .  A - answer;
+C     .  STR - string to write to terminal;
+C     .  MENU - menu options;
+C     .  MENUSET - set of characters allowed for menu options;
+C     .  HEAD - heading for the table;
+C     .  FNM - file number;
+C     .  LASTFNM - last value of FNM;
+C     .  HOME,CLEAR - values passed to TCONTROL to home the cursor and
+C     .     clear the terminal screen;
+C     .  BELL - character which sounds terminal bell;
+C     .  BLANK - character string of blanks;
+C     .  DASH  - character string of dashes;
+C     .  NEXT - logical variables required by some function calls but
+C     .     which is not used in this calling program;
+C     .  HDRONLY = true--> read the header only; ***
+C     .            false--> read the header and image;
+C     .  ERRTYPE = type of error in processing images:
+C     .    0 = no errors in processing;
+C     .    6 = cannot read FILE(1);
+C     .    7 = cannot read FILE(2);
+C     .    8 = cannot read FILE(3);
+C     .    9 = cannot read FILE(4);
+C     .   10 = cannot read FILE(5);
+C     .   17 = illegal scanner = SCANRERR;
+C     .   18 = illegal number of slices in image = SLICERR;
+C     .   -1 = error in local processing;
+C     
+C     Uses Subroutines:
+C     .  D2GETIMG - read image file header (HDRONLY=true);
+C     .  CHFIELD  - get a character from terminal;
+C     .  ERSFIELD - erase a field;
+C     .  INFIELD  - get a string from a field;
+C     .  INTFIELD - get an integer from a field;
+C     .  QUERY    - write a question and get a Y or N response;
+C     .  RELFIELD - get a real no. from a field;
+C     .  TCONTROL - terminal control functions;
+C     .  WRTFIELD - write a character string to a field;
+C     
+C     Called by:  SPIDERAM
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: m2files.f,v 1.7 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE M2FILES
+
+      INTEGER*4    HOME, CLEAR, ROW, OCOL(9), OLEN(9), ERRTYPE, SLCNUM,
+     &     ROWCH, COLCH, WARNLINE, FNM, LASTFNM, L, L2, I
+      LOGICAL*1    NEXT, HDRONLY, A
+      CHARACTER*1  CH, BELL
+      CHARACTER*2  NUM
+      CHARACTER*20 BLANK
+      CHARACTER*80 MENU(2), MENUSET, Q, STR, HEAD(2)
+
+      INCLUDE 'spideram.inc'
+
+      DATA HOME, CLEAR /1,2/
+      DATA ROW /2/
+      DATA OCOL /2, 5, 27, 31, 41, 47, 56, 66, 75/
+      DATA OLEN /2, 20, 2, 8, 4, 6, 5, 2, 2/
+      DATA ROWCH, COLCH, WARNLINE /23, 1, 24/
+      DATA MENUSET /'AFCHDSEMafchdsem'/
+
+      HEAD(1) = ' #  Scan File Name        #S  Proc Date  By   '//
+     &     'Factor   Const   HO File  CO File'
+      HEAD(2) = '--  --------------------  --  --------- ----  '//
+     &     '------   ------  -------  -------'
+      MENU(1) = '         A = Add      F = Factor      C = Constant '//
+     &     '   H = Change HO/CO Files'
+      MENU(2) = 'Options: D = Delete   S = Substitute  E = Erase ALL'//
+     &     '   M = Main Menu'
+      BLANK = ' '
+      BELL = CHAR(7)
+      FNM = 1
+      SLCNUM = 1
+      LASTFNM = 1
+      HDRONLY = .TRUE.
+
+C     ====================================================================
+C     Write the scan file list to the terminal
+
+ 8180 FORMAT (A80)
+ 8181 FORMAT (A80)
+ 8190 FORMAT (I2, 2X, A20, 2X, I2, 2X, A8, 2X, A4)
+ 9010 FORMAT (I5)
+ 9020 FORMAT (I2)
+ 100  CALL TCONTROL (HOME, 0, 0)
+      CALL TCONTROL (CLEAR, 0, 0)
+      WRITE (USEROUT, 8180) HEAD (1)
+      WRITE (USEROUT, 8181) HEAD (2)
+      DO 150 I = 1, 20
+         IF (FILENAME (I) .EQ. BLANK) THEN
+            WRITE (USEROUT, 8190) I
+         ELSE
+            WRITE (USEROUT, 8190) I, FILENAME (I), NMSLICES, PROCDATE (I), PROCBY(I)
+            CALL WRITEREL (MULTFACT(I),OLEN(6),ROW + I,OCOL(6))
+            WRITE (STR, 9010) ADDFACT (I)
+            L  = INANYL(STR,' ')
+            L2 = INANYR(STR,' ')
+            CALL WRITEINT (ADDFACT (I), L2-L+1, ROW + I, OCOL (7))
+            WRITE (STR, 9020) HOFILE (I)
+            L  = INANYL(STR,' ')
+            L2 = INANYR(STR,' ')
+            CALL WRITEINT (HOFILE (I), L2-L+1, ROW + I, OCOL (8))
+            WRITE (STR, 9020) COFILE (I)
+            L  = INANYL(STR,' ')
+            L2 = INANYR(STR,' ')
+            CALL WRITEINT (COFILE (I), L2-L+1, ROW + I, OCOL (9))
+         END IF
+ 150  CONTINUE
+
+C     ====================================================================
+C     Get user's selection
+
+ 200  CALL WRTFIELD (MENU(1), 79, ROWCH, COLCH)
+      CALL WRTFIELD (MENU(2), 79, ROWCH + 1, COLCH)
+      CALL CHFIELD (CH, MENUSET, ROWCH, COLCH, 0)
+
+C     ----------------------------------------------------------
+C     'A' or 'S' - Add or Substitute a File Name
+
+      IF (CH .EQ. 'A' .OR. CH .EQ. 'a' .OR. CH .EQ. 'S' .OR. CH .EQ. 's') THEN
+         ERRTYPE = 0
+         CALL ERSFIELD (80, ROWCH, COLCH)
+         Q = 'File Number'
+         L = INANYR (Q, ' ')
+         CALL WRTFIELD (Q, L, ROWCH, COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+ 500     CALL INTFIELD (FNM, 0, 20, 2, ROWCH, 
+     &        COLCH + L + 2, WARNLINE, NEXT)
+
+C     Erase last input name if an error occurred
+
+         IF (ERRTYPE .NE. 0) THEN
+            CALL ERSFIELD (76, ROW + LASTFNM, OCOL (2))
+            ERRTYPE = 0
+         END IF
+
+C     Cancel this option
+
+         IF (FNM .EQ. 0) GO TO 7000
+
+C     Get the file name
+
+ 510     IF (FILENAME (FNM) .NE. BLANK) 
+     &        CALL ERSFIELD (76,ROW+FNM,OCOL (2))
+         CALL INFIELD (FILENAME (FNM),OLEN(2),ROW+FNM,OCOL(2),NEXT)
+         IF (FILENAME (FNM) .EQ. BLANK) GO TO 7000
+
+C     Check existence of image file
+
+ 8000    FORMAT(I2)
+         CALL D2GETIMG(1,SLCNUM,FNM,ERRTYPE,HDRONLY)
+         IF (ERRTYPE.NE.0) THEN
+            FILENAME(FNM) = ' '
+            LASTFNM = FNM
+            IF (ERRTYPE.EQ.17) THEN
+               IF (PETTNUM.EQ.6) THEN
+                  STR = '*** ERROR:  this is not a PETT VI file *** '
+               ELSE IF (PETTNUM.EQ.7) THEN
+                  STR = '*** ERROR:  this is not a Super PETT I file'
+               ELSE IF (PETTNUM.EQ.10) THEN
+                  STR = '*** ERROR:  this is not an ECAT file'
+               ELSE 
+                  STR = '*** ERROR:  this is not a Super PETT II file'
+               END IF
+            ELSE IF (ERRTYPE .EQ. 18) THEN
+               WRITE (NUM, 8000) NMSLICES
+               STR = '*** ERROR:  other scan files have '//NUM//'slices'//BELL
+            ELSE
+               STR = '*** ERROR:  cannot read this file *** '//BELL
+            END IF
+            L2 = INANYR (STR, ' ')
+            CALL WRTFIELD (STR, L2, ROW + FNM, OCOL (3))
+            GO TO 500
+         ELSE
+            MULTFACT(FNM) = 1.0
+            ADDFACT(FNM)  = 0
+            HOFILE(FNM)   = 0
+            COFILE(FNM)   = 0
+            CALL WRITEINT (NMSLICES,OLEN(3),ROW+FNM,OCOL(3))
+            CALL WRTFIELD (PROCDATE(FNM),OLEN(4),ROW+FNM,OCOL(4))
+            CALL WRTFIELD (PROCBY(FNM),OLEN(5),ROW+FNM,OCOL(5))
+            CALL WRITEREL (MULTFACT(FNM),OLEN(6),ROW+FNM,OCOL(6))
+            WRITE (STR, 9010) ADDFACT (FNM)
+            L  = INANYL(STR,' ')
+            L2 = INANYR(STR,' ')
+            CALL WRITEINT (ADDFACT(FNM),L-L2+1,ROW+FNM,OCOL(7))
+            WRITE (STR, 9020) HOFILE (FNM)
+            L  = INANYL(STR,' ')
+            L2 = INANYR(STR,' ')
+            CALL WRITEINT (HOFILE(FNM),L-L2+1,ROW+FNM,OCOL(8))
+            WRITE (STR, 9020) HOFILE (FNM)
+            L  = INANYL(STR,' ')
+            L2 = INANYR(STR,' ')
+            CALL WRITEINT (COFILE(FNM),L-L2+1,ROW+FNM,OCOL(9))
+         END IF
+
+         IF (FNM.LT.20) THEN
+            FNM = FNM+1
+            IF (CH.EQ.'A' .OR. CH.EQ.'a') GO TO 510
+         END IF
+
+C     ----------------------------------------------------------
+C     'D' - Delete a File Name
+
+      ELSE IF (CH.EQ.'D' .OR. CH.EQ.'d') THEN
+         CALL ERSFIELD(80,ROWCH,COLCH)
+         Q = 'File Number'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+         CALL INTFIELD(FNM,0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         IF (FNM.NE.0 .AND. FILENAME(FNM).NE.BLANK) THEN
+            CALL ERSFIELD(76,ROW+FNM,OCOL(2))
+            FILENAME(FNM) = BLANK
+            PROCDATE(FNM) = '00/00/00'
+            PROCBY(FNM)   = '    '
+            MULTFACT(FNM) = 1.0
+            ADDFACT(FNM)  = 0
+            HOFILE(FNM)   = 0
+            COFILE(FNM)   = 0
+
+C     If file list is empty, initialize PETTNUM and NMSLICES to 0
+
+            DO 600 I=1,20
+               IF (FILENAME(I).NE.BLANK) GO TO 610
+ 600        CONTINUE
+            PETTNUM = 0
+            NMSLICES = 0
+ 610        CONTINUE
+
+         END IF
+
+C     ----------------------------------------------------------
+C     'E' - Erase ALL files from the list
+
+      ELSE IF (CH.EQ.'E' .OR. CH.EQ.'e') THEN
+         CALL ERSFIELD(80,ROWCH,COLCH)
+         Q = 'Clear ALL files from the list'
+         L = INANYR(Q,' ')
+         CALL QUERY(Q,A,ROWCH,COLCH)
+         IF (A) THEN
+            PETTNUM = 0
+            NMSLICES = 0
+            DO 1000 I=1,20
+               FILENAME(I) = ' '
+               PROCDATE(I) = '00/00/00'
+               PROCBY(I)   = ' '
+               MULTFACT(I) = 1.0
+               ADDFACT(I)  = 0
+               HOFILE(I)   = 0
+               COFILE(I)   = 0
+ 1000       CONTINUE
+            GO TO 100
+         END IF
+
+C     ----------------------------------------------------------
+C     'F' - Change Factor for scaling a file
+
+      ELSE IF (CH.EQ.'F' .OR. CH.EQ.'f') THEN
+         CALL ERSFIELD(80,ROWCH,COLCH)
+         Q = 'File Number'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+         CALL INTFIELD(FNM,0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         IF (FNM.NE.0 .AND. FILENAME(FNM).NE.BLANK) THEN
+            STR = 'All image points will be multiplied by this factor'
+            CALL WRTFIELD(STR,80,ROWCH,COLCH)
+            CALL RELFIELD(MULTFACT(FNM),-9999.,99999.,OLEN(6),
+     &           ROW+FNM,OCOL(6),WARNLINE,NEXT)
+         END IF
+
+C     ----------------------------------------------------------
+C     'C' - Change the constant to add to all points in a file
+
+      ELSE IF (CH.EQ.'C' .OR. CH.EQ.'c') THEN
+         CALL ERSFIELD(80,ROWCH,COLCH)
+         Q = 'File Number'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+         CALL INTFIELD(FNM,0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         IF (FNM.NE.0 .AND. FILENAME(FNM).NE.BLANK) THEN
+            STR = 'This constant will be added to all image points'
+            CALL WRTFIELD(STR,80,ROWCH,COLCH)
+            CALL INTFIELD(ADDFACT(FNM),-9999,99999,OLEN(7),
+     &           ROW+FNM,OCOL(7),WARNLINE,NEXT)
+         END IF
+
+C     ---------------------------------------------------------------
+C     Change HO and CO Files associated with a file name
+
+      ELSE IF (CH .EQ. 'H' .OR. CH .EQ. 'h') THEN
+         CALL ERSFIELD (80, ROWCH, COLCH)
+         ERRTYPE = 0
+         Q = 'O2 File Number'
+         L = INANYR (Q, ' ')
+         CALL WRTFIELD (Q, L, ROWCH, COLCH)
+         STR = '(enter 0 to cancel)'
+         CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+         CALL INTFIELD (FNM, 0, 20, 2, ROWCH, COLCH + L + 2, WARNLINE, NEXT)
+         IF (FNM .NE. 0 .AND. FILENAME (FNM) .NE. BLANK) THEN
+ 1010       CALL INTFIELD (HOFILE (FNM), 0, 20, OLEN (8), ROW + FNM, OCOL (8),
+     &           WARNLINE, NEXT)
+            IF (HOFILE (FNM) .NE. 0 .AND. FILENAME (HOFILE (FNM)) .EQ. BLANK) THEN
+               ERRTYPE = -1
+               STR = '*** ERROR: no scan file assigned to this number'//BELL
+               CALL WRTFIELD (STR, 70, WARNLINE, 1)
+               GO TO 1010
+            ELSE IF (HOFILE(FNM).NE.0) THEN
+               CALL D2GETIMG(1,SLCNUM,HOFILE(FNM),ERRTYPE,HDRONLY)
+               IF (ERRTYPE.NE.0) THEN
+                  STR = '*** ERROR: cannot read this file'//BELL
+                  CALL ERSFIELD(70,WARNLINE,1)
+                  CALL WRTFIELD(STR,70,WARNLINE,1)
+                  GO TO 1010
+               ELSE IF (NTYPE(1).NE.2 .AND. NTYPE(1).NE.4) THEN
+                  ERRTYPE = 1
+                  STR = '*** ERROR: this is not an HO file'//BELL
+                  CALL ERSFIELD(70,WARNLINE,1)
+                  CALL WRTFIELD(STR,70,WARNLINE,1)
+                  GO TO 1010
+               END IF
+            END IF
+ 1015       CALL INTFIELD(COFILE(FNM),0,20,OLEN(9),ROW+FNM,OCOL(9),WARNLINE,NEXT)
+            IF (COFILE(FNM).NE.0 .AND. FILENAME(COFILE(FNM)).EQ.BLANK) THEN
+               ERRTYPE = -1
+               STR='*** ERROR: no scan file assigned to this number'//BELL
+               CALL WRTFIELD(STR,70,WARNLINE,1)
+               GO TO 1015
+            ELSE IF (COFILE(FNM).NE.0) THEN
+               CALL D2GETIMG(1,SLCNUM,COFILE(FNM),ERRTYPE,HDRONLY)
+               IF (ERRTYPE.NE.0) THEN
+                  STR = '*** ERROR: cannot read this file'//BELL
+                  CALL ERSFIELD(70,WARNLINE,1)
+                  CALL WRTFIELD(STR,70,WARNLINE,1)
+                  GO TO 1015
+               ELSE IF (NTYPE(1).NE.3) THEN
+                  ERRTYPE = 1
+                  STR = '*** ERROR: this is not a CO file'//BELL
+                  CALL ERSFIELD(70,WARNLINE,1)
+                  CALL WRTFIELD(STR,70,WARNLINE,1)
+                  GO TO 1015
+               END IF
+            END IF
+         END IF
+         IF (ERRTYPE.NE.0) CALL ERSFIELD(70,WARNLINE,1)
+         CALL ERSFIELD(80,ROWCH,COLCH)
+
+C     ----------------------------------------------------------
+
+      ELSE IF (CH.EQ.'M' .OR. CH.EQ.'m') THEN
+         RETURN
+      END IF
+
+ 7000 CALL ERSFIELD(80,ROWCH,COLCH)
+      GO TO 200
+
+      END
+@
+
+
+1.7
+log
+@format changes plus fixes for g77
+@
+text
+@d79 1
+a79 1
+C     rcsheader = "$Id: m2files.f,v 1.6 1993/10/04 21:55:32 tom Exp tom $"
+@
+
+
+1.6
+log
+@added rcsheader
+@
+text
+@d2 76
+a77 83
+C
+C  Subroutine:   m2files.f
+C
+C  Author:       Tom O. Videen
+C  Date:         20-May-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified 20-Aug-87 by TOV to reset PETTNUM and NMSLICES to 0
+C        when all files are deleted using deleted.  Checks for
+C        remaining files after each delete.
+C     Modified 01-Feb-90 by TOV to assign SLCNUM = 1.
+C     Modified 27-Sep-91 by TOV for XSPIDERAM.
+C     Modified 11-Oct-91 by Tom Yang for changing the default
+C	cursor position for Constant, HO, and CO selection.
+C     Modified 14-Oct-91 by TOV:
+C
+C  Intent:
+C     This subroutine displays the scan file list and allows
+C     the user to add to or delete files from the list using
+C     full screen editing techniques (for the scan file numbers).
+C     As each file is entered in the list, the program check for
+C     its existence and reads the number of slices, date processed,
+C     and initials of the person who processed the file
+C     from the file header and writes them to the terminal.
+C
+C  Common Blocks from SPIDERAM.INC
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **FILES    - scan file list                 (write)
+C
+C  Local Variables:
+C     ROW - row number of the heading;
+C     OCOL - column number of the options fields;
+C     OLEN - length of option fields;
+C     CH - input character for selecting a menu option;
+C     ROWCH,COLCH - location of the field for entering CH;
+C     L,L2 - length passed to write field subroutines;
+C     WARNLINE - line on which warnings will be written;
+C     Q - question writen to terminal;
+C     A - answer;
+C     STR - string to write to terminal;
+C     MENU - menu options;
+C     MENUSET - set of characters allowed for menu options;
+C     HEAD - heading for the table;
+C     FNM - file number;
+C     LASTFNM - last value of FNM;
+C     HOME,CLEAR - values passed to TCONTROL to home the cursor and
+C        clear the terminal screen;
+C     BELL - character which sounds terminal bell;
+C     BLANK - character string of blanks;
+C     DASH  - character string of dashes;
+C     NEXT - logical variables required by some function calls but
+C        which is not used in this calling program;
+C     HDRONLY = true--> read the header only; ***
+C               false--> read the header and image;
+C     ERRTYPE = type of error in processing images:
+C       0 = no errors in processing;
+C       6 = cannot read FILE(1);
+C       7 = cannot read FILE(2);
+C       8 = cannot read FILE(3);
+C       9 = cannot read FILE(4);
+C      10 = cannot read FILE(5);
+C      17 = illegal scanner = SCANRERR;
+C      18 = illegal number of slices in image = SLICERR;
+C      -1 = error in local processing;
+C
+C  Uses Subroutines:
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     D2GETIMG - read image file header (HDRONLY=true);
+C
+C  FIELDS.LIB - terminal I/O routines using fields:
+C     CHFIELD  - get a character from terminal;
+C     ERSFIELD - erase a field;
+C     INFIELD  - get a string from a field;
+C     INTFIELD - get an integer from a field;
+C     QUERY    - write a question and get a Y or N response;
+C     RELFIELD - get a real no. from a field;
+C     TCONTROL - terminal control functions;
+C     WRTFIELD - write a character string to a field;
+C
+C  Called by:  SPIDERAM
+C
+d79 2
+a80 1
+C
+d82 1
+a82 1
+C
+d84 1
+a84 1
+     &             ROWCH, COLCH, WARNLINE, FNM, LASTFNM, L, L2, I
+d90 1
+a90 2
+      character*256 rcsheader
+C
+a91 1
+      rcsheader = "$Id$"
+d99 25
+a123 25
+C
+      HEAD(1)	= ' #  Scan File Name        #S  Proc Date  By   '//
+     2          'Factor   Const   HO File  CO File'
+      HEAD(2)	= '--  --------------------  --  --------- ----  '//
+     2          '------   ------  -------  -------'
+      MENU(1)	= '         A = Add      F = Factor      C = Constant '//
+     2          '   H = Change HO/CO Files'
+      MENU(2)	= 'Options: D = Delete   S = Substitute  E = Erase ALL'//
+     2          '   M = Main Menu'
+      BLANK	= ' '
+      BELL	= CHAR(7)
+      FNM	= 1
+      SLCNUM	= 1
+      LASTFNM	= 1
+      HDRONLY	= .TRUE.
+C
+C ====================================================================
+C  Write the scan file list to the terminal
+C
+8180  FORMAT (A80)
+8181  FORMAT (A80)
+8190  FORMAT (I2, 2X, A20, 2X, I2, 2X, A8, 2X, A4)
+9010  FORMAT (I5)
+9020  FORMAT (I2)
+100   CALL TCONTROL (HOME, 0, 0)
+d128 24
+a151 25
+	IF (FILENAME (I) .EQ. BLANK) THEN
+	  WRITE (USEROUT, 8190) I
+        ELSE
+	  WRITE (USEROUT, 8190) I, FILENAME (I), NMSLICES, PROCDATE (I),
+     2	    PROCBY(I)
+	  CALL WRITEREL (MULTFACT(I),OLEN(6),ROW + I,OCOL(6))
+	  WRITE (STR, 9010) ADDFACT (I)
+          L  = INANYL(STR,' ')
+          L2 = INANYR(STR,' ')
+	  CALL WRITEINT (ADDFACT (I), L2-L+1, ROW + I, OCOL (7))
+	  WRITE (STR, 9020) HOFILE (I)
+          L  = INANYL(STR,' ')
+          L2 = INANYR(STR,' ')
+	  CALL WRITEINT (HOFILE (I), L2-L+1, ROW + I, OCOL (8))
+	  WRITE (STR, 9020) COFILE (I)
+          L  = INANYL(STR,' ')
+          L2 = INANYR(STR,' ')
+	  CALL WRITEINT (COFILE (I), L2-L+1, ROW + I, OCOL (9))
+	END IF
+150   CONTINUE
+C
+C ====================================================================
+C  Get user's selection
+C
+200   CALL WRTFIELD (MENU(1), 79, ROWCH, COLCH)
+d154 55
+a208 50
+C
+C  ----------------------------------------------------------
+C  'A' or 'S' - Add or Substitute a File Name
+C
+      IF (CH .EQ. 'A' .OR. CH .EQ. 'a' .OR.
+     2	  CH .EQ. 'S' .OR. CH .EQ. 's') THEN
+	ERRTYPE	= 0
+	CALL ERSFIELD (80, ROWCH, COLCH)
+	Q = 'File Number'
+	L = INANYR (Q, ' ')
+	CALL WRTFIELD (Q, L, ROWCH, COLCH)
+	STR = '(enter 0 to cancel)'
+	CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+500	CALL INTFIELD (FNM, 0, 20, 2, ROWCH, 
+     &		COLCH + L + 2, WARNLINE, NEXT)
+C
+C    Erase last input name if an error occurred
+C
+        IF (ERRTYPE .NE. 0) THEN
+	  CALL ERSFIELD (76, ROW + LASTFNM, OCOL (2))
+	  ERRTYPE = 0
+        END IF
+C
+C    Cancel this option
+C
+        IF (FNM .EQ. 0) GO TO 7000
+C
+C    Get the file name
+C
+510     IF (FILENAME (FNM) .NE. BLANK) 
+     2	  CALL ERSFIELD (76,ROW+FNM,OCOL (2))
+        CALL INFIELD (FILENAME (FNM),OLEN(2),ROW+FNM,OCOL(2),NEXT)
+        IF (FILENAME (FNM) .EQ. BLANK) GO TO 7000
+C
+C    Check existence of image file
+C
+8000    FORMAT(I2)
+        CALL D2GETIMG(1,SLCNUM,FNM,ERRTYPE,HDRONLY)
+        IF (ERRTYPE.NE.0) THEN
+          FILENAME(FNM) = ' '
+          LASTFNM = FNM
+          IF (ERRTYPE.EQ.17) THEN
+            IF (PETTNUM.EQ.6) THEN
+              STR = '*** ERROR:  this is not a PETT VI file *** '
+            ELSE IF (PETTNUM.EQ.7) THEN
+              STR = '*** ERROR:  this is not a Super PETT I file'
+            ELSE IF (PETTNUM.EQ.10) THEN
+              STR = '*** ERROR:  this is not an ECAT file'
+            ELSE 
+              STR = '*** ERROR:  this is not a Super PETT II file'
+d210 34
+a243 41
+          ELSE IF (ERRTYPE .EQ. 18) THEN
+            WRITE (NUM, 8000) NMSLICES
+            STR = '*** ERROR:  other scan files have '//NUM//
+     2        ' slices'//BELL
+          ELSE
+            STR = '*** ERROR:  cannot read this file *** '//BELL
+          END IF
+          L2 = INANYR (STR, ' ')
+          CALL WRTFIELD (STR, L2, ROW + FNM, OCOL (3))
+          GO TO 500
+        ELSE
+          MULTFACT(FNM) = 1.0
+          ADDFACT(FNM)  = 0
+          HOFILE(FNM)   = 0
+          COFILE(FNM)   = 0
+          CALL WRITEINT (NMSLICES,OLEN(3),ROW+FNM,OCOL(3))
+          CALL WRTFIELD (PROCDATE(FNM),OLEN(4),ROW+FNM,OCOL(4))
+          CALL WRTFIELD (PROCBY(FNM),OLEN(5),ROW+FNM,OCOL(5))
+          CALL WRITEREL (MULTFACT(FNM),OLEN(6),ROW+FNM,OCOL(6))
+          WRITE (STR, 9010) ADDFACT (FNM)
+          L  = INANYL(STR,' ')
+          L2 = INANYR(STR,' ')
+          CALL WRITEINT (ADDFACT(FNM),L-L2+1,ROW+FNM,OCOL(7))
+          WRITE (STR, 9020) HOFILE (FNM)
+          L  = INANYL(STR,' ')
+          L2 = INANYR(STR,' ')
+          CALL WRITEINT (HOFILE(FNM),L-L2+1,ROW+FNM,OCOL(8))
+          WRITE (STR, 9020) HOFILE (FNM)
+          L  = INANYL(STR,' ')
+          L2 = INANYR(STR,' ')
+          CALL WRITEINT (COFILE(FNM),L-L2+1,ROW+FNM,OCOL(9))
+        END IF
+C
+        IF (FNM.LT.20) THEN
+          FNM = FNM+1
+          IF (CH.EQ.'A' .OR. CH.EQ.'a') GO TO 510
+        END IF
+C
+C  ----------------------------------------------------------
+C  'D' - Delete a File Name
+C
+d245 31
+a275 31
+        CALL ERSFIELD(80,ROWCH,COLCH)
+        Q = 'File Number'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        CALL INTFIELD(FNM,0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (FNM.NE.0 .AND. FILENAME(FNM).NE.BLANK) THEN
+          CALL ERSFIELD(76,ROW+FNM,OCOL(2))
+          FILENAME(FNM) = BLANK
+          PROCDATE(FNM) = '00/00/00'
+          PROCBY(FNM)   = '    '
+          MULTFACT(FNM) = 1.0
+          ADDFACT(FNM)  = 0
+          HOFILE(FNM)   = 0
+          COFILE(FNM)   = 0
+C
+C  If file list is empty, initialize PETTNUM and NMSLICES to 0
+C
+          DO 600 I=1,20
+            IF (FILENAME(I).NE.BLANK) GO TO 610
+600       CONTINUE
+          PETTNUM = 0
+          NMSLICES = 0
+610       CONTINUE
+C
+        END IF
+C
+C  ----------------------------------------------------------
+C  'E' - Erase ALL files from the list
+C
+d277 22
+a298 22
+        CALL ERSFIELD(80,ROWCH,COLCH)
+        Q = 'Clear ALL files from the list'
+        L = INANYR(Q,' ')
+        CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) THEN
+          PETTNUM = 0
+          NMSLICES = 0
+          DO 1000 I=1,20
+            FILENAME(I) = ' '
+            PROCDATE(I) = '00/00/00'
+            PROCBY(I)   = ' '
+            MULTFACT(I) = 1.0
+            ADDFACT(I)  = 0
+            HOFILE(I)   = 0
+            COFILE(I)   = 0
+1000      CONTINUE
+          GO TO 100
+        END IF
+C
+C  ----------------------------------------------------------
+C  'F' - Change Factor for scaling a file
+C
+d300 17
+a316 17
+        CALL ERSFIELD(80,ROWCH,COLCH)
+        Q = 'File Number'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        CALL INTFIELD(FNM,0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (FNM.NE.0 .AND. FILENAME(FNM).NE.BLANK) THEN
+          STR = 'All image points will be multiplied by this factor'
+          CALL WRTFIELD(STR,80,ROWCH,COLCH)
+          CALL RELFIELD(MULTFACT(FNM),-9999.,99999.,OLEN(6),
+     2                  ROW+FNM,OCOL(6),WARNLINE,NEXT)
+        END IF
+C
+C  ----------------------------------------------------------
+C  'C' - Change the constant to add to all points in a file
+C
+d318 17
+a334 17
+        CALL ERSFIELD(80,ROWCH,COLCH)
+        Q = 'File Number'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        STR = '(enter 0 to cancel)'
+        CALL WRTFIELD(STR,20,ROWCH,COLCH+L+6)
+        CALL INTFIELD(FNM,0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (FNM.NE.0 .AND. FILENAME(FNM).NE.BLANK) THEN
+          STR = 'This constant will be added to all image points'
+          CALL WRTFIELD(STR,80,ROWCH,COLCH)
+          CALL INTFIELD(ADDFACT(FNM),-9999,99999,OLEN(7),
+     2      ROW+FNM,OCOL(7),WARNLINE,NEXT)
+        END IF
+C
+C  ---------------------------------------------------------------
+C  Change HO and CO Files associated with a file name
+C
+d336 30
+a365 30
+	CALL ERSFIELD (80, ROWCH, COLCH)
+	ERRTYPE	= 0
+	Q = 'O2 File Number'
+	L = INANYR (Q, ' ')
+	CALL WRTFIELD (Q, L, ROWCH, COLCH)
+	STR = '(enter 0 to cancel)'
+	CALL WRTFIELD (STR, 20, ROWCH, COLCH + L + 6)
+	CALL INTFIELD (FNM, 0, 20, 2, ROWCH, COLCH + L + 2, WARNLINE, NEXT)
+	IF (FNM .NE. 0 .AND. FILENAME (FNM) .NE. BLANK) THEN
+1010	  CALL INTFIELD (HOFILE (FNM), 0, 20, OLEN (8), ROW + FNM, OCOL (8),
+     2	    WARNLINE, NEXT)
+	  IF (HOFILE (FNM) .NE. 0 .AND.
+     2	      FILENAME (HOFILE (FNM)) .EQ. BLANK) THEN
+	    ERRTYPE	= -1
+	    STR = '*** ERROR: no scan file assigned to this number'//BELL
+	    CALL WRTFIELD (STR, 70, WARNLINE, 1)
+            GO TO 1010
+          ELSE IF (HOFILE(FNM).NE.0) THEN
+            CALL D2GETIMG(1,SLCNUM,HOFILE(FNM),ERRTYPE,HDRONLY)
+            IF (ERRTYPE.NE.0) THEN
+              STR = '*** ERROR: cannot read this file'//BELL
+              CALL ERSFIELD(70,WARNLINE,1)
+              CALL WRTFIELD(STR,70,WARNLINE,1)
+              GO TO 1010
+            ELSE IF (NTYPE(1).NE.2 .AND. NTYPE(1).NE.4) THEN
+              ERRTYPE = 1
+              STR = '*** ERROR: this is not an HO file'//BELL
+              CALL ERSFIELD(70,WARNLINE,1)
+              CALL WRTFIELD(STR,70,WARNLINE,1)
+              GO TO 1010
+d367 20
+a386 22
+          END IF
+1015      CALL INTFIELD(COFILE(FNM),0,20,OLEN(9),ROW+FNM,OCOL(9),
+     2        WARNLINE,NEXT)
+          IF (COFILE(FNM).NE.0 .AND.
+     2        FILENAME(COFILE(FNM)).EQ.BLANK) THEN
+            ERRTYPE = -1
+            STR='*** ERROR: no scan file assigned to this number'//BELL
+            CALL WRTFIELD(STR,70,WARNLINE,1)
+            GO TO 1015
+          ELSE IF (COFILE(FNM).NE.0) THEN
+            CALL D2GETIMG(1,SLCNUM,COFILE(FNM),ERRTYPE,HDRONLY)
+            IF (ERRTYPE.NE.0) THEN
+              STR = '*** ERROR: cannot read this file'//BELL
+              CALL ERSFIELD(70,WARNLINE,1)
+              CALL WRTFIELD(STR,70,WARNLINE,1)
+              GO TO 1015
+            ELSE IF (NTYPE(1).NE.3) THEN
+              ERRTYPE = 1
+              STR = '*** ERROR: this is not a CO file'//BELL
+              CALL ERSFIELD(70,WARNLINE,1)
+              CALL WRTFIELD(STR,70,WARNLINE,1)
+              GO TO 1015
+d388 6
+a393 7
+          END IF
+        END IF
+        IF (ERRTYPE.NE.0) CALL ERSFIELD(70,WARNLINE,1)
+        CALL ERSFIELD(80,ROWCH,COLCH)
+C
+C  ----------------------------------------------------------
+C
+d395 1
+a395 1
+        RETURN
+d397 2
+a398 2
+C
+7000  CALL ERSFIELD(80,ROWCH,COLCH)
+d400 1
+a400 1
+C
+@
+
+
+1.5
+log
+@Before calling libcti library.
+@
+text
+@d90 1
+a90 1
+     2             ROWCH, COLCH, WARNLINE, FNM, LASTFNM, L, L2, I
+d96 1
+d99 2
+@
+
+
+1.4
+log
+@After deleting error checking for image types.
+@
+text
+@d3 1
+a3 1
+C  Subroutine:   M2FILES.FTN
+@
+
+
+1.3
+log
+@Added Error Message for ECAT image.
+@
+text
+@d211 2
+a212 2
+          ELSE IF (ERRTYPE.EQ.18) THEN
+            WRITE(NUM,8000) NMSLICES
+d218 2
+a219 2
+          L2 = INANYR(STR,' ')
+          CALL WRTFIELD(STR,L2,ROW+FNM,OCOL(3))
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d173 2
+a174 1
+500	CALL INTFIELD (FNM, 0, 20, 2, ROWCH, COLCH + L + 2, WARNLINE, NEXT)
+d206 4
+a209 2
+            ELSE
+              STR = '*** ERROR:  this is not a Super PETT IIH file'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

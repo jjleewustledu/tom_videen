@@ -1,0 +1,196 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2005.07.11.14.45.18;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@PRO VOLSEGCOND
+@@IMAGE_UTILS.h
+
+   on_error, 2
+   
+   fname1 = getenv('INFILE1')
+   fname2 = getenv('INFILE2')
+   oname = getenv('OUTFILE')
+   x = fix(getenv('XSEED'))-1
+   y = fix(getenv('YSEED'))-1
+   z = fix(getenv('ZSEED'))-1
+   x2 = fix(getenv('X2'))-1
+   y2 = fix(getenv('Y2'))-1
+   z2 = fix(getenv('Z2'))-1
+   bot0 = fix(getenv('MIN'))
+   bot = bot0
+   top = 30000
+   set1 = 32000
+   set2 = set1+1
+
+   img1 = {VIMAGE}
+   img1.ff = 1
+   img1.lf = 1
+   img1.fp = 1
+   img1.lp = 512
+   img1.fname = fname1
+   msg = ''
+   IF (getframe(img1, msg) NE 0) THEN BEGIN
+      print,'ERROR: reading ',fname1
+      RETURN
+   ENDIF
+   image1 = (*img1.data)[*,*,*]
+   xd = img1.dim[0]
+   yd = img1.dim[1]
+   zd = img1.dim[2]
+
+   img2 = {VIMAGE}
+   img2.ff = 1
+   img2.lf = 1
+   img2.fp = 1
+   img2.lp = 512
+   img2.fname = fname2
+   msg = ''
+   IF (getframe(img2, msg) NE 0) THEN BEGIN
+      print,'ERROR: reading ',fname2
+      RETURN
+   ENDIF
+   image2 = (*img2.data)[*,*,*]
+
+   tmp = image1[x,y,z]
+   str = 'Image['+string(x+1)+','+string(y+1)+','+string(z+1)+']'
+   seed = strcompress(str,/remove_all)
+   val = strcompress(string(tmp),/remove_all)
+   IF (tmp LT bot OR tmp GT top) THEN BEGIN
+      print,'ERROR: ',seed,' = ',val,' is out of range in ',fname1
+      RETURN
+   ENDIF ELSE print, seed,' = ',val,'  ',fname1
+
+   tmp = image2[x,y,z]
+   val = strcompress(string(tmp),/remove_all)
+   print, seed,' = ',val,'  ',fname2
+
+   IF (z2 GT 0) THEN BEGIN
+      str = 'Image['+string(x2+1)+','+string(y2+1)+','+string(z2+1)+']'
+      seed2 = strcompress(str,/remove_all)
+      tmp = image1[x2,y2,z2]
+      val = strcompress(string(tmp),/remove_all)
+      print, seed2,' = ',val,'  ',fname1
+      tmp = image2[x2,y2,z2]
+      val = strcompress(string(tmp),/remove_all)
+      print, seed2,' = ',val,'  ',fname2
+   ENDIF
+   
+   imin1 = 0
+   cmax1 = 0
+   inc = 100
+   exceed = 0
+   WHILE ((inc GT 0) OR (exceed GT 0)) DO BEGIN
+
+      IF (imin1 NE 0) THEN BEGIN
+         IF (exceed GT 0) THEN BEGIN
+            IF (bot LT bot0) THEN bot = bot+inc
+            IF (inc EQ 10) THEN inc = 0
+            IF (inc EQ 20) THEN inc = 10
+            IF (inc GT 20) THEN inc = 20
+         ENDIF ELSE BEGIN
+            bot = bot-inc
+         ENDELSE
+      ENDIF
+
+      idx1 = SEARCH3D (image1, x, y, z, bot, top)
+      nvox1 = n_elements (idx1)
+      nimg = image1 
+      IF (nvox1 GT 0) THEN nimg[idx1] = set1
+
+      IF (z2 GT 0) THEN BEGIN
+         IF (image1[x2,y2,z2] GE bot) THEN BEGIN
+            idx = SEARCH3D (image1, x2, y2, z2, bot, top)
+            tmp = n_elements (idx)
+            IF (tmp GT 0) THEN nimg[idx] = set1
+            atmp = [idx1,idx]
+            idx1 = atmp[uniq(sort([idx1,idx]))]
+            nvox1 = n_elements (idx1)
+         ENDIF
+      ENDIF
+
+      IF (image2[x,y,z] GE bot) THEN BEGIN
+         idx2 = SEARCH3D (image2, x, y, z, bot, top)
+         nvox2 = n_elements (idx2)
+         IF (nvox2 GT 0) THEN nimg[idx2] = set1
+      ENDIF ELSE nvox2 = 0
+      
+      IF (z2 GT 0) THEN BEGIN
+         IF (image2[x2,y2,z2] GE bot) THEN BEGIN
+            idx = SEARCH3D (image2, x2, y2, z2, bot, top)
+            tmp = n_elements (idx)
+            IF (tmp GT 0) THEN nimg[idx] = set1
+            IF (nvox2 GT 0) THEN BEGIN
+               atmp = [idx2,idx]
+               idx2 = atmp[uniq(sort([idx2,idx]))]
+               nvox2 = n_elements (idx2)
+            ENDIF
+         ENDIF
+      ENDIF
+
+      idx0 = where(nimg NE set1)
+      count = n_elements (idx0)
+      IF (count GT 0) THEN nimg[idx0] = 0
+
+      exceed = 0
+      FOR k=0,zd-1 DO BEGIN 
+         FOR j=0,yd-1 DO BEGIN 
+            FOR i=0,xd-1 DO BEGIN 
+               IF (nimg[i,j,k] EQ set1) THEN BEGIN
+                  ii = xd-i-1
+                  IF ((*img1.data)[ii,j,k] LT bot AND (*img2.data)[ii,j,k] LT bot) THEN BEGIN
+                     nimg[ii,j,k] = set2
+                  ENDIF ELSE BEGIN
+                     nimg[i,j,k] = 0
+                     exceed = exceed + 1
+                  ENDELSE
+               ENDIF
+            ENDFOR
+         ENDFOR
+      ENDFOR
+      idx0 = where(nimg EQ set1)
+      idx3 = where(nimg EQ set2)
+      nvox0 = n_elements (idx0)
+      str1 = string(bot)+string(inc)+string(nvox1)+string(nvox2)+string(nvox0)+string(exceed)
+
+      imin1 = fix(min(image1[idx1]))
+      imax1 = fix(max(image1[idx1]))
+      imin2 = fix(min(image2[idx1]))
+      imax2 = fix(max(image2[idx1]))
+      cmin1 = fix(min(image1[idx3]))
+      cmax1 = fix(max(image1[idx3]))
+      cmin2 = fix(min(image2[idx3]))
+      cmax2 = fix(max(image2[idx3]))
+      str2 =  string(imin1)+string(imax1)+string(imin2)+string(imax2)
+      str3 =  string(cmin1)+string(cmax1)+string(cmin2)+string(cmax2)
+      print,'Ipsi',str2,'  Contra',str3,'  Thresh  ',strcompress(str1)
+
+   ENDWHILE
+
+   (*img1.data) = nimg
+   str = 'Threshold = '+string(bot)+'  Voxels = '+string(nvox0)+' --> '+oname
+   print,strcompress(str)
+   IF (putinterfile(img1, oname, msg) NE 0) THEN BEGIN
+      print,'ERROR: writing ',oname
+      RETURN
+   ENDIF
+
+END 
+@

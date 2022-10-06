@@ -1,0 +1,72 @@
+#!/bin/csh
+# Name:   read_archive_tape
+# Date:   21-Mar-94
+# Author: Tom Videen
+#	Intent:	Recover a set of raw files from an ACS archive tape.
+#
+#		Archive tapes begin with a tape label, followed by
+#		archived data files, which come in pairs (label + files)
+#
+#		0) Rewind and start at the beginning of the tape
+#		1) The first file on the tape (.arclabel) is skipped  ==> fsf 1
+#		2) The second (label) is read ==> tar tvf
+#		3) If the tape has run out (status > 0) ==> break and exit
+#		   otherwise the tape is moved to the next file ==> fsf
+#		3) If the subject was found (grep, cat, and if) ==> break, and tar xvf
+#		4) else skip the data file ==> fsf 1    (this is effected by looping to (1))
+#		   and go to (2)
+
+if ($#argv < 1 || $#argv > 2) then
+	echo "Usage: read_archive_tape id [tape_device#]"
+	echo " e.g., read_archive_tape p2000"
+	echo " e.g., read_archive_tape m700 0hn		(for /dev/rmt/0hn)"
+	exit
+endif
+
+set id = $1
+set found = 0
+set temp = /tmp/read_archive_tape.$$
+set temp2 = /tmp/read_archive_tape2.$$
+if (-e ${temp}) rm ${temp}
+if (-e ${temp2}) rm ${temp2}
+
+if ($#argv == 2) then
+	set devnum = $2
+else
+	set devnum = 1
+endif
+
+mt -f /dev/rmt/${devnum} rewind
+
+unalias rm
+while (${status} == 0 && ${found} == 0)
+	mt -f /dev/rmt/${devnum} fsf 1       # always skip a tar file, including the first on the tape
+  tar tvf /dev/rmt/${devnum} > ${temp}
+  if (${status} != 0) break
+#  mt -f /dev/rmt/${devnum} fsf
+	grep ${id} ${temp} > ${temp2}
+	set n = `cat ${temp2}`
+	if ($#n >= 1) set found = 1
+	cat ${temp}
+	rm ${temp}
+	rm ${temp2}
+end
+alias rm 'rm -i'
+
+if (${status} != 0) then
+	echo "ERROR reading tape"
+	exit
+endif
+
+if (${found} != 0) then
+	echo "Reading ${id} from tape"
+	tar xvf /dev/rmt/${devnum}
+else
+	echo "Archive file ${id} was NOT read from tape"
+endif
+
+# Rewind and eject the tape.
+# Change protections on the scan files so "ecat" can write or delete them.
+
+mt -f /dev/rmt/${devnum} offline
+echo "read_archive_tape complete"

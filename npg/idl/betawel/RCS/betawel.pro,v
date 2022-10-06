@@ -1,0 +1,530 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.4
+date	2008.11.14.18.44.02;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2007.04.06.14.46.55;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2005.03.24.19.50.13;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2005.03.21.19.37.10;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@added countrate linearity correction factor
+@
+text
+@; $Id: betawel.pro,v 1.3 2007/04/06 14:46:55 tom Exp tom $
+;
+;+
+; NAME:
+;   BETAWEL
+;
+; PURPOSE:
+;   Compute automated blood sampler calibration factor
+;
+; CATEGORY:
+;   PET processing.
+;
+; CALLING SEQUENCE:
+;   betawel
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, Mar 2005
+;-
+
+PRO BETAWEL_EVENT, ev
+   COMMON BETAVAL, wellmean, betafit, halflife, wellf, calname, welname, wellsec, $
+		background, tracer, decay, data, curve, inc, crcor
+
+   catch, error_status
+   IF (error_status NE 0) THEN BEGIN
+      ok = widget_message(!err_string)
+      RETURN
+   END
+   widget_control, ev.top, get_uvalue=uv
+   widget_control, uv.wid.msg, set_value=''
+
+   CASE ev.id OF
+      
+      uv.wid.crvfile: BEGIN
+         fname = calname
+         IF (strlen(calname) GT 0) THEN BEGIN 
+            l1 = rstrpos(fname,'/')
+            l2 = rstrpos(fname,'.')
+            str1 = string(replicate(32b,(l2-l1-2)))
+            str1 = '*'+str1
+            strput,fname,str1,l1+1
+            fname = strcompress(fname, /remove_all)
+         ENDIF ELSE fname = '*.crv'
+         fname = dialog_pickfile(FILE=fname, FILTER=fname, /READ)
+         IF (strlen(fname) EQ 0) THEN BEGIN
+            widget_control, uv.wid.msg, set_value='No file entered'
+            RETURN
+         ENDIF ELSE BEGIN 
+            IF (read_betacrv(fname, curve, msg) NE 0) THEN BEGIN
+               widget_control, uv.wid.msg, set_value=msg
+               RETURN
+            ENDIF
+            calname = fname
+            widget_control, uv.wid.cname, set_value=calname
+            widget_control, uv.wid.msg, set_value='File '+calname+' read'
+         ENDELSE 
+      ENDCASE
+
+      uv.wid.welfile: BEGIN
+         fname = welname
+         IF (strlen(fname) GT 0) THEN BEGIN 
+            l1 = rstrpos(fname,'/')
+            l2 = rstrpos(fname,'.')
+            str1 = string(replicate(32b,(l2-l1-2)))
+            str1 = '*'+str1
+            strput,fname,str1,l1+1
+            fname = strcompress(fname, /remove_all)
+         ENDIF ELSE fname = '*.wel'
+         fname = dialog_pickfile(FILE=fname, FILTER=fname, /READ)
+         IF (strlen(fname) EQ 0) THEN BEGIN
+            widget_control, uv.wid.msg, set_value='No file entered'
+            RETURN
+         ENDIF ELSE BEGIN 
+            IF (read_well(fname, data, msg) NE 0) THEN BEGIN
+               widget_control, uv.wid.msg, set_value=msg
+               RETURN
+            ENDIF
+            welname = fname
+            widget_control, uv.wid.wname, set_value=welname
+            widget_control, uv.wid.msg, set_value='File '+welname+' read'
+            widget_control, uv.wid.table, set_value=data
+         ENDELSE 
+      ENDCASE
+      
+      uv.wid.welbin: BEGIN 
+         wellsec = ev.value
+         widget_control, uv.wid.welbin, set_value=wellsec
+      ENDCASE
+
+      uv.wid.ptype: BEGIN
+         tracer = ev.value
+         widget_control, uv.wid.hlife, set_value=ALOG(2.)/decay(tracer)
+      ENDCASE 
+      
+      uv.wid.table: BEGIN
+         widget_control, uv.wid.msg, set_value='Table'
+      ENDCASE 
+
+      uv.wid.crc: BEGIN
+         i = ev.value
+         crcor = i
+         widget_control, uv.wid.crc, set_value=crcor
+      ENDCASE 
+      
+      uv.wid.incl: BEGIN
+         i = ev.value
+         IF (inc[i] EQ 1) THEN inc[i]=0 ELSE inc[i]=1
+      ENDCASE 
+      
+      uv.wid.bkgnd: BEGIN 
+         background = ev.value
+         widget_control, uv.wid.bkgnd, set_value=background
+      ENDCASE
+
+      uv.wid.proc: BEGIN
+         CASE ev.value OF 
+            
+            'Fit Probe CRV': BEGIN 
+               IF ((size(curve))[0] EQ 0) THEN BEGIN
+                  widget_control, uv.wid.msg, set_value='No calibration data -- read CRV file'
+                  RETURN
+               ENDIF
+               time = rotate(curve(0,*),4)
+               cnts = rotate(curve(1,*),4)
+
+               scrnsize = get_screen_size()
+               xloc = scrnsize[0]/2
+               IF (xloc GT 1150) THEN xloc = 1150
+               window, xpos=xloc, colors=10, xsize=750, ysize=750
+   
+               plot, time, cnts
+               weights = 1.0/cnts
+               lambda = decay[tracer]
+               A = [cnts[0],lambda]
+               yfit = CURVEFIT(time, cnts, weights, A, SIGMA, FUNCTION_NAME='gfunct')
+               betafit = A[0]
+               halflife = ALOG(2.)/A[1]
+               true = ALOG(2.)/decay(tracer)
+               error = 100*(halflife-true)/true
+               widget_control, uv.wid.meanbeta, set_value=betafit
+               msg = string (betafit,halflife, error, $
+                  format='("Fit Probe cnts/sec: ",F12.1 ,"    Halflife: ",F10.2," sec   (",F4.1,"%)")')
+               widget_control, uv.wid.msg, set_value=msg
+            ENDCASE
+
+            'Compute Calibration': BEGIN 
+               widget_control, uv.wid.table, get_value=data
+               lambda = decay[tracer]
+               geo1 = 1.026
+               geo2 = -0.0522
+               sum = 0.
+               sumsqr = 0.
+               n = 0
+               minv = 1000000.
+               maxv = 0.
+               FOR i=0,3 DO BEGIN
+                  IF (inc[i] GT 0) THEN BEGIN
+                     n = n+1
+                     wt = data[1,i]-data[0,i]
+                     min = fix(data[2,i])
+                     sec = fix(100*(data[2,i]-min)+0.1)
+                     time = float(60*min + sec)
+                     dkfac = exp (lambda * time) * (lambda * wellsec)/(1. - exp (-lambda * wellsec))
+                     geofac = geo1 + geo2*wt
+                     cnts = (data[3,i]-background)/(wt*wellsec)
+                     corcnts = dkfac*cnts/geofac
+
+                     ;; Countrate correction from wellcounter_linearity_20070717_C11.xls (NNICU)
+                     IF (crcor GT 0) THEN BEGIN
+                        x = 0.001*(data[3,i]-background)*(12/wellsec)
+                        fac = (3.903e-6)*x*x + (4.575e-4)*x + 1.0
+                        print,format='("Correction Factor: ",F5.3," using ",F5.1," x 1000 cnts/12 sec")',fac,x
+                        corcnts = fac*corcnts
+                     ENDIF
+                     data[4,i] = corcnts
+                     sum = sum + corcnts
+                     sumsqr = sumsqr + corcnts*corcnts
+                     IF (corcnts GT maxv) THEN maxv = corcnts
+                     IF (corcnts LT minv) THEN minv = corcnts
+                  ENDIF
+               ENDFOR
+               wellmean = sum/float(n)
+               stdev = SQRT((sumsqr - sum*sum/float(n))/float(n-1)) 
+               sem = stdev / float(n)
+               var = (maxv-minv)/wellmean
+
+               widget_control, uv.wid.table, set_value=data
+               widget_control, uv.wid.msg, set_value='Updated'
+               widget_control, uv.wid.meanwell, set_value=wellmean
+
+               IF (betafit LE 0.) THEN BEGIN
+                  widget_control, uv.wid.msg, set_value='Missing betacal curve fit'
+                  RETURN
+               ENDIF
+               wellf = wellmean/betafit
+               widget_control, uv.wid.fact, set_value=wellf
+               str0 = string (wellf, format='("Beta Calibration Factor: ",F9.3)')
+               str1 = '     (well counts/ml/sec) / (probe counts/sec)'
+               str2 = string (100*(sem/wellmean), format='("SEM = ",F4.1,"%")')
+               str3 = string (100*(stdev/wellmean), format='("    SD = ",F4.1,"%")')
+               str4 = string (100*(var), format='("    (Max-Min)/Mean = ",F4.1,"%")')
+               msg = string(format='(A,/,A)',str0+str1,str2+str3+str4)
+               widget_control, uv.wid.msg, set_value=msg
+            ENDCASE
+            
+            'Save WEL File': BEGIN
+               fname = welname
+               IF (strlen(fname) LE 0) THEN fname = '*.wel'
+               fname = dialog_pickfile(FILE=fname, FILTER=fname, /WRITE)
+               IF (strlen(fname) EQ 0) THEN BEGIN
+                  widget_control, uv.wid.msg, set_value='No file entered'
+                  RETURN
+               ENDIF
+               openw,lu,fname,/get_lun
+               widget_control, uv.wid.table, get_value=data
+               FOR i=0,3 DO BEGIN
+                  d1 = data[0,i]
+                  d2 = data[1,i]
+                  d3 = fix(data[2,i])
+                  d4 = fix(100*(data[2,i]-d3)+0.1)
+                  d5 = long(data[3,i])
+                  printf, lu, format='(F8.4,F8.4,I5,I5,I8)', d1, d2, d3, d4, d5
+               ENDFOR
+               printf, lu, format='(F7.3,F10.2)', wellf, halflife
+               close,lu
+               free_lun,lu
+               msg = 'Well counter data saved to '+fname
+               widget_control, uv.wid.msg, set_value=msg
+            ENDCASE 
+
+            'Exit': widget_control, ev.top, /destroy
+            
+         ENDCASE 
+      ENDCASE 
+   ENDCASE
+END
+   
+
+PRO BETAWEL
+   @@BETA.h
+
+   on_error, 2
+   loadct,5
+
+   base = widget_base (TITLE='BETAWEL', /COLUMN)
+   base1 = widget_base(base, row=1)
+   crvfile = cw_bgroup(base1, /ROW, /NO_RELEASE, ['CRV File'])
+   cname = widget_text(base1, xsize=70)
+   
+   base2 = widget_base(base, row=1)
+   welfile = cw_bgroup(base2, /ROW, /NO_RELEASE, /RETURN_NAME, ['Well File'])
+   wname = widget_text(base2, xsize=70)
+   
+   base3 = widget_base(base, /ROW)
+
+   welbin = cw_field(base3, title='Well Counter:  Sampling Period (sec)', /return_events, $
+                     /long, xsize=3, ysize=1)
+   ptype = cw_bgroup(base3, LABEL_LEFT='  Tracer', /ROW, /EXCLUSIVE, /NO_REL, $
+                     ['O15', 'C11', 'F18'], SET_VALUE=tracer)
+   hlife = cw_field(base3, title='  Halflife (sec)', xsize=8, /noedit)
+   
+   base4 = widget_base(base, /ROW)
+   rlab=['1','2','3','4']
+   clab=['Dry Wt','Wet Wt','Min.Sec','Well Counts/Period','Corrected cnts/ml/sec']
+   csiz=[80,80,80,150,180]
+   table = widget_table(base4, value=data, xsize=5, ysize=4, column_widths=csiz, $
+                        row_labels=rlab, column_labels=clab, /editable, alignment=1, $
+                        format='(F12.4)' )
+   base4b = widget_base(base4, /COL)
+   dum1 = widget_label(base4b, xsize=4,value=' ')
+   incl = cw_bgroup(base4b, LABEL_TOP='Use', /COL, /NONEXCLUSIVE, $
+                     frame=2, ['1','2','3','4'], SET_VALUE=inc)
+
+   base4c = widget_base(base, /ROW)
+   crc = cw_bgroup(base4c, ['No Count Rate Correction','Count Rate Correction Applied'], $
+		/ROW, /EXCLUSIVE, set_value=crcor)
+   base5 = widget_base(base, /ROW)
+   meanbeta = cw_field(base5, title='Fit Beta Probe Counts/Sec', xsize=9, /floating, /noedit)
+   meanwell = cw_field(base5, title='Mean Well Counts/Sec', xsize=9, /floating, /noedit)
+   fact = cw_field(base5, title='Cal Factor', xsize=9, /floating, /noedit)
+
+   base6 = widget_base(base, /ROW)
+   proc = cw_bgroup(base6, /ROW, /NO_RELEASE, /RETURN_NAME,  $
+                    ['Fit Probe CRV','Compute Calibration','Save WEL File','Exit'])
+   bkgnd = cw_field(base6, title='     Background Well Counts/Period', /return_events, $
+                     /long, xsize=6, ysize=1)
+
+   msg = widget_text(base, xsize=80, ysize=2)
+   
+   wid = {WIDGETS,		$
+          base    : base,	$ ; top level base
+          crvfile : crvfile,	$ ; crv file selection button id
+          cname   : cname,	$ ; crv filename
+          welfile : welfile,	$ ; well file selection button id
+          wname   : wname,	$ ; filename
+          welbin  : welbin,	$ ; well period field
+          table   : table,	$ ; well counter entry table
+          incl    : incl,	$ ; 
+          crc     : crc,	$ ; countrate correction on/off
+          ptype   : ptype,	$ ; tracer button id
+          hlife   : hlife,	$ ; halflife report field
+          proc    : proc,	$ ; process button id
+          bkgnd   : bkgnd,	$ ; background field
+          meanwell : meanwell,    $ ; calculated mean well cnts/sec
+          meanbeta : meanbeta,    $ ; fit betaprobe well cnts/sec
+          fact    : fact,       $ ; calculated calibration factor
+          msg     : msg	$       ; message box
+         }
+
+   uv = {wid:wid}
+   
+   widget_control, ptype, set_value=tracer
+   widget_control, welbin, set_value=wellsec
+   widget_control, hlife, set_value=ALOG(2.)/decay(tracer)
+   widget_control, uv.wid.bkgnd, set_value=background
+
+   widget_control, base, set_uvalue=uv
+   widget_control, base, /realize, xoffset=0, yoffset=0
+   xmanager, "BETAWEL", base, EVENT_HANDLER='BETAWEL_EVENT'
+
+END 
+
+@
+
+
+1.3
+log
+@set maximum screensize
+@
+text
+@d1 1
+a1 1
+; $Id: betawel.pro,v 1.2 2005/03/24 19:50:13 tom Exp tom $
+d22 1
+a22 1
+		background, tracer, decay, data, curve, inc
+d99 6
+d167 8
+d274 3
+d299 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+; $Id: betawel.pro,v 1.1 2005/03/21 19:37:10 tom Exp tom $
+d21 2
+a22 1
+   COMMON BETAVAL, wellmean, betafit, calib,calname, welname, cbin, wbin, tracer, decay, data, curve, inc
+d31 1
+a31 2
+   decay = [0.005668, 0.0005668, 0.00010529]
+   
+d86 2
+a87 2
+         wbin = ev.value
+         widget_control, uv.wid.welbin, set_value=wbin
+d104 5
+d119 6
+d131 3
+a133 1
+               t2 = ALOG(2.)/A[1]
+d135 2
+a136 1
+               msg = string (betafit,t2, format='("Initial Cnts/Sec: ",F12.1 ,"    Halflife: ",F10.2," sec")')
+d146 1
+d148 2
+d157 9
+a165 5
+                     dkfac = exp (lambda * time) * (lambda * wbin)/(1. - exp (-lambda * wbin))
+                     geofac = 1.026 - (0.0522*wt)
+                     cnts = data[3,i]/(wt*wbin)
+                     data[4,i] = geofac*dkfac*cnts
+                     sum = sum + data[4,i]
+d169 4
+d181 8
+a188 3
+               calib = wellmean/betafit
+               widget_control, uv.wid.fact, set_value=calib
+               msg = string (calib, format='("Beta Calibration Factor: ",F9.3)')
+d208 1
+a208 1
+                  printf, lu, format='(F7.3,F7.3,I5,I5,I8)', d1, d2, d3, d4, d5
+d210 1
+a210 1
+               printf, lu, format='(F7.3)', calib
+a225 1
+
+d250 1
+a250 1
+   clab=['Dry Wt','Wet Wt','Min.Sec','Well Counts/Period','Corrected Counts/Sec']
+d254 1
+a254 1
+                        format='(F12.2)' )
+d268 2
+d271 1
+a271 1
+   msg = widget_text(base, xsize=80)
+d281 1
+a281 1
+          incl   : incl,	$ ; 
+d285 1
+d295 1
+a295 1
+   widget_control, welbin, set_value=wbin
+d297 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+; $Id: betawel.pro,v 1.1 2005/03/21 19:17:24 tom Exp tom $
+d21 1
+a21 1
+   COMMON BETAVAL, wellmean, betafit, calib,calname, welname, cbin, wbin, tracer, decay, data, curve
+d98 5
+d107 1
+a107 1
+            'Plot & Fit CRV': BEGIN 
+d126 1
+a126 1
+            'Compute CorCnts': BEGIN 
+d132 1
+d134 12
+a145 10
+                  wt = data[1,i]-data[0,i]
+                  min = fix(data[2,i])
+                  sec = fix(100*(data[2,i]-min)+0.1)
+                  time = float(60*min + sec)
+                  dkfac = exp (lambda * time) * (lambda * wbin)/(1. - exp (-lambda * wbin))
+                  geofac = 1.026 - (0.0522*wt)
+                  cnts = data[3,i]/(wt*wbin)
+                  data[4,i] = geofac*dkfac*cnts
+                                ;print,i,cnts,wt,wbin,dkfac,geofac,data[4,i]
+                  sum = sum + data[4,i]
+d147 1
+a147 1
+               wellmean = sum/4.
+d151 9
+d162 1
+a162 1
+            'Save WEL': BEGIN
+a185 15
+            
+            'Compute Cal Factor': BEGIN
+               IF (wellmean LE 0.) THEN BEGIN
+                  widget_control, uv.wid.msg, set_value='Missing mean well counter counts'
+                  RETURN
+               ENDIF
+               IF (betafit LE 0.) THEN BEGIN
+                  widget_control, uv.wid.msg, set_value='Missing betacal curve fit'
+                  RETURN
+               ENDIF
+               calib = wellmean/betafit
+               widget_control, uv.wid.fact, set_value=calib
+               msg = string (calib, format='("Beta Calibration Factor: ",F9.3)')
+               widget_control, uv.wid.msg, set_value=msg
+            ENDCASE
+d213 1
+a213 1
+   welbin = cw_field(base3, title='Well Counter Sampling Period (sec)', /return_events, $
+d215 1
+a215 1
+   ptype = cw_bgroup(base3, LABEL_LEFT='Tracer:', /ROW, /EXCLUSIVE, /NO_REL, $
+d219 1
+d222 2
+a223 2
+   csiz=[100,100,100,150,180]
+   table = widget_table(base, value=data, xsize=5, ysize=4, column_widths=csiz, $
+d226 4
+a230 5
+   base4 = widget_base(base, /ROW)
+   meanbeta = cw_field(base4, title='Fit Beta Probe Cnts/Sec', xsize=9, /floating, /noedit)
+   meanwell = cw_field(base4, title='Mean Well Cnts/Sec', xsize=9, /floating, /noedit)
+   fact = cw_field(base4, title='Cal Factor', xsize=9, /floating, /noedit)
+
+d232 3
+a234 2
+   proc = cw_bgroup(base5, /ROW, /NO_RELEASE, /RETURN_NAME,  $
+                    ['Plot & Fit CRV','Compute CorCnts','Compute Cal Factor','Save WEL','Exit'])
+d236 4
+d250 1
+@

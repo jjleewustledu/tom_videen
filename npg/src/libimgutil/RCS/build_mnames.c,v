@@ -1,0 +1,412 @@
+head	3.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+3.3
+date	2004.02.12.22.08.52;	author tom;	state Exp;
+branches;
+next	3.2;
+
+3.2
+date	2004.01.02.21.23.12;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.12.13.17.04.17;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.08.16.20.38.45;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+3.3
+log
+@Feb 2004
+@
+text
+@/*	$Log: build_mnames.c,v $
+ * Revision 3.2  2004/01/02  21:23:12  tom
+ * splint cleaning
+ *
+ * Revision 1.2  1999/12/13  17:04:17  tom
+ * tov revision
+ *
+ * Revision 1.1  1996/08/16  20:38:45  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			build_mnames.c
+ *	Date:			Jun 1993
+ *	Author:			Tom Yang
+ *	Description:	Construct short filenames from prm and imglist structures.
+ *	History:
+ *		Aut-96	TOV	modified buildnames to handle map files instead of SXR files.
+ *
+ *	Algorithm:
+ *		if (imgmode == STDIMAGE_MODE) then
+ *			fname [0]:
+ *			<species><subject_id><tracer><scanset1_id><filter>[.<extension>]
+ *	
+ *			fname [1]:
+ *			<species><subject_id><tracer><scanset2_id><filter>[.<extension>]
+ *		else if (imgmode == DIFIMAGE_MODE)
+ *			fname [0]:
+ *			<species><subject_id><tracer><scanset1_id>-<scanset2_id><suffix><filter>[.<extension>]
+ *		else if (imgmode == PREWELDED_IMAGE_MODE)
+ *			fname [0]:
+ *			<species><subject_id><tracer><scanset1_n1><filter>[.<extension>]
+ *	
+ *			fname [1]:
+ *			<species><subject_id><tracer><scanset1_n2><filter>[.<extension>]
+ *	
+ *			fname [2]:
+ *			<species><subject_id><tracer><scanset2_n1><filter>[.<extension>]
+ *	
+ *			fname [3]:
+ *			<species><subject_id><tracer><scanset2_n2><filter>[.<extension>]
+ *		else if (imgmode == MULTITRACER_IMAGE_MODE)
+ *			fname [0]:
+ *			<species><subject_id><tracer><scanset1_n1><filter>[.<extension>]
+ *	
+ *			fname [1]:
+ *			<species><subject_id><ftracer><scanset1_n2><filter>[.<extension>]
+ *	
+ *			fname [2]:
+ *			<species><subject_id><vtracer><scanset1_n3><filter>[.<extension>]
+ *	
+ *			fname [3]:
+ *			<species><subject_id><tracer><scanset2_n1><filter>[.<extension>]
+ *	
+ *			fname [4]:
+ *			<species><subject_id><ftracer><scanset2_n2><filter>[.<extension>]
+ *	
+ *			fname [5]:
+ *			<species><subject_id><vtracer><scanset2_n3><filter>[.<extension>]
+ *		else if (imgmode == WELDED_IMAGE_MODE)
+ *			fname [0]:
+ *			<species><subject_id><tracer><scanset1_id>w<scanset2_id>[.<extension>]
+ *		endif
+ *
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char		rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/build_mnames.c,v 3.2 2004/01/02 21:23:12 tom Exp tom $";
+#endif 
+
+#include <stdio.h>
+#include <string.h>
+#include <imgutil.h>
+#include <myvalues.h>
+
+#define	MINUS	"-"
+#define	WELD	"w"
+
+int      build_mnames (prm, imglist, filtmode, nfiles, fname, sxrname)
+	PARAMETER_DATA  *prm;
+	IMAGE_LIST_DATA *imglist;
+	int             filtmode;		/* IMGFILTER_MODE, MSKFILTER_MODE */
+	int            *nfiles;			/* returned */
+	char          **fname;			/* returned */
+	char           *sxrname;		/* returned */
+
+{
+	int             imgmode;		/* STDIMAGE_MODE, DIFIMAGE_MODE */
+	char            cbuffer[MAXPATH];
+	char            extension[MAXPATH];
+	char            fsuffix[MAXPATH];
+	char            string[MAXPATH];
+	char            subject[MAXPATH];
+	float           filter_cutoff = 0;
+	int             filter_order = 0;
+	int             filter_type = 0;
+	int             scanset_field[6];
+	int             i;
+
+	(void) strcpy (cbuffer, prm->species);
+	(void) strcat (cbuffer, imglist->subject_id);
+	(void) strcpy (subject, cbuffer);
+	(void) strcat (cbuffer, prm->tracer);
+	imgmode = prm->imglist_mode;
+
+	if (filtmode == RECFILTER_MODE) {
+		filter_type = prm->recfilter_type;
+		filter_cutoff = prm->recfilter_cutoff;
+		filter_order = prm->recfilter_order;
+	} else if (filtmode == IMGFILTER_MODE) {
+		filter_type = prm->imgfilter_type;
+		filter_cutoff = prm->imgfilter_cutoff;
+		filter_order = prm->imgfilter_order;
+	} else if (filtmode == MSKFILTER_MODE) {
+		filter_type = prm->mskfilter_type;
+		filter_cutoff = prm->mskfilter_cutoff;
+		filter_order = prm->mskfilter_order;
+	}
+	if (imgmode == STDIMAGE_MODE) {
+		(void) strcpy (fname[0], cbuffer);
+		(void) strcat (fname[0], imglist->scanset1_id);
+		*nfiles = 1;
+		if (strlen (imglist->scanset2_id) > 0) {
+			(void) strcpy (fname[1], cbuffer);
+			(void) strcat (fname[1], imglist->scanset2_id);
+			*nfiles = 2;
+		}
+	} else if (imgmode == DIFIMAGE_MODE) {
+		if (strlen (imglist->scanset2_id) == 0) {
+			fprintf (stderr, "ERROR [build_mnames]: image list is not paired\n");
+			return (ERROR);
+		}
+		(void) strcpy (fname[0], cbuffer);
+		(void) strcat (fname[0], imglist->scanset1_id);
+		(void) strcat (fname[0], MINUS);
+		(void) strcat (fname[0], imglist->scanset2_id);
+		*nfiles = 1;
+	} else if (imgmode == PREWELDED_IMAGE_MODE) {
+		if (sscanf (imglist->scanset1_id, "%dw%d", scanset_field, scanset_field + 1) != 2) {
+			fprintf (stderr, "ERROR [build_mnames]: scanset1_id (%s) is not of the form n1wn2\n",
+				 imglist->scanset1_id);
+			return (ERROR);
+		}
+		for (i = 0; i <= 1; i++) {
+			(void) strcpy (fname[i], cbuffer);
+			itoa (scanset_field[i], string);
+			(void) strcat (fname[i], string);
+		}
+		*nfiles = 2;
+
+		if (strlen (imglist->scanset2_id) > 0) {
+			if (sscanf (imglist->scanset2_id, "%dw%d", scanset_field,
+				    scanset_field + 1) != 2) {
+				fprintf (stderr, "ERROR [build_mnames]: scanset2_id (%s) is no of the form n1wn2\n",
+					 imglist->scanset2_id);
+				return (ERROR);
+			}
+			for (i = 2; i <= 3; i++) {
+				(void) strcpy (fname[i], cbuffer);
+				itoa (scanset_field[i - 2], string);
+				(void) strcat (fname[i], string);
+			}
+			*nfiles = 4;
+		}
+	} else if (imgmode == MULTITRACER_IMAGE_MODE) {
+		if (sscanf (imglist->scanset1_id, "%df%dv%d",
+			    scanset_field, scanset_field + 1, scanset_field + 2) != 3) {
+			fprintf (stderr, "ERROR [build_mnames]: scanset1_id (%s) is not of the form n1fn2vn3\n",
+				 imglist->scanset1_id);
+			return (ERROR);
+		}
+		(void) strcpy (fname[0], cbuffer);
+		(void) strcpy (fname[1], subject);
+		(void) strcat (fname[1], prm->ftracer);
+		(void) strcpy (fname[2], subject);
+		(void) strcat (fname[2], prm->vtracer);
+		for (i = 0; i <= 2; i++) {
+			itoa (scanset_field[i], string);
+			(void) strcat (fname[i], string);
+		}
+		*nfiles = 3;
+
+		if (strlen (imglist->scanset2_id) > 0) {
+			if (sscanf (imglist->scanset2_id, "%df%dv%d",
+				    scanset_field, scanset_field + 1, scanset_field + 2) != 3) {
+				fprintf (stderr, "ERROR [build_mnames]: scanset1_id (%s) is not of the form n1fn2vn3\n",
+					 imglist->scanset2_id);
+				return (ERROR);
+			}
+			(void) strcpy (fname[3], cbuffer);
+			(void) strcpy (fname[4], subject);
+			(void) strcat (fname[4], prm->ftracer);
+			(void) strcpy (fname[5], subject);
+			(void) strcat (fname[5], prm->vtracer);
+			for (i = 3; i <= 5; i++) {
+				itoa (scanset_field[i - 3], string);
+				(void) strcat (fname[i], string);
+			}
+			*nfiles = 6;
+		}
+	} else if (imgmode == WELDED_IMAGE_MODE) {
+		if (strlen (imglist->scanset2_id) == 0) {
+			fprintf (stderr, "ERROR [build_mnames]: image list is not paired\n");
+			return (ERROR);
+		}
+		(void) strcpy (fname[0], cbuffer);
+		(void) strcat (fname[0], imglist->scanset1_id);
+		(void) strcat (fname[0], WELD);
+		(void) strcat (fname[0], imglist->scanset2_id);
+		*nfiles = 1;
+	} else {
+		fprintf (stderr, "ERROR [build_mnames]: Unknown image mode: %d\n", imgmode);
+		return (ERROR);
+	}
+
+/*
+ * Add extension
+ */
+	if (strlen (prm->extension) == 0 && imgmode == DIFIMAGE_MODE)
+		(void) strcpy (extension, DIFF_EXT);
+	else
+		(void) strcpy (extension, prm->extension);
+	for (i = 0; i < *nfiles; i++) {
+		(void) strcat (fname[i], prm->suffix);
+		if (filter_type != FILTER_NONE) {
+			filter_suffix (filter_type, filter_cutoff, filter_order, fsuffix);
+			(void) strcat (fname[i], fsuffix);
+		}
+		(void) strcat (fname[i], extension);
+	}
+
+/*
+ * Construct short sxr file
+ */
+	(void) strcpy (sxrname, subject);
+	if (strlen (imglist->sxrid) > 0)
+		(void) strcat (sxrname, imglist->sxrid);
+	else
+		(void) strcat (sxrname, MAP_EXT);
+	return (OK);
+}
+@
+
+
+3.2
+log
+@splint cleaning
+@
+text
+@d2 3
+d68 1
+a68 1
+static char		rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/build_mnames.c,v 1.2 1999/12/13 17:04:17 tom Exp tom $";
+@
+
+
+1.2
+log
+@tov revision
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jun-93
+d63 1
+d65 1
+a65 1
+static char		rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/build_mnames.c,v 1.1 1996/08/16 20:38:45 tom Exp tom $";
+a95 1
+	void			filter_suffix ();
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d61 1
+a61 1
+static char		rcsid[] = "$Header: /home/petsun19/tom/src/libimgutil/RCS/build_mnames.c,v 2.2 1996/05/17 17:42:37 tom Exp $";
+d65 1
+d67 1
+d87 3
+a89 3
+	float           filter_cutoff;
+	int             filter_order;
+	int             filter_type;
+d94 4
+a97 4
+	strcpy (cbuffer, prm->species);
+	strcat (cbuffer, imglist->subject_id);
+	strcpy (subject, cbuffer);
+	strcat (cbuffer, prm->tracer);
+d114 2
+a115 2
+		strcpy (fname[0], cbuffer);
+		strcat (fname[0], imglist->scanset1_id);
+d118 2
+a119 2
+			strcpy (fname[1], cbuffer);
+			strcat (fname[1], imglist->scanset2_id);
+d127 4
+a130 4
+		strcpy (fname[0], cbuffer);
+		strcat (fname[0], imglist->scanset1_id);
+		strcat (fname[0], MINUS);
+		strcat (fname[0], imglist->scanset2_id);
+d139 1
+a139 1
+			strcpy (fname[i], cbuffer);
+d141 1
+a141 1
+			strcat (fname[i], string);
+d153 1
+a153 1
+				strcpy (fname[i], cbuffer);
+d155 1
+a155 1
+				strcat (fname[i], string);
+d166 5
+a170 5
+		strcpy (fname[0], cbuffer);
+		strcpy (fname[1], subject);
+		strcat (fname[1], prm->ftracer);
+		strcpy (fname[2], subject);
+		strcat (fname[2], prm->vtracer);
+d173 1
+a173 1
+			strcat (fname[i], string);
+d184 5
+a188 5
+			strcpy (fname[3], cbuffer);
+			strcpy (fname[4], subject);
+			strcat (fname[4], prm->ftracer);
+			strcpy (fname[5], subject);
+			strcat (fname[5], prm->vtracer);
+d191 1
+a191 1
+				strcat (fname[i], string);
+d200 4
+a203 4
+		strcpy (fname[0], cbuffer);
+		strcat (fname[0], imglist->scanset1_id);
+		strcat (fname[0], WELD);
+		strcat (fname[0], imglist->scanset2_id);
+d214 1
+a214 1
+		strcpy (extension, DIFF_EXT);
+d216 1
+a216 1
+		strcpy (extension, prm->extension);
+d218 1
+a218 1
+		strcat (fname[i], prm->suffix);
+d221 1
+a221 1
+			strcat (fname[i], fsuffix);
+d223 1
+a223 1
+		strcat (fname[i], extension);
+d229 1
+a229 1
+	strcpy (sxrname, subject);
+d231 1
+a231 1
+		strcat (sxrname, imglist->sxrid);
+d233 1
+a233 1
+		strcat (sxrname, MAP_EXT);
+@

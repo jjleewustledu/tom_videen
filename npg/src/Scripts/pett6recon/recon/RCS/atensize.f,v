@@ -1,0 +1,151 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.13.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      ATENSIZE.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         21-Sep-88
+C  Written For:  PETT VI Reconstruction
+C
+C  History:
+C     Modified 17-Oct-88 by TOV to use object area instead of diameter.
+C
+C  Intent:
+C     Reads an attenuation image and estimates the area in pixels of
+C     object scanned for each slice.
+C     This is done by:
+C     1) finding the maximum pixel value in the attenuation image;
+C     2) taking 50% of this value as threshold;
+C     3) counting the pixels above this threshold
+C
+C     The slice areas are written to the output file, OUTFILE,
+C     where they are read by SLICESEP and used to estimate the appropriate
+C     value to use for alpha in computing randoms/slice.
+C
+C     Input File: see PETT6IMG.FIL
+C
+C  Logical Units:
+C     1 = Attenuation image file (INFILE)
+C     2 = File of object diameters for each slice (OUTFILE)
+C     5 = User output (USEROUT)
+C
+C  Uses Subroutines:
+C     SYSIO
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM ATENSIZE
+C
+      PARAMETER (NDIM=100)          ! array dimension
+      PARAMETER (NSLICE=7)          ! number of slices
+C
+      INTEGER*4  PB(6)              ! parameter block for SYSIO
+      INTEGER*4  IOREAD             ! read binary, wait
+      INTEGER*4  NBYTES             ! no. of bytes to read or write
+      INTEGER*4  INFILE             ! log unit for image file
+      INTEGER*4  OUTFILE            ! log unit for profile file
+      INTEGER*4  USEROUT            ! log unit for user output
+      INTEGER*4  SLICE              ! DO loop index (slice no.)
+      INTEGER*4  SUM                ! no. of pixels in object for a given slice
+      INTEGER*4  AREA(NSLICE)       ! object area (pixels) for each slice
+      INTEGER*4  I,J                ! local integers
+C
+      INTEGER*2  IMAGE(NDIM,NDIM)   ! image
+      INTEGER*2  HEADER(128)        ! header record for image
+      INTEGER*2  IMAX               ! maximum pixel value
+      INTEGER*2  THRESH             ! threshold value for TEMP
+C     INTEGER*2  JUNK(112)
+C
+      CHARACTER*1 BELL              ! ring terminal bell
+      CHARACTER*20 IMAGENAME,ATENSIZENAME
+C
+      DATA INFILE,OUTFILE,USEROUT /1,2,6/
+      DATA IOREAD /88/
+C
+      WRITE(USEROUT,*) '***  ATENSIZE  Sep-97  {estimate object area from attenuation image}'
+      CALL GETARG (1,IMAGENAME)
+      CALL GETARG (2,ATENSIZENAME)
+
+      OPEN(INFILE,FILE=IMAGENAME)
+      OPEN(OUTFILE,FILE=ATENSIZENAME)
+      
+      PB(6) = 0
+      IMAX = 0
+      NBYTES  = NDIM*NDIM*2
+      BELL    = CHAR(7)
+C
+C  Find maximum pixel value for all slices
+C
+      DO 300 SLICE=1,NSLICE
+        CALL SYSIO(PB,IOREAD,INFILE,HEADER,256,0)
+        CALL SYSIO(PB,IOREAD,INFILE,IMAGE,NBYTES,0)
+C       CALL SYSIO(PB,IOREAD,INFILE,JUNK,224,0)
+C
+C  Check that file type is reconstructed attenuation image
+C
+        IF (SLICE.EQ.1 .AND. HEADER(38).NE.1010) THEN
+          WRITE(USEROUT,*) '*****************************************'
+          WRITE(USEROUT,*) '* Input file is of wrong type.'
+          WRITE(USEROUT,*) '* It must be an attenuation image (1010).'
+          WRITE(USEROUT,*) '*****************************************'
+          STOP
+        END IF
+C
+C  Find maximum pixel value
+C
+        DO 200 J=1,NDIM
+          DO 100 I=1,NDIM
+            IF (IMAGE(I,J).GT.IMAX) IMAX = IMAGE(I,J)
+100       CONTINUE
+200     CONTINUE
+300   CONTINUE
+C
+C  Count pixels above threshold in each slice
+C
+      THRESH = IMAX/2         ! use 50% threshold
+      REWIND (INFILE)
+      DO 600 SLICE=1,NSLICE
+        CALL SYSIO(PB,IOREAD,INFILE,HEADER,256,0)
+        CALL SYSIO(PB,IOREAD,INFILE,IMAGE,NBYTES,0)
+C       CALL SYSIO(PB,IOREAD,INFILE,JUNK,224,0)
+        SUM = 0
+        DO 500 J=1,NDIM
+          DO 400 I=1,NDIM
+            IF (IMAGE(I,J).GE.THRESH) SUM = SUM+1
+400       CONTINUE
+500     CONTINUE
+        AREA(SLICE) = SUM
+600   CONTINUE
+C
+C  Write object area for all slices to disk file
+C
+      WRITE(USEROUT,*) 'Object area (no. pixels) in slices 1-7:'
+      WRITE(USEROUT,8000) (AREA(SLICE),SLICE=1,7)
+      WRITE(OUTFILE,8000) (AREA(SLICE),SLICE=1,7)
+8000  FORMAT(1X,7I6)
+C
+      STOP
+      END
+
+@

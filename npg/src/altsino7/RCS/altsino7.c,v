@@ -1,0 +1,239 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.16.56.19;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.27.14.31.13;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.07.18.02.12;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2002.11.05.15.07.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: altsino7.c,v $
+ * Revision 1.3  2002/11/27  14:31:13  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2002/11/07  18:02:12  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2002/11/05  15:07:02  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			altsino7.c
+ *	Date:			Nov 2002
+ *	Author:			Tom Videen
+ *	Description:	Alter ECAT Matrix 7 sinogram.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/altsino7/RCS/altsino7.c,v 1.3 2002/11/27 14:31:13 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <image.h>
+#include <libimage.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	short          *matrix;
+	short          *sino;
+	char           *inname;
+	char           *outname;
+	short           frm, pln;
+	long            i, k, sizepln;
+	unsigned long   dim1, dim2, dim3;
+
+	if (argc != 4) {
+		fprintf (stdout, "ERROR [altsino7]: Usage: altsino7 in out frm\n");
+		return (ERROR);
+	}
+	inname = argv[1];
+	outname = argv[2];
+	frm = atoi(argv[3]);
+	indx.frm = frm;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (inname);
+	(void) strcpy (file->mode, "r+");
+	fprintf (stdout, "Open %s\n", file->name);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stdout, "ERROR [altsino7]: Cannot open %s\n", inname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stdout, "ERROR [altsino7]: Cannot get MainHeader from %s\n", inname);
+		return (ERROR);
+	}
+	if (file->mh->file_format != MATRIX_REV7) {
+		fprintf (stdout, "ERROR [altsino7]: File is not type Matrix 7 %s\n", inname);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		fprintf (stdout, "ERROR [altsino7]: Cannot find %s frame %d\n", inname, indx.frm);
+		return (ERROR);
+	}
+	if (get_ss7 (file, &indx) == ERROR) {
+		fprintf (stdout, "ERROR [altsino7]: Cannot read file subheader in %s\n", inname);
+		return (ERROR);
+	}
+	if (use_ss7 (file, &indx) == ERROR) {
+		fprintf (stdout, "ERROR [altsino7]: Cannot convert file subheader in %s\n", inname);
+		return (ERROR);
+	}
+	dim1 = (unsigned long) file->sh->dim1;
+	dim2 = (unsigned long) file->sh->dim2;
+	dim3 = (unsigned long) file->sh->dim3;
+	sizepln = dim1 * dim2;
+	sino = (short *) calloc (dim1 * dim2 * dim3, sizeof (short));
+
+	fprintf (stdout, "Reading frame %d of %s\n", indx.frm, file->name);
+	for (pln = 0; pln < dim3; pln++) {
+		k = pln * sizepln;
+		indx.pln = pln+1;
+		if ((matrix = rdscan7 (file, indx)) == NULL) {
+			fprintf (stdout, "ERROR [altsino7]: Cannot read frame %d plane %d of %s\n",
+				 indx.frm, pln+1, inname);
+			return (ERROR);
+		}
+		for (i = 0; i < sizepln; i++)
+			sino[k + i] = matrix[i];
+		if (pln < dim3-1)
+			 free (matrix);
+	}
+	close_imgfile (file);
+
+/*	Write the new sinogram to the output file */
+
+	(void) strcpy (file->name, outname);
+	(void) strcpy (file->mode, "w");
+	file->mh->nframe = 1;
+	file->m7->mh->num_frames = 1;
+	indx.frm = 1;
+
+	fprintf (stdout, "Open %s\n", file->name);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stdout, "ERROR [altsino7]: Cannot open %s\n", file->name);
+		return (ERROR);
+	}
+    if (put_mh7 (file) == ERROR) {
+        fprintf (stderr, "ERROR [altsino7]: Cannot write MainHeader to %s\n", outname);
+        return (ERROR);
+    }
+	fprintf (stdout, "Writing frame %d of %s\n", indx.frm, file->name);
+
+/*
+	file->m7->s3d->frame_duration = 2000;
+*/
+
+    if (put_ss7 (file, &indx) == ERROR) {
+    	fprintf (stderr, "ERROR [altsino7]: Cannot write file subheader to %s\n", outname);
+    	return (ERROR);
+    }
+	for (pln = 0; pln < dim3; pln++) {
+		k = pln * sizepln;
+		indx.pln = pln+1;
+		for (i = 0; i < sizepln; i++)
+			matrix[i] = sino[k + i];
+		if (wrscan7 (file, indx, matrix) != OK) {
+			fprintf (stdout, "ERROR [altsino7]: Writing frame %d plane %d of %s\n",
+				 indx.frm, pln+1, outname);
+			return (ERROR);
+		}
+	}
+	close_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d18 1
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/altsino7/RCS/altsino7.c,v 1.2 2002/11/07 18:02:12 tom Exp tom $";
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/altsino7/RCS/altsino7.c,v 1.1 2002/11/05 15:07:02 tom Exp $";
+d39 4
+d83 1
+a83 1
+	sino = (short *) malloc (dim1 * dim2 * dim3 * sizeof (short));
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/altsino7/RCS/altsino7.c,v 1.6 2000/09/06 19:29:36 tom Exp $";
+d114 1
+a114 11
+	file->m7->s3d->prompts = 0;
+	file->m7->s3d->delayed = 0;
+	file->m7->s3d->net_trues = 0;
+	file->m7->s3d->tot_avg_cor = 0;
+	file->m7->s3d->tot_avg_uncor = 0;
+	file->m7->s3d->total_coin_rate = 0;
+	file->m7->s3d->frame_start_time = 0;
+	file->m7->s3d->frame_duration = 4000;
+	file->m7->s3d->deadtime_correction_fctr = 1.5;
+	for (i = 0; i < 47; i++)
+		file->m7->s3d->uncor_singles[i] = 0;
+@

@@ -1,0 +1,220 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.8
+date	94.05.18.15.53.30;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	93.08.26.17.26.22;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.08.20.20.23.53;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.08.19.22.55.22;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@a corrected hd6mean-atlas version of t88mean
+@
+
+
+1.8
+log
+@changed $Id$ to $Header$
+@
+text
+@      SUBROUTINE IMGROTO (IMAGE, MASK, NSLICE, NCOL, NROW, FOVMM, MMPPIX, PARAM, SCALE, ERR)
+
+C   FINDS OPTIMAL TRANSLATION/ROTATION TO ACHIEVE SYMMETRY ABOUT x=0
+C
+C		Steps through each of 3 parameters, fits a parabola to points computed at steps
+C		over a fixed range given by DARAM, and takes the analytically determined minimum as the next
+C		value of this parameter.
+
+      PARAMETER (NTERM=6)
+      PARAMETER (NI=7)
+      PARAMETER (NPTS=2*NI+1)
+
+      REAL*4		IMAGE(NCOL,NROW,NSLICE)
+      INTEGER*2 MASK(NCOL,NROW,NSLICE)
+			INTEGER*2	NSLICE
+			INTEGER*2	NCOL
+			INTEGER*2	NROW
+      REAL*4 		FOVMM(3)
+      REAL*4 		MMPPIX(3)
+      REAL*4 		PARAM(12)
+			REAL*4		SCALE
+			REAL*4		ERR
+
+			REAL*4		ROT(3,3,8)
+			REAL*4		DEL
+      REAL*4 		TARAM(NTERM)
+      REAL*4 		CURVA(NTERM)
+      REAL*4 		DARAM(NTERM) 	/1.8,1.8,2.1,3*0.06981317/
+      REAL*4 		COEF(0:2)
+      REAL*4 		ARRAY(3,3)
+      REAL*4 		X(-NI:NI)
+      REAL*4 		Y(-NI:NI)
+      REAL*4 		REPORT(-NI:NI,6)			! The final points to which the parabolas were fit
+      REAL*4 		T
+C     REAL*4 		R
+C     REAL*4 		RAXIS(3)
+
+      INTEGER*4 JOFJJ(3) 			/1,5,6/	! PARAM indices for x=0 symmetery
+			INTEGER*4	NN
+			INTEGER*4	JAXIS
+      INTEGER*4 LU 			/6/
+
+      LOGICAL*4 LITER
+			CHARACTER*256	RCSHEADER
+
+			COMMON /ROTCOM/ ROT
+
+      DATA JAXIS /1/
+      DATA DEL	/8./			! sampling mesh (mm) in virtual image
+
+			RCSHEADER = "$Header: imgroto.f,v 1.1 92/12/30 04:21:18 tom Exp $"
+      DEGPERAD = 45./ATAN(1.)
+
+8101	FORMAT(6X,'dXmm',6X,'dYmm',6X,'dZmm',5X,'dXdeg',5X,'dYdeg',5X,'dZdeg','  rmsERROR')
+8102	FORMAT(7F10.4,F8.4)
+      WRITE (LU,8101)
+
+      CALL IMGROTE (IMAGE,MASK,NSLICE,NCOL,NROW,FOVMM,MMPPIX,PARAM,DEL,JAXIS,SCALE,ERR)
+      WRITE (LU,8102) (PARAM(J),J=1,3),(PARAM(J)*DEGPERAD,J=4,6),SQRT(ERR)
+      NITER = 5
+100		LITER = .FALSE.
+      DO 300 JJ=1,3
+      	J = JOFJJ(JJ)
+     		TARAM(J) = PARAM(J)
+      	DO 200 I=-NI,NI
+      		PARAM(J) = TARAM(J) + DARAM(J)*FLOAT(I)/FLOAT(NI)
+      		CALL IMGROTE (IMAGE,MASK,NSLICE,NCOL,NROW,FOVMM,MMPPIX,PARAM,DEL,JAXIS,SCALE,ERR)
+      		X(I) = FLOAT(I)/FLOAT(NI)
+      		Y(I) = ERR
+  		 		REPORT(I,J) = ERR
+200			CONTINUE
+				NN = 3
+
+C		Fit a parabola to the computed points
+
+      	CALL POLFIT (X,Y,NPTS,COEF,ARRAY,NN,CHISQR)
+
+C		T should be the computed analytic minimum within the range -1 to +1
+
+      	T = .5*COEF(1)/COEF(2)
+      	IF (COEF(2).LT.0..OR.ABS(T).GT..5) THEN
+      	  write (*,"(' T ',F10.6)")T
+      	  T = SIGN(.5,COEF(1))
+      	  NITER = NITER+1
+      	  write (*,"(' T ',F10.6)")T
+      	ENDIF
+      	LITER = LITER.OR.ABS(T).GT.0.01
+      	CURVA(J) = COEF(2)
+
+C		Change PARAM to the new position (minimum or a half step)
+
+	 			PARAM(J) = TARAM(J)-DARAM(J)*T
+
+300		CONTINUE
+
+      CALL IMGROTE (IMAGE,MASK,NSLICE,NCOL,NROW,FOVMM,MMPPIX,PARAM,DEL,JAXIS,SCALE,ERR)
+      WRITE (LU,8102) (PARAM(J),J=1,3),(PARAM(J)*DEGPERAD,J=4,6),SQRT(ERR)
+      NITER=NITER-1
+      IF (LITER.AND.NITER.GT.0) GOTO 100
+      WRITE (LU,"(' RMS REPORT')")
+      WRITE (LU,8102)(DARAM(J),J=1,3),(DARAM(J)*DEGPERAD,J=4,6)
+      WRITE (LU,"(6F10.0)")(CURVA(J)/DARAM(J)**2,J=1,3),
+     &                        (CURVA(J)/(DARAM(J)*DEGPERAD)**2,J=4,6)
+      DO 400 I=-NI,NI
+			 	WRITE (LU,"(6F10.4)")(SQRT(REPORT(I,J)),J=1,6)
+400		CONTINUE
+      WRITE (LU,8102) (PARAM(J),J=1,3),(PARAM(J)*DEGPERAD,J=4,6),SQRT(ERR)
+
+			write (lu,8300) param(1)
+			write (lu,8310) param(5)*DEGPERAD
+			write (lu,8320) param(6)*DEGPERAD
+8300	format ("x-translation:",f10.4," mm")
+8310  format ("y-rotation:   ",f10.4," deg")
+8320  format ("z-rotation:   ",f10.4," deg")
+
+C			T = SQRT (PARAM(1)**2 + PARAM(2)**2 + PARAM(3)**2)
+C			WRITE (LU,8000) T, PARAM(1)/T, PARAM(2)/T, PARAM(3)/T
+C8000	FORMAT("translation ",f10.4," mm    direction ",3f10.4)
+C			RAXIS(1) = 5 * (-ROT(2,3,8) + ROT(3,2,8))
+C			RAXIS(2) = 5 * ( ROT(1,3,8) - ROT(3,1,8))
+C			RAXIS(3) = 5 * (-ROT(1,2,8) + ROT(2,1,8))
+C			R = SQRT (RAXIS(2)**2 + RAXIS(3)**2)
+C			WRITE (LU,8001) R, 0, RAXIS(2)/R, RAXIS(3)/R
+C8001	FORMAT("yz-rotation ",f10.4," deg   axis      ",3f10.4)
+
+      RETURN
+      END
+@
+
+
+1.7
+log
+@changed atlas y-dim to used 5 mm between brain and skull
+@
+text
+@d35 2
+a36 2
+      REAL*4 		R
+      REAL*4 		RAXIS(3)
+d51 1
+a51 1
+			RCSHEADER = "$Id: imgroto.f,v 1.6 1993/08/20 20:23:53 tom Exp tom $"
+@
+
+
+1.6
+log
+@first version with Talairach 1988 atlas
+@
+text
+@d51 1
+a51 1
+			RCSHEADER = "$Id: imgroto.f,v 1.5 1993/08/19 22:55:22 tom Exp tom $"
+@
+
+
+1.5
+log
+@a corrected hd6mean-atlas version of t88mean
+@
+text
+@d51 1
+a51 1
+			RCSHEADER = "$Id$"
+d53 3
+d57 1
+d109 6
+a114 7
+			T = SQRT (PARAM(1)**2 + PARAM(2)**2 + PARAM(3)**2)
+			WRITE (LU,8000) T, PARAM(1)/T, PARAM(2)/T, PARAM(3)/T
+			RAXIS(1) = 5 * (-ROT(2,3,8) + ROT(3,2,8))
+			RAXIS(2) = 5 * ( ROT(1,3,8) - ROT(3,1,8))
+			RAXIS(3) = 5 * (-ROT(1,2,8) + ROT(2,1,8))
+			R = SQRT (RAXIS(1)**2 + RAXIS(2)**2 + RAXIS(3)**2)
+			WRITE (LU,8001) R*DEGPERAD, RAXIS(1)/R, RAXIS(2)/R, RAXIS(3)/R
+d116 9
+a124 4
+8000	FORMAT("translation ",f10.4," mm    direction ",3f10.4)
+8001	FORMAT("rotation    ",f10.4," deg   axis      ",3f10.4)
+8101	FORMAT(6X,'dXmm',6X,'dYmm',6X,'dZmm',5X,'dXrot',5X,'dYrot',5X,'dZrot','  rmsERROR')
+8102	FORMAT(7F10.4,F8.4)
+@

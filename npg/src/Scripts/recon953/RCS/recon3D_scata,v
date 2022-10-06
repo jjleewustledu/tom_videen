@@ -1,0 +1,173 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2003.12.18.14.31.05;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/bin/csh
+#
+# Name: recon3D
+# $Revision: 3.0 $
+# $Date: 1997/10/29 19:26:43 $
+# Author: Fran Miezin
+# Intent: Reduce the number of keystrokes needed to do reconstructions
+#	on 3D HO sinogram data. The following assumptions are made:
+#	1. the files are being reconstructed in a subvolume of 
+#		/data/(pethp1 or pethp2]/img2/recon or /data/pethp2/recon
+#			 depending on which machine the recon is run on
+#	2. the subvolume has the name of the subject,ie, p2222
+#	3. the transmission filename has the form p2222tr(n]l.scn.
+#		where n = 1 or 2
+#	4. the plane efficiency file has the form plane_eff_3d_930304
+#	5. only the second frame will be reconstructed
+#	7. the temporary files created on /tmp are deleted
+#
+#Copyright 1991-1996, Washington University.
+#All rights reserved. Unauthorized reproduction prohibited.
+
+setenv TABLES /usr/local/lib/tables
+###setenv ND /data/pethp2/recon/norm
+###setenv ND /data/petsun15/recon/norm
+setenv ND /export/data/recon/norm
+if(! -e $ND) then
+    echo $ND "does not exist, using current working directory."
+    set ND = `pwd`
+endif
+
+echo Copyright 1991-1996, Washington University.
+echo All rights reserved. Unauthorized reproduction prohibited.
+if ( $#argv < 3 ) then
+	echo "------------------------------------------"
+	echo " Incorrect number of input parameters specified"
+	echo " Usage: recon3D_scat eff_date tr# blank_date -scat/-norm [-f frame -p pixsiz_mm] subj# "
+	echo " 		where:"
+	echo "			subj# = the # of the subject"
+	echo "	                eff_date = the date the efficiency scan"
+	echo "	                was performed"
+	echo "                  tr# = the # of the transmission scan"
+	echo "                  Date of blank scan, eg, 950123"
+	echo "                  -scat: scatter correct and normalize"
+	echo "                  -norm: normalize but don't scatter correct"
+	echo "                  -p pixsiz_mm: Pixel size in millimeters.  Default value is 2.08575 mm."
+	echo "                  Default is norm if neither scat nor norm are specified."
+	echo "                  frame is the frame number. It defaults to 2."
+	echo " Examples:  recon3D_scat 930304 1 930311 -norm p2222ho1"
+	echo ".           recon3D_scat 930304 2 930311 -norm p2222ho{1,2,4,5}.scn"
+	echo ".           recon3D_scat 930304 2 930311 -norm p2222ho*.scn to do all scans"
+	echo ".           recon3D_scat 961014 1 961015 -scat p2732sp1.scn to reconstruct a quantitative dynamic study."
+	echo "            ho1 - ho9 using transmission scan 2 (tr2)"
+	echo "   "
+	echo " NOTICE THAT THE SCRIPT IS MACHINE SPECIFIC SO THE "
+	echo "   DATA FILES ( .scn files) MUST BE IN THE CORRECT DIRECTORY"
+	echo "   AND ON THE CURRENT MACHINE"
+	echo "----------------------------------------------"
+else
+	set scat = $4
+	if($scat == -scat) then
+	    set imgdim = 80
+	else
+	    set imgdim = 40
+	endif
+	set imgdim_fctr = `expr $imgdim / 40`
+	set frame = 2
+	set i = 1
+	set offset = 5
+        set PIXSIZ = 2.08575
+	while ($i <= $#argv)
+            switch ($argv[$i])
+                case -f:
+                    @@ i++
+                    set frame = $argv[$i]
+		    set offset = `expr $offset + 2`
+                breaksw
+                case -p:
+                    @@ i++
+                    set PIXSIZ = $argv[$i]
+echo "Pixel size set to " $PIXSIZ
+		    set offset = `expr $offset + 2`
+                breaksw
+            endsw
+            @@ i++
+        end
+
+        set scanfiles = ($argv[$offset-])
+
+# 	Use only 1st 5 chars of name for dir & tr1 filename
+###	set ddir=`echo $scanfiles[1] | awk '{ printf("%-.5s",$1)}'`
+	set dpath = `pwd`
+        set ddir = `pwd | gawk '{n=split($1,y,"/");printf("%s\n",y[n])}'`
+	if ( $#ddir == 0) then
+	   echo "---------subdirectory name has zero length-----"
+	   exit
+	endif
+	set blank = {$3}bl1.scn
+	set tran  = ${ddir}tr$2.scn
+	set norm = normal3d_${imgdim}x${imgdim}_{$1}.nrm
+
+#	Check that files exist.
+	if (!(-e ${blank})) then
+		echo ${blank} does not exist
+		exit
+	else if (!(-e ${tran})) then
+		echo ${tran} does not exist
+		exit
+	endif
+	foreach scanfile ($scanfiles)
+	echo $scanfile
+		set image3d  = $dpath/$scanfile:r\.img
+		if (!(-e ${scanfile})) then
+			echo ${scanfile} does not exist
+			exit
+		endif
+	end
+	if ( ! -e $dpath ) then
+	   echo "--------Directory $dpath does not exist------------"
+	   echo " execution aborted"
+	   exit
+	endif
+
+#	If normalization files don't exist, create them.
+	if(! -e $ND\/$norm) then
+	    makenorm_f3d $1 $imgdim_fctr
+	    mv $norm $ND
+        endif
+
+	foreach scanfile ($scanfiles)
+	    set frames = `cti_getparam $scanfile -nframe`
+	    if($frames > 2) then
+		set frm = 1
+	        while($frm <= $frames)
+		    echo Reconstructing frame $frm
+		    set ARGS = ($dpath $scanfile:r \ $ND\/$norm:r $tran:r \
+			$blank:r -f $frm $scat -fo $frm -if $imgdim_fctr \
+			-num_frames $frames -p $PIXSIZ)
+ 	            recon3d_scat $ARGS
+	            @@ frm++
+	        end
+		nframes $image3d $frames
+	    else
+	       set ARGS = ($dpath $scanfile:r $ND\/$norm:r $tran:r \
+			$blank:r -f $frame -fo $frame $scat -if $imgdim_fctr)
+ 	        recon3d_scat $ARGS
+	    endif
+
+		/bin/rm -f /tmp/{$scanfile:r}*
+	end
+endif
+@

@@ -1,0 +1,318 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	2003.12.11.20.19.04;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.07.21.21.50.03;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Solaris version
+@
+
+
+1.2
+log
+@NPG
+@
+text
+@#!/bin/csh
+# Name:	 rec2d
+# Date:	 Mar 1994
+# Author: Tom Videen
+#	Intent:	Reconstruct a set of raw ECAT scan files in "datapath".
+#
+#	Reconstructs either wobbled or stationary sinograms (checks).
+#	Looks for a single attenuation file.
+#	The existence and sizes of all expected files are checked:
+#	 Stationary attenuation, stationary & wobbled nrm
+#		Wobbled, 1- or 2-framed, or 4-framed dual-sinogram scans,
+#	Wobbled dynamic single-sinogram scans.
+#	All files must be in 'datapath'.
+#	Reconstructed images will be in 'datapath'.
+#	Reconstructs the LAST frame of 1-2 frame sinograms,
+#		2+3 frame of 4-frame sinograms (into a single frame),
+#		all frames of anything else (dynamic).
+#	Note that bkproj_sun uses a cutoff of 0.5 for wobbled images
+#		instead of 0.25 which the ACS uses.
+#	Reconstructs an attenuation image if there is a file ${atten}l.scn
+#
+#	All messages are saved in $path/$id.log
+#	This log file is mailed to $userid when the script is complete.
+#
+# History:
+#	 09-Jun-94	Dynamic reconstructions were not using _rn scan file until today!
+
+if ($#argv != 4) then
+	echo "Usage:  rec2d directory id zoom mail_address"
+	echo " e.g.:  rec2d /data/recon/p2000 p2000 1.875 tom@@petadmin"
+	exit 1
+endif
+
+set vol  = $1
+set id   = $2
+set zoom = $3		# 1.5 or 1.875 to match 3D
+set userid = $4
+
+# Get names of scan files
+# -----------------------
+
+set datapath = ${vol}/
+set all		= ${datapath}${id}
+set stanorm	= `ls ${datapath}normalsta_*.nrm | sed 's/\.nrm//'`
+set wobnorm	= `ls ${datapath}normalwob_*.nrm | sed 's/\.nrm//'`
+set atten	= ${all}tr1
+set wobatten = ${all}tr1_wob
+set logfile	= ${all}.log
+echo "rec2d $1 $2 $3 $4" >! ${logfile}
+
+set matrix_size = 7634944
+set mainhdr_size = 512
+
+if (`uname` == "SunOS") then
+	set cutrange = "22-32"
+	set cutrange2 = "22-32"
+	alias mailit '/usr/ucb/Mail -s "$2 reconstruction" ${userid} < ${logfile}'
+else if (`uname` == "HP-UX") then
+	set cutrange = "32-41"
+	set cutrange2 = "32-42"
+	alias mailit '/bin/mail ${userid} < ${logfile}'
+else
+	echo "This script will run under SunOS or HP-UX only."
+	exit 1
+endif
+
+#	Check existence, type, and size of scan files
+# ---------------------------------------------
+
+# STA.NRM
+
+if (! -e ${stanorm}.nrm) then
+	echo "No stationary norm" >>! ${logfile}
+	goto error
+else if (`ls -l ${stanorm}.nrm | cut -c${cutrange}` != 3826176) then
+	echo "Stationary nrm file is wrong size" >>! ${logfile}
+	echo "`ls -l ${stanorm}.nrm | cut -c${cutrange}` instead of 3826176" >>! ${logfile}
+	goto error
+else if (`scanhdr ${stanorm}.nrm | grep "Data type" | cut -c31-32` != 5) then
+	echo "Stationary norm is wrong data type" >>! ${logfile}
+	echo `scanhdr ${stanorm}.nrm | grep "Data type" | cut -c31-32` instead of 5 >>! ${logfile}
+	goto error
+else
+	echo "Stationary norm = ${stanorm}.nrm" >>! ${logfile}
+endif
+ 
+# WOB.NRM
+
+if (! -e ${wobnorm}.nrm) then
+	echo "No wobbled norm" >>! ${logfile}
+	set wobnrm = 0
+else if (`ls -l ${wobnorm}.nrm | cut -c${cutrange}` != 15254016) then
+	echo "Wobbled nrm file is wrong size" >>! ${logfile}
+	echo "`ls -l ${wobnorm}.nrm | cut -c${cutrange}` instead of 15254016" >>! ${logfile}
+	goto error
+else if (`scanhdr ${wobnorm}.nrm | grep "Data type" | cut -c31-32` != 5) then
+	echo "Wobbled norm is wrong data type" >>! ${logfile}
+	echo `scanhdr ${wobnorm}.nrm | grep "Data type" | cut -c31-32` instead of 5 >>! ${logfile}
+	goto error
+else
+	echo "Wobbled norm = ${wobnorm}.nrm" >>! ${logfile}
+	set wobnrm = 1
+endif
+ 
+# TR1.ATN
+
+if (! -e ${atten}.atn) then
+	echo "No attenuation" >>! ${logfile}
+	goto error
+else if (`ls -l ${atten}.atn | cut -c${cutrange}` != 3826176) then
+	echo "Attenuation file is wrong size" >>! ${logfile}
+	echo "`ls -l ${atten}.atn | cut -c${cutrange}` instead of 3826176" >>! ${logfile}
+	goto error
+else if (`scanhdr ${atten}.atn | grep "Acquisition type" | cut -c56-` != 10) then
+	echo "Attenuation file is wrong acquisition type" >>! ${logfile}
+	echo `scanhdr ${atten}.atn | grep "Acquisition type" | cut -c56-` instead of 10 >>! ${logfile}
+	goto error
+else
+	echo "Stationary Attenuation = ${atten}.atn" >>! ${logfile}
+endif
+set allscans = `ls ${all}tr?.atn`
+if ($#allscans > 1) then
+	echo "ERROR: More than 1 attenuation file" >>! ${logfile}
+	goto error
+endif
+ 
+# ALL OTHER SCN
+
+set allscans = `ls ${all}*.scn`
+if ($#allscans < 1) then
+	echo "No emission scans" >>! ${logfile}
+	goto error
+endif
+
+# Wobble Attenuation
+# ------------------
+
+if (${wobnrm}) then
+	echo "Creating wobble attenuation file ${wobatten}.atn" >>! ${logfile}
+	makeWobbleAttn ${atten}.atn ${wobatten}.atn >>&! ${logfile}
+endif
+
+# Transmission Image
+# ------------------
+
+unalias rm
+if (-e ${atten}l.scn) then
+	echo "--------------------------------------------" >>! ${logfile}
+	echo "Reconstructing attenuation image ${atten}.img" >>! ${logfile}
+	recon_2dtr ${atten} ${atten}l 1 0.5 ${zoom} >>&! ${logfile}
+endif
+
+# Reconstruct Emission scans
+# --------------------------
+foreach i (${allscans})
+	echo "--------------------------------------------" >>! ${logfile}
+	if (`ls ${i} | grep tr` == ${i}) then
+			echo "Skipping transmission scan ${i}" >>! ${logfile}
+	else
+		if (`scanhdr ${i} | grep "Acquisition type" | cut -c56-` != 3) then
+			echo File ${i} is not an emission scan >>! ${logfile}
+			echo Acquisition type = `scanhdr ${i} | grep "Acquisition type" | cut -c56-` >>! ${logfile}
+			echo "	 instead of 3" >>! ${logfile}
+		else
+			set frames = `scanhdr ${i} | grep Frames | cut -d" " -f1`
+			if (${frames} <= 2) then
+				echo "Reconstructing frame ${frames} of ${frames} for ${i}" >>! ${logfile}
+				rnwproc -r -f ${frames} ${i} >>&! ${logfile}
+				set root = `echo ${i} | cut -d. -f1`
+				if (`scanhdr ${i} | grep "Wobble speed" | cut -c16-` == 0) then
+					echo "${frames}-Frame Stationary ${i}" >>! ${logfile}
+					recon_2dsta ${root} ${root}_rn ${atten} ${stanorm} 1 0.5 ${zoom} 1 >>&! ${logfile}
+				else
+					echo "${frames}-Frame Wobbled ${i}" >>! ${logfile}
+					recon_2dwob ${root} ${root}_rn ${wobatten} ${wobnorm} 1 0.5 ${zoom} 1 >>&! ${logfile}
+				endif
+			else if (${frames} == 4) then
+				echo "The HP's cannot reconstruct a composite of frames 2+3 for ${i}" >>! ${logfile}
+				echo "You must complete this for ${i} on a Sun" >>! ${logfile}
+			 	echo "Reconstructing all ${frames} frames for ${i}" >>! ${logfile}
+#				echo "Reconstructing frames 2+3 of ${frames} frames for ${i}" >>! ${logfile}
+				set root = `echo ${i} | cut -d. -f1`
+				rnwproc -r ${root}.scn >>&! ${logfile}
+#				sum_frames ${root}_rn.scn ${root}_ontime.scn 2,3 1,31 >>&! ${logfile}
+#				oneframe ${root}_ontime.scn >>&! ${logfile}
+				if (`scanhdr ${i} | grep "Wobble speed" | cut -c16-` == 0) then
+					recon_2dsta ${root} ${root}_ontime ${atten} ${stanorm} 1 0.5 ${zoom} >>&! ${logfile}
+					echo "${frames}-Frame Stationary ${i}" >>! ${logfile}
+				else
+					echo "${frames}-Frame Wobbled ${i}" >>! ${logfile}
+					recon_2dwob ${root} ${root}_ontime ${wobatten} ${wobnorm} 1 0.5 ${zoom} >>&! ${logfile}
+				endif
+			else 
+				echo "Reconstructing ${frames} frames of dynamic scan ${i}" >>! ${logfile}
+				set root = `echo ${i} | cut -d. -f1`
+				set singlesino = `expr ${frames} \* ${matrix_size} + ${mainhdr_size}`
+				if (`ls -l ${i} | cut -c${cutrange2}` > ${singlesino}) then 
+					echo "Dual-sinogram file: running rnwproc to correct for randoms" >>&! ${logfile}
+					rnwproc -r ${i} >>&! ${logfile}
+			 		if (`scanhdr ${i} | grep "Wobble speed" | cut -c16-` == 0) then
+						recon_2dstadyn ${root} ${root}_rn ${atten} ${stanorm} 1 0.5 ${zoom} ${frames} >>&! ${logfile}
+						echo "${frames}-Frame Stationary ${i}" >>! ${logfile}
+					else
+						echo "${frames}-Frame Wobbled ${i}" >>! ${logfile}
+						recon_2dwobdyn ${root} ${root}_rn ${wobatten} ${wobnorm} 1 0.5 ${zoom} ${frames} >>&! ${logfile}
+					endif
+				else
+					echo "Single-sinogram file assumed to be corrected for randoms" >>&! ${logfile}
+					if (`scanhdr ${i} | grep "Wobble speed" | cut -c16-` == 0) then
+						recon_2dstadyn ${root} ${root} ${atten} ${stanorm} 1 0.5 ${zoom} ${frames} >>&! ${logfile}
+						echo "${frames}-Frame Stationary ${i}" >>! ${logfile}
+					else
+						echo "${frames}-Frame Wobbled ${i}" >>! ${logfile}
+						recon_2dwobdyn ${root} ${root} ${wobatten} ${wobnorm} 1 0.5 ${zoom} ${frames} >>&! ${logfile}
+					endif
+				endif
+			endif
+		endif
+	endif
+end
+
+# Change protections
+# ------------------
+
+set files = `ls ${datapath}${id}*.img`
+foreach i (${files})
+	chmod 666 ${i}
+end
+
+#	Send mail to user
+# -----------------
+
+echo "Reconstruction of ${id} is Complete"	>>! ${logfile}
+mailit >& /dev/null
+unalias mailit
+alias rm "rm -i"
+exit
+
+# Error exit
+# ----------
+
+error:
+echo ">>> ERROR RECONSTRUCTING ${id} <<<"	>>! ${logfile}
+mailit >& /dev/null
+unalias mailit
+alias rm "rm -i"
+exit 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d3 1
+a3 1
+# Date:	 24-Mar-94
+d29 3
+a31 3
+	echo "Usage: rec2d directory id zoom mail_address"
+	echo " i.e., rec2d /data/recon/p2000 p2000 1.875 tom@@petadmin"
+	exit
+d34 3
+a36 3
+set vol		= $1
+set id		 = $2
+set zoom	 = $3		# 1.5 or 1.875 to match 3D
+d43 1
+a43 1
+set all			= ${datapath}${id}
+d46 1
+a46 1
+set atten		= ${all}tr1
+d64 1
+a64 1
+	exit
+d72 1
+a72 1
+if (!(-e ${stanorm}.nrm)) then
+d89 1
+a89 1
+if (!(-e ${wobnorm}.nrm)) then
+d107 1
+a107 1
+if (!(-e ${atten}.atn)) then
+d247 1
+a247 1
+exit
+@

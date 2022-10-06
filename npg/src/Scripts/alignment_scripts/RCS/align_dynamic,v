@@ -1,0 +1,539 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.7
+date	2003.12.17.15.08.25;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2001.07.06.18.57.46;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2001.07.05.18.42.26;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.07.05.16.33.22;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2001.07.05.15.40.57;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.10.06.17.07.50;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.10.05.13.40.14;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@#!/bin/csh
+# Program:	align_dynamic
+# Author:	Tom Videen
+# Date:		Jul 2001
+# Usage:	Align all frames in a dynamic image.
+# 	Requires:
+# 		1) dynamic image separated into single-frame images (Analyze format)
+# 		2) a reference image (masked, filtered image defining brain)
+# 		3) a rescaling AIR file and its inverse 
+#	Creates:
+#		1) combined air files aligning each image to the first
+# 		2) a null AIR file (for computing net movement)
+#		3) log file showing net movement between each scan and first (using pixels in reference image)
+#		4) log file showing final fit of cost function
+#	Removes temporary files:
+#		1) resampled images
+#		2) pair-wise air files
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv != 7) then
+	echo "Usage:  align_dynamic root ext brainmask frms thresh blur resample_air"
+	echo " e.g.,  align_dynamic p3000fd img p3000fd_mask.img 3to44 40 5 scale_953"
+	exit 1
+endif
+
+set ROOT   = $1
+set EXT   = .$2
+set BRAIN  = $3
+set FIRST  = `echo $4 | nawk '{FS="to";print $1}'`
+set LAST   = `echo $4 | nawk '{FS="to";print $2}'`
+set THRESH = $5
+set BLUR   = $6
+set A_AIR  = $7.air
+
+set BLUR3D = "$BLUR $BLUR $BLUR"
+set B_AIR  = i$A_AIR
+set ANAM   = a${ROOT}
+set XNAM   = x${ROOT}
+set SECOND = `echo "$FIRST + 1; quit" | bc`
+set TMP    = ${ROOT}temp.img
+set TLOG   = ${ROOT}.temp
+set MASK   = alignmsk
+set XMASK  = xalignmsk
+set ALOG   = ${ROOT}_alignmsk_b${BLUR}_t${THRESH}_p1_x3.log
+set CLOG   = ${ROOT}_alignmsk_b${BLUR}_t${THRESH}_p1_x3.fit
+echo `date` >! $ALOG
+echo `date` >! $CLOG
+echo $BRAIN >> $CLOG
+set t1 = `${NPG}/bin/t`
+unalias rm
+unalias cp
+
+# Check existence of AIR files
+# ----------------------------
+if (! -e $A_AIR) then
+	if (! -e ${NPG}/air/$A_AIR) then
+		echo "ERROR [align_dynamic]: Missing resampling AIR file: $A_AIR"
+		exit 1
+	else
+		cp ${NPG}/air/$A_AIR $A_AIR
+	endif
+endif
+if (! -e $B_AIR) then
+	if (! -e ${NPG}/air/$B_AIR) then
+		echo "ERROR [align_dynamic]: Missing inverted AIR file: $B_AIR"
+		exit 1
+	else
+		cp ${NPG}/air/$B_AIR $B_AIR
+	endif
+endif
+ 
+# Check existence of all single-frame files used for alignment
+# ------------------------------------------------------------
+set i = $FIRST
+while ($i <= $LAST)
+	set AIMG = $ANAM$i
+	if (! -e $AIMG.img) then
+		echo "ERROR [align_dynamic]: Missing image $AIMG.img"
+		echo "      Use single_frames to create single-frame images for alignment."
+		exit 1
+	endif
+	@@ i++
+end
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+img2analyze $BRAIN $MASK
+set i = $FIRST
+set IMG  = $ROOT$i$EXT
+set AIMG = $ANAM$i
+set NULLAIR  = ${ROOT}_null.air
+${NPG}/bin/setanamin $AIMG 0
+echo "-- alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 50 -p1 1 -p2 0 -e1 $MASK"
+${NPG}/bin/alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 50 -p1 1 -p2 0 -e1 $MASK
+
+# Adjust pixel size in standard air files (if necessary)
+# ------------------------------------------------------
+set NVOX = `scanheader $AIMG | grep x_size | cut -f2 -d= | cut -f1 -de`
+set SVOX = `scanair $A_AIR | grep voxel | head -1 | cut -f3 -d' ' | cut -f1 -de`
+set AVOX = `scanair $A_AIR | grep voxel | tail -1 | cut -f3 -d' ' | cut -f1 -de`
+set BVOX = `scanair $B_AIR | grep voxel | head -1 | cut -f3 -d' ' | cut -f1 -de`
+if ($NVOX != $AVOX) then
+	set DELTA = `echo "1000 * $NVOX / $AVOX" | bc`
+	if ($DELTA <= 1001 && $DELTA >= 999) then
+		${NPG}/bin/newairpix $A_AIR:r $SVOX $NVOX 
+		${NPG}/bin/newairpix $B_AIR:r $NVOX $SVOX
+	else
+		echo "ERROR [align_dynamic]: Different pixel sizes in $AIMG and $A_AIR"
+		echo "   $NVOX != $AVOX"
+		echo "   Use or create different air files for $A_AIR and $B_AIR"
+		exit 1
+	endif
+endif
+
+# Resample Mask 
+# -------------
+	${NPG}/bin/setanamin $MASK -1
+	${NPG}/bin/reslice $A_AIR $XMASK -a $MASK -n 1 -k -o
+
+# Align all adjacent pairs 
+# ------------------------
+set i = $FIRST
+while ($i < $LAST)
+	set j = `echo "$i + 1" | bc`
+	set IMG  = $ROOT$i$EXT
+	set JMG  = $ROOT$j$EXT
+	set AIMG = $ANAM$i
+	set AJMG = $ANAM$j
+	set XIMG = $XNAM$i
+	if (! -e $XIMG.img) then
+		${NPG}/bin/setanamin $AIMG -1
+		${NPG}/bin/reslice $A_AIR $XIMG -a $AIMG -n 1 -k -o
+	endif
+	set XJMG = $XNAM$j
+	if (! -e $XJMG.img) then
+		${NPG}/bin/setanamin $AJMG -1
+		${NPG}/bin/reslice $A_AIR $XJMG -a $AJMG -n 1 -k -o
+	endif
+	set AIR  = ${ROOT}_${i}vs${j}.air
+	set NETAIR = ${ROOT}_${FIRST}vs${j}.air
+	${NPG}/bin/setanamin $XIMG 0 
+	${NPG}/bin/setanamin $XJMG 0
+
+	set PRM = "-m 6 -t1 50 -p1 1 -t2 50 -p2 1 -e1 $XMASK -e2 $XMASK -b1 $BLUR3D -b2 $BLUR3D -x 3 -v"
+	echo "-- alignlinear $XIMG $XJMG $AIR $PRM"
+	${NPG}/bin/alignlinear $XIMG $XJMG $AIR $PRM >! $TLOG
+	tail -1 $TLOG >> $CLOG
+	rm $TLOG
+	if ($i > $FIRST) then
+		echo -- combine_air $NETAIR y $AIR1 $B_AIR $AIR $A_AIR
+		${NPG}/bin/combine_air $NETAIR y $AIR1 $B_AIR $AIR $A_AIR
+	else
+		echo -- combine_air $NETAIR y $B_AIR $AIR $A_AIR
+		${NPG}/bin/combine_air $NETAIR y $B_AIR $AIR $A_AIR
+	endif
+	if ($i > $SECOND) then
+		rm $AIR2
+	endif
+	set AIR2 = $AIR
+	set AIR1 = $NETAIR
+	${NPG}/bin/airdif $NETAIR $NULLAIR $BRAIN | grep Mean >> $ALOG
+	rm $XIMG.img
+	rm $XIMG.hdr
+	@@ i++
+end
+rm $XJMG.img
+rm $XJMG.hdr
+rm $AIR2
+if (-e $TMP) rm $TMP
+set t2 = `${NPG}/bin/t`
+echo "[align_dynamic] Complete at" `date` "   Elapsed time: " `echo "$t2 - $t1" | bc` " sec"
+
+@
+
+
+1.6
+log
+@July 6 tested version
+@
+text
+@d19 2
+a20 3
+set BINPATH = /usr/local/npg/bin
+set NPGPATH = /usr/local/npg/air
+ 
+d22 2
+a23 2
+	echo "Usage: align_dynamic root ext brainmask frms thresh blur resample_air"
+	echo " i.e., align_dynamic p3000fd img p3000fd_mask.img 3to44 40 5 scale_953"
+d50 1
+a50 1
+set t1 = `${BINPATH}/t`
+d57 1
+a57 1
+	if (! -e ${NPGPATH}/$A_AIR) then
+d61 1
+a61 1
+		cp ${NPGPATH}/$A_AIR $A_AIR
+d65 1
+a65 1
+	if (! -e ${NPGPATH}/$B_AIR) then
+d69 1
+a69 1
+		cp ${NPGPATH}/$B_AIR $B_AIR
+d93 1
+a93 1
+${BINPATH}/setanamin $AIMG 0
+d95 1
+a95 1
+${BINPATH}/alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 50 -p1 1 -p2 0 -e1 $MASK
+d106 2
+a107 2
+		${BINPATH}/newairpix $A_AIR:r $SVOX $NVOX 
+		${BINPATH}/newairpix $B_AIR:r $NVOX $SVOX
+d118 2
+a119 2
+	${BINPATH}/setanamin $MASK -1
+	${BINPATH}/reslice $A_AIR $XMASK -a $MASK -n 1 -k -o
+d132 2
+a133 2
+		${BINPATH}/setanamin $AIMG -1
+		${BINPATH}/reslice $A_AIR $XIMG -a $AIMG -n 1 -k -o
+d137 2
+a138 2
+		${BINPATH}/setanamin $AJMG -1
+		${BINPATH}/reslice $A_AIR $XJMG -a $AJMG -n 1 -k -o
+d142 2
+a143 2
+	${BINPATH}/setanamin $XIMG 0 
+	${BINPATH}/setanamin $XJMG 0
+d147 1
+a147 1
+	${BINPATH}/alignlinear $XIMG $XJMG $AIR $PRM >! $TLOG
+d152 1
+a152 1
+		${BINPATH}/combine_air $NETAIR y $AIR1 $B_AIR $AIR $A_AIR
+d155 1
+a155 1
+		${BINPATH}/combine_air $NETAIR y $B_AIR $AIR $A_AIR
+d162 1
+a162 1
+	${BINPATH}/airdif $NETAIR $NULLAIR $BRAIN | grep Mean >> $ALOG
+d171 1
+a171 1
+set t2 = `${BINPATH}/t`
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d22 3
+a24 3
+if ($#argv != 6) then
+	echo "Usage: align_dynamic root ext brainmask frms blur resample_air"
+	echo " i.e., align_dynamic p3000fd img p3000fd_mask.img 3to44 5 scale_953"
+d33 3
+a35 4
+set BLUR   = "$5 $5 $5"
+set ALOG   = ${ROOT}_alignmsk_b${5}_p1_x3.log
+set CLOG   = ${ROOT}_alignmsk_b${5}_p1_x3.fit
+set A_AIR  = $6.air
+d37 1
+d46 2
+d146 1
+a146 1
+	set PRM = "-m 6 -t1 50 -p1 1 -t2 50 -p2 1 -e1 $XMASK -e2 $XMASK -b1 $BLUR -b2 $BLUR -x 3 -v"
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@a172 1
+more $ALOG
+@
+
+
+1.3
+log
+@Revised Jul 5, 2001
+@
+text
+@d22 3
+a24 3
+if ($#argv != 7) then
+	echo "Usage: align_dynamic root ext ref frms cutoff blur resample_air"
+	echo " i.e., align_dynamic p3000fd img p3000fd_mask.img 3to44 0.3 5 scale_953"
+d33 4
+a36 3
+set CUTOFF = $5
+set BLUR   = "$6 $6 $6"
+set A_AIR  = $7.air
+a37 4
+set MSKPCT = 20
+set filterid = `echo "scale=0;${CUTOFF} * 10" | bc | awk -F. '{print $1}'`
+set GF = _g${filterid}
+
+a45 2
+set ALOG   = ${ROOT}_m${MSKPCT}_b${6}_p1_x3.log
+set CLOG   = ${ROOT}_m${MSKPCT}_b${6}_p1_x3.fit
+d115 5
+a143 8
+# Mask is based on sum of each pair of adjacent, filtered images; resampled
+# -------------------------------------------------------------------------
+	${BINPATH}/imgsum $ROOT$i$GF$EXT $ROOT$j$GF$EXT $TMP
+	${BINPATH}/maskpct $TMP $TMP $MSKPCT
+	${BINPATH}/img2analyze $TMP $MASK
+	${BINPATH}/setanamin $MASK -1
+	${BINPATH}/reslice $A_AIR $XMASK -a $MASK -n 1 -k -o
+
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 1
+# Date:		Oct-99
+d7 2
+a8 2
+# 		1) dynamic image has been separated into single-frame images in Analyze format
+# 		2) a reference image has been created (masked, filtered image defining brain)
+d12 1
+a12 1
+# 		2) a null AIR file has been created
+d23 3
+a25 3
+	echo "Usage: align_dynamic root ext ref frms thresh blur resample_air"
+	echo " i.e., align_dynamic p3000mb img p3000mb_mask.img 3to44 4 5 scale_953"
+	exit(1)
+d33 2
+a34 2
+set THRESH = $5
+set BLUR  = "$6 $6 $6"
+d37 4
+d47 4
+a50 2
+set ALOG   = ${ROOT}_t${THRESH}_p1_x3.log
+set CLOG   = ${ROOT}_t${THRESH}_p1_x3.fit
+d53 1
+d63 1
+a63 1
+		exit(1)
+d71 1
+a71 1
+		exit(1)
+d76 1
+a76 1
+
+d84 2
+a85 2
+		echo "      Use singlefrm_gauss_scale to create scaled, filtered, single-frame images for alignment."
+		exit(1)
+d92 1
+a96 2
+set imax = `${BINPATH}/imghdr $IMG | grep Max | cut -f3 -d ' ' | cut -f1 -d.`
+set ithr = `echo "$imax/$THRESH" | bc`
+d98 2
+a99 2
+echo "-- alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 $ithr -p1 1 -p2 0"
+${BINPATH}/alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 $ithr -p1 1 -p2 0
+d113 1
+a113 1
+		echo "ERROR [align_dynamic]: Different pixel sizes in $FDI and $A_AIR"
+d116 1
+a116 1
+		exit (1)
+d141 12
+a152 9
+	if ($i == $FIRST) then
+		set imax = `${BINPATH}/imghdr $IMG | grep Max | cut -f3 -d ' '`
+		set ithr = `echo "$imax/$THRESH" | bc`
+	endif
+	set jmax = `${BINPATH}/imghdr $JMG | grep Max | cut -f3 -d ' '`
+	set jthr = `echo "$jmax/$THRESH" | bc`
+	${BINPATH}/setanamin $XIMG 0 $imax
+	${BINPATH}/setanamin $XJMG 0 $jmax
+	set PRM = "-m 6 -t1 $ithr -p1 1 -t2 $jthr -p2 1 -b1 $BLUR -b2 $BLUR -x 3 -v"
+a168 1
+	set ithr = $jthr
+d181 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d7 1
+a7 2
+# 		1) dynamic image has been separated into filtered, single-frame images in Analyze format
+# 		   scaled to maxima of 32000.
+d9 1
+a9 1
+# 		3) a rescaling AIR file and its inverse have been created
+a19 1
+set PUBPATH = /usr/bin
+d22 3
+a24 3
+if ($#argv != 8) then
+	echo "Usage: align_dynamic root ext ref frms cutoff thresh model resample_air"
+	echo " i.e., align_dynamic m500n img m500ref.img 3to44 0.3 5 2 scale"
+d28 1
+a28 1
+set ROOT  = $1
+d30 10
+a39 3
+set BRAIN = $3
+set FIRST = `echo $4 | nawk '{FS="to";print $1}'`
+set LAST  = `echo $4 | nawk '{FS="to";print $2}'`
+d41 4
+a44 14
+set ANAM  = a${ROOT}
+set XNAM  = x${ROOT}
+set CUTOFF = $5
+set GF    = `echo "$CUTOFF * 10; quit" | bc -l | cut -f1 -d.`
+set OEXT  = _g$GF$EXT
+set AEXT  = _g$GF
+set THRESH = $6
+set MODEL = $7
+set A_AIR = $8.air
+set B_AIR = i$A_AIR
+set TMP   = ${ROOT}temp.img
+set TLOG  = ${ROOT}.temp
+set ALOG  = ${ROOT}_t${THRESH}_p1_x${MODEL}.log
+set CLOG  = ${ROOT}_t${THRESH}_p1_x${MODEL}.fit
+d48 2
+d58 1
+a58 1
+		${PUBPATH}/cp ${NPGPATH}/$A_AIR $A_AIR
+d66 1
+a66 1
+		${PUBPATH}/cp ${NPGPATH}/$B_AIR $B_AIR
+d74 1
+a74 1
+	set AIMG = $ANAM$i$AEXT
+d86 2
+a87 2
+set IMG  = $ROOT$i$OEXT
+set AIMG = $ANAM$i$AEXT
+a89 5
+if ($imax < 30000) then
+	echo "ERROR [align_dynamic]: all filtered images must be scaled to a maximum of 32000"
+	echo "      Maximum in $IMG = $imax"
+	exit(1)
+endif
+d119 5
+a123 5
+	set IMG  = $ROOT$i$OEXT
+	set JMG  = $ROOT$j$OEXT
+	set AIMG = $ANAM$i$AEXT
+	set AJMG = $ANAM$j$AEXT
+	set XIMG = $XNAM$i$AEXT
+d128 1
+a128 1
+	set XJMG = $XNAM$j$AEXT
+d143 1
+a143 1
+	set PRM = "-m 6 -t1 $ithr -p1 1 -t2 $jthr -p2 1 -x $MODEL -v"
+d147 1
+a147 1
+	${PUBPATH}/rm $TLOG
+d156 2
+a157 2
+		${PUBPATH}/rm $AIR2
+	endif	
+d162 2
+a163 2
+	${PUBPATH}/rm $XIMG.img
+	${PUBPATH}/rm $XIMG.hdr
+d166 4
+a169 4
+${PUBPATH}/rm $XJMG.img
+${PUBPATH}/rm $XJMG.hdr
+${PUBPATH}/rm $AIR2
+if (-e $TMP) ${PUBPATH}/rm $TMP
+@

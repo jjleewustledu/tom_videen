@@ -1,0 +1,58 @@
+# Variables:
+	plasma 		 	 = decay-corrected well counts/sec: from dta file
+	f0, f1, f2, beta 
+	fac1 			 = convert ECAT cnts to cnts/sec	
+	fac2 			 = convert micromoles/ml to ml/100g/min	
+	ri1, ri2 		 = convolutions
+	k1, k2, k3, k4 	 = rate constants (1/min)
+	lc 				 = lumped constant
+	alpha1, alpha2 	 = macro parameters clearance rates
+	gluc 			 = glucose concentration in micromoles/ml
+	t0 				 = scan start (sec)
+	t1 				 = frame start (sec)
+	tm 				 = average frame time (sec)
+	framelen 		 = from image header
+	pie 			 = (wellcounts/ml/sec)/(PETcounts/pixel/min)
+	tau = 0.00010529 = decay factor for F18
+
+# Convert rate constants to 1/sec 
+
+	k1 /= 60 
+	k2 /= 60 
+	k3 /= 60 
+	k4 /= 60 
+
+# average frame time for decay correction and for integration of blood curve
+
+	tm = t1 - (log (0.5 * (1.0 + exp (-tau * framelen)))) / tau 
+
+# Common computations (Huang eqs. 4 & 5)
+
+	f0 = sqrt (pow ((k2 + k3 + k4), 2.) - 4 * k2 * k4) 
+	alpha1 = (k2 + k3 + k4 - f0) / 2 
+	alpha2 = (k2 + k3 + k4 + f0) / 2 
+
+# Convolve [plasma(s)  exp(-k*(t1-s)) ds] from t0 to t1
+
+	ri1 = dconex (time, plasma, np, t0, tm, alpha1) 
+	ri2 = dconex (time, plasma, np, t0, tm, alpha2) 
+
+# Convert ECAT counts to wellcounts/sec
+#	pie:  		cnts/ml/sec -> cnts/ml/min	(60)
+#	ECAT cnts:  cnts/frame -> cnts/sec		(1/framelen)
+#	decay correct to average frame time:	exp(tm * tau)
+
+	fac1 = (60 / framelen) * pie * exp (tm * tau) 
+	pet = fac1 * img
+
+# Huang's formula: Am J Physiol 238:E69-E82, 1980  Equation 8, p. E71
+
+	f1 = (k1 / (alpha2 - alpha1)) * ((k4 - alpha1) * ri1 + (alpha2 - k4) * ri2) 
+	f2 = gluc / (lc * (k2 + k3) * (ri1 - ri2) / (alpha2 - alpha1)) 
+	cmrg = f2 * (pet - f1) 
+
+# Convert micromoles/ml to ml/100g/min plus scaler (x1000) for spideram:
+
+	fac2 = scaler * 0.18016 * 60 * 100 / 1.05 
+	CMRGlu = fac2 * cmrg
+

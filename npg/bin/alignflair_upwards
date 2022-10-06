@@ -1,0 +1,142 @@
+#!/bin/csh
+# Program:	alignflair_upwards
+# Author:	Tom Videen
+# Date:		Dec 2003
+# Function:	Align slices in a FLAIR image (Analyze format).
+# 	Separates 3D image into single-slice images;
+#	Uses alignlinear to align these in 2D;
+#	Copies slices as is above FIRST and below LAST slices;
+#	LAST slice is reference for all slices FIRST to LAST;
+#	Align adjacent images and compute a combined_air file for the
+#	new slice using all air files from the reference slice;
+#	Air files are used to reslice single-slice images,
+#	and these are merged into a single 3D image.
+#	All single-slice images are removed but air files and a log remain.
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv != 4 && $#argv != 6) then
+	echo "Usage:  alignflair_upwards in out mask thresh [first last]"
+	echo " e.g.,  alignflair_upwards v7034_flair_1A v7034_flair_1B v7034_mask_1 100"
+	echo "  or,   alignflair_upwards v7034_flair_1A v7034_flair_1B v7034_mask_1 100 2 62"
+	exit 1
+endif
+
+set IN   = $1
+set OUT  = $2
+set MASK = $3
+set THR  = $4
+
+set BLUR = 3
+set SLICES = `scanheader $IN | grep z_dim | cut -f2 -d=`
+if ($#argv == 4) then
+	set FIRST = 1
+	set LAST = $SLICES
+else
+	set FIRST = $5
+	set LAST = $6
+endif
+set NAM = ${OUT}_
+set MSK = ${MASK}_
+set LOGFILE = ${OUT}_align_slices.log
+
+unalias mv
+unalias rm
+
+if (! -e $IN.img) then
+	echo "ERROR [alignflair_upwards]: cannot find $IN.img"
+	exit 1
+endif
+if (! -e $IN.hdr) then
+	echo "ERROR [alignflair_upwards]: cannot find $IN.hdr"
+	exit 1
+endif
+if (! -e $MASK.img) then
+	echo "ERROR [alignflair_upwards]: cannot find $MASK.img"
+	exit 1
+endif
+if (! -e $MASK.hdr) then
+	echo "ERROR [alignflair_upwards]: cannot find $MASK.hdr"
+	exit 1
+endif
+if ($SLICES < $LAST) then
+	echo "ERROR [alignflair_upwards]: last slice is greater than $SLICES"
+	exit 1
+endif
+echo $IN  $SLICES slices, ref = $LAST >! $LOGFILE
+${NPG}/bin/separate_slices $IN $NAM
+${NPG}/bin/separate_slices $MASK $MSK
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set PRM = "-m 23 -t1 $THR -t2 $THR -p1 1 -p2 1 -b1 $BLUR $BLUR 0 -b2 $BLUR $BLUR 0 -x 2"
+set REF = $NAM$LAST
+${NPG}/bin/setanamin $REF 0
+alignlinear $REF $REF $REF.air $PRM
+cp $REF.hdr r$REF.hdr
+cp $REF.img r$REF.img
+
+# Copy files below LAST
+# ---------------------------------------------------------
+set i = $SLICES
+while ($i > $LAST)
+	mv $NAM$i.hdr r$NAM$i.hdr
+	mv $NAM$i.img r$NAM$i.img
+	cp $REF.air $NAM$i.air
+	@ i--
+end
+
+# Align all adjacent pairs (and remove single-slice images)
+# ---------------------------------------------------------
+set i = $LAST
+set TOTAIR = $REF.air
+while ($i > $FIRST)
+	echo "$i $FIRST --------------------------------"
+	set k = `echo "$i - 1; quit" | bc`
+	set PREV = $NAM$i
+	set NEXT = $NAM$k
+	set PMSK = $MSK$i
+	set NMSK = $MSK$k
+	set NEWAIR = ${NEXT}vs${i}.air
+	${NPG}/bin/setanamin $PREV 0
+	${NPG}/bin/setanamin $NEXT 0
+	echo alignlinear $PREV $NEXT $NEWAIR $PRM -e1 $PMSK -e2 $NMSK
+	alignlinear $PREV $NEXT $NEWAIR $PRM -e1 $PMSK -e2 $NMSK
+	combine_air $NEXT.air y $TOTAIR $NEWAIR
+	${NPG}/bin/airdif $NEXT.air $REF.air | head -3 >> $LOGFILE
+	${NPG}/bin/airdif $NEXT.air $REF.air | head -3 
+	${NPG}/bin/imgreslice $NEXT $NEXT
+	rm $NEWAIR
+	rm $PREV.img
+	rm $PREV.hdr
+	set TOTAIR = $NEXT.air
+	@ i--
+end
+rm $NAM$LAST.img
+rm $NAM$LAST.hdr
+@ i--
+
+# Reslice any remaining files
+# ---------------------------------------------------------
+while ($i > 0)
+	set NEXT = $NAM$i
+	cp $TOTAIR $NEXT.air
+	${NPG}/bin/imgreslice $NEXT $NEXT
+	rm $NEXT.hdr
+	rm $NEXT.img
+	@ i--
+end
+
+# Merge realigned single-slice images, then remove them
+# -----------------------------------------------------
+${NPG}/bin/merge_slices r$NAM 1 $SLICES $OUT
+set i = 1
+while ($i <= $SLICES)
+	rm r${NAM}$i.img
+	rm r${NAM}$i.hdr
+	rm ${MSK}$i.img
+	rm ${MSK}$i.hdr
+	@ i++
+end
+echo "Created $OUT.img"
+

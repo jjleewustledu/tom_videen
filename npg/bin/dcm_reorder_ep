@@ -1,0 +1,119 @@
+#!/usr/local/bin/perl
+# Author:	Tom Videen
+# Date:		Oct 2003
+# Purpose:	Rename .dcm files separating dual-name acquisitions
+# -----------------------------------------------
+if ($#ARGV != 1) {
+	print STDERR "Usage: dcm_reorder_ep <first> <last>\n";
+	print STDERR " e.g.: dcm_reorder_ep 129 256\n";
+	exit(1);
+}
+
+$first = $ARGV[0];
+$last = $ARGV[1];
+if ($first > $last) {
+	$first = $ARGV[1];
+	$last = $ARGV[0];
+}
+$tmp = dcm_reorder_ep.tmp;
+
+# Add prefix to first file number and check DICOM format
+# -----------------------------------------------------
+if ($first < 10 ) {
+	$prefix = "0000";
+} elsif ($first < 100) {
+	$prefix = "000";
+} elsif ($first < 1000) {
+	$prefix = "00";
+} elsif ($first < 10000) {
+	$prefix = "0";
+}
+$file = $prefix . $first . ".dcm";
+`dcm_dump_element -t 0020 1041 $file $tmp 2> /dev/null`;
+if (!$?) {	  # DICOM Part 10 format
+	$type = "-t";
+} else {
+	`dcm_dump_element 0020 1041 $file $tmp 2> /dev/null`;
+	if (!$?) {
+		$type = '';
+	} else {
+		print STDERR "$file is not DICOM format\n";
+		exit(1);
+	}
+}
+
+# For each file, get "ACQ Sequence Name"
+# ------------------------------------
+foreach $fileno ($first..$last) {
+	if ($fileno < 10 ) {
+		$prefix = "0000";
+	} elsif ($fileno < 100) {
+		$prefix = "000";
+	} elsif ($fileno < 1000) {
+		$prefix = "00";
+	} elsif ($fileno < 10000) {
+		$prefix = "0";
+	} 
+	$file = $prefix . $fileno . ".dcm";
+	`dcm_dump_element $type 0018 0024 $file $tmp`;
+	open(OUTFILE, "$tmp");
+	@out = <OUTFILE>;
+	$sequence_name{$fileno} = $out[0];
+	$newno{$fileno} = $fileno;
+}
+
+# Sort files by sequence_name
+# ---------------------------
+$switch = 1;
+while ($switch) {
+	$switch = 0;
+	foreach $n ($first+1..$last) {
+		if ($sequence_name{$newno{$n}} lt $sequence_name{$newno{$n-1}}) {
+			$switch = 1;
+			$temp = $newno{$n};
+			$newno{$n} = $newno{$n-1};
+			$newno{$n-1} = $temp;
+		}
+	}
+}
+
+# Rename files to tmp...
+# ---------------------------
+foreach $fileno ($first..$last) {
+	if ($fileno < 10 ) {
+		$prefix = "0000";
+	} elsif ($fileno < 100) {
+		$prefix = "000";
+	} elsif ($fileno < 1000) {
+		$prefix = "00";
+	} elsif ($fileno < 10000) {
+		$prefix = "0";
+	} 
+	$oldname = $prefix . $fileno . ".dcm";
+	$tmpname = "tmp" . $fileno . ".dcm";
+	`mv $oldname $tmpname`;
+}
+
+# Rename tmp files to new names
+# ---------------------------
+foreach $fileno ($first..$last) {
+	$newnum = $newno{$fileno};
+	if ($fileno < 10 ) {
+		$prefix = "0000";
+	} elsif ($fileno < 100) {
+		$prefix = "000";
+	} elsif ($fileno < 1000) {
+		$prefix = "00";
+	} elsif ($fileno < 10000) {
+		$prefix = "0";
+	} 
+	$tmpname = "tmp" . $newnum . ".dcm";
+	$newname = $prefix . $fileno . ".dcm";
+	`mv $tmpname $newname`;
+}
+
+# Remove temporary file and exit
+# ---------------------------
+`rm $tmp`;
+exit(0);
+

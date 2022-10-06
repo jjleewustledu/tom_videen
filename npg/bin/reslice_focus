@@ -1,0 +1,94 @@
+#!/bin/csh
+#	Module:	reslice_focus
+#	Author:	Tom Videen
+#	Date:	Sep 2005
+#	Use:	Reslice dynamic Focus image
+
+if ($#argv < 2) then
+	echo "Usage:  reslice_focus image air_file [path]"
+	echo " e.g.,  reslice_focus m1015dt1 m1015tr_to_m1010tr"
+	echo " or,    reslice_focus m1015dt1 m1015tr_to_m1010tr Align"
+	exit 1
+endif
+
+set IMG m1015dt1
+set AIR m1015tr_to_m1010tr
+
+set IMG = $1
+set AIR = $2
+if $#argv == 2 then
+	set APATH = Align
+else
+	set APATH = $3
+endif
+
+# Check files
+if (! -e $APATH/$AIR.air) then
+	echo "ERROR [reslice_focus]: missing $APATH/$AIR.air"
+	echo "      align_focus_tr must be run first"
+	exit 1
+endif
+if (! -e $IMG.v) then
+	echo "ERROR [reslice_focus]: missing $IMG.v"
+	exit 1
+endif
+set FRMS = `imghdr $IMG.v | grep frames | cut -f3 -ds | cut -f1 -df`
+echo $FRMS frames
+
+mkdir RTMP
+cd RTMP
+set DDIR = `pwd`
+if ($DDIR:t != RTMP) then
+	echo "ERROR [reslice_focus]: unable to create RTMP"
+    echo "This procedure will be executed in a temporary path named RTMP"
+    echo "   to avoid overwriting or removing other files."
+    exit 1
+endif
+
+cp ../$APATH/$AIR.air .
+cp ../$IMG.v .
+
+# Get maximum pixel value and scale factor
+set MAX = `imgmax $IMG.v | tail -1 | cut -c8-20`
+set SCALE = `echo "32700 / $MAX" | bc -l | cut -c1-10`
+set INVSCALE = `echo "1.0 / $SCALE" | bc -l | cut -c1-10`
+set UNITY = `echo "$SCALE * $INVSCALE" | bc -l | cut -c1-6`
+echo "Scaler = $SCALE   Inverse Scaler = $INVSCALE    Product = $UNITY"
+scaleimage $IMG.v $SCALE
+set SMAX = `imgmax $IMG.v | tail -1 | cut -c8-20`
+echo "Scaled max = $SMAX"
+
+# Separate file into single frames
+# Convert to Analyze, reslice, convert back to ECAT
+# Merge reslice frames into single dynamic image
+if ($FRMS > 1) then
+	separate_dynframes $IMG.v tmp i 1,$FRMS
+	set k = 1
+	while ($k <= $FRMS)
+		img2analyze tmp$k.i atmp$k
+		imgreslice atmp$k $AIR
+		analyze2img ratmp$k rtmp$k.v $IMG.v $k
+		@ k++
+	end
+	merge_dynframes rtmp 1to$FRMS .v r$IMG.v
+else
+	img2analyze $IMG.v atmp
+	imgreslice atmp $AIR
+	analyze2img ratmp r$IMG.v $IMG.v 1
+endif
+
+# Rescale using inverse of previous scale factor
+scaleimage r$IMG.v $INVSCALE
+
+# Save resliced dynamic ECAT image
+mv r$IMG.v ..
+
+# Everything else in RTMP is duplicate or scratch
+set DDIR = `pwd`
+if ($DDIR:t == RTMP) then
+	unalias rm
+	rm *
+endif
+cd ..
+rmdir RTMP
+

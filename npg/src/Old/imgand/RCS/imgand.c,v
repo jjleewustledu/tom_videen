@@ -1,0 +1,242 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	94.12.15.19.11.38;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.12.15.19.10.34;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@First checking in, working version.
+@
+
+
+1.2
+log
+@Added author.
+@
+text
+@/*$Id: imgand.c,v 1.1 1994/12/15 19:10:34 ty7777 Exp ty7777 $*/
+/*$Log: imgand.c,v $
+ * Revision 1.1  1994/12/15  19:10:34  ty7777
+ * Initial revision
+ **/
+
+/*_________________________________________________________________
+  Description:	This program performes logical and on two images. If both 
+		pixel values for a location is not zero, the pixel value
+		of the output image is set to 1. Otherwise, it is set to 0.
+
+  Author:	Tom Yang, 12/13/94.
+
+  History:	Created by Tom Yang on 12/13/94. 
+_________________________________________________________________*/
+
+#include <petutil/imglist.h>
+#include <petutil/matrix.h>
+
+#define ERROR_BOUND	0.00001
+
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/imgand/RCS/imgand.c,v 1.1 1994/12/15 19:10:34 ty7777 Exp ty7777 $";
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	FILE		*recfp;
+	Image_subheader	**subheader_list1;
+	Image_subheader	**subheader_list2;
+	Main_header	*main_header1;
+	Main_header	*main_header2;
+	char		date [MAXLINE];
+	char		*imgfile_and;
+	char		*image_file1;
+	char		*image_file2;
+	char		image_recfile [MAXPATH];
+	char		recfile [MAXPATH];
+	char		*uid;
+	char		version [MAXLINE];
+	float		*image3d1;
+	float		*image3d2;
+	float		pixel_size1;
+	float		pixel_size2;
+	float		plane_separation1;
+	float		plane_separation2;
+	int		dimension;
+	int		i;
+	int		scanner;
+	short		width1;
+	short		width2;
+	short		height1;
+	short		height2;
+	short		num_slices1;
+	short		num_slices2;
+	struct Matval	matval;
+
+	/*
+	 * Get command line arguments.
+	 */
+	image_file1	= argv [1];
+	image_file2	= argv [2];
+	imgfile_and	= argv [3];
+	sprintf (date, "%s %s %s %s %s %s", argv [4], argv [5], argv [6], argv [7], argv [8], argv [9]);
+	uid		= argv [10];
+
+	/*
+	 * Check if the input images have the same dimension and the voxel size.
+	 */
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+	if (getimagedim (image_file1, matval, &scanner, &width1, &height1, &num_slices1, 
+		&pixel_size1, &pixel_size1, &plane_separation1) == FAIL) 
+	{
+		fprintf (stderr, "Error: the first image file %s cannot be found.\n", image_file1);
+		exit (FAIL);
+	}
+
+	if (getimagedim (image_file2, matval, &scanner, &width2, &height2, &num_slices2, 
+		&pixel_size2, &pixel_size2, &plane_separation2) == FAIL) 
+	{
+		fprintf (stderr, "Error: the second image file %s cannot be found.\n", image_file2);
+		exit (FAIL);
+	}
+
+	if (width1 != width2 || height1 != height2 || num_slices1 != num_slices2 ||
+	pkg_abs (pixel_size1 - pixel_size2) > ERROR_BOUND ||
+	pkg_abs (plane_separation1 - plane_separation2) > ERROR_BOUND) 
+	{
+		fprintf (stderr, "Error: The images %s and %s do not match.\n", 
+			image_file1, image_file2);
+		exit (FAIL);
+	}
+
+	/*
+	 * Read image1 and image2.
+	 */
+	subheader_list1	= (Image_subheader **) pkg_malloc (num_slices1 * sizeof (caddr_t), 
+				"imgand", "subheader_list1");
+	subheader_list2	= (Image_subheader **) pkg_malloc (num_slices2 * sizeof (caddr_t), 
+				"imgand", "subheader_list2");
+	main_header1	= (Main_header *) calloc (1, sizeof (Main_header));
+	main_header2	= (Main_header *) calloc (1, sizeof (Main_header));
+
+	dimension	= width1 * height1 * num_slices1;
+	image3d1	= (float *) pkg_malloc (dimension * sizeof (float), "imgand", "image3d1");
+	image3d2	= (float *) pkg_malloc (dimension * sizeof (float), "imgand", "image3d2");
+
+	if (getrealimg (image_file1, scanner, matval, width1, height1, num_slices1, image3d1, 
+		main_header1, subheader_list1) == FAIL)
+	{
+		fprintf (stderr, "Error in reading image %s\n", image_file1);
+		free (image3d1);
+		free (image3d2);
+		exit (FAIL);
+	}
+
+	if (getrealimg (image_file2, scanner, matval, width2, height2, num_slices2, image3d2, 
+		main_header2, subheader_list2) == FAIL)
+	{
+		fprintf (stderr, "Error in reading image %s\n", image_file2);
+		free (image3d1);
+		free (image3d2);
+		exit (FAIL);
+	}
+
+	/*
+	 * Perfomes image and.
+	 */
+	for (i = 0; i < dimension; i++)
+	{
+		if (pkg_abs (image3d1 [i]) > 0 && pkg_abs (image3d2 [i]) > 0) 
+			image3d1 [i]	= 1;
+		else
+			image3d1 [i]	= 0;
+	}
+
+	for (i = 0; i < num_slices2; i++)
+	{
+		free (subheader_list2 [i]);
+	}
+	free (subheader_list2);
+	free (main_header2);
+	free (image3d2);
+
+	/*
+	 * Write the 3D array to filter file.
+	 */
+	if (GetVersion (rcsid, version) == FAIL)
+		strcpy (version, rcsid + 5);
+	strncpy (main_header1->physician_name, version, sizeof (main_header1->physician_name) - 1);
+	strncpy (main_header1->operator_name, date, sizeof (main_header1->operator_name) - 1);
+
+	if (writerealimg (imgfile_and, matval, width1, height1, num_slices1, image3d1, 
+			main_header1, subheader_list1) == FAIL)
+	{
+		fprintf (stderr, "Error occurs writerealimg ().\n");
+	}
+
+	for (i = 0; i < num_slices1; i++)
+	{
+		free (subheader_list1 [i]);
+	}
+	free (subheader_list1);
+	free (main_header1);
+	free (image3d1);
+
+	/*
+	 * Construct the rec filename and creates the rec file header.
+	 */
+	strcpy (recfile, imgfile_and);
+	strcat (recfile, REC_EXT);
+
+	recfp	= fopen (recfile, "w");
+	if (recfp == (FILE *) NULL)
+	{
+		fprintf (stderr, "Error in opening rec file %s\n", recfile);
+		exit (FAIL);
+	}
+	fprintf (recfp, "rec %s %s %s\n", imgfile_and, date, uid);
+	fprintf (recfp, "%s %s %s %s\n", argv [0], image_file1, image_file2, imgfile_and);
+	fprintf (recfp, "   %s\n\n", rcsid);
+
+	/*
+ 	 * Copy the image rec files if there are any.
+ 	 */
+	strcpy (image_recfile, imgfile_and);
+	strcat (image_recfile, REC_EXT);
+	copyrec (recfp, image_recfile);
+	fprintf (recfp, "endrec\n");
+	fclose (recfp);
+
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d12 2
+d22 1
+a22 1
+static char rcsid [] = "$Header$";
+@

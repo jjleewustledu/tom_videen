@@ -1,0 +1,187 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	2003.01.14.22.07.38;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@/*--------------------------------------------------------------------
+
+Program: arc_corr
+
+Purpose: Arc correct all sinograms in a file.
+
+Perpetrator: John Ollinger
+
+Date: August 18, 1995
+
+Copyright 1991-1994, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <matrix.h>
+
+static char rcsid [] = "$Header: /home/npggw/tom/src/3drecon_ollinger/RCS/arc_corr.c,v 1.1 1998/04/01 14:39:42 tom Exp tom $";
+
+#define MAXNAME 120
+#define TRUE 1
+#define FALSE 0
+#define DEPTH_OF_INTERACTION .753 /* 1-cm for BGO */
+
+float	*rdimg6();
+Main_header *getmhdr6();
+void	*getsbhdr6();
+int	wrimg6();
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+Scan_subheader	*sh;
+Main_header 	*mh;
+
+FILE	*fp;
+
+int	i,j,plane=1,frame=1,gate=1,data=0,bed=0,nprojs,nviews,stat,ndets;
+
+float	*scan_in,*scan_out,radius,*x,
+	*arc_correct();
+
+double  scl;
+
+char	*infil;
+
+if(argc < 4) {
+        fprintf(stderr,"Usage: arc_corr filnam actual_radius_cm number_of_detectors [-frame frame]\n");
+        exit(-1);
+        }
+
+infil  = argv[1];
+radius = atof(argv[2]);
+ndets = atoi(argv[3]);
+for(i=2;i<argc;i++) {
+    if(!strcmp(argv[i],"-frame") && (i < argc-1))
+	frame = atoi(argv[i+1]);
+    }
+
+if((mh=getmhdr6(infil)) == NULL) {
+    fprintf(stderr,"arc_corr, Could not read main header., %s\n",infil);
+    exit(ERROR);
+    }
+if((sh=(Scan_subheader *)getsbhdr6(infil,plane,frame,gate,data,bed)) == NULL) {
+    fprintf(stderr,"arc_corr, Could not read subheader., %s, plane: %d, frame: %d\n",infil,plane,frame);
+    exit(ERROR);
+    }
+x = (float *)malloc((sh->dimension_1+1)*sizeof(float));
+nprojs = sh->dimension_1;
+nviews = sh->dimension_2;
+
+scl = radius/sh->sample_distance;
+/*scl = (double)ndets/M_PI;*/
+for (i=0; i<=nprojs; i++) {
+    j  = i-nprojs/2;
+    x[i] = nprojs/2 + scl*asin((double)j/scl) - j*DEPTH_OF_INTERACTION/radius;
+    if(x[i] < 0)
+	x[i] = 0;
+    if(x[i] > nprojs + .9999)
+	x[i] = nprojs + .9999;
+    }
+
+
+for(plane=1;plane<=mh->num_planes;plane++) {
+    if((sh=(Scan_subheader *)getsbhdr6(infil,plane,frame,gate,data,bed))!=NULL) {
+        if((scan_in=rdimg6(infil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",infil,plane);
+            exit(ERROR);
+            }
+	scan_out = arc_correct(nprojs,nviews,scan_in,x);
+	for(i=0;i<nprojs*nviews;i++)
+	    scan_out[i] /= sh->loss_correction_fctr;
+        if((stat=wrimg6(infil,scan_out,mh,sh,plane,frame,gate,data,bed))!=OK) {
+            fprintf(stderr,"Error writing %S, plane %d\n",infil,plane);
+            exit(ERROR);
+            }
+	free(scan_out);
+	}
+    }
+
+}
+
+
+/******************************************/
+float *arc_correct( nprojs,nviews,scan_in,x)
+/******************************************/
+
+int nprojs, nviews;
+float *scan_in,*x;
+
+{
+int i,k,ray,i1,i2,j,ang,ioff;
+float *scan_out,d,a1,a2;
+
+scan_out = (float *)malloc(nprojs*nviews*sizeof(float));
+for (ray=0;ray<nprojs-1;ray++) {
+    i1 = (int)x[ray];
+    i2 = (int)x[ray+1];
+    d = x[ray+1] - x[ray];
+    if(d == 0) 
+ 	d = 1.;
+    if(i1 == i2) {
+	i2 = i1 + 1;
+	a2 = 0.;
+        a1 = x[ray+1] - x[ray];
+	}
+    else {
+        a1 = 1 - (x[ray] - i1);
+	a2 = x[ray+1]-i2;
+	}
+    for (ang=0,ioff=0;ang<nviews;ang++,ioff+=nprojs) {
+        scan_out[ray+ioff] = a1*scan_in[i1+ioff] + a2*scan_in[i2+ioff];
+        for(k=i1+1;k<i2;k++)
+            scan_out[ray+ioff] += scan_in[k+ioff];
+	scan_out[ray+ioff] /= d; /* Adjust for parallax error. */
+        }
+    }
+
+return(scan_out);
+
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d21 1
+a21 1
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/arc_corr.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+@

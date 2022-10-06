@@ -1,0 +1,762 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2001.06.01.15.37.47;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2001.05.30.19.46.30;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.03.05.18.49.14;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   D2OXYGEN.FTN
+C     Author:       Tom O. Videen
+C     Date:         21-May-87
+C     Intent:
+C     .  This routine processes an image for OEF or CMRO2:
+C     .      2 ==> Processing for OEF
+C     .      3 ==> Processing for CMRO2
+C     .      7 ==> Processing for CVO2
+C     
+C     Requires simultaneous use of 3 images:
+C     .   IMAGE(n,n,I1) = Oxygen scan   (read before entering routine)
+C     .   IMAGE(n,n,I2) = Water or Butanol scan
+C     .   IMAGE(n,n,I3) = CO scan
+C     
+C     History:
+C     .  Modified 05-Mar-99 by TOV to allow processing for CVO2
+C     .     (PROCESS may be 2,3, or 7).
+C     .  Modified 06-Oct-87 by TOV (PROCESS may now be 0-5);
+C     .  Modified 22-Sep-93 by TOV to process NTYPE = 11 and 12 (created by t88mean).
+C     .  Modified 30-May-2001 by TOV to process NTYPE = 7 (steady-state oxygen)
+C     
+C     Common Blocks from: SPIDERAM.INC
+C     .  **IMAGEDAT - image arrays                   (write)
+C     .  **DISPLAY   - display parameters            (read only)
+C     .  **FILES     - scan file list                (read only)
+C     
+C     Passed Variables:
+C     .  I1 = array no. for OO image to process (1-3);
+C     .     (the image has been read before entering this routine)
+C     .  SLYCE = slice number to process;
+C     .  ERRTYPE = type of error in processing images:
+C     
+C     Local Variables:
+C     .  K = 1 for 7-slice images or even slices of 14-slice images;
+C     .      2 for odd slices of 14-slice images;
+C     .  F1,F2,F3 = scan file numbers (1-20) of OO, HO and CO images;
+C     .  I2,I3 = image array numbers (4,5) for HO and CO images;
+C     .  S2,S3 = scaling factors for image arrays I1, I2, I3;
+C     .  X1,X2,X3 = image array elements from image arrays I1, I2, I3;
+C     .  C1 = (constant) SLVRATIO*integral of blood O2 counts/100.0;
+C     .  C2 = (constant) VOLFACTR*C1;
+C     .  C3 = (constant) PETTCONV(N)/BRAINDEN;
+C     .  A1,A2,A3,A4,A5 = temporary components in computation;
+C     .  SLVRATIO = ratio of cerebral small vessel hematocrit to large vessel
+C     .     hematocrit;
+C     .  VOLFACTR = (postcapillary vol + 0.5*capillary vol)/total blood volume;
+C     .  BRAINDEN = density of brain (g/ml);
+C     .  HDRONLY = true--> read the header only;
+C     .            false--> read the header and image; **
+C     
+C     Subroutines:
+C     .  D2GETIMG - get an image from a disk file;
+C     .  D2PROCES - metabolic processing of an image;
+C     
+C     Called by:  D2IMAGE
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: d2oxygen.f,v 1.7 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE D2OXYGEN(I1,SLYCE,ERRTYPE)
+
+      INTEGER*4  SLYCE,ERRTYPE,I1,I2,I3,F1,F2,F3,K,HOERR(3),COERR(3)
+      DOUBLE PRECISION SLVRATIO,VOLFACTR,BRAINDEN,C1,C2,C3,A1,A2,A3,A4,A5,
+     &     S2,S3,X1,X2,X3,SX,TMP,C4,C5,C6,C7,C8,KD,WATERCONT
+      LOGICAL*1  HDRONLY
+
+      INCLUDE 'spideram.inc'
+
+      DATA I2,I3     /4,5/
+      DATA SLVRATIO  /0.85/
+      DATA VOLFACTR  /0.835/
+      DATA BRAINDEN  /1.05/
+      DATA KD        /0.005668/
+      DATA HOERR,COERR /11,12,13,14,15,16/
+
+      ERRTYPE = 0
+      HDRONLY = .FALSE.
+
+      IF (PROCESS.NE.2 .AND. PROCESS.NE.3 .AND. PROCESS.NE.7) THEN
+         ERRTYPE = I1
+         RETURN
+      END IF
+
+      F1 = FILE(I1)
+
+C     NTYPE = 11 and NTYPE = 12 are special cases where t88mean 
+C     has created a single image of OEF or CMRO2 and scaled it by 1/AOXYGEN(1)
+
+      IF ((PROCESS.EQ.2 .AND. NTYPE(I1).EQ.11) .OR.
+     &     (PROCESS.EQ.3 .AND. NTYPE(I1).EQ.12)) THEN
+         SCALER(I1) = AOXYGEN(I1,1)
+         RETURN
+      END IF
+
+C     Otherwise, process normally
+
+      IF (NTYPE(I1).NE.1 .AND. NTYPE(I1).NE.7) THEN
+         ERRTYPE = I1
+         RETURN
+      ELSE IF (HOFILE(F1).EQ.0) THEN
+         ERRTYPE = HOERR(I1)
+         RETURN
+      ELSE IF (COFILE(F1).EQ.0) THEN
+         ERRTYPE = COERR(I1)
+         RETURN
+      END IF
+
+C     Process Cerebral Blood Flow image in IMAGE(n,n,I2)
+
+      F2 = HOFILE(F1)
+      CALL D2GETIMG(I2,SLYCE,F2,ERRTYPE,HDRONLY)
+      IF (ERRTYPE.NE.0) RETURN
+      CALL D2PROCES(I2,ERRTYPE)
+      IF (ERRTYPE.NE.0) RETURN
+
+C     Process Cerebral Blood Volume image in IMAGE(n,n,I3)
+
+      F3 = COFILE(F1)
+      CALL D2GETIMG(I3,SLYCE,F3,ERRTYPE,HDRONLY)
+      IF (ERRTYPE.NE.0) RETURN
+      CALL D2PROCES(I3,ERRTYPE)
+      IF (ERRTYPE.NE.0) RETURN
+
+C     Use metabolic factors for odd (K=2), even (K=1) or 7-slices (K=1).
+
+      IF (SLICES.EQ.14 .AND. MOD(CURSLICE,2).NE.0) THEN
+         K = 2
+      ELSE
+         K = 1
+      END IF
+
+C     Set SCALER for computed array
+C     S2 and S3 are scaling factors introduced in D2PROCES
+
+      IF (PROCESS.EQ.2) THEN
+         SCALER(I1) = 0.02
+         SX = 1.0/SCALER(I1)
+      ELSE IF (PROCESS.EQ.3) THEN
+         SCALER(I1) = 0.001
+         SX = 1.0/SCALER(I1)
+      ELSE 
+         SCALER(I1) = 0.00001
+         SX = 1.0/SCALER(I1)
+      END IF
+      S2 = SCALER(I2)
+      S3 = SCALER(I3)
+
+C     Mintun bolus oxygen processing
+C     --------------------------------------------------------
+C     Oxygen Extraction and Rate of Oxygen Utilization (CMRO2)
+C     (note: F1-F5 all have units of well counts/(g*scan))
+
+      IF (NTYPE(I1).EQ.1) THEN
+         C1 = SLVRATIO*O2CNTS(I1,K)/100.0
+         C2 = VOLFACTR*C1
+         C3 = PETTCONV(I1,K)/BRAINDEN
+         DO 400 J=1,AMAX
+            DO 300 I=1,AMAX
+               IF (IMAGE(I,J,I1).EQ.0) GO TO 300
+               X1 = IMAGE(I,J,I1)
+               X2 = IMAGE(I,J,I2)*S2
+               X3 = IMAGE(I,J,I3)*S3
+               A1 = C3*X1
+               A2 = X2*(AWATER(I1,K)*X2 + BWATER(I1,K))
+               A3 = C1*X3
+               A4 = X2*(AOXYGEN(I1,K)*X2 + BOXYGEN(I1,K))
+               A5 = C2*X3
+               TMP = (A1-A2-A3)/(A4-A5)
+               IF (A4.EQ.A5) THEN
+                  IMAGE(I,J,I1) = 0
+               ELSE IF (PROCESS.EQ.2) THEN
+                  IMAGE(I,J,I1) = NINT(SX*TMP)
+               ELSE IF (PROCESS.EQ.3) THEN
+                  IMAGE(I,J,I1) = NINT(SX*X2*TMP*OXYCONT(I1,K))
+               ELSE IF (PROCESS.EQ.7) THEN
+                  IF (TMP.LT.1 .AND. TMP.GE.0) THEN
+                     IMAGE(I,J,I1) = NINT(SX*(1.0-TMP)*OXYCONT(I1,K))
+                  ELSE
+                     IMAGE(I,J,I1) = 0
+                  ENDIF
+               END IF
+ 300        CONTINUE
+ 400     CONTINUE
+
+C     Steady-state oxygen processing
+C     See Peter Herscovitch's notes (also procSSOxygen.c in libimgutil.a)
+C     Assumes partition coefficient = 1.0
+C     --------------------------------------------------------
+
+      ELSE IF (NTYPE(I1).EQ.7) THEN
+         C4 = PETTCONV(I1,K)/ SCANLEN(I1)
+         C5 = S2 * BRAINDEN / (60*100)
+         C6 = S3 * BRAINDEN / 100
+         C7 = BRAINDEN*SLVRATIO*OXYCONT(I1,K)/100
+         C8 = C7*VOLFACTR
+         KD = 0.005668
+         WATERCONT = OXYCONT(I1,K) * AOXYGEN(I1,K)
+
+         DO 600 J=1,AMAX
+            DO 500 I=1,AMAX
+               IF (IMAGE(I,J,I1).EQ.0) GO TO 500
+               X1 = IMAGE(I,J,I1)
+               X2 = IMAGE(I,J,I2)*C5
+               X3 = IMAGE(I,J,I3)*C6
+               A1 = X1*C4
+               A2 = X2*WATERCONT/(KD + X2)
+               A3 = X3*C7
+               A4 = X2*OXYCONT(I1,K)/(KD + X2)
+               A5 = X3*C8
+               TMP = (A1-A2-A3)/(A4-A5)
+               IF (A4.EQ.A5) THEN
+                  IMAGE(I,J,I1) = 0
+               ELSE IF (PROCESS.EQ.2) THEN
+                  IMAGE(I,J,I1) = NINT(SX*TMP)
+               ELSE IF (PROCESS.EQ.3) THEN
+                  X2 = IMAGE(I,J,I2)*S2
+                  IMAGE(I,J,I1) = NINT(SX*X2*TMP*OXYCONT(I1,K))
+               ELSE IF (PROCESS.EQ.7) THEN
+                  IF (TMP.LT.1 .AND. TMP.GE.0) THEN
+                     IMAGE(I,J,I1) = NINT(SX*(1.0-TMP)*OXYCONT(I1,K))
+                  ELSE
+                     IMAGE(I,J,I1) = 0
+                  ENDIF
+               END IF
+ 500        CONTINUE
+ 600     CONTINUE
+
+      ELSE
+         ERRTYPE = I1
+      ENDIF
+
+      RETURN
+      END
+@
+
+
+1.7
+log
+@format changes plus fixes for g77
+@
+text
+@d60 1
+a60 1
+C     rcsheader = "$Id: d2oxygen.f,v 1.6 2001/06/01 15:37:47 tom Exp tom $"
+@
+
+
+1.6
+log
+@correct X2 in steadystate
+@
+text
+@d2 10
+a11 13
+C
+C  Subroutine:   D2OXYGEN.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         21-May-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This routine processes an image for OEF or CMRO2:
+C         2 ==> Processing for OEF
+C         3 ==> Processing for CMRO2
+C         7 ==> Processing for CVO2
+C
+d13 46
+a58 46
+C        IMAGE(n,n,I1) = Oxygen scan   (read before entering routine)
+C        IMAGE(n,n,I2) = Water or Butanol scan
+C        IMAGE(n,n,I3) = CO scan
+C
+C  History:
+C     Modified 05-Mar-99 by TOV to allow processing for CVO2
+C        (PROCESS may be 2,3, or 7).
+C     Modified 06-Oct-87 by TOV (PROCESS may now be 0-5);
+C     Modified 22-Sep-93 by TOV to process NTYPE = 11 and 12 (created by t88mean).
+C     Modified 30-May-2001 by TOV to process NTYPE = 7 (steady-state oxygen)
+C
+C  Common Blocks from: SPIDERAM.INC
+C     **IMAGEDAT - image arrays                   (write)
+C     **DISPLAY   - display parameters            (read only)
+C     **FILES     - scan file list                (read only)
+C
+C  Passed Variables:
+C     I1 = array no. for OO image to process (1-3);
+C        (the image has been read before entering this routine)
+C     SLYCE = slice number to process;
+C     ERRTYPE = type of error in processing images:
+C
+C  Local Variables:
+C     K = 1 for 7-slice images or even slices of 14-slice images;
+C         2 for odd slices of 14-slice images;
+C     F1,F2,F3 = scan file numbers (1-20) of OO, HO and CO images;
+C     I2,I3 = image array numbers (4,5) for HO and CO images;
+C     S2,S3 = scaling factors for image arrays I1, I2, I3;
+C     X1,X2,X3 = image array elements from image arrays I1, I2, I3;
+C     C1 = (constant) SLVRATIO*integral of blood O2 counts/100.0;
+C     C2 = (constant) VOLFACTR*C1;
+C     C3 = (constant) PETTCONV(N)/BRAINDEN;
+C     A1,A2,A3,A4,A5 = temporary components in computation;
+C     SLVRATIO = ratio of cerebral small vessel hematocrit to large vessel
+C        hematocrit;
+C     VOLFACTR = (postcapillary vol + 0.5*capillary vol)/total blood volume;
+C     BRAINDEN = density of brain (g/ml);
+C     HDRONLY = true--> read the header only;
+C               false--> read the header and image; **
+C
+C  Subroutines:
+C     D2GETIMG - get an image from a disk file;
+C     D2PROCES - metabolic processing of an image;
+C
+C  Called by:  D2IMAGE
+C
+d60 1
+d66 1
+a66 2
+     &           S2,S3,X1,X2,X3,SX,TMP,
+     &           C4,C5,C6,C7,C8,KD,WATERCONT
+a67 1
+      character*256 rcsheader
+a69 1
+      rcsheader = "$Id: d2oxygen.f,v 1.5 2001/05/30 19:46:30 tom Exp tom $"
+d82 2
+a83 2
+        ERRTYPE = I1
+        RETURN
+d88 2
+a89 2
+C   NTYPE = 11 and NTYPE = 12 are special cases where t88mean 
+C   has created a single image of OEF or CMRO2 and scaled it by 1/AOXYGEN(1)
+d92 3
+a94 3
+     &    (PROCESS.EQ.3 .AND. NTYPE(I1).EQ.12)) THEN
+        SCALER(I1) = AOXYGEN(I1,1)
+        RETURN
+d97 1
+a97 1
+C  Otherwise, process normally
+d100 2
+a101 2
+        ERRTYPE = I1
+        RETURN
+d103 2
+a104 2
+        ERRTYPE = HOERR(I1)
+        RETURN
+d106 2
+a107 2
+        ERRTYPE = COERR(I1)
+        RETURN
+d110 1
+a110 1
+C  Process Cerebral Blood Flow image in IMAGE(n,n,I2)
+d118 1
+a118 1
+C  Process Cerebral Blood Volume image in IMAGE(n,n,I3)
+d126 1
+a126 1
+C  Use metabolic factors for odd (K=2), even (K=1) or 7-slices (K=1).
+d129 1
+a129 1
+        K = 2
+d131 1
+a131 1
+        K = 1
+d134 2
+a135 2
+C  Set SCALER for computed array
+C  S2 and S3 are scaling factors introduced in D2PROCES
+d138 2
+a139 2
+        SCALER(I1) = 0.02
+        SX = 1.0/SCALER(I1)
+d141 2
+a142 2
+        SCALER(I1) = 0.001
+        SX = 1.0/SCALER(I1)
+d144 2
+a145 2
+        SCALER(I1) = 0.00001
+        SX = 1.0/SCALER(I1)
+d150 4
+a153 4
+C  Mintun bolus oxygen processing
+C  --------------------------------------------------------
+C  Oxygen Extraction and Rate of Oxygen Utilization (CMRO2)
+C    (note: F1-F5 all have units of well counts/(g*scan))
+d156 30
+a185 30
+        C1 = SLVRATIO*O2CNTS(I1,K)/100.0
+        C2 = VOLFACTR*C1
+        C3 = PETTCONV(I1,K)/BRAINDEN
+        DO 400 J=1,AMAX
+          DO 300 I=1,AMAX
+            IF (IMAGE(I,J,I1).EQ.0) GO TO 300
+            X1 = IMAGE(I,J,I1)
+            X2 = IMAGE(I,J,I2)*S2
+            X3 = IMAGE(I,J,I3)*S3
+            A1 = C3*X1
+            A2 = X2*(AWATER(I1,K)*X2 + BWATER(I1,K))
+            A3 = C1*X3
+            A4 = X2*(AOXYGEN(I1,K)*X2 + BOXYGEN(I1,K))
+            A5 = C2*X3
+            TMP = (A1-A2-A3)/(A4-A5)
+            IF (A4.EQ.A5) THEN
+              IMAGE(I,J,I1) = 0
+            ELSE IF (PROCESS.EQ.2) THEN
+              IMAGE(I,J,I1) = NINT(SX*TMP)
+            ELSE IF (PROCESS.EQ.3) THEN
+              IMAGE(I,J,I1) = NINT(SX*X2*TMP*OXYCONT(I1,K))
+            ELSE IF (PROCESS.EQ.7) THEN
+              IF (TMP.LT.1 .AND. TMP.GE.0) THEN
+                IMAGE(I,J,I1) = NINT(SX*(1.0-TMP)*OXYCONT(I1,K))
+              ELSE
+                IMAGE(I,J,I1) = 0
+              ENDIF
+            END IF
+300       CONTINUE
+400     CONTINUE
+d187 4
+a190 4
+C  Steady-state oxygen processing
+C  See Peter Herscovitch's notes (also procSSOxygen.c in libimgutil.a)
+C  Assumes partition coefficient = 1.0
+C  --------------------------------------------------------
+d193 7
+a199 7
+        C4 = PETTCONV(I1,K)/ SCANLEN(I1)
+        C5 = S2 * BRAINDEN / (60*100)
+        C6 = S3 * BRAINDEN / 100
+        C7 = BRAINDEN*SLVRATIO*OXYCONT(I1,K)/100
+        C8 = C7*VOLFACTR
+        KD = 0.005668
+        WATERCONT = OXYCONT(I1,K) * AOXYGEN(I1,K)
+d201 28
+a228 28
+        DO 600 J=1,AMAX
+          DO 500 I=1,AMAX
+            IF (IMAGE(I,J,I1).EQ.0) GO TO 500
+            X1 = IMAGE(I,J,I1)
+            X2 = IMAGE(I,J,I2)*C5
+            X3 = IMAGE(I,J,I3)*C6
+            A1 = X1*C4
+            A2 = X2*WATERCONT/(KD + X2)
+            A3 = X3*C7
+            A4 = X2*OXYCONT(I1,K)/(KD + X2)
+            A5 = X3*C8
+            TMP = (A1-A2-A3)/(A4-A5)
+            IF (A4.EQ.A5) THEN
+              IMAGE(I,J,I1) = 0
+            ELSE IF (PROCESS.EQ.2) THEN
+              IMAGE(I,J,I1) = NINT(SX*TMP)
+            ELSE IF (PROCESS.EQ.3) THEN
+              X2 = IMAGE(I,J,I2)*S2
+              IMAGE(I,J,I1) = NINT(SX*X2*TMP*OXYCONT(I1,K))
+            ELSE IF (PROCESS.EQ.7) THEN
+              IF (TMP.LT.1 .AND. TMP.GE.0) THEN
+                IMAGE(I,J,I1) = NINT(SX*(1.0-TMP)*OXYCONT(I1,K))
+              ELSE
+                IMAGE(I,J,I1) = 0
+              ENDIF
+            END IF
+500       CONTINUE
+600     CONTINUE
+d231 1
+a231 1
+        ERRTYPE = I1
+@
+
+
+1.5
+log
+@add steady-state oxygen processing
+@
+text
+@d69 1
+a69 1
+     &           C4,C5,C6,C7,KD,WATERCONT
+d74 1
+a74 1
+      rcsheader = "$Id: d2oxygen.f,v 1.4 1999/03/05 18:49:14 tom Exp tom $"
+d199 4
+a202 3
+        C5 = BRAINDEN / (60*100)
+        C6 = BRAINDEN*SLVRATIO*OXYCONT(I1,K)/100
+        C7 = C6*VOLFACTR
+d210 2
+a211 2
+            X2 = IMAGE(I,J,I2)*S2*C5
+            X3 = IMAGE(I,J,I3)*S3
+d214 1
+a214 1
+            A3 = X3*C6
+d216 1
+a216 1
+            A5 = X3*C7
+d223 1
+@
+
+
+1.4
+log
+@add CVO2
+@
+text
+@d13 1
+d25 1
+d56 1
+a56 3
+C  Uses:
+C
+C  SPIDERAM.LIB
+d63 1
+a63 1
+C
+d68 2
+a69 1
+     &           S2,S3,X1,X2,X3,SX,TMP
+d74 1
+a74 1
+      rcsheader = "$Id: d2oxygen.f,v 1.3 1993/10/04 21:55:32 tom Exp tom $"
+d80 1
+d104 1
+a104 1
+      IF (NTYPE(I1).NE.1) THEN
+a138 9
+C  Oxygen Extraction and Rate of Oxygen Utilization (CMRO2)
+C    (note: F1-F5 all have units of well counts/(g*scan))
+
+      C1 = SLVRATIO*O2CNTS(I1,K)/100.0
+      C2 = VOLFACTR*C1
+      C3 = PETTCONV(I1,K)/BRAINDEN
+      S2 = SCALER(I2)
+      S3 = SCALER(I3)
+
+d140 1
+d152 2
+d155 22
+a176 22
+      DO 400 J=1,AMAX
+        DO 300 I=1,AMAX
+          IF (IMAGE(I,J,I1).EQ.0) GO TO 300
+          X1 = IMAGE(I,J,I1)
+          X2 = IMAGE(I,J,I2)*S2
+          X3 = IMAGE(I,J,I3)*S3
+          A1 = C3*X1
+          A2 = X2*(AWATER(I1,K)*X2 + BWATER(I1,K))
+          A3 = C1*X3
+          A4 = X2*(AOXYGEN(I1,K)*X2 + BOXYGEN(I1,K))
+          A5 = C2*X3
+          TMP = (A1-A2-A3)/(A4-A5)
+          IF (A4.EQ.A5) THEN
+            IMAGE(I,J,I1) = 0
+          ELSE IF (PROCESS.EQ.2) THEN
+            IMAGE(I,J,I1) = NINT(SX*TMP)
+          ELSE IF (PROCESS.EQ.3) THEN
+            IMAGE(I,J,I1) = NINT(SX*X2*TMP*OXYCONT(I1,K))
+          ELSE IF (PROCESS.EQ.7) THEN
+            IF (TMP.LT.1 .AND. TMP.GE.0) THEN
+              IMAGE(I,J,I1) = NINT(SX*(1.0-TMP)*OXYCONT(I1,K))
+            ELSE
+d178 13
+a190 4
+            ENDIF
+          END IF
+300     CONTINUE
+400   CONTINUE
+d192 45
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d20 2
+d65 1
+a65 1
+C
+d67 2
+a68 2
+      REAL*4     SLVRATIO,VOLFACTR,BRAINDEN,C1,C2,C3,A1,A2,A3,A4,A5,
+     &           S2,S3,X1,X2,X3,SX
+d71 1
+a71 1
+C
+d73 1
+a73 1
+      rcsheader = "$Id$"
+d80 1
+a80 1
+C
+d83 2
+a84 2
+C
+      IF (PROCESS.LT.2 .OR. PROCESS.GT.3) THEN
+d88 1
+a88 1
+C
+d90 1
+a90 1
+C
+d93 2
+a94 2
+C
+			IF ((PROCESS.EQ.2 .AND. NTYPE(I1).EQ.11) .OR.
+d97 3
+a99 3
+      	RETURN
+			END IF
+C
+d101 1
+a101 1
+C
+d112 1
+a112 1
+C
+d114 1
+a114 1
+C
+d120 1
+a120 1
+C
+d122 1
+a122 1
+C
+d128 1
+a128 1
+C
+d130 1
+a130 1
+C
+d136 1
+a136 1
+C
+d139 1
+a139 1
+C
+d145 1
+a145 1
+C
+d147 1
+a147 1
+C
+d151 1
+a151 1
+      ELSE
+d154 3
+d158 1
+a158 1
+C
+d170 1
+d174 9
+a182 3
+            IMAGE(I,J,I1)= NINT(SX*(A1-A2-A3)/(A4-A5))
+          ELSE
+            IMAGE(I,J,I1)= NINT(SX*X2*OXYCONT(I1,K)*(A1-A2-A3)/(A4-A5))
+d186 1
+a186 1
+C
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d21 1
+a63 5
+C
+C
+C
+C
+C
+d66 1
+a66 1
+     2           S2,S3,X1,X2,X3,SX
+d68 1
+d71 2
+d88 12
+d154 3
+a156 3
+      DO 200 J=1,AMAX
+        DO 100 I=1,AMAX
+          IF (IMAGE(I,J,I1).EQ.0) GO TO 100
+d172 2
+a173 2
+100     CONTINUE
+200   CONTINUE
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

@@ -1,0 +1,470 @@
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      OPROFILE.FTN
+C
+C  Author:       Ken B. Larson
+C  Date:         30-Jan-87
+C  History:      Modified by Tom O. Videen 19-Feb-87
+C                  adding GraphOn routines to plot results;
+C                Modified by Tom O. Videen 24-Feb-87
+C                  to prohibit negative oxygen values;
+C                Modified by Tom O. Videen 15-Jun-87
+C                  to trap exponential underflows in BETADENS;
+C
+C  Intent:
+C     Steady-state unit-capillary model of molecular-oxygen transport
+C     and utilization. (Oxygen PROFILEs)
+C
+C     "CC" denotes ml of molecular oxygen at STP;
+c     "TENSION" denotes partial pressure.
+C
+C  Arrays:
+C     ULAB - utilization distribution in laboratory units;
+C     ZTILDE - axial distribution of tissue oxygen content;
+C     RTILDE - radial distribution of tissue oxygen content;
+C     C2TILDE(axial,radial) - tissue oxygen content;
+C     C1TILDE - whole blood oxygen content (bound & dissolved);
+C     C11TILDE - plasma oxygen content;
+C
+C  Uses Functions:
+C     BETADENS
+C     POFSIGMA
+C     SIGMAOFP
+C
+C  Uses Mathematical Subroutines:
+C     BETAI
+C     RTNI
+C     QSF
+C     GAMMA
+C     FCT
+C     FCTOFP
+C
+C  Uses Subroutines:
+C     OFILE
+C     OPLOT
+C     OPLOTYPE - sets up plot types for up to 12 plots;
+C
+C  Uses TERMINAL.LIB subroutines:
+C     TERMSET
+C     TCONTROL
+C     GETINT
+C     GETREAL
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM OPROFILE
+C
+      EXTERNAL FCTOFP
+C
+      INTEGER*4    AUXLU,DISK,USERIN,USEROUT,MHB,NPOINTS,NUMPLOTS,
+     2             PTYPE(12),PSIZE(12),LTYPE(12)
+      REAL         ZTILDE(101), RTILDE(101), C1TILDE(101),
+     2             P(101), PTILDE(101), ULAB(101), UTILDE(101),
+     3             C2TILDE(101,101), C11TILDE(101),
+     4             LAMBDA,NU,SMV,E0,E0PCT,PA,FLAB,V1,V1PCT,
+     5             VCOV1,VCOV1PCT,DCMU,RHO,CHB,HCT,HCTPCT,HBVF,HBVFPCT,
+     6             A,B,C,D,E,A1,A2,
+     7             XVAL(101),YVAL(101),XMIN,XMAX,YMIN,YMAX
+      CHARACTER*1  DISPTYPE,OUTPUT
+      CHARACTER*80 Q,STR,CHARSET
+      LOGICAL*1    ANS,CHANGE,XLOG,YLOG,PLOTPNTS,RESET
+C
+      COMMON  ALPHA1, ALPHA2, ALPHA3
+C
+      COMMON /USRIO/ USERIN,USEROUT
+      COMMON /SCALE/ XVAL,YVAL,XMIN,XMAX,YMIN,YMAX,NPOINTS,XLOG,YLOG
+      COMMON /PLOTTYPE/ PTYPE,PSIZE,LTYPE,NUMPLOTS,PLOTPNTS
+      COMMON /VALUES/ NZ,NR,ZTILDE,RTILDE,ULAB,C1TILDE,C11TILDE,
+     2                C2TILDE
+C
+      DATA  A1, A2, MHB /2.095731E-04, 2.590726, 64460./
+      DATA  B1, B2      / 0.303E-04, 0.297E-04 /
+      DATA  NU, SMV     / 4., 22413.7 /
+C
+      DATA  AUXLU,DISK,USERIN,USEROUT /1,3,4,5/
+C
+C  Initializations
+C
+      DO 10 I=1,12
+        PTYPE(I) = MOD(I,3)+2
+        PSIZE(I) = 2
+        LTYPE(I) = I
+10    CONTINUE
+      XLOG  = .FALSE.
+      YLOG  = .FALSE.
+      PLOTPNTS = .FALSE.
+      NUMPLOTS = 12
+      CHANGE = .FALSE.
+      DISPTYPE = 'A'
+      OUTPUT = 'S'
+      NZ = 101
+      NR = 101
+      E0PCT = 35.
+      PA = 95.
+      FLAB = 50.
+      V1PCT = 3.
+      VCOV1PCT = 22.75696
+      DCMU = 8.
+      RHO  = 1.05
+      CHB = 0.15
+      HCTPCT = 45.
+      HBVFPCT = 25.
+      D = 0.000017
+      A = 10.
+      B = 10.
+      C = 0.
+      ZTILDE(1) = 1.
+      RTILDE(1) = 1.
+C
+      CALL TERMSET(AUXLU)
+      CALL TCONTROL(1,0,0)
+      CALL TCONTROL(2,0,0)
+C
+8000  FORMAT(25X,A)
+      WRITE (USEROUT,8000) '*****************************'
+      WRITE (USEROUT,8000) '***    Oxygen Profiles    ***'
+      WRITE (USEROUT,8000) '***                       ***'
+      WRITE (USEROUT,8000) '***  (version 15-Jun-87)  ***'
+      WRITE (USEROUT,8000) '*****************************'
+      WRITE (USEROUT,*)
+C
+101   Q = 'Normal percentage of oxygen extracted'
+      CALL GETREAL(Q,E0PCT,0.,100.)
+      E0 = E0PCT / 100.
+      IF (CHANGE) GO TO 200
+C
+102   Q = 'Arterial-oxygen tension in torr'
+      CALL GETREAL(Q,PA,0.,200.)
+      IF (CHANGE) GO TO 200
+C
+103   Q = 'Blood flow in (ml/min)/hg'
+      CALL GETREAL(Q,FLAB,0.,200.)
+      IF (CHANGE) GO TO 200
+C
+104   Q = 'Blood volume in percent of voxel volume'
+      CALL GETREAL (Q,V1PCT,0.,100.)
+      V1 = V1PCT / 100.
+      IF (CHANGE) GO TO 200
+C
+105   Q = 'Capillary volume in percent of blood volume'
+      CALL GETREAL(Q,VCOV1PCT,0.,100.)
+      VCOV1 = VCOV1PCT / 100.
+      IF (CHANGE) GO TO 200
+C
+106   Q = 'Capillary diameter in microns'
+      CALL GETREAL(Q,DCMU,0.,100.)
+      IF (CHANGE) GO TO 200
+C
+107   Q = 'Voxel density in g/ml'
+      CALL GETREAL(Q,RHO,0.,100.)
+      IF (CHANGE) GO TO 200
+C
+108   Q = 'Hemoglobin concentration in g/ml'
+      CALL GETREAL(Q,CHB,0.,100.)
+      IF (CHANGE) GO TO 200
+C
+109   Q = 'Capillary hematocrit in percent'
+      CALL GETREAL(Q,HCTPCT,1.,100.)
+      HCT = HCTPCT / 100.
+      IF (CHANGE) GO TO 200
+C
+110   Q = 'Hemoglobin volume fraction of RBC in percent'
+      CALL GETREAL(Q,HBVFPCT,1.,100.)
+      HBVF = HBVFPCT / 100.
+      IF (CHANGE) GO TO 200
+C
+111   Q = 'Oxygen diffusivity in tissue in cm**2/sec'
+      CALL GETREAL(Q,D,0.,100.)
+      IF (CHANGE) GO TO 200
+C
+112   Q = 'Oxygen-utilization-rate profile parameter:  A'
+      CALL GETREAL(Q,A,0.,100.)
+      IF (CHANGE) GO TO 200
+C
+113   Q = 'Oxygen-utilization-rate profile parameter:  B'
+      CALL GETREAL(Q,B,0.,100.)
+      IF (CHANGE) GO TO 200
+C
+114   Q = 'Anomalous/normal utilization rates:  C'
+      CALL GETREAL(Q,C,0.,100.)
+      EPCT = (1. + C) * E0PCT
+      E = EPCT / 100.
+      IF (CHANGE) GO TO 200
+C
+115   Q = 'ZTILDE'
+      CALL GETREAL(Q,ZTILDE(1),0.,100.)
+      IF (CHANGE) GO TO 200
+C
+116   Q = 'RTILDE'
+      CALL GETREAL(Q,RTILDE(1),0.,100.)
+      IF (CHANGE) GO TO 200
+C
+117   Q = 'Select plot type (type of points/lines)'
+      ANS = .FALSE.
+      CALL YESNO(Q,ANS)
+      IF (ANS) CALL OPLOTYPE
+      IF (CHANGE) GO TO 200
+C
+200   CALL TCONTROL(1,0,0)
+      CALL TCONTROL(2,0,0)
+C
+      WRITE (USEROUT,8001) E0PCT,EPCT,PA,FLAB,V1PCT,VCOV1PCT,DCMU,RHO
+8001  FORMAT (1X,'Normal Fraction of Oxygen Input-Flux Extracted = ',
+     1   F5.1, ' percent' /
+     2 1X, 'Actual Fraction of Oxygen Input-Flux Extracted = ',
+     3   F5.1, ' percent' /
+     4 1X, 'Arterial-Oxygen Tension = ', F5.1, ' Torr' /
+     5 1X, 'Blood Flow = ', F5.1, ' (ml/min)/hg' /
+     6 1X, 'Blood Volume = ', F4.1, ' Percent of Voxel Volume' /
+     7 1X, 'Capillary Volume = ', F4.1, ' Percent of Blood Volume' /
+     8 1X, 'Capillary Diameter = ', F4.1, ' microns' /
+     9 1X, 'Density of Tissue in Voxel = ', F4.2, ' g/ml' )
+C
+      WRITE (USEROUT,8002) CHB,HCTPCT,HBVFPCT,D,A,B,C,ZTILDE(1),
+     2   RTILDE(1)
+8002  FORMAT (1X, 'Hemoglobin Concentration = ', F4.2, ' g/ml' /
+     1 1X, 'Capillary Hematocrit = ', F4.1, ' percent' /
+     2 1X, 'Hemoglobin Volume Fraction in RBC = ', F4.1, ' percent' /
+     3 1X, 'Oxygen Diffusivity in Tissue = ', E9.2, ' cm**2/sec' /
+     4 1X, 'Oxygen-Utilization-Rate Profile Parameters:'/
+     5 4X, ' A = ', F6.3 /
+     6 4X, ' B = ', F6.3 /
+     7 4X, ' C = ', F6.3 /
+     8 1X, 'Capillary-Cylinder Position Coordinates:'/
+     9 4X, ' ZTILDE = ', F7.4 /
+     1 4X, ' RTILDE = ', F7.4 /)
+C
+      Q = 'Change parameters'
+      CALL YESNO(Q,CHANGE)
+      IF (CHANGE) THEN
+        CALL TCONTROL(1,0,0)
+        CALL TCONTROL(2,0,0)
+        WRITE (USEROUT,8004)
+        Q = 'Parameter to change'
+        IPARM = 0
+        CALL GETINT(Q,IPARM,0,17)
+        IF (IPARM.NE.0) THEN
+          GO TO (101,102,103,104,105,106,107,108,109,110,111,112,
+     2      113,114,115,116,117) IPARM
+        END IF
+      END IF
+8004  FORMAT (1X,'Select parameter to be changed:'//
+     1 5X, '0 = No change   6  = DC       12= A      '/
+     2 5X, '1 = E0          7  = RHO      13= B      '/
+     3 5X, '2 = PA          8  = CHB      14= C      '/
+     4 5X, '3 = F           9  = HCT      15= ZTILDE '/
+     5 5X, '4 = V1          10 = HBVF     16= RTILDE '/
+     6 5X, '5 = VCOV1       11 = D        17= Plot Type '/)
+C
+C  Computations
+C
+      V1  = V1PCT / 100.
+      VCOV1 = VCOV1PCT / 100.
+      VC  = VCOV1 * V1
+      RC = 1.E-04 * DCMU/ 2.
+      R2 = RC * SQRT ((1. - VC) / VC)
+      R2MU = R2 * 1.E04
+      RCTILDE = RC / R2
+      TAU = R2 * R2 / D
+      F = RHO * FLAB / 6000.
+      E0 = E0PCT / 100.
+      EPCT = (1. + C) * E0PCT
+      E = EPCT / 100.
+      CHBO8 = CHB * NU * SMV / MHB
+      CA = CHBO8 * SIGMAOFP(PA) + B1 * PA
+      CVTILDE = 1. - E
+      CV = CVTILDE * CA
+      ULABAVG = E * FLAB * CA
+      UAVG0 = E0 * F * CA
+      LAMBDA = B2 * (1. - HBVF * HCT) / B1
+      ALPHA1 = CHBO8 / CA
+      ALPHA2 = B1 / CA
+      CALL BETAI (ZTILDE(1), A, B, Y, IER1)
+      C1TILDE(1) = 1. - E0 * (ZTILDE(1) + C * Y)
+      ALPHA3 = C1TILDE(1)
+      SIGMA0 = ALPHA3 / ALPHA1
+      P0 = POFSIGMA (SIGMA0)
+      CALL RTNI (PRT, G, DGDP, FCTOFP, P0, 0.4E-06, 100, NI, IER2)
+      P(1) = PRT
+      PTILDE(1) = P(1) / PA
+      C11TILDE(1) = B1 * P(1) / CA
+      UTILDE(1) = (1. + C * BETADENS(ZTILDE(1), A, B)) * UAVG0 / CA
+      ULAB(1) = 6000. * UTILDE(1) * CA / RHO
+      C2TILDE(1,1) = LAMBDA * C11TILDE(1)
+     1               - (TAU / 4.) * (2. * ALOG(RTILDE(1) / RCTILDE)
+     2               - RTILDE(1)**2 + RCTILDE**2) * UTILDE(1)
+C
+      CALL TCONTROL(1,0,0)
+      CALL TCONTROL(2,0,0)
+      WRITE(USEROUT,8001) E0PCT,EPCT,PA,FLAB,V1PCT,VCOV1PCT,DCMU,RHO
+      WRITE(USEROUT,8002) CHB,HCTPCT,HBVFPCT,D,A,B,C,
+     1  ZTILDE(1),RTILDE(1)
+C
+      Q = 'Continue'
+      ANS = .TRUE.
+      CALL YESNO(Q,ANS)
+C
+      WRITE (USEROUT,8005) E0PCT,EPCT,PA,CA,CV,ULABAVG,LAMBDA,
+     1  R2MU, TAU, RCTILDE
+8005  FORMAT (1X, 'E0 = ', F5.1, ' PERCENT' /
+     1            ' E  = ', F5.1, ' PERCENT' /
+     2            ' PA = ', F5.1, ' TORR' /
+     3            ' CA = ', F7.4, ' CC/ML' /
+     4            ' CV = ', F7.4, ' CC/ML' /
+     5            ' UAVG = ', F7.3, ' (CC/MIN)/HG' /
+     6            ' LAMBDA = ', F7.4 /
+     7            ' R2 = ', F7.2, ' MICRONS' /
+     8            ' TAU = ', F7.4, ' SEC' /
+     9            ' RCTILDE = ', F7.4 /)
+C
+      WRITE (USEROUT,8006) ZTILDE(1), RTILDE(1), ULAB(1), P(1),
+     1     PTILDE(1), C1TILDE(1), C11TILDE(1), C2TILDE(1,1)
+8006  FORMAT (1X, 'ZTILDE = ', F5.3 /
+     1            ' RTILDE = ', F5.3 /
+     2            ' U(ZTILDE) = ', F5.3, ' (CC/MIN)/HG' /
+     3            ' P(ZTILDE) = ', F6.3, ' TORR' /
+     4            ' PTILDE (ZTILDE) = ', F5.3 /
+     5            ' C1TILDE (ZTILDE) = ', E13.7 /
+     6            ' C11TILDE (ZTILDE) = ', E13.7 /
+     7            ' C2TILDE (ZTILDE, RTILDE) = ', E13.7 /)
+C
+      Q = 'Change or review input values'
+      ANS = .FALSE.
+      CALL YESNO(Q,ANS)
+      IF (ANS) GO TO 200
+C
+      Q = 'Number of axial points to be computed for blood & tissue '//
+     2   'profiles'
+      CALL GETINT(Q,NZ,1,101)
+C
+      Q = 'Number of radial points to be computed for the tissue '//
+     2   'profile'
+      CALL GETINT(Q,NR,1,101)
+C
+      DZ = 1. / FLOAT(NZ - 1)
+      DR = (1.- RCTILDE) / FLOAT (NR - 1)
+      ZTILDE(1) = 0.
+      RTILDE(1) = RCTILDE
+C
+      DO 700 I = 2, NZ
+        ZTILDE(I) = ZTILDE(I - 1) + DZ
+700   CONTINUE
+C
+      DO 710 I = 2, NR
+        RTILDE(I) = RTILDE(I - 1) + DR
+710   CONTINUE
+C
+      DO 730 I = 1, NZ
+        CALL BETAI (ZTILDE(I), A, B, Y, IER1)
+        C1TILDE(I) = 1. - E0 * (ZTILDE(I) + C * Y)
+        ALPHA3 = C1TILDE(I)
+        SIGMA0 = ALPHA3 / ALPHA1
+        P0 = POFSIGMA (SIGMA0)
+        CALL RTNI (PRT, G, DGDP, FCTOFP, P0, 0.4E-06, 100, NI, IER2)
+        P(I) = PRT
+        PTILDE(I) = P(I) / PA
+        C11TILDE(I) = B1 * P(I) / CA
+        UTILDE(I) = (1. + C * BETADENS(ZTILDE(I), A, B)) * UAVG0 / CA
+        ULAB(I) = 6000. * UTILDE(I) * CA / RHO
+        DO 720 J = 1, NR
+          C2TILDE(I,J) = LAMBDA * C11TILDE(I)
+     1      - (TAU / 4.) * (2. * ALOG(RTILDE(J) / RCTILDE)
+     2      - RTILDE(J)**2 + RCTILDE**2) * UTILDE(I)
+          IF (C2TILDE(I,J).LT.0.0) C2TILDE(I,J) = 0.0
+720     CONTINUE
+730   CONTINUE
+C
+      Q = 'Display profile sequences'
+      ANS = .FALSE.
+      CALL YESNO(Q,ANS)
+      IF (.NOT.ANS) GO TO 1000
+C
+      WRITE (USEROUT,8011)
+8011  FORMAT (1X, 32X, 'BLOOD PROFILES' /
+     1   1X, 2X, 'ZTILDE', 7X, 'U', 11X, 'C1TILDE', 8X,
+     2   'C11TILDE', 10X, 'P', 7X, 'PTILDE')
+C
+      WRITE (USEROUT,8012) (ZTILDE(I), ULAB(I), C1TILDE(I),
+     1    C11TILDE(11), P(I), PTILDE(I), I = 1, NZ)
+8012  FORMAT (1X, F8.3, 3E15.7, F10.2, E15.7)
+      WRITE(USEROUT,*)
+C
+C  ---------------------------------------------------------------
+C  Plot, write to file, or scroll values on terminal
+C
+1000  Q = 'Plot values, write to File, write to Screen, '//
+     2  'Continue, or Exit (P,F,S,C,E)'
+      CHARSET = 'PFSCEpfsce'
+      CALL GETCHAR(Q,OUTPUT,CHARSET)
+C
+C  Exit or Continue
+C
+      IF (OUTPUT.EQ.'E' .OR. OUTPUT.EQ.'e') THEN
+        STOP
+      ELSE IF (OUTPUT.EQ.'C' .OR. OUTPUT.EQ.'c') THEN
+        GO TO 200
+C  ---------------------------------------------------------------
+C
+C  Display Axial Profiles on Screen
+C
+      ELSE IF (OUTPUT.EQ.'S' .OR. OUTPUT.EQ.'s') THEN
+        Q = 'Display Axial or Radial Tissue Profile (A,R)'
+        CHARSET = 'ARar'
+        CALL GETCHAR(Q,DISPTYPE,CHARSET)
+        IF (DISPTYPE.EQ.'A' .OR. DISPTYPE.EQ.'a') THEN
+          WRITE (USEROUT,8014)
+          DO 1110 J = 1, NR
+            WRITE (USEROUT,8015) RTILDE (J)
+            DO 1100 I = 1, NZ
+              WRITE (USEROUT,8016) ZTILDE (I), C2TILDE(I,J)
+1100         CONTINUE
+1110       CONTINUE
+8014    FORMAT (1X, 12X, 'AXIAL TISSUE PROFILES')
+8015    FORMAT (1X, 16X, 'RTILDE = ', F5.3)
+8016    FORMAT (1X, 'ZTILDE = ', F5.3, 7X, 'C2TILDE = ', E14.7)
+C
+C  Display Radial Profiles on Screen
+C
+        ELSE IF (DISPTYPE.EQ.'R' .OR. DISPTYPE.EQ.'r') THEN
+          WRITE (USEROUT,8017)
+          DO 1210 I = 1, NZ
+            WRITE (USEROUT,8018) ZTILDE (I)
+            DO 1200 J = 1, NR
+              WRITE (USEROUT,8019) RTILDE (J), C2TILDE(I,J)
+1200         CONTINUE
+1210       CONTINUE
+        END IF
+8017    FORMAT (1X/12X, 'RADIAL TISSUE PROFILES')
+8018    FORMAT (1X,16X, 'ZTILDE = ', F5.3)
+8019    FORMAT (1X,'RTILDE = ', F5.3, 7X, 'C2TILDE = ', E14.7)
+C  ---------------------------------------------------------------
+C
+C  Write Profiles to a File
+C
+      ELSE IF (OUTPUT.EQ.'F' .OR. OUTPUT.EQ.'f') THEN
+        Q = 'Axial, Radial, Whole blood, Plasma, Utilization (ARWPU)'
+        CHARSET = 'ARWPUarwpu'
+        CALL GETCHAR(Q,DISPTYPE,CHARSET)
+        CALL OFILE(DISPTYPE,DISK)
+C  ---------------------------------------------------------------
+C
+C  Plot Profiles on terminal
+C
+      ELSE IF (OUTPUT.EQ.'P' .OR. OUTPUT.EQ.'p') THEN
+        Q = 'Axial, Radial, Whole blood, Plasma, Utilization (ARWPU)'
+        CHARSET = 'ARWPUarwpu'
+        CALL GETCHAR(Q,DISPTYPE,CHARSET)
+        IF (DISPTYPE.EQ.'U' .OR. DISPTYPE.EQ.'u') THEN
+          Q = 'Clear screen before plotting utilization'
+          CALL YESNO(Q,RESET)
+        ELSE
+          RESET = .TRUE.
+        END IF
+        CALL OPLOT(DISPTYPE,RESET)
+      END IF
+C  ---------------------------------------------------------------
+C
+      GO TO 1000
+C
+      STOP
+      END

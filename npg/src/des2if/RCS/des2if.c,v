@@ -1,0 +1,422 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2004.02.13.22.10.00;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.27.14.53.19;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.12.07.21.59.34;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@/*	$Log: des2if.c,v $
+ * Revision 1.2  2002/11/27  14:53:19  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2000/12/07  21:59:34  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			des2if.c
+ *	Date:			Dec 2000
+ *	Author:			Tom Videen
+ *	Description:	Convert images in Descriptor format (RIC UT, San Antonio) into Interfile format
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/des2if/RCS/des2if.c,v 1.2 2002/11/27 14:53:19 tom Exp tom $";
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <image.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	FILE           *f_des;			 /* file for Descriptor header */
+	FILE           *f_ima;			 /* file for Descriptor image */
+	FILE           *f_ifh;			 /* file for Interfile header */
+	FILE           *f_ifi;			 /* file for Interfile image */
+	char           *prefix;
+	char           *suffix;
+	char           *output;
+	char           *nam_des;		 /* input Descriptor header filename  */
+	char           *nam_ima;		 /* input Descriptor image filename */
+	char           *nam_ifh;		 /* input Interfile header filename  */
+	char           *nam_ifi;		 /* input Interfile image filename */
+	char           *ptr;
+	char           *ch;
+	char            frame[5];
+	char            version[5];
+	char            program_date[12];
+	char            orient[10];
+	char            str[256];
+	char           *imgname;
+	short          *img;
+	float          *fmg;
+	float           val, tmp1, tmp2;
+	float           scale = 1;
+	float           size[3];
+	long            dim[4];
+	int             f, ff, lf;
+	int             i, j, k, n;
+	int             len;
+	int             nbytes;
+	int             ndim = 3;
+	int             nvol = 0;
+	int             offset = 0;
+	float           global_max = 0.;
+	float           global_min = 0.;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 6) {
+		(void) printf ("Usage: des2if prefix suffix output ff lf\n");
+		return (ERROR);
+	}
+	prefix = argv[1];
+	suffix = argv[2];
+	output = argv[3];
+	ff = atoi (argv[4]);
+	lf = atoi (argv[5]);
+	dim[3] = lf - ff + 1;
+	if (dim[3] > 1)
+		ndim = 4;
+	nam_ima = (char *) calloc (256, sizeof (char));
+	nam_des = (char *) calloc (256, sizeof (char));
+	nam_ifi = (char *) calloc (256, sizeof (char));
+	nam_ifh = (char *) calloc (256, sizeof (char));
+	imgname = (char *) calloc (256, sizeof (char));
+	if (nam_ima == NULL) return (ERROR);
+	if (nam_des == NULL) return (ERROR);
+	if (nam_ifi == NULL) return (ERROR);
+	if (nam_ifh == NULL) return (ERROR);
+	if (imgname == NULL) return (ERROR);
+	(void) strcpy (nam_ifh, output);
+	(void) strcat (nam_ifh, ".ifh");
+	(void) strcpy (nam_ifi, output);
+	(void) strcat (nam_ifi, ".ifi");
+
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	(void) strcpy (version, "    ");
+	if (ptr != NULL)
+		(void) strncpy (version, ptr, 4);
+	if (ptr != NULL)
+		ptr = strstr (ptr, " ");
+	ptr++;
+	(void) strcpy (program_date, "           ");
+	if (ptr != NULL)
+		(void) strncpy (program_date, ptr, 10);
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+
+	if ((f_ifh = fopen (nam_ifh, "w")) == 0) {
+		fprintf (stderr, "ERROR [des2if]: Unable to create Interfile Format header %s\n", nam_ifh);
+		return (ERROR);
+	}
+	if ((f_ifi = fopen (nam_ifi, "w")) == 0) {
+		fprintf (stderr, "ERROR [des2if]: Unable to create Interfile image %s\n", nam_ifi);
+		return (ERROR);
+	}
+	for (f = ff; f <= lf; f++) {
+		(void) sprintf (frame, "%04d", f);
+		(void) strcpy (nam_des, prefix);
+		(void) strcat (nam_des, frame);
+		(void) strcat (nam_des, suffix);
+		(void) strcpy (nam_ima, nam_des);
+		(void) strcat (nam_des, ".des");
+		(void) strcat (nam_ima, ".ima");
+
+/*
+ * Read Descriptor file
+ */
+
+		if ((f_des = fopen (nam_des, "r")) == 0) {
+			(void) printf ("Unable to open Descriptor header %s\n", nam_des);
+			return (ERROR);
+		}
+		if (fgets (str, sizeof (str), f_des) == NULL) {
+			(void) printf ("ERROR [des2if]: reading %s\n", nam_des);
+			return (ERROR);
+		}
+		if (strstr (str, "NEMA01") == NULL) {
+			(void) printf ("ERROR [des2if]: %s is not in Descriptor format\n", nam_des);
+			return (ERROR);
+		}
+		if (strstr (str, "TOTAL_VOLUMES") != NULL) {
+			(void) sscanf (ptr, "%d", &nvol);
+			if (nvol != 1) {
+				(void) printf ("ERROR [des2if]: non-standard total volumes = %d\n", nvol);
+				return (ERROR);
+			}
+		}
+		while (fgets (str, sizeof (str), f_des) != NULL) {
+			ptr = strstr (str, "=");
+			if (ptr != NULL) {
+				ptr++;
+				if (strstr (str, "PIXEL_REPRESENTATION") != NULL) {
+					if (strstr (ptr, "SIGNED") == NULL) {
+						(void) printf ("ERROR [des2if]: non-standard number type = %s\n", ptr);
+						return (ERROR);
+					}
+					continue;
+				}
+				if (strstr (str, "BITS_ALLOCATED") != NULL) {
+					(void) sscanf (ptr, "%d", &nbytes);
+					continue;
+				}
+				if (strstr (str, "ROWS") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[0]);
+					continue;
+				}
+				if (strstr (str, "COLUMNS") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[1]);
+					continue;
+				}
+				if (strstr (str, "TOTAL_SCANS") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[2]);
+					continue;
+				}
+				if (strstr (str, "ROWVEC") != NULL) {
+					(void) sscanf (ptr, "%f,%f,%f", &size[0], &tmp1, &tmp2);
+					continue;
+				}
+				if (strstr (str, "COLVEC") != NULL) {
+					(void) sscanf (ptr, "%f,%f,%f", &tmp1, &size[1], &tmp2);
+					continue;
+				}
+				if (strstr (str, "SLICEVEC") != NULL) {
+					(void) sscanf (ptr, "%f,%f,%f", &tmp1, &tmp2, &size[2]);
+					continue;
+				}
+				if (strstr (str, "ORIENTATION") != NULL) {
+					(void) strcpy (orient, ptr);
+					continue;
+				}
+				if (strstr (str, "DATA_SCALE") != NULL) {
+					(void) sscanf (ptr, "%f", &scale);
+					continue;
+				}
+				if (strstr (str, "DATA") != NULL) {
+					(void) sscanf (ptr, "%s %d", imgname, &offset);
+					ch = strchr (imgname, ',');
+					*ch = '\0';
+					if (strcmp (imgname, nam_ima) != 0) {
+						(void) printf ("ERROR [des2if]: change in filename = %s\n", imgname);
+						return (ERROR);
+					}
+					break;
+				}
+			}
+		}
+
+/*
+ *	Read image data and compute min and max
+ */
+
+		len = dim[0];
+		img = (short *) calloc (len, sizeof (short));
+		fmg = (float *) calloc (len, sizeof (float));
+		if (img == NULL) return (ERROR);
+		if (fmg == NULL) return (ERROR);
+		if ((f_ima = fopen (nam_ima, "r")) == 0) {
+			(void) printf ("ERROR [des2if]: Unable to open Descriptor image %s\n", nam_ima);
+			return (ERROR);
+		}
+		for (k = 1; k <= dim[2]; k++) {
+			/* (void) printf ("%2d %7d  %f\n", k, offset, scale); */
+			if (fseek (f_ima, offset, SEEK_SET) != 0) {
+				(void) printf ("ERROR [des2if]: fseek %d in %s\n", offset, nam_ima);
+				return (ERROR);
+			}
+			for (j = 1; j <= dim[1]; j++) {
+				if (fread (img, len * sizeof (short), 1, f_ima) != 1) {
+					(void) printf ("ERROR [des2if]: reading %s\n", nam_ima);
+					return (ERROR);
+				} else {
+					for (i = 0; i < len; i++) {
+						val = scale * (float) img[i];
+						fmg[len - 1 - i] = val;
+						if (val > global_max)
+							global_max = val;
+						else if (val < global_min)
+							global_min = val;
+					}
+				}
+				(void) fwrite (fmg, sizeof (float), len, f_ifi);
+			}
+			scale = 1;
+			while (fgets (str, sizeof (str), f_des) != NULL) {
+				ptr = strstr (str, "=");
+				if (ptr != NULL) {
+					ptr++;
+					if (strstr (str, "$SLICE") != NULL) {
+						(void) sscanf (ptr, "%d", &n);
+						continue;
+					}
+					if (strstr (str, "DATA_SCALE") != NULL) {
+						(void) sscanf (ptr, "%f", &scale);
+						continue;
+					}
+					if (strstr (str, "DATA") != NULL) {
+						(void) sscanf (ptr, "%s %d", imgname, &offset);
+						break;
+					}
+				}
+			}
+		}
+		(void) fclose (f_ima);
+		(void) fclose (f_des);
+		free (img);
+		free (fmg);
+	}
+	(void) fclose (f_ifi);
+
+/*
+ * Create Interfile Format header file
+ */
+
+	fprintf (f_ifh, "INTERFILE :=\n");
+	fprintf (f_ifh, "version of keys    := 3.3\n");
+	fprintf (f_ifh, "date of keys       := 1992:01:01\n");
+	fprintf (f_ifh, "conversion program := des2if\n");
+	fprintf (f_ifh, "program version    := %s\n", version);
+	fprintf (f_ifh, "program date       := %s\n", program_date);
+	fprintf (f_ifh, ";\n");
+	fprintf (f_ifh, "GENERAL DATA :=\n");
+	fprintf (f_ifh, "original institution := RIC.UTHSCSA\n");
+	fprintf (f_ifh, "data starting block  := 0\n");
+	fprintf (f_ifh, "name of data file    := %s\n", nam_ifi);
+	fprintf (f_ifh, ";\n");
+	fprintf (f_ifh, "GENERAL IMAGE DATA :=\n");
+	fprintf (f_ifh, "type of data := tomographic\n");
+	fprintf (f_ifh, "total number of images := %d\n", (int) dim[2]);
+	fprintf (f_ifh, "imagedata byte order   := bigendian\n");
+	fprintf (f_ifh, ";\n");
+	fprintf (f_ifh, "IMAGE STUDY :=\n");
+	fprintf (f_ifh, "process status := reconstructed\n");
+	fprintf (f_ifh, "number of dimensions := %d\n", ndim);
+	fprintf (f_ifh, "number of slices := %d\n", (int) dim[2]);
+	fprintf (f_ifh, "matrix size [1] := %d\n", (int) dim[0]);
+	fprintf (f_ifh, "matrix size [2] := %d\n", (int) dim[1]);
+	fprintf (f_ifh, "matrix size [3] := %d\n", (int) dim[2]);
+	fprintf (f_ifh, "matrix size [4] := %d\n", (int) dim[3]);
+	fprintf (f_ifh, "number format   := float\n");
+	fprintf (f_ifh, "number of bytes per pixel  := %d\n", sizeof (float));
+	fprintf (f_ifh, "scaling factor (mm/pixel) [1]  := %f\n", size[0]);
+	fprintf (f_ifh, "scaling factor (mm/pixel) [2]  := %f\n", size[1]);
+	fprintf (f_ifh, "scaling factor (mm/pixel) [3]  := %f\n", size[2]);
+	fprintf (f_ifh, "maximum pixel count := %f\n", global_max);
+	fprintf (f_ifh, "minimum pixel count := %f\n", global_min);
+	if (strncmp (orient, "XYZ--+", 6) == 0) {
+		fprintf (f_ifh, "matrix initial element [1] := left\n");
+		fprintf (f_ifh, "matrix initial element [2] := anterior\n");
+		fprintf (f_ifh, "matrix initial element [3] := inferior\n");
+
+	} else
+		(void) printf ("Unexpected ORIENTATION = %s", orient);
+	fprintf (f_ifh, "END OF INTERFILE :=\n");
+	(void) fclose (f_ifh);
+
+	(void) printf ("Converted: %s to %s\n", nam_des, nam_ifh);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/des2if/RCS/des2if.c,v 1.1 2000/12/07 21:59:34 tom Exp tom $";
+d46 1
+a46 1
+	char            imgname[256];
+d83 10
+a92 4
+	strcpy (nam_ifh, output);
+	strcat (nam_ifh, ".ifh");
+	strcpy (nam_ifi, output);
+	strcat (nam_ifi, ".ifi");
+d96 5
+a100 3
+	strcpy (version, "    ");
+	strncpy (version, ptr, 4);
+	ptr = strstr (ptr, " ");
+d102 3
+a104 2
+	strcpy (program_date, "           ");
+	strncpy (program_date, ptr, 10);
+d119 7
+a125 7
+		sprintf (frame, "%04d", f);
+		strcpy (nam_des, prefix);
+		strcat (nam_des, frame);
+		strcat (nam_des, suffix);
+		strcpy (nam_ima, nam_des);
+		strcat (nam_des, ".des");
+		strcat (nam_ima, ".ima");
+d198 1
+a198 1
+					(void) sscanf (ptr, "%s %d", &imgname, &offset);
+d217 2
+d259 1
+a259 1
+						(void) sscanf (ptr, "%s %d", &imgname, &offset);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/des2if/RCS/des2if.c,v 1.1 2000/12/06 21:09:54 tom Exp tom $";
+d154 1
+a154 1
+					(void) sscanf (ptr, "%d", &dim[0]);
+d158 1
+a158 1
+					(void) sscanf (ptr, "%d", &dim[1]);
+d162 1
+a162 1
+					(void) sscanf (ptr, "%d", &dim[2]);
+@

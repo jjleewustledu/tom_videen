@@ -1,0 +1,244 @@
+<PRE><LI><H2>FILE: analyze.c</H2>/* 
+// sccsid = "%W%  UCL-TOPO	%E%"
+/*
+ *  Copyright (C) 1995 University of Louvain, Louvain-la-Neuve, Belgium
+ *
+ *  Author : &lt;Merence Sibomana&gt; Sibomana@topo.ucl.ac.be
+ *
+ *	  Positron Emission Tomography Laboratory
+ *	  Universite Catholique de Louvain
+ *	  Ch. du Cyclotron, 2
+ *	  B-1348 Louvain-la-Neuve
+ *		  Belgium
+ *
+ *  This program may be used free of charge by the members
+ *  of all academic and/or scientific institutions.
+ *	   ANY OTHER USE IS PROHIBITED.
+ *  It may also be included in any package "<A NAME=17 HREF=".html"></A>" 
+ *	  -  provided that this text is not removed from
+ *	  the source code and that reference to this original
+ *	  work is done ;
+ *	  - provided that this package is itself available
+ *	  for use, free of charge, to the members of all
+ *	  academic and/or scientific institutions.
+ *  Nor the author, nor the Universite Catholique de Louvain, in any
+ *  way guarantee that this program will fullfill any particular
+ *  requirement, nor even that its use will always be harmless.
+ *
+ *
+ */
+
+#include  &lt;<A NAME=31 HREF="time.h.html">time.h</A>&gt; 
+#include  &lt;<A NAME=32 HREF="string.h.html">string.h</A>&gt; 
+#include  &lt;<A NAME=33 HREF="stdlib.h.html">stdlib.h</A>&gt; 
+#include  &lt;<A NAME=34 HREF="stdio.h.html">stdio.h</A>&gt; 
+#include  &lt;<A NAME=35 HREF="sys/types.h.html">sys/types.h</A>&gt; 
+#include  &lt;<A NAME=36 HREF="sys/stat.h.html">sys/stat.h</A>&gt; 
+#include  "<A NAME=37 HREF="analyze.h.html">analyze.h</A>" 
+#include  "<A NAME=38 HREF="interfile.h.html">interfile.h</A>" 
+
+#define ERROR   -1
+#define OK 0
+
+static char* magicNumber = "interfile";
+static struct dsr hdr;
+
+#ifdef __STDC__
+static int <a href="analyze.c.html#analyze_read_hdr">analyze_read_hdr</a>(const char *fname) 
+#else
+<LI><H3><a name="analyze_read_hdr">static int analyze_read_hdr(fname) </a></H3>
+char *fname;
+#endif
+{
+	FILE *fp;
+	char tmp[80];
+
+	if ((fp = fopen(fname, "r")) == NULL) return 0;
+	if (fread(&hdr,sizeof(struct dsr),1,fp) &lt; 0) return 0;
+	fclose(fp);
+    if (ntohs(1) != 1) {
+        hdr.hk.sizeof_hdr = ntohl(hdr.hk.sizeof_hdr);
+        hdr.hk.extents = ntohl(hdr.hk.extents);
+        swab(hdr.dime.dim,tmp,4*sizeof(short));
+        memcpy(hdr.dime.dim,tmp,4*sizeof(short));
+        hdr.dime.datatype = ntohs(hdr.dime.datatype);
+        hdr.dime.bitpix = ntohs(hdr.dime.bitpix);
+        swab(hdr.dime.pixdim,tmp,4*sizeof(float));
+        <a href="matrix.c.html#swaw">swaw</a>(tmp,hdr.dime.pixdim,4*sizeof(float)/2);
+        swab(&hdr.dime.funused1,tmp,sizeof(float));
+        <a href="matrix.c.html#swaw">swaw</a>(tmp,&hdr.dime.funused1,sizeof(float)/2);
+        hdr.dime.glmax = ntohl(hdr.dime.glmax);
+        hdr.dime.glmin = ntohl(hdr.dime.glmin);
+    }
+	return 1;
+}
+#ifdef __STDC__
+static int <a href="analyze.c.html#_is_analyze">_is_analyze</a>(const char* fname)
+#else
+<LI><H3><a name="_is_analyze">static int _is_analyze(fname) </a></H3>
+char *fname;
+#endif
+{
+	FILE *fp;
+	int sizeof_hdr;
+	int magic_number = sizeof(struct dsr);
+	
+	if ( (fp = fopen(fname, "r")) == NULL) return 0;
+	if (fread(&sizeof_hdr,sizeof(int),1,fp) == 1)
+		sizeof_hdr = ntohl(sizeof_hdr);
+	else sizeof_hdr = 0;
+	fclose(fp);
+	if (sizeof_hdr == magic_number) return 1;
+	return 0;
+}
+
+#ifdef __STDC__
+char* <a href="analyze.c.html#is_analyze">is_analyze</a>(const char* fname)
+#else
+<LI><H3><a name="is_analyze">char* is_analyze(fname) </a></H3>
+char *fname;
+#endif
+{
+	char *p, *hdr_fname=NULL, *img_fname=NULL;
+	struct stat st;
+	int elem_size = 2, nvoxels;		/* default is short */
+	short *dim=NULL;
+
+	if (<a href="analyze.c.html#_is_analyze">_is_analyze</a>(fname)) {
+		hdr_fname = <a href="interfile.c.html#strdup">strdup</a>(fname);
+		img_fname = malloc(strlen(fname)+3);
+		strcpy(img_fname,fname);
+		if ( (p=strrchr(img_fname,'.')) != NULL) *p++ = '\0';
+		strcat(img_fname,".img");
+	} else {
+		img_fname = <a href="interfile.c.html#strdup">strdup</a>(fname);
+		hdr_fname = malloc(strlen(fname)+3);
+		strcpy(hdr_fname,fname);
+		if ( (p=strrchr(hdr_fname,'.')) != NULL) *p++ = '\0';
+		strcat(hdr_fname,".hdr");
+	}
+	if (stat(img_fname,&st) &lt; 0) return NULL;
+	free(img_fname);
+	if (<a href="analyze.c.html#_is_analyze">_is_analyze</a>(hdr_fname) && analyze_read_hdr(hdr_fname)) {
+		dim = hdr.dime.dim;
+		nvoxels = dim[1]*dim[2]*dim[3];
+		if (hdr.dime.datatype == 2) elem_size = 1;
+		else if (hdr.dime.datatype == 8) elem_size = 4;
+		if (nvoxels*elem_size == st.st_size) {
+			if (strcmp(hdr_fname, fname) != 0)
+				fprintf(stderr,"using %s header for %s data file\n",
+					hdr_fname, fname);
+			return hdr_fname;
+		}
+	}
+	free(hdr_fname);
+	return NULL;
+}
+
+<LI><H3><a name="itoa">static char *itoa(i)</a></H3>
+int i;
+{
+	char <a href="matrix_64.h.html#word">word</a>[20];
+	sprintf(<a href="matrix_64.h.html#word">word</a>,"%d",i);
+	return <a href="interfile.c.html#strdup">strdup</a>(word);
+}
+
+<LI><H3><a name="ftoa">static char *ftoa(f)</a></H3>
+float f;
+{
+	char <a href="matrix_64.h.html#word">word</a>[20];
+	sprintf(<a href="matrix_64.h.html#word">word</a>,"%g",f);
+	return <a href="interfile.c.html#strdup">strdup</a>(word);
+}
+
+<LI><H3><a name="analyze_open">int analyze_open(mptr)</a></H3>
+MatrixFile *mptr;
+{
+	<a href="matrix.h.html#Main_header">Main_header</a> *mh;
+	struct <a href="matrix.h.html#MatDir">MatDir</a> matdir;
+	char *data_file, *extension, patient_id[20];
+	short  *dim, spm_origin[5];
+	int elem_size, data_offset=0, data_size;
+
+	if (!<a href="analyze.c.html#analyze_read_hdr">analyze_read_hdr</a>(mptr-&gt;fname)) return 0;
+    strncpy(patient_id,hdr.hist.patient_id,10);
+    patient_id[10] ='\0';
+	<a href="_convert.html#mh">mh</a> = mptr-&gt;
+	sprintf(<a href="_convert.html#mh">mh</a>-&gt;magic_number,"%d",sizeof(struct dsr));
+	<a href="_convert.html#mh">mh</a>-&gt;sw_version = 70;
+	<a href="_convert.html#mh">mh</a>-&gt;file_type = InterfileImage;
+	mptr-&gt;interfile_header = (char**)calloc(END_OF_INTERFILE,sizeof(char*));
+	data_file = malloc(strlen(mptr-&gt;fname)+4);
+	strcpy(data_file, mptr-&gt;fname);
+	if ((extension = strrchr(data_file,'/')) == NULL)
+		extension = strrchr(data_file,'.');
+	else extension = strrchr(extension,'.');
+	if (extension != NULL) strcpy(extension,".img");
+	else strcat(data_file,".img");
+	mptr-&gt;interfile_header[NAME_OF_DATA_FILE] = data_file;
+	if ( (mptr-&gt;fptr = fopen(data_file, "r")) == NULL) {
+		free(mptr-&gt;interfile_header);
+		mptr-&gt;interfile_header = NULL;
+		return 0;
+	}
+	switch(hdr.dime.datatype) {
+		case 2 :
+			elem_size = 1;
+			mptr-&gt;interfile_header[NUMBER_FORMAT] = "unsigned integer";
+			mptr-&gt;interfile_header[NUMBER_OF_BYTES_PER_PIXEL] = "1";
+			break;
+		case 4 :
+			elem_size = 2;
+			mptr-&gt;interfile_header[NUMBER_FORMAT] = "signed integer";
+			mptr-&gt;interfile_header[NUMBER_OF_BYTES_PER_PIXEL] = "2";
+			break;
+		case 8 :
+			elem_size = 4;
+			mptr-&gt;interfile_header[NUMBER_FORMAT] = "short float";
+			mptr-&gt;interfile_header[NUMBER_OF_BYTES_PER_PIXEL] = "4";
+			break;
+		default :
+			fprintf(stderr,"analyze data type 2,4,16 only are supported\n");
+			free(mptr-&gt;interfile_header);
+			mptr-&gt;interfile_header = NULL;
+			return 0;
+	}
+	<a href="_convert.html#mh">mh</a>-&gt;num_planes = hdr.dime.dim[3];
+	<a href="_convert.html#mh">mh</a>-&gt;num_frames = 
+	strcpy(<a href="_convert.html#mh">mh</a>-&gt;patient_id,patient_id);
+	mptr-&gt;interfile_header[PATIENT_ID] = <a href="interfile.c.html#strdup">strdup</a>(patient_id);
+	mptr-&gt;interfile_header[NUMBER_OF_DIMENSIONS] = "3";
+							/* check spm origin */
+	dim = hdr.dime.dim;
+	if (ntohs(1) != 1) swab(hdr.hist.originator,spm_origin,10);
+	else memcpy(spm_origin,hdr.hist.originator,10);
+	if (spm_origin[0]&gt;1 && spm_origin[1]>1 && spm_origin[2]>1 &&
+		spm_origin[0]&lt;dim[1] && spm_origin[1]<dim[2] && spm_origin[2]<dim[3]) {
+		mptr-&gt;interfile_header[ATLAS_ORIGIN_1] = <a href="analyze.c.html#itoa">itoa</a>(spm_origin[0]);
+		mptr-&gt;interfile_header[ATLAS_ORIGIN_2] = <a href="analyze.c.html#itoa">itoa</a>(spm_origin[1]);
+		mptr-&gt;interfile_header[ATLAS_ORIGIN_3] = <a href="analyze.c.html#itoa">itoa</a>(spm_origin[2]);
+	} else {
+		mptr-&gt;interfile_header[ATLAS_ORIGIN_1] = <a href="analyze.c.html#itoa">itoa</a>((dim[1]+1)/2);
+		mptr-&gt;interfile_header[ATLAS_ORIGIN_2] = <a href="analyze.c.html#itoa">itoa</a>((dim[2]+1)/2);
+		mptr-&gt;interfile_header[ATLAS_ORIGIN_3] = <a href="analyze.c.html#itoa">itoa</a>((dim[3]+1)/2);
+	}
+	mptr-&gt;interfile_header[MATRIX_SIZE_1] = <a href="analyze.c.html#itoa">itoa</a>(dim[1]);
+	mptr-&gt;interfile_header[MATRIX_SIZE_2] = <a href="analyze.c.html#itoa">itoa</a>(dim[2]);
+	mptr-&gt;interfile_header[MATRIX_SIZE_3] = <a href="analyze.c.html#itoa">itoa</a>(dim[3]);
+	mptr-&gt;interfile_header[MAXIMUM_PIXEL_COUNT] = <a href="analyze.c.html#itoa">itoa</a>(hdr.dime.glmax);
+	mptr-&gt;interfile_header[MATRIX_INITIAL_ELEMENT_1] = "right";
+	mptr-&gt;interfile_header[MATRIX_INITIAL_ELEMENT_2] = "posterior";
+	mptr-&gt;interfile_header[MATRIX_INITIAL_ELEMENT_3] = "inferior";
+	mptr-&gt;interfile_header[SCALE_FACTOR_1] = <a href="analyze.c.html#ftoa">ftoa</a>(hdr.dime.pixdim[1]);
+	mptr-&gt;interfile_header[SCALE_FACTOR_2] = <a href="analyze.c.html#ftoa">ftoa</a>(hdr.dime.pixdim[2]);
+	mptr-&gt;interfile_header[SCALE_FACTOR_3] = <a href="analyze.c.html#ftoa">ftoa</a>(hdr.dime.pixdim[3]);
+	mptr-&gt;interfile_header[QUANTIFICATION_UNITS] = <a href="analyze.c.html#ftoa">ftoa</a>(hdr.dime.funused1);
+	<a href="_convert.html#mh">mh</a>-&gt;plane_separation = hdr.dime.pixdim[3]/10;	/* convert mm to cm */
+	data_size = hdr.dime.dim[1] * hdr.dime.dim[2] * hdr.dime.dim[3] * elem_size;
+	mptr-&gt;dirlist = (MatDirList *) calloc(1,sizeof(MatDirList)) ;
+	<a href="matrix.h.html#matdir">matdir</a>.matnum = mat_numcod(1,1,1,0,0);
+	<a href="matrix.h.html#matdir">matdir</a>.strtblk = data_offset/MatBLKSIZE;
+	<a href="matrix.h.html#matdir">matdir</a>.endblk = (data_offset + data_size)/MatBLKSIZE;
+	<a href="matrix_extra.c.html#insert_mdir">insert_mdir</a>(matdir, mptr-&gt;dirlist) ;
+	return 1;
+}

@@ -1,0 +1,385 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	2004.02.16.15.23.52;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.10.16.21.04.48;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2001.10.04.17.38.17;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2001.09.26.17.31.38;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.09.29.13.52.35;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@Feb 2004
+@
+text
+@/*	$Log: fpsino7.c,v $
+ * Revision 1.4  2001/10/16  21:04:48  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  2001/10/04  17:38:17  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2001/09/26  17:31:38  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2000/09/29  13:52:35  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			fpsino7.c
+ *	Date:			Sep 2000
+ *	Author:			Tom Videen
+ *	Description:	Read ECAT7 image and write to sinogram
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpsino7/RCS/fpsino7.c,v 1.4 2001/10/16 21:04:48 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <values.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	int             reprojection ();
+	ImageFile      *file;
+	Index           indx;
+	char           *iname;			 /* image filename */
+	char           *sname;			 /* original sinogram filename */
+	char           *oname;			 /* forward-projected sinogram filename */
+	float        ***img;			 /* image */
+	float        ***sino;			 /* sinogram */
+	short          *smatrix;		 /* buffer for I/O */
+	DataSetType     dtype;
+	int             fformat;
+	int             xdim, ydim, zdim;
+	int             numray, numang, numpln;
+	float           pixsize, binsize;
+	float           smax, scaler, iscaler;
+	int             stat;
+	int             i, j, p;
+	long            k;
+
+	if (argc != 5) {
+		fprintf (stderr, "Usage: fpsino7 input_image input_sino output_sino frame\n");
+		return (ERROR);
+	}
+	iname = argv[1];
+	sname = argv[2];
+	oname = argv[3];
+	indx.frm = atoi(argv[4]);
+
+/*	Read Image */
+
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file = make_imgfile (iname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpsino7]: Cannot open %s\n", iname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpsino7]: Cannot read MainHeader from %s\n", iname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [fpsino7]: Cannot read subheader from %s\n", iname);
+		return (ERROR);
+	}
+	xdim = file->sh->dim1;
+	ydim = file->sh->dim2;
+	zdim = file->sh->dim3;
+	pixsize = file->sh->sample_size_1;
+	if (xdim != 128 || ydim != 128) {
+		fprintf (stderr, "ERROR [fpsino7]: x- y-dimensions must be 128\n");
+		return (ERROR);
+	}
+
+	printf ("mh7->calibration_factor = %e\n", file->m7->mh->calibration_factor);
+	printf ("mh7->data_units = %s\n", file->m7->mh->data_units);
+	printf ("sh7->filter_scatter_fraction = %f\n", file->m7->sh->filter_scatter_fraction);
+	printf ("sh7->filter_scatter_slope = %f\n", file->m7->sh->filter_scatter_slope);
+	printf ("sh7->frame_duration = %d\n", file->m7->sh->frame_duration);
+	printf ("sh7->scale_factor = %e\n", file->m7->sh->scale_factor);
+	printf ("sh7->decay_corr_fctr = %f\n", file->m7->sh->decay_corr_fctr);
+	iscaler = 1./(REV7SCALER * file->m7->sh->frame_duration);
+	printf ("iscaler = %f\n", iscaler);
+
+	if ((img = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	close_imgfile (file);
+
+	for (p = 1; p <= zdim; p++) 
+		for (j = 1; j <= ydim; j++) 
+			for (i = 1; i <= xdim; i++) 
+				img[p][j][i] *= iscaler;
+
+/*	Read Input Sinogram header */
+
+	(void) strcpy (file->name, sname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpsino7]: Opening %s\n", sname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpsino7]: Reading MainHeader from %s\n", sname);
+		return (ERROR);
+	}
+	fformat = file->mh->file_format;
+	dtype = (DataSetType) file->mh->filetype;
+	if (fformat != MATRIX_REV7) {
+		fprintf (stderr, "ERROR [fpsino7]: Unsupported file format %d\n", fformat);
+		return (ERROR);
+	}
+	if (dtype != Short3dSinogram) {
+		fprintf (stderr, "ERROR [fpsino7]: Unsupported datatype %d\n", dtype);
+		return (ERROR);
+	}
+	if (get_ss (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [fpsino7]: Reading sinogram subheader in %s\n", sname);
+		return (ERROR);
+	}
+	close_imgfile (file);
+
+	numray = file->sh->dim1;
+	numang = file->sh->dim2;
+	numpln = file->sh->dim3;
+	binsize = file->sh->sample_size_1;
+
+	if (zdim != numpln) {
+		fprintf (stderr, "ERROR [fpsino7]: number of planes in files don't correspond\n");
+		fprintf (stderr, "                 image = %d   sino = %d\n", zdim, numpln);
+		return (ERROR);
+	}
+	printf ("Reprojecting %d rays and %d angles ____________|\n", numray, numang);
+
+/*	Create Output sinogram	*/
+
+	(void) strcpy (file->name, oname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpsino7]: Cannot open %s\n", oname);
+		return (ERROR);
+	}
+	if (put_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [fpsino7]: Cannot write MainHeader to %s\n", oname);
+		return (ERROR);
+	}
+	if ((sino = f3tensor (0, numpln - 1, 0, numang - 1, 0, numray - 1)) == NULL) {
+		fprintf (stderr, "ERROR [fpsino7]: Cannot malloc sino\n");
+		return (ERROR);
+	}
+	if ((smatrix = (short *) calloc (numang * numray, sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [fpsino7]: Cannot calloc smatrix\n");
+		return (ERROR);
+	}
+
+/*	Forward-projection	*/
+
+	stat = reprojection (img, xdim, pixsize, sino, numang, numray, numpln, binsize);
+	if (stat == ERROR) {
+		fprintf (stderr, "ERROR [fpsino7]: reprojection\n");
+		return (ERROR);
+	}
+	free (img);
+
+/*	Write sinogram	*/
+
+	if (dtype == Short3dSinogram) {
+		smax = 0;
+		for (p = 0; p < numpln; p++) {
+			for (j = 0; j < numang; j++) {
+				for (i = 0; i < numray; i++) {
+					sino[p][j][i] /= numang;
+					if (sino[p][j][i] > smax)
+						smax = sino[p][j][i];
+				}
+			}
+		}
+		scaler = (float) (MAXSHORT * numang) / smax;
+		scaler = (float) (MAXSHORT) / smax;
+		file->m7->s3d->scale_factor = scaler;
+		fprintf (stdout, "Scaler %f\n", scaler);
+		fprintf (stdout, "smax = %f  maxshort = %f\n", smax, (float) MAXSHORT);
+	}
+
+	for (p = 0; p < numpln; p++) {
+		k = 0;
+		indx.pln = p + 1;
+		for (j = 0; j < numang; j++) {
+			for (i = 0; i < numray; i++) {
+				smatrix[k] = (short) (scaler * sino[p][j][i]);
+				k++;
+			}
+		}
+		if (p == 0) {
+			if (put_ss7 (file, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [fpsino7]: Cannot write file subheader to %s\n", oname);
+				return (ERROR);
+			}
+		}
+		if (wrscan7 (file, indx, smatrix) == ERROR) {
+			fprintf (stderr, "ERROR [fpsino7]: Cannot write plane %d of %s\n", p+1, oname);
+			return (ERROR);
+		}
+	}
+	free_f3tensor (sino, 0, numpln - 1, 0, numang - 1, 0, numray - 1);
+	free (smatrix);
+
+/*	Pad the end of the sinogram file (CAPP will not import the file without this) */
+
+	if ((smatrix = (short *) calloc (64, sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [fpsino7]: Cannot calloc smatrix\n");
+		return (ERROR);
+	}
+	if ((stat = fwrite (smatrix, sizeof (short), 64, file->fp)) != 64) {
+		fprintf (stderr, "ERROR [fpsino7]: during write; status = %d\n", stat);
+		return (ERROR);
+	}
+	free (smatrix);
+
+	close_imgfile (file);
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			Sep-2000
+d21 1
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpsino7/RCS/fpsino7.c,v 1.3 2001/10/04 17:38:17 tom Exp tom $";
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpsino7/RCS/fpsino7.c,v 1.2 2001/09/26 17:31:38 tom Exp tom $";
+d187 1
+d193 2
+a194 2
+		scaler = smax / (float) MAXSHORT;
+		scaler = 1;
+d205 1
+a205 1
+				smatrix[k] = (short) (sino[p][j][i] / scaler);
+d220 1
+a220 1
+	free (sino);
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fpsino7/RCS/fpsino7.c,v 1.1 2000/09/29 13:52:35 tom Exp tom $";
+d145 1
+a145 1
+	printf ("Reprojecting %d rays and %d angles\n", numray, numang);
+d190 1
+d193 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/reproj/RCS/reproj.c,v 1.4 2000/09/06 19:11:43 tom Exp tom $";
+d40 1
+a40 1
+	long            xdim, ydim, zdim;
+d43 1
+a43 1
+	float           smax, scaler;
+d45 2
+a46 1
+	long            i, j, k, p;
+d48 2
+a49 2
+	if (argc < 4) {
+		fprintf (stderr, "Usage: fpsino7 input_image input_sino output_sino\n");
+d55 1
+a58 1
+	indx.frm = 1;
+d85 11
+d100 5
+d132 3
+a134 3
+	numray = (long) file->sh->dim1;
+	numang = (long) file->sh->dim2;
+	numpln = (long) file->sh->dim3;
+d139 1
+d164 1
+d190 1
+d207 1
+a207 2
+			fprintf (stderr, "ERROR [fpsino7]: Cannot write plane %d of %s\n",
+				 (int) p + 1, oname);
+@

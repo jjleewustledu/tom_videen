@@ -1,0 +1,430 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.09.23.15.42.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Common Block File:   SPIDERAM.INC
+C
+C  Author:       Tom O. Videen
+C  Date:         06-Oct-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified by TOV 28-Dec-87 to add SEPSCALE to **DISPLAY.
+C     Modified by TOV 13-Sep-88:
+C        1) change FILETP from I*4 to CH*23 in **DISPLAY.
+C        2) eliminate REFRESH from **DISPLAY.
+C        3) include VERSION date in **LUINFO.
+C     Modified 03-Jan-90 by TOV:
+C        1) alter documentation to allow 15-slice templates.
+C     Modified 27-Sep-91 by TOV:
+C        1) change line(512,4) --> LINE(896,4)
+C     Modified 07-Oct-91 by Tom Yang:
+C        1) Add OUTFNAME for saving in text and printout.
+C     Modified 12-Oct-91 by Tom Yang:
+C        1) Add FONT1, FONT2 for displaying text.
+C     Modified 14-Oct-91 by TOV:
+C        1) IMGVOL and HDRVOL changed CHAR*4 --> CHAR*80.
+C
+C  Common Blocks for SPIDERAM program and subroutines.
+C
+C   **IMAGEDAT  - image arrays;
+C   **LUINFO    - logical units (also /USRIO/)
+C   **DISPLAY   - display parameters;
+C   **SCALES    - scaling parameters;
+C   **FILES     - scan file list;
+C   **GLOBALAV  - global averaging parameters;
+C   **REGION    - regions of interest parameters;
+C   **AREA      - area of a region (points included);
+C   **REGCOMP   - region analysis parameters & output list;
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+**IMAGEDAT
+      INTEGER*2    IMAGE(128,128,5),IARRAY(128,128),XIMAGE(128,49),
+     &             LINE(896,7)
+      INTEGER*4    CURSLICE
+      REAL         SCALER(5)
+      LOGICAL*1    TIMAGE(128,128)
+C
+C     Array size 128 must equal AMAX (in COMMON /DISPLAY/)
+C
+C     IMAGE(col,row,num) = image data for the three primary images (1-3)
+C        plus two image arrays for oxygen processing HO and CO files (4,5);
+C     IARRAY(col,row) = image data for local processing applications;
+C        (used for creating templates, decoding images, and scaling
+C        images to color scale before displaying them)
+C     XIMAGE(col,row) = image array for sagittal or coronal sections;
+C        (can use 49 slice images)
+C     LINE(col,num) = single lines of an image;
+C     CURSLICE = slice number of the current IMAGE;
+C     SCALER(num) = values in IMAGE(num) are multiplied by SCALER(num)
+C        to get the actual values;  this allows I*2 arrays to represent
+C        real numbers with >4 digit precision;
+C        (values in XIMAGE are multiplied by SCALER (1))
+C     Note:  SCALER values are always 1 except in processed images
+C        for CBF, CBV, OEF, or CMRO2, or in images divided by
+C        another image with relative scaling.
+C     TIMAGE(col,row) = template image data (on or off);
+C        (templates are created on transverse images only but can
+C         be used on displays of sagittal or coronal images)
+C
+**LUINFO
+      INTEGER*4    USERIN,USEROUT,PRINTER,RMD,DISK,TDISK,STDISK
+      CHARACTER*20 OUTFILE
+      CHARACTER*80 DUMPNAME
+      CHARACTER*9  VERSION   
+C
+C     USERIN  = logical unit assigned for terminal input;
+C     USEROUT = logical unit for terminal output;
+C     DISK    = logical unit assigned to disk for image files;
+C     TDISK   = logical unit assigned to template disk file;
+C        File consists of 15 templates: each is 64 records and
+C        contains an array of (128,128) LOGICAL*1 for the
+C        TIMAGE template for each of 15 slices;
+C        (file is 896 contiguous records and assigned ERW throughout task)
+C     STDISK  = logical unit assigned to 75 slice template disk file;
+C        File consists of slice number of templates (similar to TDISK)
+C        (file is 3136 contiguous records and permanently assigned)
+C     RMD     = logical unit assigned to Ramtek;
+C     PRINTER = logical unit assigned to printer;
+C     OUTFILE = output file name;
+C     DUMPNAME = window dump file name;
+C     VERSION = date of current version of SPIDERAM
+C        (this should appear on all output to the PRINTER);
+C
+**DISPLAY
+      INTEGER*4    XORG,YORG,XBAR,YBAR,AMAX,MAG,ZFACTOR,SLCLINES,
+     2             XLOW,XHIGH,YLOW,YHIGH,ZOFFSET,SLICES,TEMPLANE,
+     3             REGPLANE,FIXPLANE,THRESHLD,
+     4             DSECTION,NUMDISP,DLOC,SECTSTEP,THRESHTP,FILE(5),
+     5             PCFLAG,TEMPLATE,COMPTYPE,PROCESS,ZORIGIN,SIZE
+      INTEGER*2    DMAX,DMIN,FONT1C,FONT2C
+      CHARACTER*1  ORIENT
+      CHARACTER*23 FILETP
+      LOGICAL*1    SMOOTH, ANNOTATE, COMPLEFT, COMPARE, FULLSCRN, SEPSCALE
+C
+C     XORG,YORG = screen coordinates of the origin of the image;
+C        (upper left corner)
+C     XBAR,YBAR = screen coordinates of the origin of the color bar;
+C        (upper left corner)
+C     AMAX = maximum array element of image data;
+C        (128 for Super PET II)
+C     MAG = magnification factor of the image on the Ramtek screen
+C        (1-4); no. of times each pixel is replicated in both dimensions;
+C     ZFACTOR = zoom factor; number of times each image point is
+C        magnified in the x- and y-directions;
+C        (total magnification will be MAG*ZFACTOR)
+C     SLICES = no. of slices in the displayed image;
+C     SLCLINES = no. of image lines per slice of the reconstructed image;
+C        (relevant only for coronal/sagittal images)
+C        (corresponds to the Z:X ratio for displayed images)
+C     PCFLAG:   1: ==> color does not change dynamically.
+C               0: ==> color changes dynamically.
+C     TEMPLATE:
+C        0==> no template or thresholding;
+C        1==> threshold displayed image using THRESHLD;
+C           (this templating is done by D2TEMPLA for transverse images
+C            and by D2MASKX for coronal and sagittal images)
+C        2==> create a template of the image(s) displayed;
+C        3==> use a template for the image(s) displayed;
+C        4==> use the SARP 49-slice or more slices template for the image(s) displayed;
+C     THRESHLD = percent below which all PET points in the surround
+C        will not be displayed;
+C     THRESHTP = threshold used to create the template;
+C     DSECTION = first section to display;
+C     NUMDISP = total number of sections to display (1-28);
+C     DLOC = display location of first section (for small or
+C        quarter-sized images);
+C     SECTSTEP = step size between sections;
+C     FILE =  scan file numbers:
+C                 For PET Numbers,CBF,CBV:    For CMRO2 or OEF:
+C        FILE(1)    primary file                O2 file (primary)
+C        FILE(2)    subtracted file             O2 file (subtract)
+C        FILE(3)    divisor file                O2 file (divisor)
+C        FILE(4)    unused                      HO file
+C        FILE(5)    unused                      CO file
+C     XLOW,YLOW = image coordinates of the first displayed point of
+C        the image (if the entire image is displayed, this is 1,1)
+C     XHIGH,YHIGH = image coordinates of the highest displayed point
+C        of the image (if entire image displayed, this is 128,128)
+C     ZOFFSET = for coronal/sagittal image displays the top displayed line
+C       (slice #1) is written below the top line of the same sized
+C       transverse display;  the offset between the top line of a
+C       transverse display (i.e., image y-value 128) and the top line
+C       of a coronal/sagittal display (i.e., slice #1 or image y-value,
+C       or effectively z-value, of 1) is given by ZOFFSET;
+C       Note that ZOFFSET differs for interpolated and non-interpolated
+C       images;
+C     SIZE = size of unzoomed displayed image (in image elements)
+C        (<=AMAX);
+C     TEMPLANE = planes in which coronal and mid-lines are displayed;
+C     REGPLANE = planes in which regions are temporarily displayed;
+C     FIXPLANE = planes in which regions are permanently displayed;
+C     DMAX = maximum count in the current image;
+C        (must be multiplied by SCALER(1) to get true value)
+C     DMIN = minimum count in the current image;
+C     FONT1C = font 1 name.
+C     FONT2C = font 2 name.
+C     ORIENT = orientation of displayed image
+C         (T = transverse; S = sagittal; C = coronal)
+C     FILETP = scan file name used to create the template;
+C     COMPTYPE = comparison type:
+C         1==>comparison/control; 2==>(comparison-control)/control;
+C     COMPLEFT: true ==> left side is comparison;
+C               false==> right side is comparison;
+C     PROCESS = type of processing for image file;
+C         0 ==> PET Numbers (no processing)
+C         1 ==> Processing for CBF or CBV
+C               (which type is determined from value of NTYPE)
+C         2 ==> Processing for OEF
+C         3 ==> Processing for CMRO2
+C         4 ==> Processing for tissue activity (decay correction)
+C         5 ==> Processing for tissue activity (no decay correction)
+C     ZORIGIN: zorigin slice
+C     SMOOTH = flag for interpolating the values of intermediate
+C        pixels before displaying the image:
+C          true ==> interpolate
+C          false ==> do not interpolate (show actual data points);
+C     ANNOTATE: true ==> annotate the image with labels;
+C     COMPARE:  true ==> image comparisons or scaling enabled;
+C     FULLSCRN: true: ==> 1 image displayed (MAG=4);
+C               false==> half-screen images displayed (MAG=4);
+C     SEPSCALE: true: ==> images in row of 7 scaled separately
+C                        (scaling to slice individual slice maximum);
+C               false==> images in rows of 7 scaled to common maximum;
+C
+**SCALES
+      REAL      ABSMAX,RELMAX
+      INTEGER*4 SCALEPOS
+      LOGICAL*1 ABSSCALE,ABSRANGE
+C
+C     ABSMAX = scale maximum for an absolute scale;
+C     RELMAX = scale maximum for a relative scale;
+C     SCALEPOS = positioning for a relative scale
+C               (0 ==> centered; 1 ==> 0 to max; -1 ==> min to 0)
+C     ABSSCALE: true ==> absolute scale;
+C               false==> relative scale (percent);
+C     ABSRANGE: true ==> scale to ABSMAX or RELMAX;
+C               false==> scale to maximum value of slice (after template)
+C
+**FILES
+      REAL         PETTCONV(5,2),AFLOW(5,2),BFLOW(5,2),BVFACTOR(5,2),
+     2             AOXYGEN(5,2),BOXYGEN(5,2),AWATER(5,2),BWATER(5,2),
+     3             O2CNTS(5,2),OXYCONT(5,2),MULTFACT(20),PETTDCOR(5,2)
+      INTEGER*4    NMSLICES, HOFILE (20), COFILE (20), ADDFACT (20),
+     2             PETTNUM, NTYPE (5), SLCOUNTS (5, 75), SCANLEN (5)
+      CHARACTER*20 FILENAME (20)
+      CHARACTER*14 SCANNER
+      CHARACTER*12 FILTER(5)
+      CHARACTER*10 COMPOUND(5), NUCLIDE(5)
+      CHARACTER*8  PROCDATE(20), SCANNAME (5), SCANDATE (5)
+      CHARACTER*4  PROCBY (20)
+      CHARACTER*80 IMGVOL, HDRVOL
+      LOGICAL*1    HDRFILE (20), ENCODED (20)
+C
+C  Scan File List:
+C     MULTFACT = factor to multiply times each image;
+C     ADDFACT  = factor to add to each image;
+C        Note:  these factors are applied to the image AFTER any
+C        metabolic processing;
+C     PETTNUM  = version number of PETT scanner (6,7 or 8);
+C     SCANNER = name of scanner;
+C     NMSLICES = number of slices in e image files;
+C     PROCDATE = date each file was processed;
+C     PROCBY   = initials of the person who processed each file;
+C     HOFILE   = HO file to process with an O2 file;
+C     COFILE   = CO file to process with an O2 file;
+C     FILENAME = scan file names;
+C     IMGVOL   = default volume name for image files (.IMG);
+C     HDRVOL   = volume name for header files (.HDR);
+C        Volume names do not include the colon ':'
+C     HDRFILE: true--> HDR file exists;
+C     ENCODED: true--> image file is encoded;
+C
+C  The following are read from the .HDR file.
+C  The array values 1-5 correspond to FILEs 1-5 for the 5 stored images
+C     of common block DISPLAY.
+C  These values are used for metabolic processing and display labels.
+C
+C     SCANNAME = name of scan (may or may not be same as the filename);
+C     SCANDATE = date of scan;
+C     COMPOUND = compound used in scan;
+C     NUCLIDE  = nuclide used in scan (i.e., O15,C11,F18,N13,GA68);
+C     FILTER   = filter used in reconstruction;
+C     NTYPE    = type of file;
+C        1 = O2 scan (Oxygen Processing)
+C        2 = H2O scan (CBF Processing)
+C        3 = CO scan (CBV Processing)
+C        4 = Butanol scan (CBF Processing)
+C        5 = Tissue Activity Processing
+C     SCANLEN  = scan length in seconds;
+C     SLCOUNTS(n,slice) = total counts per slice;
+C
+C     For the following:
+C       element 1 = 7-slice images or even slices of 14-slice images
+C       element 2 = odd slices of 14-slice images
+C
+C     PETTCONV = PETT conversion factor (1=7-slice images or even slices)
+C                (WITHOUT decay correction)
+C     AFLOW    = flow coefficient;
+C     BFLOW    = flow coefficient;
+C     BVFACTOR = volume factor;
+C     AOXYGEN  = oxygen coefficient;
+C     BOXYGEN  = oxygen coefficient;
+C     AWATER   = oxygen coefficient;
+C     BWATER   = oxygen coefficient;
+C     O2CNTS   = total oxygen counts;
+C     OXYCONT  = oxygen content of blood;
+C     PETTDCOR = PETT conversion factor (1=7-slice images or even slices)
+C                (WITH decay correction)
+C
+**GLOBALAV
+      REAL         NRMVALUE
+      INTEGER*4    GLBTYPE, GLBFILE, GSLICES, GLBSTART, GLBSLICE (75)
+      LOGICAL*1    GLBTEMP, NORMALIZE
+C
+C  Global Averaging:
+C     NRMVALUE = normalization value.
+C     GLBTYPE  = type of global averaging;
+C                (1= mean regional;  2= whole slice)
+C     GLBFILE  = scan file number for global averaging (1-20);
+C     GSLICES  = total no. of slices to process for whole slice averaging (1-75);
+C     GLBSTART = starting slice number for global average;
+C     GLBSLICE = slice numbers to process;
+C     GLBTEMP:   true ==> use current template for whole slice averaging;
+C                false==> use THRESHLD to create template for averaging;
+C     NORMALIZE:   true ==> normalize mean.
+C                  false==> not normalize mean.
+C
+**REGION
+      INTEGER*2    BOUNDARY(2,2000),AVAL(100),BVAL(100),
+     2             XMIN(100),XMAX(100),YMIN(100),YMAX(100),
+     3             SLICE(100),INC
+      INTEGER*4    TOP, LASTREGN, YCORLINE, RSCANNER, RSLICES
+      REAL         XLOC(100),YLOC(100),XMIDLINE
+      CHARACTER*1  REGTYPE (100), RORIENT
+      CHARACTER*8  REGATLAS
+      CHARACTER*10 REGNAME(100)
+      CHARACTER*20 REGFILE
+      LOGICAL*1    ALTERX,ALTERY
+C
+C     BOUNDARY = list of all points in the boundary of each region;
+C     TOP = pointer to the last point entered in the BOUNDARY list;
+C        (corresponds to the total number of points in all irregular
+C         regions);
+C     XMIN = minimum value of X in each regions;
+C     YMIN = minimum value of Y in each regions;
+C     XMAX = maximum value of X in each regions;
+C     YMAX = maximum value of Y in each regions;
+C        Note: XMIN,YMIN,XMAX,YMAX are all in the user's reference
+C        frame (with Y=1 at the bottom of the Ramtek image;
+C
+C     INC = step increment size for expanding, reducing or shifting
+C        regions;
+C     SLICE = slice number on which the region was defined;
+C     XLOC,YLOC = center of regular region / 1st point of irregular region;
+C     LASTREGN = number of last region created;
+C     YCORLINE = y-coordinate of the current coronal line;
+C     XMIDLINE = x-coordinate of the current midline;
+C     REGATLAS = atlas from which an .REG file was created;
+C     REGNAME = name of region;
+C     REGTYPE = type of region
+C       'R'  rectangle  AVAL = x-side;   BVAL = y-side
+C       'I'  irregular  AVAL = # of boundary points in region;
+C                       BVAL = pointer to first point in BOUNDARY;
+C     REGFILE = region file name (file read from disk);
+C     RSCANNER = scanner number of images on which regions were defined;
+C        (6, 7, or 8)
+C     RSLICES = no. of slices of images on which regions were defined;
+C        (7, 14, 31, 49)
+C     RORIENT  = orientation of images on which regions were defined
+C        (T, S, or C)
+C     ALTERX:  true--> x-dimension of regions is altered in
+C                       Expand/Reduce options;
+C              false-> x-dimension is not altered;
+C     ALTERY:  true--> y-dimension of regions is altered in
+C                       Expand/Reduce options;
+C              false-> y-dimension is not altered;
+C
+**AREA
+      INTEGER*2     INREGION (16384, 2), RTOP
+C
+C  Region Area:
+C     (Array size 16384 = AMAX*AMAX;  AMAX initialized in /DISPLAY/)
+C
+C     INREGION = list of all points included in the region;
+C        INREGION(n,1) = X
+C        INREGION(n,2) = Y
+C     RTOP = index of last point entered in INREGION;
+
+**REGCOMP
+      INTEGER*4    NSCANS,NREGS,PROCNREG
+      REAL         REGMEAN(20,100)
+      CHARACTER*8  REGFID(20),REGFNAME(20),RGTATLAS,RGTFILE
+      LOGICAL*1    PROC(20)
+C
+C  Automated Regions Analysis:
+C
+C     NSCANS   = total number of scan files processed (1-20);
+C     NREGS    = total number of regions processed (1-100);
+C     PROCNREG - number of regions used in processed files;
+C     REGMEAN (file,region) = mean counts for each region and scan file;
+C     REGFID  (file)  = scan file name (minus volume & extension);
+C     REGFNAME(file)  = scan name;
+C        (from file header - may differ from file name)
+C     RGTATLAS = atlas name from which RGT file regions were created;
+C     RGTFILE  = name of .RGT file in which region means were saved;
+C     PROC     = selected for automatic region processing
+
+
+      COMMON /IMAGEDAT/ IMAGE,IARRAY,LINE,XIMAGE,CURSLICE,SCALER,TIMAGE
+      COMMON /USRIO/    USERIN,USEROUT
+      COMMON /LUINFO/   DISK,TDISK,STDISK,RMD,PRINTER,OUTFILE,
+     2			DUMPNAME,VERSION
+      COMMON /DISPLAY/  XORG,YORG,XBAR,YBAR,AMAX,MAG,ZFACTOR,
+     2                  SLCLINES,XLOW,XHIGH,YLOW,YHIGH,ZOFFSET,SLICES,
+     3                  TEMPLANE,REGPLANE,FIXPLANE,DSECTION,NUMDISP,
+     4                  DLOC,PCFLAG,TEMPLATE,THRESHLD,
+     5                  SECTSTEP,FILE,THRESHTP,COMPTYPE,PROCESS,ZORIGIN,
+     6                  SIZE,DMAX,DMIN,FONT1C,FONT2C,ORIENT,FILETP,
+     7	                COMPLEFT,SMOOTH,ANNOTATE,COMPARE,FULLSCRN,SEPSCALE
+      COMMON /SCALES/   ABSMAX,RELMAX,SCALEPOS,ABSSCALE,ABSRANGE
+      COMMON /FILES/    PETTCONV,AFLOW,BFLOW,BVFACTOR,AOXYGEN,BOXYGEN,
+     2                  AWATER,BWATER,O2CNTS,OXYCONT,MULTFACT,PETTDCOR,
+     3                  NMSLICES,HOFILE,COFILE,ADDFACT,
+     4                  PETTNUM,NTYPE,SLCOUNTS,
+     5                  SCANLEN,FILENAME,SCANNER,FILTER,COMPOUND,
+     6                  PROCDATE,SCANNAME,SCANDATE,PROCBY,IMGVOL,HDRVOL,
+     7                  HDRFILE,ENCODED,NUCLIDE
+      COMMON /GLOBALAV/ NRMVALUE,GLBTYPE,GLBFILE,GSLICES,GLBSTART,GLBSLICE,
+     2                  GLBTEMP,NORMALIZE
+      COMMON /REGION/   BOUNDARY,AVAL,BVAL,XMIN,XMAX,YMIN,YMAX,SLICE,
+     2                  TOP,LASTREGN,YCORLINE,RSCANNER,RSLICES,
+     3                  XLOC,YLOC,XMIDLINE,REGTYPE,REGATLAS,REGNAME,
+     4                  REGFILE,INC,RORIENT,ALTERX,ALTERY
+      COMMON /AREA/     INREGION,RTOP
+      COMMON /REGCOMP/  NSCANS,NREGS,PROCNREG,REGMEAN,REGFID,
+     2                  REGFNAME,RGTATLAS,RGTFILE,PROC
+
+
+@

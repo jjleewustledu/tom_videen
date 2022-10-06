@@ -1,0 +1,206 @@
+head	1.1;
+access;
+symbols;
+locks
+	tom:1.1; strict;
+comment	@c @;
+
+
+1.1
+date	92.08.10.15.12.57;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial release
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@c $Log$
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   TRANSFORM.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         05-Aug-92
+C  Written For:  HD6TOT88
+C
+C  History:
+C     Modified 30-Jul-92 TOV from HD6TRANS.
+C			Modified 05-Aug-92 by TOV:
+C				1)	Bug in y-positioning was fixed.  
+C						Original version positioned the image 2 pixels anterior.
+C
+C  Intent:
+C     Transform Talairach 1967 (HD6) brain to Talairach 1988 brain image.
+C
+C  Uses Subroutine:
+C     MATMULT  - matrix multiplication
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE TRANSFORM
+C
+      PARAMETER (nxa = 128) 		! x-dimension of PETA
+      PARAMETER (nya = 128) 		! y-dimension of PETA
+      PARAMETER (nza =  49) 		! z-dimension of PETA
+      PARAMETER (nxb = 100) 		! x-dimension of PETB
+      PARAMETER (nyb = 100) 		! y-dimension of PETB
+      PARAMETER (nzb =  49) 		! z-dimension of PETB
+C
+      REAL*4     Q(4,4)   	! product of R*S
+      REAL*4     R(4,4)   	! shift PETB origin to image origin
+      REAL*4     S(4,4)   	! scale PETB to PETA
+      REAL*4     T(4,4)   	! shift PETA image origin to array origin
+
+      REAL*4     MAP(4,4)   ! combined conversion matrix PETB-->PETA
+      REAL*4     A(4,1)     ! point in PETA-space
+      REAL*4     B(4,1)     ! point in PETB-space
+C
+      REAL*4     wx         ! weighting factor for x
+      REAL*4     wy         ! weighting factor for y
+      REAL*4     wz         ! weighting factor for z
+      REAL*4     VAL        ! temporary value computed for PETB
+C
+      INTEGER*4  x          ! index to atlas x
+      INTEGER*4  y          ! index to atlas y
+      INTEGER*4  z          ! index to atlas slice number
+C
+      INTEGER*4  x1,x2      ! indices to PETA x
+      INTEGER*4  y1,y2      ! indices to PETA y
+      INTEGER*4  z1,z2      ! indices to PETA z
+C
+			INTEGER*2  NOTIN			! value to assign if transformed pixel is not in PETA
+C
+			CHARACTER*100 RCSHEADER
+C
+C  Common Block Elements:
+C
+      INTEGER*2  PETA(nxa,nya,nza) ! atlas input image (HD6 brain)
+      INTEGER*2  PETB(nxb,nyb,nzb) ! atlas output image (T88 brain)
+C
+      COMMON /IMAGES/ PETA, PETB
+C
+			DATA NOTIN /0/
+C
+			RCSHEADER = "$Header$"
+C
+C  Define the TRANSFORMATION MATRIX, MAP = T*S*R
+C
+      DO 20 J=1,4
+        DO 10 I=1,4
+          R(I,J) = 0.
+          S(I,J) = 0.
+          T(I,J) = 0.
+10      CONTINUE
+				R(J,J) = 1.
+				S(J,J) = 1.
+				T(J,J) = 1.
+20    CONTINUE
+C
+			R(1,4) = -50.5				! PETB is 100x100 array
+			R(2,4) = -50.5 -6.0		! explanation below
+			R(3,4) = -31.					! z=0 for slice=31
+C
+			S(1,1) = 145./130.		! HD6 / T88
+			S(2,2) = 163./172.
+			S(3,3) = 70./75.
+C
+C 	The atlas origin of PETB (T88) is 12 mm anterior to atlas origin of HD6.
+C		However, the original HD6MEAN (based on SARP) had the image origin 2 mm anterior
+C 	to what should have been its true origin (by defining the origin at the bisection 
+C		of the line passing through the commissures.
+C		Therefore, our existing HD6-formatted images need to be shifted posteriorly 14 mm 
+C		(or 7 pixels) to accurately position the T88 origin.  
+C		This corresponds to a 6 pixel shift to get the atlas origin of PETB 
+C		to the true (atlas) origin of PETA plus a 1 pixel shift in PETA.
+C		The true atlas origin in PETA (HD6) is, in fact, 2 mm (1 pixel) anterior to the
+C		center of the 128x128 array.
+C
+			T(1,4) = 64.5
+			T(2,4) = 63.5			! explanation above
+			T(3,4) = 31.
+C
+			CALL MATMULT(S,R,Q,4,4,4)
+			CALL MATMULT(T,Q,MAP,4,4,4)
+C
+C  ----------------------------------------------------------------
+C  Transfrom each pixel
+C
+			B(4,1) = 1.
+			DO 500 z=1,nzb
+				B(3,1) = FLOAT(z)
+				DO 400 y=1,nyb
+					B(2,1) = FLOAT(y)
+	        DO 300 x=1,nxb
+            B(1,1) = FLOAT(x)
+C
+C  Project point B into A space (MAP*B --> A)
+C
+            CALL MATMULT(MAP,B,A,4,4,1)
+            x1 = INT(A(1,1))
+            y1 = INT(A(2,1))
+            z1 = INT(A(3,1))
+C
+C  If outside PETA array, PETB = NOTIN
+C
+            IF (x1.GE.nxa .OR. y1.GE.nya .OR. z1.GT.nza .OR.
+     &          x1.LT.1   .OR. y1.LT.1   .OR. z1.LT.1) THEN
+              PETB(x,y,z) = NOTIN
+              GO TO 300
+C
+C  If B is within tolerance of a PETA slice, use 2-D interpolation
+C
+            ELSE IF (B(3,1)-FLOAT(z1) .LE. 0.001) THEN
+              x2 = x1+1
+              y2 = y1+1
+              wx = A(1,1) - FLOAT(x1)
+              wy = A(2,1) - FLOAT(y1)
+              VAL = (1.-wx)*(1.-wy)*FLOAT(PETA(x1,y1,z1)) +
+     &                  wx *(1.-wy)*FLOAT(PETA(x2,y1,z1)) +
+     &              (1.-wx)*    wy *FLOAT(PETA(x1,y2,z1)) +
+     &                  wx *    wy *FLOAT(PETA(x2,y2,z1))
+C
+C  If B is not on slice nza, then z1 must be less than nza
+C
+            ELSE IF (z1.GE.nza) THEN
+              PETB(x,y,z) = NOTIN
+              GO TO 300
+C
+C  Otherwise use 3-D interpolation
+C
+            ELSE
+              x2 = x1+1
+              y2 = y1+1
+              z2 = z1+1
+              wx = A(1,1) - FLOAT(x1)
+              wy = A(2,1) - FLOAT(y1)
+              wz = A(3,1) - FLOAT(z1)
+              VAL = (1.-wx)*(1.-wy)*(1.-wz)*FLOAT(PETA(x1,y1,z1)) +
+     &                  wx *(1.-wy)*(1.-wz)*FLOAT(PETA(x2,y1,z1)) +
+     &              (1.-wx)*    wy *(1.-wz)*FLOAT(PETA(x1,y2,z1)) +
+     &                  wx *    wy *(1.-wz)*FLOAT(PETA(x2,y2,z1)) +
+     &              (1.-wx)*(1.-wy)*    wz *FLOAT(PETA(x1,y1,z2)) +
+     &                  wx *(1.-wy)*    wz *FLOAT(PETA(x2,y1,z2)) +
+     &              (1.-wx)*    wy *    wz *FLOAT(PETA(x1,y2,z2)) +
+     &                  wx *    wy *    wz *FLOAT(PETA(x2,y2,z2))
+            END IF
+C
+C  Atlas value is rounded VAL
+C
+            PETB(x,y,z) = INT(NINT(VAL))
+C
+300       CONTINUE
+400     CONTINUE
+500   CONTINUE
+C
+      RETURN
+      END
+@

@@ -1,0 +1,326 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   D2SCALER.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         29-May-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified by TOV 15-Jul-87 to changes absolute color scale range
+C        to 0-240 (instead of 0-255) and from 320-480 for relative images
+C        (instead of 300-500);
+C     Modified by TOV 14-Sep-88 to eliminate a confusing scale factor
+C        for images with a divisor.  The scale factor is now incorporated
+C        into SCALER(1) in D2COMPAR.
+C
+C  Intent:
+C     This routine scales an image to an absolute or relative
+C     color scale.  The image to be scaled is in IMAGE(n,n,1)
+C     if it is a transverse, and in XIMAGE(n,n) if it is a
+C     coronal/sagittal image.
+C     The resultant image is stored in the array IARRAY
+C     for ALL images.
+C     The image is written to the Ramtek by another routine.
+C     Scaling is necessary to define color scales.
+C     Need DMIN and DMAX before calling this routine.
+C
+C  Note:  when an absolute range (ABSRANGE) has been selected,
+C     the maximum value must be divided by SCALER to get the
+C     proper FACTOR for dividing the image values.
+C
+C  Common Blocks from: SPIDERAM.INC
+C     **IMAGEDAT - image arrays                   (write)
+C     **LUINFO   - logical units                  (read only)
+C     **DISPLAY  - display parameters             (read only)
+C     **SCALES   - scaling parameters             (read only)
+C     **FILES    - scan file list                 (read only)
+C     **REGION   - region analysis parameters     (read)
+C
+C  Variables Passed:
+C     COL = indicates column used for sagittal images;
+C     ROW = indicates row used for coronal images;
+C
+C  Local Variables:
+C     TEMP = temporary value used for array elements;
+C     NOTEMPLT = true iff no template is used;
+C     ZERO = added to scaled value
+C        (0 for absolute scales; midpoint for relative scales);
+C     RANGE = range of scaled values;
+C     HIGHLIM = largest value allow after scaling;
+C     LOWLIM  = smallest value allow after scaling;
+C     JMAX = no of rows of the image
+C     PB - parameter block used by SYSIO;
+C     IOREADR - random access I/O wait read;
+C     TBYTES - no. of bytes to read for a template (TIMAGE);
+C     ADDR - random address to start reading a template from;
+C     NONZERO: true--> use computed values for coronal/sagittal images;
+C              false-> set all remaining values to zero;
+C        (flag to zero last SLCLINES-1 lines of the image array);
+C     MID - integer value of XMIDLINE;
+C
+C  Uses:
+C
+C  SPIDERAM.LIB
+C     D2TEMPLA - create a template of an image;
+C
+C  FORTRAN Runtime Library
+C     SYSIO
+C
+C  Called by:  D2DISPLA
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE D2SCALER (COL, ROW, SIDE)
+C
+C
+      INTEGER*2	TEMP, HIGHLIM, LOWLIM, ZERO
+      INTEGER*4	COL, ROW, SIDE, MID, PB(6), IOREADR, TBYTES, ADDR, 
+     &			C, R, I, J, K, N       
+      REAL	FACTOR, RANGE
+      LOGICAL*1	NOTEMPLT, NONZERO, ONPIX
+      character*256 rcsheader
+C
+      INCLUDE 'spideram.inc'
+      rcsheader = "$Id$"
+
+      DATA IOREADR, TBYTES /92, 16384/
+C
+      NOTEMPLT	= .TRUE.
+C
+C  Threshold image:  after D2TEMPLA template is stored in TIMAGE
+C    (for transverse images only)
+C
+      IF (TEMPLATE .EQ. 1) THEN
+	NOTEMPLT	= .FALSE.
+	CALL D2TEMPLA (0)
+C
+C  Create & use a template: after D2TEMPLA template is stored in TIMAGE
+C    (for transverse images only)
+C
+      ELSE IF (TEMPLATE .EQ. 2) THEN
+	NOTEMPLT	= .FALSE.
+	CALL D2TEMPLA (CURSLICE)
+C
+C  Use a template: For transverse images,read from TDISK into TIMAGE;
+C  (For coronal or sagittal images, TIMAGE is read later in this subroutine)
+C
+      ELSE IF (TEMPLATE .EQ. 3) THEN
+	NOTEMPLT	= .FALSE.
+	IF (ORIENT .EQ. 'T') THEN
+		ADDR	= (CURSLICE - 1) * 64
+		CALL SYSIO (PB, IOREADR, TDISK, TIMAGE, TBYTES, ADDR)
+	END IF
+C
+C  Use a template for a 49-slice image
+C
+      ELSE IF (TEMPLATE .EQ. 4) THEN
+	NOTEMPLT	= .FALSE.
+	IF (ORIENT .EQ. 'T') THEN
+		ADDR	= (CURSLICE - 1) * 64
+		CALL SYSIO (PB, IOREADR, STDISK, TIMAGE, TBYTES, ADDR)
+	END IF
+C
+C  No thresholding or template
+C
+      ELSE
+	NOTEMPLT	= .TRUE.
+      END IF
+C
+      IF (ABSSCALE) THEN
+	LOWLIM		= 0
+	HIGHLIM		= 240
+	RANGE		= 240.
+	ZERO		= 0
+	IF (ABSRANGE) THEN
+		FACTOR	= ABSMAX / SCALER (1)
+	ELSE
+		FACTOR	= FLOAT (DMAX)
+	END IF
+      ELSE
+	ZERO	= 400
+	RANGE	= 80.
+	IF (SCALEPOS .EQ. 0) THEN
+		IF (ABSRANGE) THEN
+			FACTOR	= RELMAX / SCALER (1)
+		ELSE
+			FACTOR	= FLOAT (MAX0 (DMAX, IABS (DMIN)))
+		END IF
+		LOWLIM		= 320
+		HIGHLIM		= 480
+	ELSE IF (SCALEPOS .EQ. 1) THEN
+		IF (ABSRANGE) THEN
+			FACTOR	= RELMAX / SCALER (1)
+		ELSE
+			FACTOR	= FLOAT(DMAX)
+		END IF
+		LOWLIM		= 400
+		HIGHLIM		= 480
+	ELSE
+		IF (ABSRANGE) THEN
+			FACTOR	= ABS (RELMAX) / SCALER (1)
+		ELSE
+			FACTOR	= FLOAT (IABS (DMIN))
+		END IF
+		LOWLIM		= 320
+		HIGHLIM		= 400
+	END IF
+      END IF
+C
+C  Get midline location if only half an image is to be scaled.
+C
+      IF (ABS (XMIDLINE - FLOAT (INT (XMIDLINE))) .LT. 0.25) THEN
+	ONPIX		= .TRUE.
+	MID		= NINT (XMIDLINE)
+	XMIDLINE	= FLOAT (MID)
+      ELSE
+	ONPIX		= .FALSE.
+	MID		= INT (XMIDLINE)
+	XMIDLINE	= FLOAT (MID) + 0.5
+      END IF
+C
+      IF (SIDE .EQ. 1) THEN		! left side only
+	C1	= 1
+	C2	= MID
+      ELSE IF (SIDE .EQ. 2) THEN	! right side only
+	C1	= MID + 1
+	C2	= 128
+      ELSE				! entire image
+	C1	= 1
+	C2	= 128
+      END IF
+C
+C  Zero the image
+C
+      DO 200 J = 1, 128
+	DO 100 I = C1, C2
+		IARRAY (I, J)	= 0
+100	CONTINUE
+200   CONTINUE
+      IF (ONPIX .AND. SIDE .EQ. 1) C2 = C2 - 1
+C
+C  If FACTOR=0 then return with null image
+C
+      IF (FACTOR .EQ. 0.0) RETURN
+C
+C  Scaling for TRANSVERSE images
+C
+      IF (ORIENT .EQ. 'T') THEN
+	DO 400 J = 1, 128
+		DO 300 I = C1, C2
+			IF (NOTEMPLT .OR. TIMAGE (I, J)) THEN
+				TEMP	= NINT (RANGE * FLOAT (IMAGE (I, J, 1)) / FACTOR)
+     2									+ ZERO
+				IF (TEMP .LE. LOWLIM) THEN
+					IARRAY (I, J)	= LOWLIM
+				ELSE IF (TEMP .GE. HIGHLIM) THEN
+					IARRAY (I, J)	= HIGHLIM
+				ELSE
+					IARRAY (I, J)	= TEMP
+				END IF
+			ELSE
+				IARRAY (I, J)	= ZERO
+			END IF
+300		CONTINUE
+400	CONTINUE
+C
+C  Scaling for SAGITTAL or CORONAL images
+C
+      ELSE
+	NONZERO		= .TRUE.
+	C		= COL
+	R		= ROW
+	N		= 0
+	DO 700 I = 1, SLICES
+		IF (TEMPLATE .EQ. 3) THEN
+			ADDR	= (I - 1) * 64
+			CALL SYSIO (PB, IOREADR, TDISK, TIMAGE, TBYTES, ADDR)
+		ELSE IF (TEMPLATE .EQ. 4) THEN
+			ADDR	= (I - 1) * 64
+			CALL SYSIO (PB, IOREADR, STDISK, TIMAGE, TBYTES, ADDR)
+		END IF
+		DO 600 K = 1, SLCLINES
+			IF (I .EQ. SLICES .AND. K .GT. 1 .AND. SMOOTH) NONZERO = .FALSE.
+				N	= N + 1
+				DO 500 J = 1, 128
+					IF (ORIENT .EQ. 'S') THEN
+						R	= J
+					ELSE
+						C	= J
+					END IF
+					IF ((NOTEMPLT .OR. TIMAGE (C, R)) 
+     2							.AND. NONZERO) THEN		
+						TEMP	= NINT (RANGE 
+     2					* FLOAT (XIMAGE (J, N)) / FACTOR) + ZERO
+						IF (TEMP .LE. LOWLIM) THEN
+							IARRAY (J, N)	= LOWLIM
+						ELSE IF (TEMP .GE. HIGHLIM) THEN
+							IARRAY (J, N)	= HIGHLIM
+						ELSE
+							IARRAY (J, N)	= TEMP
+						END IF
+					ELSE
+						IARRAY (J, N)	= ZERO
+					END IF
+500				CONTINUE
+600		CONTINUE
+700	CONTINUE
+      END IF
+C
+      RETURN
+      END
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d79 1
+a79 1
+     2			C, R, I, J, K, N       
+d82 1
+d85 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

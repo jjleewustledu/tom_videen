@@ -1,0 +1,566 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	2006.05.30.18.41.20;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2004.02.20.14.46.59;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.11.27.17.55.07;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2000.09.06.19.45.01;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.04.11.18.13.15;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.03.29.15.23.39;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.11.17.11.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@dimensions=3 OK
+@
+text
+@/*	$Log: spm2img.c,v $
+ * Revision 1.6  2004/02/20  14:46:59  tom
+ * Feb 2004
+ *
+ * Revision 1.5  2002/11/27  17:55:07  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  2000/09/06  19:45:01  tom
+ * strcpy filename
+ *
+ * Revision 1.3  2000/04/11  18:13:15  tom
+ * fix 8-bit conversion
+ *
+ * Revision 1.2  2000/03/29  15:23:39  tom
+ * read 8- and 16-bit images
+ *
+ * Revision 1.1  1998/12/11  17:11:56  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			analyze2spm.c
+ *	Date:			Dec 1998
+ *	Author:			Tom Videen
+ *	Description:	Transform SPM (Analyze) images into ECAT 7.0 format.
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/spm2img/RCS/spm2img.c,v 1.6 2004/02/20 14:46:59 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>				 /* dsr */
+
+#define MAXSTR 256
+
+/*	----------------------------
+ *	Function:			analyze2spm
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	ImageFile      *file;
+	Index           indx;
+	struct dsr      hdr;			 /* header for ANALYZE */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	int             stdfrm;
+	char           *stdimg;			 /* image filename for default header values */
+	char           *ecatimg;		 /* output PET image filename */
+	char           *ANALYZE_hdr;		 /* input Analyze header filename  */
+	char           *ANALYZE_img;		 /* input Analyze image filename */
+	char            runstamp[40];		 /* version, date and userid info */
+	long            odim1, odim2, odim3;	 /* dimensions of img */
+	long            ndim1, ndim2, ndim3;	 /* dimensions of image */
+	long            xoffset, yoffset;	 /* offsets for recutting img */
+	int             bytes;
+	int             i, j, k, m, n;
+
+	float        ***img;			 /* intermediate image */
+	float        ***image;			 /* output image */
+	short          *srow;			 /* single row of input image */
+	char           *crow;			 /* single row of input image */
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 13) {
+		fprintf (stdout, "Usage: analyze2spm ANALYZE_img ANALYZE_hdr ecatimg stdimg stdfrm\n");
+		return (ERROR);
+	}
+	ANALYZE_img = argv[1];
+	ANALYZE_hdr = argv[2];
+	ecatimg = argv[3];
+	stdimg = argv[4];
+	stdfrm = atoi (argv[5]);
+	n = 6;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n + 1], argv[n + 2],
+		 argv[n + 3], argv[n + 5], argv[n + 6]);
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (ANALYZE_hdr, "r")) == NULL) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot open: %s\n", ANALYZE_hdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [analyze2spm]: Reading: %s\n", ANALYZE_hdr);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [analyze2spm]: Reading: %s\n", ANALYZE_hdr);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix == 8)
+		bytes = 1;
+	else if (hdr.dime.bitpix == 16)
+		bytes = 2;
+	else {
+		fprintf (stderr, "ERROR [analyze2spm]: Reading: %s\n", ANALYZE_hdr);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	odim1 = hdr.dime.dim[1];
+	odim2 = hdr.dime.dim[2];
+	odim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+/*
+ *	Read the img and flip X, Y & Z from Analyze convention
+ */
+
+	if ((fd_img = fopen (ANALYZE_img, "r")) == NULL) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot open: %s\n", ANALYZE_img);
+		return (ERROR);
+	}
+	if ((img = f3tensor (1, odim3, 1, odim2, 1, odim1)) == NULL) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot malloc img\n");
+		return (ERROR);
+	}
+	if (bytes == 1) {
+		if (NULL == (crow = (char *) calloc (odim1, sizeof (char)))) {
+			fprintf (stderr, "ERROR [analyze2spm]: Cannot malloc memory for row\n");
+			return (ERROR);
+		}
+		for (i = odim3; i > 0; i--) {
+			for (j = odim2; j > 0; j--) {
+				if ((fread (crow, sizeof(char), odim1, fd_img)) != odim1) {
+					fprintf (stderr, "ERROR [analyze2spm]: Reading: %s\n", ANALYZE_img);
+					return (ERROR);
+				}
+				for (k = 1; k <= odim1; k++)
+					if ((short) crow[k] < 0)
+						img[i][j][k] = (float) (256+crow[k]);
+					else
+						img[i][j][k] = (float) crow[k];
+			}
+		}
+
+	} else {
+		if (NULL == (srow = (short *) calloc (odim1, sizeof (short)))) {
+			fprintf (stderr, "ERROR [analyze2spm]: Cannot malloc memory for row\n");
+			return (ERROR);
+		}
+		for (i = odim3; i > 0; i--) {
+			for (j = odim2; j > 0; j--) {
+				if ((fread (srow, sizeof(short), odim1, fd_img)) != odim1) {
+					fprintf (stderr, "ERROR [analyze2spm]: Reading: %s\n", ANALYZE_img);
+					return (ERROR);
+				}
+				for (k = 1; k <= odim1; k++) {
+					if (srow[k] == -32768)
+						img[i][j][k] = 0.;
+					else
+						img[i][j][k] = (float) srow[k];
+				}
+			}
+		}
+	}
+	(void) fclose (fd_img);
+
+/*
+ *	Generate 128x128 slices from img
+ */
+
+	ndim1 = 128;
+	ndim2 = 128;
+	ndim3 = odim3;
+	xoffset = (odim1 - ndim1) / 2;
+	yoffset = (odim2 - ndim2) / 2;
+	if ((image = f3tensor (1, ndim3, 1, ndim2, 1, ndim1)) == NULL) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot malloc image\n");
+		return (ERROR);
+	}
+	for (i = 1; i <= ndim3; i++) {
+		for (j = 1; j <= ndim2; j++) {
+			m = j + yoffset;
+			for (k = 1; k <= ndim1; k++) {
+				n = k + xoffset;
+				if (m > 0 && m <= odim2 && n > 0 && n <= odim1)
+					image[i][j][k] = img[i][m][n];
+				else
+					image[i][j][k] = 0.;
+			}
+		}
+	}
+
+/*
+ *	Create ECAT file
+ */
+
+	file = make_imgfile (ecatimg);
+	if (make_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot make mh for %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (make_sh (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot make sh for %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ *	Define ECAT file properties
+ */
+
+	file->mh->file_format = MATRIX_REV7;
+	file->mh->filetype = PetVolume;
+	file->mh->scanner_type = 0;
+	file->mh->start_time = 0;
+	for (i = 0; i < 8; i++)
+		file->mh->isotope[i] = ' ';
+	for (i = 0; i < 32; i++)
+		file->mh->radiopharmaceutical[i] = ' ';
+	file->mh->bed_elevation = 0;
+	file->mh->wobble_speed = 0;
+	file->mh->calibration_factor = 1;
+	file->mh->sw_revision = (char *) calloc (32, sizeof (char));
+	file->mh->filetime = (char *) calloc (32, sizeof (char));
+	file->mh->nplane = odim3;
+	file->mh->nframe = 1;
+	file->mh->ngate = 1;
+	file->mh->nbed = 1;
+	file->mh->init_bed_pos = 0;
+	for (i = 0; i < 16; i++)
+		file->mh->bed_off[i] = 0;
+	file->mh->slicesep = 0.1 * hdr.dime.pixdim[3];
+
+	file->sh->number_format = SHORT_DATA;
+	file->sh->ndim = 3;
+	file->sh->dim1 = ndim1;
+	file->sh->dim2 = ndim2;
+	file->sh->dim3 = ndim3;
+	file->sh->sample_size_1 = 0.1 * hdr.dime.pixdim[1];
+	file->sh->sample_size_2 = 0.1 * hdr.dime.pixdim[2];
+	file->sh->sample_size_3 = 0.1 * hdr.dime.pixdim[3];
+	file->sh->start_time = 0;
+	file->sh->duration = 1;
+	(void) save_rcs (file, rcsid, runstamp);
+
+	if (make_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot make mh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+	(void) fill_mh7 (file);
+	if (make_sh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot make sh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ *	Read std image
+ */
+	if (stdfrm > 0) {
+		fprintf (stdout, "Using header info from %s frm=%d\n", stdimg, stdfrm);
+		(void) strcpy (file->name, stdimg);
+		if (open_imgfile (file) == ERROR) {
+			fprintf (stderr, "ERROR [analyze2spm]: Cannot open %s\n", stdimg);
+			return (ERROR);
+		}
+		if (get_mh (file) == ERROR) {
+			fprintf (stderr, "ERROR [analyze2spm]: Cannot get MainHeader from %s\n", stdimg);
+			return (ERROR);
+		}
+		indx.frm = stdfrm;
+		if (existimgfrm (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [analyze2spm]: cannot find %s frame %d\n",
+				 stdimg, stdfrm);
+			return (ERROR);
+		}
+		if (get_sh (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [analyze2spm]: Cannot read file subheader in %s\n", stdimg);
+			return (ERROR);
+		}
+		close_imgfile (file);
+	}
+	file->m7->sh->decay_corr_fctr = 1;
+	file->mh->nplane = odim3;
+	file->sh->dim3 = odim3;
+	(void) save_rcs (file, rcsid, runstamp);
+
+/*
+ *	Write ECAT image file
+ */
+
+	(void) strcpy (file->name, ecatimg);
+	(void) strcpy (file->mode, "w");
+	indx.frm = 1;
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot open %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot write %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (writetensor (file, &indx, image) == ERROR) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot write %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ *	Free & Exit
+ */
+
+	fprintf (stdout, "Converted: %s to %s\n", ANALYZE_img, ecatimg);
+	free_imgfile (file);
+	if (bytes == 1)
+		free (crow);
+	else
+		free (srow);
+	free_f3tensor (img, 1, odim3, 1, odim2, 1, odim1);
+	free_f3tensor (image, 1, ndim3, 1, ndim2, 1, ndim1);
+	return (OK);
+}
+@
+
+
+1.6
+log
+@Feb 2004
+@
+text
+@d2 3
+d27 1
+a27 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/spm2img/RCS/spm2img.c,v 1.5 2002/11/27 17:55:07 tom Exp tom $";
+d107 1
+a107 1
+	if (hdr.dime.dim[0] != 4) {
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d19 1
+a19 1
+ *	Date:			Dec-98
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/spm2img/RCS/spm2img.c,v 1.4 2000/09/06 19:45:01 tom Exp $";
+d251 1
+a251 1
+	save_rcs (file, rcsid, runstamp);
+d257 1
+a257 1
+	fill_mh7 (file);
+d291 1
+a291 1
+	save_rcs (file, rcsid, runstamp);
+@
+
+
+1.4
+log
+@strcpy filename
+@
+text
+@d2 3
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/spm2img/RCS/spm2img.c,v 1.3 2000/04/11 18:13:15 tom Exp tom $";
+d80 1
+a80 1
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n + 1], argv[n + 2],
+d118 1
+a118 1
+	fclose (fd_hdr);
+d171 1
+a171 1
+	fclose (fd_img);
+d264 1
+a264 1
+		strcpy (file->name, stdimg);
+d294 2
+a295 2
+	strcpy (file->name, ecatimg);
+	strcpy (file->mode, "w");
+@
+
+
+1.3
+log
+@fix 8-bit conversion
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/spm2img/RCS/spm2img.c,v 1.2 2000/03/29 15:23:39 tom Exp tom $";
+d261 1
+a261 1
+		file->name = stdimg;
+d291 1
+a292 1
+	file->name = ecatimg;
+@
+
+
+1.2
+log
+@read 8- and 16-bit images
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/spm2img/RCS/spm2img.c,v 1.1 1998/12/11 17:11:56 tom Exp tom $";
+d138 4
+a141 1
+					img[i][j][k] = (float) crow[k];
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/analyze2spm/RCS/analyze2spm.c,v 2.9 1998/10/12 21:32:42 tom Exp $";
+d15 1
+a21 1
+#include <matrixlib.h>
+d37 3
+a39 4
+	struct dsr      hdr;				 /* header for ANALYZE */
+	FILE           *fd_hdr;				 /* file for ANALYZE hdr */
+	FILE           *fopen ();			 /* the fopen stuff  */
+	int             fd_img;				 /* file for ANALYZE image */
+d41 2
+a42 2
+	char           *stdimg;				 /* image filename for default header values */
+	char           *ecatimg;		 	 /* output PET image filename */
+d46 2
+a47 2
+	long            odim1, odim2, odim3; /* dimensions of img */
+	long            ndim1, ndim2, ndim3; /* dimensions of image */
+d49 1
+d54 2
+a55 1
+	short          *row;			 /* single row of input image */
+d62 1
+a62 1
+		printf ("Usage: analyze2spm ANALYZE_img ANALYZE_hdr ecatimg stdimg stdfrm\n");
+d84 1
+a84 1
+	if ((fd_hdr = fopen (ANALYZE_hdr, "r")) == 0) {
+d97 5
+a101 1
+	if (hdr.dime.datatype != 4) {
+a102 5
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [analyze2spm]: Reading: %s\n", ANALYZE_hdr);
+d115 1
+a115 1
+	if ((fd_img = open (ANALYZE_img, O_RDONLY, 0444)) < 0) {
+d123 15
+a137 4
+	if (NULL == (row = (short *) calloc (odim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [analyze2spm]: Cannot malloc memory for row\n");
+		return (ERROR);
+	}
+d139 17
+a155 8
+	for (i = odim3; i > 0; i--) {
+		for (j = odim2; j > 0; j--) {
+			read (fd_img, row, odim1 * 2);
+			for (k = 1; k <= odim1; k++) {
+				if (row[k] == -32768)
+					img[i][j][k] = 0.;
+				else
+					img[i][j][k] = (float) row[k];
+d159 1
+a159 1
+	close (fd_img);
+d215 2
+a216 2
+	file->mh->sw_revision = (char *) calloc (32, sizeof(char));
+	file->mh->filetime = (char *) calloc (32, sizeof(char));
+d251 1
+a251 1
+		printf ("Using header info from %s frm=%d\n", stdimg, stdfrm);
+d301 1
+a301 1
+	printf ("Converted: %s to %s\n", ANALYZE_img, ecatimg);
+d303 4
+a306 1
+	free (row);
+@

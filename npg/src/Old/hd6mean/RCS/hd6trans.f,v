@@ -1,0 +1,518 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.4
+date	93.04.29.22.37.28;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.03.04.15.19.40;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.02.26.22.09.51;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.11.03.18.59.32;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Original version for Unix.
+This version gives nearly identical output to HD6MEAN on Medusa
+when compared to the original Concurrent version (which replicated
+SARP).  Differences in single pixel values are +/- 1, which is
+attributed to differences in rounding.
+@
+
+
+1.4
+log
+@Revised to handle 31-slice input images and sxr NTYPE = 20
+@
+text
+@c $Log: hd6trans.f,v $
+c Revision 1.3  1993/03/04  15:19:40  tom
+c Replace disk scratch file (hd6sum) with array SUM
+c
+c Revision 1.2  1993/02/26  22:09:51  tom
+c *** empty log message ***
+c
+c Revision 1.1  1992/11/03  18:59:32  tom
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   HD6TRANS.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         05-Aug-91
+C  Written For:  HD6MEAN
+C
+C  History:
+C     Modified 05-Aug-91 TOV to correct the calculation of dz.
+C
+C     It is assumed that SXR files will be one of 4 versions:
+C
+C     (SXRTYPE.EQ.1)
+C        If the magnification factor is 0.93, then the OLD cassette
+C        holder was used with the slice markers between the head and the
+C        xray source, AND the PET was in the old room with the xray
+C        source closer to the head.  It is further assumed that the
+C        reference slice position for xrays with a single slice marker
+C        (7) was measured using the slice spacing of xrays with 7-slice
+C        markers (and therefore is uncorrected and must be adjusted by
+C        mag_markers).
+C           P < P987
+C           mag = 0.93
+C           mag_markers = 0.89
+C
+C     (SXRTYPE.EQ.2)
+C        If the magnification factor is 0.94, then the OLD cassette
+C        holder was used with the slice markers between the head and the
+C        xray source.
+C           P987 <= P < P1575
+C           mag = 0.945
+C           mag_markers = 0.910
+C
+C     (SXRTYPE.EQ.3)
+C        If the magnification factor is 0.945 and the SXR file does NOT
+C        contain an 'incorrect delta-z' message, then the NEW (1988)
+C        cassette holder was used with the old slice markers between the
+C        head and the xray source.
+C           P1575 < P <= P1611
+C           mag = 0.947
+C           mag_markers = 0.913
+C
+C     (SXRTYPE.EQ.4)
+C        If the magnification factor is 0.945 and the SXR file contains
+C        an 'incorrect delta-z' message, then the NEW (1988) cassette
+C        holder was used with the slice markers against the cassette.
+C           P >= P1575
+C           mag = 0.947   (uses 0.945 as incorporated into SARPLOCS)
+C           mag_markers = 1.0
+C
+C  		Modified 18-Feb-93 TOV to handle SXRTYPE = 5 from ECAT.
+C     Modified 01-Mar-93 TOV:
+C				1) add a COMMON array SUM.
+C				2) change ATL to REAL
+C
+C  Intent:
+C     Remap a 7-slice PET image into a 49-slice HD6-brain image.
+C
+C  Uses Subroutine:
+C     MATMULT  - matrix multiplication
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE HD6TRANS(SXRTYPE,NOTIN)
+C
+      PARAMETER (nxi = 128) ! x-dimension of PET-array
+      PARAMETER (nyi = 128) ! y-dimension of PET-array
+      PARAMETER (nzi =  31) ! z-dimension of PET-array! no. of slices
+      PARAMETER (nxa = 100) ! x-dimension of atlas-array
+      PARAMETER (nya = 100) ! y-dimension of atlas-array
+      PARAMETER (nza =  49) ! z-dimension of atlas-array! no. of slices
+C
+      INTEGER*4  SXRTYPE    ! determines mag and mag-markers (1-5)
+      REAL*4     NOTIN      ! not in PET space (value to set in ATL)
+C
+      REAL*4     x_trans    ! x-translation for slice za
+      REAL*4     anglex     ! xdeg converted to radians
+      REAL*4     f          ! weighting factor
+      REAL*4     mag_markers! x-ray magnification factor for slice markers
+C
+      REAL*4     T(4,4)     ! 1st translation matrix
+      REAL*4     R(4,4)     ! rotation matrix
+      REAL*4     S1(4,4)    ! 1st scaling matrix
+      REAL*4     S2(4,4)    ! 2nd scaling matrix
+      REAL*4     W(4,4)     ! 2nd translation matrix
+      REAL*4     MAP(4,4)   ! combined conversion matrix ATL-->PET
+      REAL*4     MA(4,4)    ! temporary matrix
+      REAL*4     MB(4,4)    ! temporary matrix
+      REAL*4     MC(4,4)    ! temporary matrix
+C
+      REAL*4     X(4,4)     ! transformation matrix for x
+      REAL*4     V(4,4)     ! 2nd translation matrix for x
+      REAL*4     XMAP(4,4)  ! concatenated X*MAP
+      REAL*4     A(4,1)     ! point in ATL-space
+      REAL*4     P(4,1)     ! point in PET-space
+      REAL*4     Q(4,1)     ! point in PET-space
+C
+      REAL*4     wx         ! weighting factor for x
+      REAL*4     wy         ! weighting factor for y
+      REAL*4     wz         ! weighting factor for z
+      REAL*4     VAL        ! temporary value computed for ATL
+      REAL*4     x_width    ! PET x-width for slice za
+      REAL*4     zp         ! PET z-location for point A(x,ya,za)
+C
+      INTEGER*4  xa         ! index to atlas x
+      INTEGER*4  ya         ! index to atlas y
+      INTEGER*4  za         ! index to atlas slice number
+C
+      INTEGER*4  X1,X2      ! indices to PET x
+      INTEGER*4  Y1,Y2      ! indices to PET y
+      INTEGER*4  Z1,Z2      ! indices to PET z
+C
+			CHARACTER*256 RCSHEADER
+C
+C  ----------------------------------------------------------------
+C
+C  Common Block Elements:
+C
+      REAL*4     ATL(nxa,nya,nza)! atlas output image (HD6 brain)
+      INTEGER*2  NIN(nxa,nya,nza)! N component images for ATL pixels
+      INTEGER*2  PET(nxi,nyi,nzi)! PET input image
+      REAL*4     SUM(nxa,nya,nza)! summed atlas image
+C
+      INTEGER*4  NZ             ! number of PET slices read from sxr file
+                                ! (may differ from nzi)
+      REAL*4     cmperpixi  ! cm/pixel in PET image
+      REAL*4     cmperslci  ! cm/slice in PET image
+      REAL*4     x0i(nzi)   ! x-coordinate brain midpoint in each PET slice
+      REAL*4     y0i        ! y-coordinate midpoint PET image in refslice
+      INTEGER*4  z0i        ! reference slice in PET image
+      REAL*4     x_PET(nzi) ! width of brain in each PET slice
+      REAL*4     mag        ! x-ray magnification factor (for head)
+      REAL*4     y_xray     ! length of brain (line drawn through commissures)
+      REAL*4     z_xray     ! height of brain (perpendicular to y_xray)
+      REAL*4     xdeg       ! x-axis rotation (pitch)
+      REAL*4     dyi        ! y-translation measured on x-ray in PET-space
+      REAL*4     dzi        ! z-translation measured on x-ray in PET-space
+      REAL*4     cmperpixa  ! cm/pixel in atlas-image
+      REAL*4     cmperslca  ! cm/slice in atlas-image
+      REAL*4     x0a        ! x-origin in atlas image
+      REAL*4     y0a        ! y-origin in atlas image
+      INTEGER*4  z0a        ! z-origin in atlas image
+      REAL*4     x_atlas(nza)! width of brain for specified z-positions
+      REAL*4     y_atlas    ! length of brain (line through acpc)
+      REAL*4     z_atlas    ! height of brain (perp. to ac-pc line)
+C
+      COMMON /IMAGES/ ATL, PET, NIN, SUM, NZ, cmperpixi, cmperslci,
+     &                x0i, y0i, z0i, x_PET, mag, y_xray, z_xray,
+     &                xdeg, dyi, dzi, cmperpixa, cmperslca,
+     &                x0a, y0a, z0a, x_atlas, y_atlas, z_atlas
+C
+C  ----------------------------------------------------------------
+C
+			RCSHEADER = "$Header: /usr/local/src/hd6mean/RCS/hd6trans.f,v 1.3 1993/03/04 15:19:40 tom Exp tom $"
+C
+C  Initialize matrices
+C
+      DO 20 J=1,4
+        DO 10 I=1,4
+          T(I,J) = 0.
+          R(I,J) = 0.
+          S1(I,J) = 0.
+          S2(I,J) = 0.
+          W(I,J) = 0.
+          X(I,J) = 0.
+          V(I,J) = 0.
+10      CONTINUE
+        T(J,J) = 1.
+        R(J,J) = 1.
+        S1(J,J) = 1.
+        S2(J,J) = 1.
+        W(J,J) = 1.
+        X(J,J) = 1.
+        V(J,J) = 1.
+20    CONTINUE
+      x_trans = 0.
+      x_width = 0.
+C
+C  Correct dzi according to cassette holder and slice markers:
+C  ----------------------------------------------------------
+C
+      IF (SXRTYPE.EQ.1) THEN
+        mag = 0.93
+        mag_markers = 0.89
+        dzc = dzi*mag + ((mag/mag_markers)-1.) * cmperslci*FLOAT(7-z0i)
+      ELSE IF (SXRTYPE.EQ.2) THEN
+        mag = 0.945
+        mag_markers = 0.910
+        dzc = dzi*mag + ((mag/mag_markers)-1.) * cmperslci*FLOAT(7-z0i)
+      ELSE IF (SXRTYPE.EQ.3) THEN
+        mag = 0.947
+        mag_markers = 0.913
+        dzc = dzi*mag + ((mag/mag_markers)-1.) * cmperslci*FLOAT(7-z0i)
+      ELSE IF (SXRTYPE.EQ.4 .OR. SXRTYPE.EQ.5) THEN
+        dzc = dzi
+      ELSE
+        dzc = dzi
+      END IF
+C
+C  Convert angle degrees-->radians
+C
+      anglex = -3.14159*xdeg/180.
+C
+C  ----------------------------------------------------------------
+C  COMPUTE the transformation matrix MAP:
+C
+C  y-translation:  (Atlas image origin --> matrix origin)
+C
+      T(2,4) = -y0a
+C
+C  z-translation:  (Atlas image origin --> matrix origin)
+C
+      T(3,4) = -z0a
+C
+C  Rotate about PET matrix origin
+C
+      R(2,2) =  COS(anglex)
+      R(2,3) =  SIN(anglex)
+      R(3,2) = -SIN(anglex)
+      R(3,3) =  COS(anglex)
+C
+C  y-scaler:  (Atlas dim --> PET dim)
+C
+      S1(2,2) = mag*y_xray/y_atlas
+C
+C  z-scaler:  (Atlas dim --> PET dim)
+C
+      S1(3,3) = mag*z_xray/z_atlas
+C
+C  y-scaler:  (Atlas pixels --> PET pixels)
+C
+      S2(2,2) = cmperpixa/cmperpixi
+C
+C  z-scaler:  (Atlas pixels --> PET pixels)
+C
+      S2(3,3) = cmperslca/cmperslci
+C
+C  y-translation:  (matrix origin --> PET image origin)
+C
+      W(2,4) = y0i + dyi*mag/cmperpixi
+C
+C  z-translation:  (matrix origin --> PET image origin)
+C
+      W(3,4) = z0i - dzc/cmperslci
+C
+C  Concatenate matrices:
+C
+      CALL MATMULT(S1,T,MA,4,4,4)
+      CALL MATMULT(R,MA,MB,4,4,4)
+      CALL MATMULT(S2,MB,MC,4,4,4)
+      CALL MATMULT(W,MC,MAP,4,4,4)
+C
+C  ----------------------------------------------------------------
+C  Translation, Rotation, and Scaling LOOP for ALL ATLAS PIXELS
+C
+      A(4,1) = 1.
+C
+      DO 500 za=1,nza
+        DO 400 ya=1,nya
+          A(1,1) = x0a
+          A(2,1) = FLOAT(ya)
+          A(3,1) = FLOAT(za)
+C
+C  Compute x-translation and x-scaler for each atlas row:
+C
+          CALL MATMULT(MAP,A,Q,4,4,1)
+          zp = Q(3,1)
+          IF (zp.LE.1.) THEN
+            x_trans = x0i(1)
+            x_width = x_PET(1)
+          ELSE IF (zp.GE.FLOAT(NZ)) THEN
+            x_trans = x0i(NZ)
+            x_width = x_PET(NZ)
+          ELSE
+            DO 100 i=2,NZ
+              IF (zp.LE.FLOAT(i)) THEN
+                f = zp - FLOAT(i-1)
+                x_trans = (1-f)*x0i(i-1)   + f*x0i(i)
+                x_width = (1-f)*x_PET(i-1) + f*x_PET(i)
+                GO TO 200
+              END IF
+100         CONTINUE
+          END IF
+200       CONTINUE
+C
+C  x-translation:  (Atlas image origin --> matrix origin)
+C
+          X(1,4) = -x0a
+C
+C  x-scaler:  (Atlas pixels --> PET pixels)
+C
+          S1(1,1) = x_width*cmperpixa/x_atlas(za)
+          S1(2,2) = 1.
+          S1(3,3) = 1.
+C
+C  x-translation:  (matrix origin --> PET image origin)
+C
+          V(1,4) = x_trans
+C
+C  Concatenate matrices:
+C
+          CALL MATMULT(S1,X,MA,4,4,4)
+          CALL MATMULT(V,MA,MB,4,4,4)
+          CALL MATMULT(MB,MAP,XMAP,4,4,4)
+C
+C  ----------------------------------------------------------------
+C  LOOP for each row
+C
+          DO 300 xa=1,nxa
+            A(1,1) = FLOAT(xa)
+C
+C  Find coordinates of point A in PET space (XMAP*A --> P)
+C
+            CALL MATMULT(XMAP,A,P,4,4,1)
+            X1 = INT(P(1,1))
+            Y1 = INT(P(2,1))
+            Z1 = INT(P(3,1))
+C
+C  If outside PET array, ATL = NOTIN
+C
+            IF (X1.GE.nxi .OR. Y1.GE.nyi .OR. Z1.GT.NZ .OR.
+     &          X1.LT.1   .OR. Y1.LT.1   .OR. Z1.LT.1) THEN
+              ATL(xa,ya,za) = NOTIN
+              GO TO 300
+C
+C  If P is within tolerance of a PET slice, use 2-D interpolation
+C
+            ELSE IF (P(3,1)-FLOAT(Z1) .LE. 0.001) THEN
+              X2 = X1+1
+              Y2 = Y1+1
+              wx = P(1,1) - FLOAT(X1)
+              wy = P(2,1) - FLOAT(Y1)
+              VAL = (1.-wx)*(1.-wy)*FLOAT(PET(X1,Y1,Z1)) +
+     &                  wx *(1.-wy)*FLOAT(PET(X2,Y1,Z1)) +
+     &              (1.-wx)*    wy *FLOAT(PET(X1,Y2,Z1)) +
+     &                  wx *    wy *FLOAT(PET(X2,Y2,Z1))
+C
+C  If P is not on slice NZ, then Z1 must be less than NZ
+C
+            ELSE IF (Z1.GE.NZ) THEN
+              ATL(xa,ya,za) = NOTIN
+              GO TO 300
+C
+C  Otherwise use 3-D interpolation
+C
+            ELSE
+              X2 = X1+1
+              Y2 = Y1+1
+              Z2 = Z1+1
+              wx = P(1,1) - FLOAT(X1)
+              wy = P(2,1) - FLOAT(Y1)
+              wz = P(3,1) - FLOAT(Z1)
+              VAL = (1.-wx)*(1.-wy)*(1.-wz)*FLOAT(PET(X1,Y1,Z1)) +
+     &                  wx *(1.-wy)*(1.-wz)*FLOAT(PET(X2,Y1,Z1)) +
+     &              (1.-wx)*    wy *(1.-wz)*FLOAT(PET(X1,Y2,Z1)) +
+     &                  wx *    wy *(1.-wz)*FLOAT(PET(X2,Y2,Z1)) +
+     &              (1.-wx)*(1.-wy)*    wz *FLOAT(PET(X1,Y1,Z2)) +
+     &                  wx *(1.-wy)*    wz *FLOAT(PET(X2,Y1,Z2)) +
+     &              (1.-wx)*    wy *    wz *FLOAT(PET(X1,Y2,Z2)) +
+     &                  wx *    wy *    wz *FLOAT(PET(X2,Y2,Z2))
+            END IF
+C
+C  Atlas value is VAL
+C
+            ATL(xa,ya,za) = VAL
+C
+C  Update NIN
+C
+            NIN(xa,ya,za) = NIN(xa,ya,za) + 1
+C
+300       CONTINUE
+400     CONTINUE
+500   CONTINUE
+C
+      RETURN
+      END
+@
+
+
+1.3
+log
+@Replace disk scratch file (hd6sum) with array SUM
+@
+text
+@d2 3
+d79 1
+a79 1
+      PARAMETER (nzi =   7) ! z-dimension of PET-array! no. of slices
+d135 2
+d158 1
+a158 1
+      COMMON /IMAGES/ ATL, PET, NIN, SUM, cmperpixi, cmperslci,
+d165 1
+a165 1
+			RCSHEADER = "$Header: /home/petsun2/tom/src/hd6mean/src/RCS/hd6trans.f,v 1.2 1993/02/26 22:09:51 tom Exp tom $"
+d282 3
+a284 3
+          ELSE IF (zp.GE.FLOAT(nzi)) THEN
+            x_trans = x0i(nzi)
+            x_width = x_PET(nzi)
+d286 1
+a286 1
+            DO 100 i=2,nzi
+d332 1
+a332 1
+            IF (X1.GE.nxi .OR. Y1.GE.nyi .OR. Z1.GT.nzi .OR.
+d349 1
+a349 1
+C  If P is not on slice nzi, then Z1 must be less than nzi
+d351 1
+a351 1
+            ELSE IF (Z1.GE.nzi) THEN
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d59 4
+a62 1
+C  Modified 18-Feb-93 TOV to handle SXRTYPE = 5 from ECAT.
+d82 1
+a82 1
+      INTEGER*2  NOTIN      ! not in PET space (value to set in ATL)
+d127 1
+a127 1
+      INTEGER*2  ATL(nxa,nya,nza)! atlas output image (HD6 brain)
+d130 1
+d153 1
+a153 1
+      COMMON /IMAGES/ ATL, PET, NIN, cmperpixi, cmperslci,
+d160 1
+a160 1
+			RCSHEADER = "$Header: /home/petsun2/tom/src/hd6mean/src/RCS/hd6trans.f,v 1.1 1992/11/03 18:59:32 tom Exp tom $"
+d369 1
+a369 1
+C  Atlas value is rounded VAL
+d371 1
+a371 1
+            ATL(xa,ya,za) = INT(NINT(VAL))
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+c $Log$
+d56 2
+d75 1
+a75 1
+      INTEGER*4  SXRTYPE    ! determines mag and mag-markers (1-4)
+d153 1
+a153 1
+			RCSHEADER = "$Header$"
+d193 1
+a193 1
+      ELSE IF (SXRTYPE.EQ.4) THEN
+@

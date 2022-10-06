@@ -1,0 +1,213 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.4
+date	2004.02.17.15.04.28;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.27.19.46.33;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.18.17.13.55;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   GAUS2DGB.FTN
+C  Author:       Tom O. Videen
+C  Date:         21-Sep-89
+C  Written For:  PEAKSK7B (Simplex fit of single 2D gaussian)
+C
+C  History:
+C     Modified GAUS22DB to fit single 2D gaussian 21-Sep-89 TOV.
+C
+C  Intent:
+C     Find the coordinates of the peak of a local maximum;
+C     Retain planar coordinates.
+C
+C  Uses Subroutines/Functions:
+C     SIMPINIT
+C     SIMPLEX3
+C     FCHI2DGB (P)  (named FUNC)
+C        evaluates reduced chi square for fit to data
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+      SUBROUTINE GAUS2DGB (XM, YM, MAX, XMID, YMID, IMAGE, RANGE, DATAFILE, POINT, FIRST)
+
+      PARAMETER (NDIM =100)    ! max. number of points in local arrays
+      PARAMETER (NPARM = 6)    ! number of parameters fit
+      PARAMETER (MPTS  = 7)    ! points of simplex
+      PARAMETER (P1SCALE = 10000.) ! scaling factor for amplitude
+
+C  Variables passed:
+
+      INTEGER*4   XM,YM        ! pixel coordinates of the local maximum
+      INTEGER*4   MAX          ! pixel value of local maximum
+      REAL*4      XMID,YMID    ! coordinates of center of local maximum
+      INTEGER*2   IMAGE(128,128)! image array for 1 slice
+      INTEGER*4   RANGE        ! function is fit over +- this range
+      INTEGER*4   DATAFILE     ! log. unit for final fit parmeters
+      INTEGER*4   POINT, FIRST
+
+C  Internal variables:
+
+      REAL*4     P(MPTS,NPARM) ! simplex
+      REAL*4     FN(MPTS)      ! functional values of simplex
+      REAL*4     SCALE         ! scale in initialization
+      REAL*4     FTOL          ! functional tolerance
+      REAL*4     MTOL          ! midpoint must be within this distance
+
+      INTEGER*4  ITER          ! number of iterations
+      INTEGER*4  CYCLE         ! number of icalls to SIMPLEX3
+      INTEGER*4  MIN           ! index to best point of simplex
+      INTEGER*4  X,Y           ! local integers for DO loop
+      INTEGER*4  SUMX,SUMY,SUMALL
+      INTEGER*4  XA,XB         !
+      INTEGER*4  YA,YB         !
+
+      REAL*4     TEMP         ! used for switching MIN param to 1st
+
+C  Common Block Variables
+
+      REAL*4     XP(NDIM,NDIM) ! coordinates to fit
+      REAL*4     YP(NDIM,NDIM) ! coordinates to fit
+      REAL*4     ZP(NDIM,NDIM) ! values of points in transformed coords
+
+      INTEGER*4  NPTS          ! number of points in X, Y
+
+      EXTERNAL   FUNC          ! function to evaluate for minimum
+C                               (this should be FCHI2DGB.FTN
+
+      COMMON /RAWDATA/ XP,YP,ZP,NPTS
+
+      DATA MTOL /0.01/
+
+      CYCLE = 1
+
+C  Initial point
+C  Parameters of Fit:
+C     P(1) - amplitude of gaussian
+C     P(2) - X-location of peak
+C     P(3) - Z-location of peak
+C     P(4) - sigma X of gaussian
+C     P(5) - sigma Z of gaussian
+ 
+      MIN    = 1
+      FTOL   = 1.0E-3
+      SCALE  = 1.0
+      P(1,1) = FLOAT(MAX)/P1SCALE
+      P(1,2) = 0.
+      P(1,3) = 0.
+      P(1,4) = 2.0
+      P(1,5) = 2.0
+
+C  Range over which to fit
+
+      XA = XM-RANGE
+      XB = XM+RANGE
+      YA = YM-RANGE
+      YB = YM+RANGE
+      NPTS = 2*RANGE + 1
+
+C  Compute XMID, YMID from all values within range
+
+      SUMX = 0
+      SUMY = 0
+      SUMALL = 0
+      DO 150 Y=YA,YB
+        DO 140 X=XA,XB
+          SUMX = SUMX + X*IMAGE(X,Y)
+          SUMY = SUMY + Y*IMAGE(X,Y)
+          SUMALL = SUMALL + IMAGE(X,Y)
+140     CONTINUE
+150   CONTINUE
+
+      XMID = FLOAT(SUMX)/FLOAT(SUMALL)
+      YMID = FLOAT(SUMY)/FLOAT(SUMALL)
+
+      IF (POINT .EQ. FIRST) THEN
+        WRITE (DATAFILE,8400)
+        WRITE (DATAFILE,8410)
+      ENDIF
+8400  FORMAT('  Y  XMid  ZMid  Peak    XS    ZS   ChiSqr')
+8410  FORMAT(' --  ---- -----  -----  ---- ------ ------')
+8420  FORMAT(I3,2F6.2,I7,2F6.2,1X,F6.0)
+
+C  Y  XMid  ZMid  Peak    XS    ZS   ChiSqr
+C  -  ---- -----  -----  ---- ------ ------
+C 60 72.22 13.50   7467  1.45  1.46   311.
+ 
+C  Set XP, YP, ZP to local array to fit
+
+300   DO 450 Y=YA,YB
+        J = Y-YA+1
+        DO 400 X=XA,XB
+          I = X-XA+1
+          XP(I,J) = FLOAT(X)-XMID
+          YP(I,J) = FLOAT(Y)-YMID
+          ZP(I,J) = FLOAT(IMAGE(X,Y))
+400     CONTINUE
+450   CONTINUE
+
+      CALL SIMPINIT (P, FN, MPTS, NPARM, SCALE, FUNC)
+      CALL SIMPLEX3 (P, FN, MPTS, NPARM, FTOL, FUNC, ITER, MIN)
+
+C  Put best point in P(1,n)
+
+      IF (MIN.NE.1) THEN
+        DO 500 J=1,NPARM
+          TEMP = P(1,J)
+          P(1,J) = P(MIN,J)
+          P(MIN,J) = TEMP
+500     CONTINUE
+        TEMP = FN(1)
+        FN(1) = FN(MIN)
+        FN(MIN) = TEMP
+        MIN = 1
+      END IF
+
+      WRITE (DATAFILE,8420) POINT, XMID, YMID, NINT(P1SCALE*P(1,1)),
+     &  P(1,4), P(1,5), FN(1)
+
+      RETURN
+      END
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d122 1
+a122 1
+8420  FORMAT(I3,2F6.2,I7,2F6.2,1X,F6)
+@

@@ -1,0 +1,550 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.23.15.42.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@C$Id: g2wholes.f,v 1.4 1994/11/29 23:28:08 ty7777 Exp $
+C$Log: g2wholes.f,v $
+c Revision 1.4  1994/11/29  23:28:08  ty7777
+c Deleted VRMVALUE and NORMALIZE from the argument list.
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   G2WHOLES.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         29-May-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified 26-Aug-87 by TOV to eliminate a bug in right/left
+C        hemisphere values.
+C     Modified 06-Oct-87 by TOV to allow processing for tissue activity
+C        either with or without decay correction; (PROCESS may be 0-5)
+C     Modified 13-Sep-88 by TOV:
+C        1) change FILETP from I*4 to CH*23 in **DISPLAY common block.
+C        2) print program VERSION date.
+C     Modified 30-Sep-91 by Tom Yang:
+C        1) Ported to the X Windows environment.
+C     Modified 15-Oct-91 by TOV:
+C        1) NRMVALUE and NORMALIZE added to calling parameters.
+C     Modified 29-Sep-94 by Tom Yang:
+C        1) Deleted NRMVALUE and NORMALIZE from the argument list.
+C
+C  Intent:
+C     This subroutine computes global whole slice mean values.
+C     If RLVALUES=true, it also computes the right and left
+C     hemisphere averages using the current value of XMIDLINE
+C     as the midline for ALL slices.
+C
+C  Common Blocks from SPIDERAM:
+C     **IMAGEDAT - image arrays                   (write)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (write)
+C     **FILES    - scan file list                 (read only)
+C     **GLOBALAV - global averaging parameters    (read only)
+C     **REGION   - regions of interest parameters (read only)
+C
+C  Variables Passed:
+C     SINGLE: true--> compute threshold to max value on each slice;
+C             false-> compute threshold to max value on entire image;
+C     RLVALUES: true--> compute right/left hemisphere averages;
+C     PRINT:  true--> write averages to printer;
+C     ERRTYPE = type of error in processing images;
+C
+C  Local Variables:
+C     N = number of points included on a slice;
+C     SUM = total activity on a slice;
+C     SOS = sum of squares on a slice;
+C     GLBN = number of points included on all slices;
+C     GLBSUM = total activity on all slices;
+C     GLBSOS = sum of squares on all slices;
+C     MEAN = mean activity of all included points;
+C     SD = standard deviation (unbiased estimate);
+C
+C     NR = number of points included on a slice for right hemisphere;
+C     SUMR = total activity on a slice for right hemisphere;
+C     SOSR = sum of squares on a slice for right hemisphere;
+C     GLBNR = number of points included on all slices for right hemisphere;
+C     GLBSUMR = total activity on all slices for right hemisphere;
+C     GLBSOSR = sum of squares on all slices for right hemisphere;
+C     MEANR = mean activity of all included points for right hemisphere;
+C     SDR = standard deviation (unbiased estimate) for right hemisphere;
+C
+C     NL = number of points included on a slice for left hemisphere;
+C     SUML = total activity on a slice for left hemisphere;
+C     SOSL = sum of squares on a slice for left hemisphere;
+C     GLBNL = number of points included on all slices for left hemisphere;
+C     GLBSUML = total activity on all slices for left hemisphere;
+C     GLBSOSL = sum of squares on all slices for left hemisphere;
+C     MEANL = mean activity of all included points for left hemisphere;
+C     SDL = standard deviation (unbiased estimate) for left hemisphere;
+C
+C     NI = number of points included on a half-slice;
+C     SUMMID = total activity on a midline of pixels;
+C     SOSMID = sum of squares on a midline of pixels;
+C     MAXCOUNT = maximum count in the image array;
+C     MAXSLICE = greatest slice number;
+C     COUNT = value of a pixel in IMAGE array;
+C     PB = parameter block used by SYSIO;
+C     IOREADR = random access I/O wait read;
+C     TBYTES = no. of bytes to read for a template (TIMAGE);
+C     ADDR = random address to start reading a template from;
+C     SIDE = set to 0 to display entire image;
+C
+C  Uses Subroutines:
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     D2GETIMG - get an image from a disk file (HDR only);
+C     D2IMAGE  - assemble an image slice from component image files;
+C     D2MAXVAL - get maximum and minimum values in an image array;
+C     D2TEMPLA - create a template;
+C     P2AREAI  - get points within an irregular region;
+C     P2AREAR  - get points within a rectangular region;
+C
+C  FORTRAN Runtime Library
+C     DATE
+C
+C  Called by:  M2GLOBAL
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE G2WHOLES (SINGLE, RLVALUES, PRINT, ERRTYPE)
+C
+      INTEGER*4    N, SUM, GLBN, GLBSUM, SLCNUM, MAXSLICE,
+     &             COUNT, MAXCOUNT, NI, SUMR, SUML,
+     &             GLBSUMR, GLBSUML, SUMMID, ERRTYPE, SIDE,
+     &             ADATE (3), COL, ROW, ADDR, PB (6),
+     &             IOREADR, TBYTES, I, J, K, IMAX
+      REAL*4       MEAN, SD, SOS, GLBSOS, SOSMID,
+     &             NR, MEANR, SDR, SOSR, GLBSOSR, GLBNR,
+     &             NL, MEANL, SDL, SOSL, GLBSOSL, GLBNL
+      CHARACTER*1  FORMFEED
+      CHARACTER*35 PROCTYPE
+      LOGICAL*1    SINGLE, RLVALUES, PRINT, SUB, DIVIDE, HDRONLY
+      LOGICAL*4    PRINTON
+      character*256 rcsheader
+C
+      INCLUDE 'spideram.inc'
+      rcsheader = "$Id: g2wholes.f,v 1.4 1994/11/29 23:28:08 ty7777 Exp $"
+C
+      DATA         IOREADR, TBYTES /92, 16384/
+      DATA         SIDE /0/
+C
+C  Currently handles only transverse images with no comparisons
+C
+      COL = 0
+      ROW = 0
+      SUB = .FALSE.
+      DIVIDE = .FALSE.
+C
+      ERRTYPE = 0
+      FORMFEED = CHAR(12)
+      FILE(1) = GLBFILE
+      MAXSLICE = NMSLICES
+      CALL INTDATE(ADATE)
+C
+      N = 0
+      GLBN   = 0
+      GLBSUM = 0
+      GLBSOS = 0.0
+      NR = 0.0
+      GLBNR   = 0.0
+      GLBSUMR = 0
+      GLBSOSR = 0.0
+      NL = 0.0
+      GLBNL   = 0.0
+      GLBSUML = 0
+      GLBSOSL = 0.0
+C
+C  The following are initialized here to prevent warnings
+C  when the optimizing compiler is used (compiler bug).
+C
+      SDL   = 0.0
+      SDR   = 0.0
+      MEANL = 0.0
+      MEANR = 0.0
+      SUML  = 0.0
+      SUMR  = 0.0
+      SOSL  = 0.0
+      SOSR  = 0.0
+C
+C  Check that the printer is open
+C
+      IF (PRINT) THEN
+        INQUIRE (PRINTER, OPENED = PRINTON)
+        IF (.NOT. PRINTON) OPEN (PRINTER,FILE=OUTFILE,TYPE='DEVICE')
+      END IF
+C
+C  Write summary heading with region file name and date
+C
+8000  FORMAT(2X,'SPIDERAM {version ',A9,'}')
+8010  FORMAT(1X,'WHOLE SLICE GLOBAL AVERAGE:   (',I2,'/',I2,'/',I2,')')
+8050  FORMAT(1X,I3,'% Threshold applied to ',A5,' maximum')
+8070  FORMAT(1X,'Midline at ',F5.1)
+8100  FORMAT(55(1H_),/)
+8150  FORMAT(37X,'WHOLE',8X,'LEFT',7X,'RIGHT')
+8200  FORMAT(1X,'Slice Number ',I3)
+8210  FORMAT(3X,'Number of Pixels .............',I9,4X,F8.1,4X,F8.1)
+8220  FORMAT(3X,'Mean Value ...................',F9.2,3X,F9.2,3X,F9.2)
+8230  FORMAT(3X,'Standard Deviation ...........',F9.2,3X,F9.2,3X,F9.2)
+C
+      WRITE(USEROUT,8000) VERSION
+      WRITE(USEROUT,8010) ADATE(2),ADATE(3),ADATE(1)
+      IF (PROCESS.EQ.0) THEN
+        PROCTYPE = 'PETT Numbers'
+      ELSE IF (PROCESS.EQ.1) THEN
+        SLCNUM = 1
+        HDRONLY = .TRUE.
+        CALL D2GETIMG(1,SLCNUM,GLBFILE,ERRTYPE,HDRONLY)
+        IF (ERRTYPE.NE.0) RETURN
+        IF (NTYPE(1).EQ.2 .OR. NTYPE(1).EQ.4) THEN
+          PROCTYPE = 'CBF'
+        ELSE IF (NTYPE(1).EQ.3) THEN
+          PROCTYPE = 'CBV'
+        ELSE
+          PROCTYPE = ' '
+        END IF
+      ELSE IF (PROCESS.EQ.2) THEN
+        PROCTYPE = 'OEF'
+      ELSE IF (PROCESS.EQ.3) THEN
+        PROCTYPE = 'CMRO2'
+      ELSE IF (PROCESS.EQ.4) THEN
+        PROCTYPE = 'Decay-Corrected Tissue Activity'
+      ELSE IF (PROCESS.EQ.5) THEN
+        PROCTYPE = 'Non-Decay-Corrected Tissue Activity'
+      ELSE
+        PROCTYPE = ' '
+      END IF
+      WRITE(USEROUT,*) 'Image File = ',FILENAME(GLBFILE),
+     2    'processed as ',PROCTYPE
+      IF (GLBTEMP) THEN
+        WRITE(USEROUT,*) 'Template   = ',FILETP,
+     2    'with Threshold at ',THRESHTP,'%'
+      ELSE IF (SINGLE) THEN
+        WRITE(USEROUT,8050) THRESHLD,'slice'
+      ELSE
+        WRITE(USEROUT,8050) THRESHLD,'image'
+      END IF
+      IF (RLVALUES) WRITE(USEROUT,8070) XMIDLINE
+      WRITE(USEROUT,8100)
+      IF (RLVALUES) WRITE(USEROUT,8150)
+C
+      IF (PRINT) THEN
+        WRITE(PRINTER,8000) VERSION
+        WRITE(PRINTER,8010) ADATE(2),ADATE(3),ADATE(1)
+        WRITE(PRINTER,*) 'Image File = ',FILENAME(GLBFILE),
+     2    'processed as ',PROCTYPE
+        IF (GLBTEMP) THEN
+          WRITE(PRINTER,*) 'Template   = ',FILETP,
+     2      'with Threshold at ',THRESHTP,'%'
+        ELSE IF (SINGLE) THEN
+          WRITE(PRINTER,8050) THRESHLD,'slice'
+        ELSE
+          WRITE(PRINTER,8050) THRESHLD,'image'
+        END IF
+        IF (RLVALUES) WRITE(PRINTER,8070) XMIDLINE
+        WRITE(PRINTER,8100)
+        IF (RLVALUES) WRITE(PRINTER,8150)
+      END IF
+C
+C  If not using a template and thresholding to maximum
+C    value in entire image, get maximum value in image
+C    to use for thresholding (max value is taken from ALL slices)
+C
+      IF (.NOT.GLBTEMP) THEN
+        TEMPLATE = 1
+        IF (.NOT.SINGLE) THEN
+          MAXCOUNT = 0
+          DO 100 SLCNUM=1,MAXSLICE
+            CALL D2IMAGE(SLCNUM,COL,ROW,SUB,DIVIDE,ERRTYPE)
+            IF (ERRTYPE.NE.0) THEN
+              WRITE(USEROUT,*) '*** ERROR processing slice ',SLCNUM
+              RETURN
+            END IF
+            CALL D2MAXVAL(COL,ROW,SIDE)
+            MAXCOUNT = MAX0(MAXCOUNT,DMAX)
+100       CONTINUE
+          DMAX = MAXCOUNT
+        END IF
+      END IF
+C
+C  --------------------------------------------------------------
+C  Process all selected slices
+C
+      DO 2000 K=1,GSLICES
+        SLCNUM = GLBSLICE(K)
+        CALL D2IMAGE(SLCNUM,COL,ROW,SUB,DIVIDE,ERRTYPE)
+        IF (ERRTYPE.NE.0) THEN
+          WRITE(USEROUT,*) '*** ERROR processing slice ',SLCNUM
+          RETURN
+        END IF
+C
+C  Get template from disk or create it  (template put in TIMAGE)
+C
+        IF (GLBTEMP) THEN
+          ADDR = (SLCNUM-1)*64
+          CALL SYSIO(PB,IOREADR,TDISK,TIMAGE,TBYTES,ADDR)
+        ELSE IF (SINGLE) THEN
+          CALL D2MAXVAL(COL,ROW,SIDE)
+          CALL D2TEMPLA(0)
+        ELSE
+          CALL D2TEMPLA(0)
+        END IF
+C
+        N    = 0
+        SUM  = 0
+        SOS  = 0.0
+        MEAN = 0.0
+        SD   = 0.0
+C
+        DO 300 J=1,128
+          DO 200 I=1,128
+            IF (TIMAGE(I,J)) THEN
+              COUNT = IMAGE(I,J,1)
+              N = N + 1
+              SUM = SUM + COUNT
+              SOS = SOS + (FLOAT(COUNT) * FLOAT(COUNT))
+            END IF
+200       CONTINUE
+300     CONTINUE
+C
+C  Compute mean and SD for this slice
+C
+        IF (N.GT.0) MEAN = SCALER(1)*FLOAT(SUM)/FLOAT(N)
+        SOS = SOS*SCALER(1)*SCALER(1)
+        IF (N.GT.1) SD = SQRT((SOS-FLOAT(N)*MEAN*MEAN)/FLOAT(N-1))
+C
+C  ---------------------------------------------------------------
+C  Right/left hemisphere values
+C
+        IF (RLVALUES) THEN
+          NR   = 0.0
+          SUMR = 0
+          SOSR = 0.0
+          MEANR= 0.0
+          SDR  = 0.0
+          NL   = 0.0
+          SUML = 0
+          SOSL = 0.0
+          MEANL= 0.0
+          SDL  = 0.0
+          SUMMID = 0
+          SOSMID = 0.0
+C
+C  Case: midline is BETWEEN pixels (XMIDLINE = nn.5)
+C
+          IF (XMIDLINE-FLOAT(INT(XMIDLINE)).GT.0.1) THEN
+            IMAX = INT(XMIDLINE)
+            NI = 0
+            DO 500 J=1,128
+              DO 400 I=1,IMAX
+                IF (TIMAGE(I,J)) THEN
+                  COUNT = IMAGE(I,J,1)
+                  NI = NI + 1
+                  SUML = SUML + COUNT
+                  SOSL = SOSL + (FLOAT(COUNT) * FLOAT(COUNT))
+                END IF
+400           CONTINUE
+500         CONTINUE
+            NL = FLOAT(NI)
+C
+            NI = 0
+            DO 700 J=1,128
+              DO 600 I=IMAX+1,128
+                IF (TIMAGE(I,J)) THEN
+                  COUNT = IMAGE(I,J,1)
+                  NI = NI + 1
+                  SUMR = SUMR + COUNT
+                  SOSR = SOSR + (FLOAT(COUNT) * FLOAT(COUNT))
+                END IF
+600           CONTINUE
+700         CONTINUE
+            NR = FLOAT(NI)
+C
+C  Case: midline is ON a pixel (XMIDLINE = nn.0)
+C
+          ELSE
+            IMAX = INT(XMIDLINE)
+            NI = 0
+            DO 900 J=1,128
+              DO 800 I=1,IMAX-1
+                IF (TIMAGE(I,J)) THEN
+                  COUNT = IMAGE(I,J,1)
+                  NI = NI + 1
+                  SUML = SUML + COUNT
+                  SOSL = SOSL + (FLOAT(COUNT) * FLOAT(COUNT))
+                END IF
+800           CONTINUE
+900         CONTINUE
+            NL = FLOAT(NI)
+C
+            NI = 0
+            DO 1100 J=1,128
+              DO 1000 I=IMAX+1,128
+                IF (TIMAGE(I,J)) THEN
+                  COUNT = IMAGE(I,J,1)
+                  NI = NI + 1
+                  SUMR = SUMR + COUNT
+                  SOSR = SOSR + (FLOAT(COUNT) * FLOAT(COUNT))
+                END IF
+1000          CONTINUE
+1100        CONTINUE
+            NR = FLOAT(NI)
+C
+            NI = 0
+            DO 1200 J=1,128
+              IF (TIMAGE(IMAX,J)) THEN
+                COUNT = IMAGE(IMAX,J,1)
+                NI = NI + 1
+                SUMMID = SUMMID + COUNT
+                SOSMID = SOSMID + (FLOAT(COUNT) * FLOAT(COUNT))
+              END IF
+1200        CONTINUE
+C
+            NR = NR + FLOAT(NI)/2.0
+            NL = NL + FLOAT(NI)/2.0
+            SUMR = SUMR + SUMMID/2
+            SUML = SUML + SUMMID/2
+            SOSR = SOSR + SOSMID/2.0
+            SOSL = SOSL + SOSMID/2.0
+          END IF
+C
+C  Compute mean and SD for this slice
+C
+          IF (NL.GT.0.0) MEANL = SCALER(1)*FLOAT(SUML)/NL
+          SOSL = SOSL*SCALER(1)*SCALER(1)
+          IF (NL.GT.1.0) SDL = SQRT((SOSL-NL*MEANL*MEANL)/(NL-1.0))
+C
+          IF (NR.GT.0.0) MEANR = SCALER(1)*FLOAT(SUMR)/NR
+          SOSR = SOSR*SCALER(1)*SCALER(1)
+          IF (NR.GT.1.0) SDR = SQRT((SOSR-NR*MEANR*MEANR)/(NR-1.0))
+        END IF
+C
+C  ---------------------------------------------------------------
+C  Output to terminal and printer
+C
+        IF (RLVALUES) THEN
+          WRITE(USEROUT,8200) SLCNUM
+          WRITE(USEROUT,8210) N,NL,NR
+          WRITE(USEROUT,8220) MEAN,MEANL,MEANR
+          WRITE(USEROUT,8230) SD,SDL,SDR
+          IF (PRINT) THEN
+            WRITE(PRINTER,8200) SLCNUM
+            WRITE(PRINTER,8210) N,NL,NR
+            WRITE(PRINTER,8220) MEAN,MEANL,MEANR
+            WRITE(PRINTER,8230) SD,SDL,SDR
+          END IF
+        ELSE
+          WRITE(USEROUT,8200) SLCNUM
+          WRITE(USEROUT,8210) N
+          WRITE(USEROUT,8220) MEAN
+          WRITE(USEROUT,8230) SD
+          IF (PRINT) THEN
+            WRITE(PRINTER,8200) SLCNUM
+            WRITE(PRINTER,8210) N
+            WRITE(PRINTER,8220) MEAN
+            WRITE(PRINTER,8230) SD
+          END IF
+        END IF
+C
+        GLBN   = GLBN + N
+        GLBSUM = GLBSUM + SUM
+        GLBSOS = GLBSOS + SOS
+C
+        IF (RLVALUES) THEN
+          GLBNL  = GLBNL + NL
+          GLBSUML= GLBSUML + SUML
+          GLBSOSL= GLBSOSL + SOSL
+          GLBNR  = GLBNR + NR
+          GLBSUMR= GLBSUMR + SUMR
+          GLBSOSR= GLBSOSR + SOSR
+        END IF
+C
+2000  CONTINUE
+C  --------------------------------------------------------------
+C  Compute mean and SD for ALL slices
+C
+      MEAN = SCALER(1)*FLOAT(GLBSUM)/FLOAT(GLBN)
+      GLBSOS = GLBSOS
+      IF (N.GT.1) THEN
+        SD = SQRT((GLBSOS-FLOAT(GLBN)*MEAN*MEAN)/FLOAT(GLBN-1))
+      ELSE
+        SD = 0.0
+      END IF
+C
+      IF (RLVALUES) THEN
+        MEANL = SCALER(1)*FLOAT(GLBSUML)/GLBNL
+        GLBSOSL = GLBSOSL
+        IF (NL.GT.1.0) THEN
+          SDL = SQRT((GLBSOSL-GLBNL*MEANL*MEANL)/(GLBNL-1.0))
+        ELSE
+          SDL = 0.0
+        END IF
+C
+        MEANR = SCALER(1)*FLOAT(GLBSUMR)/GLBNR
+        GLBSOSR = GLBSOSR
+        IF (NR.GT.1.0) THEN
+          SDR = SQRT((GLBSOSR-GLBNR*MEANR*MEANR)/(GLBNR-1.0))
+        ELSE
+          SDR = 0.0
+        END IF
+      END IF
+C
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'Global Statistics for All of the Above Slices:'
+      IF (RLVALUES) THEN
+        WRITE(USEROUT,8210) GLBN,GLBNL,GLBNR
+        WRITE(USEROUT,8220) MEAN,MEANL,MEANR
+        WRITE(USEROUT,8230) SD,SDL,SDR
+        IF (PRINT) THEN
+          WRITE(PRINTER,*)
+          WRITE(PRINTER,*) 'Global Statistics for All of the Above ',
+     2      'Slices:'
+          WRITE(PRINTER,8210) GLBN,GLBNL,GLBNR
+          WRITE(PRINTER,8220) MEAN,MEANL,MEANR
+          WRITE(PRINTER,8230) SD,SDL,SDR
+          WRITE(PRINTER,8400) FORMFEED
+        END IF
+      ELSE
+        WRITE(USEROUT,8210) GLBN
+        WRITE(USEROUT,8220) MEAN
+        WRITE(USEROUT,8230) SD
+        IF (PRINT) THEN
+          WRITE(PRINTER,*)
+          WRITE(PRINTER,*) 'Global Statistics for All of the Above ',
+     2      'Slices:'
+          WRITE(PRINTER,8210) GLBN
+          WRITE(PRINTER,8220) MEAN
+          WRITE(PRINTER,8230) SD
+          WRITE(PRINTER,8400) FORMFEED
+        END IF
+      END IF
+8400  FORMAT(1X,A1)
+C
+C  Compute scaling factor
+C
+      IF (NORMALIZE) THEN
+	MULTFACT (GLBFILE) = NRMVALUE / MEAN
+      END IF
+C
+      RETURN
+      END
+@

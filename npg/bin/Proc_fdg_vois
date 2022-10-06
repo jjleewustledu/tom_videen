@@ -1,0 +1,92 @@
+#!/bin/csh
+#	Name:	Proc_fdg_vois
+#	Date:	Apr 2004
+#	Author:	Tom Videen
+#	Use:	Glucose parameter estimation for 8 VOIs
+#	Notes:
+#		Fit parameters and error for each VOI are stored in:
+#			${PID}_${VOI}a.log
+#			${PID}_${VOI}_pvca.log
+#		Striatum regions must be in specified order
+#	Uses:
+#		vstat
+#		metcalc
+#		metcalc_pvc
+#		make_tsc
+#		pvc_tsc
+#		fdgnoflow
+
+if ($#argv != 3) then
+	echo "Usage: Proc_fdg_vois pid glucose shift"
+	echo " e.g., Proc_fdg_vois p5949 4.35 10"
+	exit 1
+endif
+
+set PID = $1
+set GLUC = $2
+set SHIFT = $3
+
+set REGIONS = (l_caud r_caud l_ant_put r_ant_put l_post_put r_post_put l_occip r_occip)
+set FDG  = ${PID}fdg1
+set DTA  = ${PID}f.dta
+set HO   = ${PID}ho1
+set CO   = ${PID}oc1
+set OO   = ${PID}oo1
+set TIS  = r${PID}tis04
+
+echo "0" >! input
+echo "" >> input
+set n = 1
+while ($n <= 8)
+
+# 1) Compute uncorrected and PVC-corrected CBF, CBV, OEF, CMRO2
+	set VOI = $REGIONS[$n]
+	echo $n $VOI
+	vstat $HO.v $VOI.voi $VOI ${VOI}_ho.dat none 1 < input
+	vstat $CO.v $VOI.voi $VOI ${VOI}_oc.dat none 1 < input
+	vstat $OO.v $VOI.voi $VOI ${VOI}_oo.dat none 1 < input
+	set HOcnts = `tail -1 ${VOI}_ho.dat | cut -c24-`
+	set COcnts = `tail -1 ${VOI}_oc.dat | cut -c24-`
+	set OOcnts = `tail -1 ${VOI}_oo.dat | cut -c24-`
+	metcalc $HOcnts $COcnts $OOcnts $HO.hdr $CO.hdr $OO.hdr ${PID}_${VOI}_metcalc.log
+	vstat $TIS.v $VOI.voi $VOI ${VOI}_tis.dat none 1 < input
+	set TIScnts = `tail -1 ${VOI}_tis.dat | cut -c24-`
+	set TISSUE = `echo 0.001 \* $TIScnts | bc -l | cut -c1-5`
+	metcalc_pvc $HOcnts $COcnts $OOcnts $TIScnts $HO.hdr $CO.hdr $OO.hdr ${PID}_${VOI}_metcalc_pvc.log
+
+# 2) Create uncorrected and PVC-corrected tissue activity files for parameter estimation
+	vstat $FDG.v $VOI.voi $VOI ${VOI}_fdg.dat f18 4.3621 < input
+	make_tsc $FDG.v ${VOI}_fdg.dat ${PID}_${VOI}_fdg.tsc 44 
+	pvc_tsc ${PID}_${VOI}_fdg.tsc $TIScnts
+
+# 3) Create parameter block files for corrected and uncorrected fit
+	set PB = ${PID}_$VOI.pbl
+	set CBF = `tail -1 ${PID}_${VOI}_metcalc.log | cut -c1-8`
+	set CBV = `tail -1 ${PID}_${VOI}_metcalc.log | cut -c10-17`
+	echo "0 0 $GLUC 0 3 0.6 0.6 0.02 $SHIFT 0 0 0 0 0 0 0 0 0 0 0" >! $PB
+	echo "5"			>> $PB
+	echo "5 6 7 8 9"	>> $PB
+	echo "2"			>> $PB
+	echo "1 2"			>> $PB
+	echo "$CBF $CBV"	>> $PB
+	set PBC = ${PID}_${VOI}_pvc.pbl
+	set CBF = `tail -1 ${PID}_${VOI}_metcalc_pvc.log | cut -c1-8`
+	set CBV = `tail -1 ${PID}_${VOI}_metcalc_pvc.log | cut -c10-17`
+	echo "0 0 $GLUC 0 3 0.6 0.6 0.02 $SHIFT 0 0 0 0 0 0 0 0 0 0 0" >! $PBC
+	echo "5"			>> $PBC
+	echo "5 6 7 8 9"	>> $PBC
+	echo "2"			>> $PBC
+	echo "1 2"			>> $PBC
+	echo "$CBF $CBV"	>> $PBC
+
+# 4) Parameter estimation using both tsc files
+	set ttime = `date | cut -c1-20`
+	echo "FDG PARAMETER ESTIMATION for $VOI begun at $ttime" 
+	fdgnoflow ${PID}_${VOI}_fdg.tsc $DTA $PB
+	set ttime = `date | cut -c1-20`
+	echo "FDG PARAMETER ESTIMATION for $VOI begun at $ttime" 
+	fdgnoflow ${PID}_${VOI}_fdg_pvc.tsc $DTA $PBC
+	@ n++
+end
+
+

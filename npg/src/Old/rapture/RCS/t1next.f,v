@@ -1,0 +1,393 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.8
+date	97.04.24.16.46.00;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.05.24.21.17.48;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	94.05.04.20.50.53;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.05.03.19.04.47;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.04.22.21.13.41;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.12.28.16.39.43;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.11.26.22.44.28;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.11.17.17.29.56;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@X window version, first release.
+@
+
+
+1.8
+log
+@eliminate slice number check
+@
+text
+@C$Id: t1next.f,v 1.7 1995/05/24 21:17:48 ty7777 Exp tom $
+C$Log: t1next.f,v $
+c Revision 1.7  1995/05/24  21:17:48  ty7777
+c Use user defined ZORIGIN.
+c
+c Revision 1.6  1994/05/04  20:50:53  ty7777
+c Added getimage_type ().
+c
+c Revision 1.5  1994/05/03  19:04:47  ty7777
+c Added processinf for gettting zorigin.
+c
+c Revision 1.4  1994/04/22  21:13:41  ty7777
+c Process 75-slice images.
+c
+c Revision 1.3  1993/12/28  16:39:43  ty7777
+c Added processing for spherical regions.
+c
+c Revision 1.2  1993/11/26  22:44:28  ty7777
+c Before adding the midlines.
+c
+c Revision 1.1  1993/11/17  17:29:56  ty7777
+c Initial revision
+c
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   t1next.f
+C
+C  Author:       Tom O. Videen
+C  Date:         02-Oct-90
+C  Written For:  rapture
+C
+C  History:
+C     Modified 26-Nov-90 by TOV to not erase old slice.
+C     Modified 10-Dec-90 to remove output comment when reading mask.
+C     Modified 16-Jul-91 to fix bug--did not include previously identified
+C        points in NSLICE when comparing to PSLICE.
+C     Modified 17-Nov-93 by Tom Yang to port to UNIX environment.
+C     Modified 28-Dec-93 by Tom Yang to add processing for spherical
+C        regions.
+C     Modified 22-Dec-93 by Tom Yang to add processing for 75-slice images.
+C     Modified 03-May-94 by Tom Yang to get the zorigin.
+C     Modified 23-May-95 by Tom Yang to use used defined ZORIGIN.
+C     Modified Apr-97 TOV to eliminate 49,75 slice requirement.
+C
+C  Intent:
+C     Include all pixels in a new slice which are above
+C     threshold THRESH and adjacent to pixels in an old slice.
+C
+C  Uses:
+C     T1ADJCNT
+C     T1DISP1
+C     T1PIXELS - count pixels in single slice region
+C     T1THRESH
+C
+C     GETIMAGE
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE T1NEXT (PSLICE, NSLICE, DISPLAY)
+C
+      INCLUDE 'rapture.inc'
+C
+      INTEGER*4  PSLICE      ! previous slice
+      INTEGER*4  NSLICE      ! new slice
+      LOGICAL*1  DISPLAY     ! true--> display while processing
+C
+      INTEGER*4  NUMSLCS     ! number of slices
+      INTEGER*4  NUMPETT     ! PETT number
+      INTEGER*4  I, J, N     ! local
+C
+      INTEGER*2  HDR (128)   ! slice header
+C
+      INTEGER*4    getimage_type 
+      INTEGER*4    fd 
+      INTEGER*4    PETTNUM 
+      INTEGER*4    getfd 
+      INTEGER*2    NUMSLICES	 ! number of slices obtained by calling getiamge_type
+      LOGICAL*1    ENCODED
+      external     getimage_type !$pragma C (getimage_type)
+C
+      CHARACTER*20  NULL     ! blank string
+      CHARACTER*256 RCSHEADER
+C
+      LOGICAL*1  HDRONLY     ! read header only
+      LOGICAL*1  ERROR       ! error reading image
+C
+      RCSHEADER = '$Header: /home/npggw/tom/src/rapture/RCS/t1next.f,v 1.7 1995/05/24 21:17:48 ty7777 Exp tom $'
+      HDRONLY = .FALSE.
+      ERROR   = .FALSE.
+      NULL    = '                    '
+C
+C  Clear SETA
+C
+      DO 120 J = 1, 128
+        DO 110 I = 1, 128
+          SETA (I, J) = .FALSE.
+          SETB (I, J) = .FALSE.
+110     CONTINUE
+120   CONTINUE
+C
+C  Set SETB = to previous slice
+C
+      DO 140 N = 1, RN (PSLICE)
+        I = RC (1, N, PSLICE)
+        J = RC (2, N, PSLICE)
+        SETB (I, J) = .TRUE.
+140   CONTINUE
+C
+C  and Set SETA = to previously identified points! (16-Jul-91)
+C
+      DO 150 N = 1, RN (NSLICE)
+        I = RC (1, N, NSLICE)
+        J = RC (2, N, NSLICE)
+        SETA (I, J) = .TRUE.
+150   CONTINUE
+C
+      CALL GETIMG (IMAGE, HDR, CFNAME, NSLICE, NUMSLCS,
+     &  NUMPETT, DISK, USEROUT, HDRONLY, ERROR)
+      IF (ERROR) RETURN
+C
+C
+C  get the zorigin
+C
+      OPEN (DISK, FILE = CFNAME, STATUS = 'OLD', ERR = 55)
+      GO TO 77
+55    WRITE (USEROUT, *) '*** Error: opening image file ', CFNAME (1:20), ' ***'
+      RETURN
+77    fd = getfd (DISK)		! get the file descriptor
+      PETTNUM = getimage_type (%VAL(fd), CFNAME, ENCODED, NUMSLICES)
+      IF (PETTNUM .EQ. -1) THEN
+        WRITE (STDOUT, *) 'Wrong image type for ', CFNAME
+	RETURN
+      ENDIF
+      CLOSE (DISK) 
+C
+C  Read mask for this slice
+C
+      IF (MASKNAME .NE. NULL) THEN
+        CALL GETIMG (SETM, HDR, MASKNAME, NSLICE, NUMSLCS,
+     &    NUMPETT, MASK, USEROUT, HDRONLY, ERROR)
+        IF (ERROR) THEN
+          WRITE (USEROUT, 8001) MASKNAME (1:20), CHAR (7)
+        END IF
+      END IF
+8001  FORMAT (1X, '*** Error reading ', A, A1)
+C
+      SLICE = NSLICE
+      IF (DISPLAY) CALL T1DISP1
+      IF (SPHERICAL .EQ. .TRUE.) THEN
+        FIRST = .FALSE.
+        CALL T1SPHERI (XSEED, YSEED, NSLICE, FIRST, RADIUS, DISPLAY)
+      ELSE
+        CALL T1ADJCNT (DISPLAY)
+        CALL T1THRESH (DISPLAY)
+      ENDIF
+      CALL T1PIXELS
+C
+      RETURN
+      END
+@
+
+
+1.7
+log
+@Use user defined ZORIGIN.
+@
+text
+@d1 1
+a1 1
+C$Id: t1next.f,v 1.6 1994/05/04 20:50:53 ty7777 Exp ty7777 $
+d3 3
+d44 1
+d88 1
+a88 1
+      RCSHEADER = '$Header: /data/petsun4/src/rapture/RCS/t1next.f,v 1.6 1994/05/04 20:50:53 ty7777 Exp ty7777 $'
+a143 2
+        ELSE IF (NUMSLCS .NE. 49 .AND. NUMSLCS .NE. 75) THEN
+          WRITE (USEROUT, 8002) MASKNAME (1:20), CHAR (7)
+a146 1
+8002  FORMAT (1X, '*** ', A, ' is not 49-slice or 75-slice image.', A1)
+@
+
+
+1.6
+log
+@Added getimage_type ().
+@
+text
+@d1 1
+a1 1
+C$Id: t1next.f,v 1.5 1994/05/03 19:04:47 ty7777 Exp ty7777 $
+d3 3
+d40 1
+a75 2
+      LOGICAL*1    ERR1           ! error from get_zorigin
+      external     get_zorigin   !$pragma C (get_zorigin)
+d84 1
+a84 1
+      RCSHEADER = '$Header: /home/petsun4/ty7777/src/rapture/RCS/t1next.f,v 1.5 1994/05/03 19:04:47 ty7777 Exp ty7777 $'
+a131 13
+C
+C     Update the ZORIGIN if it is necessary
+C
+      ZORIGIN = 31
+      IF (PETTNUM .EQ. 10) THEN
+        OPEN (DISK, FILE = CFNAME, STATUS = 'OLD', ERR = 55)
+        fd = getfd (DISK)		! get the file descriptor
+        CALL get_zorigin (CFNAME, %VAL(fd), I, ERR1)
+	IF (ERR1 .NE. .TRUE.) THEN
+          ZORIGIN = I
+        ENDIF
+        CLOSE (DISK) 
+      ENDIF
+@
+
+
+1.5
+log
+@Added processinf for gettting zorigin.
+@
+text
+@d1 1
+a1 1
+C$Id: t1next.f,v 1.4 1994/04/22 21:13:41 ty7777 Exp ty7777 $
+d3 3
+d66 1
+d68 1
+d70 3
+a72 1
+      LOGICAL*1    ERR1          ! error from get_zorigin
+d74 1
+d82 1
+a82 1
+      RCSHEADER = '$Header$'
+d116 15
+d134 1
+a134 1
+      IF (NUMPETT .EQ. 10) THEN
+d136 1
+a136 4
+        GO TO 77
+55      WRITE (USEROUT, *) '*** Error: opening image file ', CFNAME (1:20), ' ***'
+        RETURN
+77      fd = getfd (DISK)		! get the file descriptor
+@
+
+
+1.4
+log
+@Process 75-slice images.
+@
+text
+@d1 1
+a1 1
+C$Id: t1next.f,v 1.3 1993/12/28 16:39:43 ty7777 Exp ty7777 $
+d3 3
+d32 2
+a33 1
+C     Modified 22-Dec-94 by Tom Yang to add processing for 75-slice images.
+d63 5
+d74 1
+a74 1
+      RCSHEADER = '$Id: t1next.f,v 1.3 1993/12/28 16:39:43 ty7777 Exp ty7777 $'
+d107 16
+@
+
+
+1.3
+log
+@Added processing for spherical regions.
+@
+text
+@d1 1
+a1 1
+C$Id: t1next.f,v 1.2 1993/11/26 22:44:28 ty7777 Exp ty7777 $
+d3 3
+d29 1
+d65 1
+a65 1
+      RCSHEADER = '$Id: t1next.f,v 1.2 1993/11/26 22:44:28 ty7777 Exp ty7777 $'
+d106 1
+a106 1
+        ELSE IF (NUMSLCS .NE. 49) THEN
+d111 1
+a111 1
+8002  FORMAT (1X, '*** ', A, ' is not 49-slice image.', A1)
+@
+
+
+1.2
+log
+@Before adding the midlines.
+@
+text
+@d1 1
+a1 1
+C$Id: t1next.f,v 1.1 1993/11/17 17:29:56 ty7777 Exp ty7777 $
+d3 3
+d12 1
+a12 1
+C  Subroutine:   T1NEXT.FTN
+d16 1
+a16 1
+C  Written For:  RAPTURE
+d24 2
+d61 1
+a61 1
+      RCSHEADER = '$Id: t1next.f,v 1.1 1993/11/17 17:29:56 ty7777 Exp ty7777 $'
+d111 7
+a117 2
+      CALL T1ADJCNT (DISPLAY)
+      CALL T1THRESH (DISPLAY)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d56 1
+a56 1
+      RCSHEADER = '$Id$'
+d96 1
+a96 1
+          WRITE (USEROUT, 8001) MASKNAME, CHAR (7)
+d98 1
+a98 1
+          WRITE (USEROUT, 8002) MASKNAME, CHAR (7)
+@

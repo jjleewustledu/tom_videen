@@ -1,0 +1,242 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.19.53.23;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.27.14.44.31;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.02.01.20.05.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: box2d.c,v $
+ * Revision 1.2  2002/11/27  14:44:31  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/02/01  20:05:12  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			box2d.c
+ *	Date:			Jan 1999
+ *	Author:			Tom Videen
+ *	Description:	Apply a 2-D boxcar filter to an Analyze image
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/box2d/RCS/box2d.c,v 1.2 2002/11/27 14:44:31 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			box2d
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	void			boxcar_filter ();
+	FILE           *fp;				 /* file pointer */
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+	long            i, j, k;
+	short        ***img;			 /* image */
+	short          *row;			 /* single row of input image */
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 5) {
+		printf ("Usage: box2d img1 hdr1 img2 hdr2\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fp = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [box2d]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [box2d]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [box2d]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [box2d]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [box2d]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fp);
+
+/*
+ *	Read img
+ */
+
+	if ((fp = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [box2d]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [box2d]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if (NULL == (row = (short *) calloc (dim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [box2d]: Cannot malloc memory for row\n");
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			if ((fread (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [box2d]: Reading: %s\n", img1);
+				return (ERROR);
+			}
+			for (k = 1; k <= dim1; k++)
+				img[i][j][dim1 - (k - 1)] = row[k - 1];
+		}
+	}
+	(void) fclose (fp);
+
+/*
+ *	Mask
+ */
+
+	boxcar_filter (img, dim1, dim2, dim3);
+
+/*
+ * Write to output file
+ */
+
+	if ((fp = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [box2d]: Unable to create ANALYZE header %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [box2d]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+	if ((fp = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [box2d]: Unable to create ANALYZE image %s\n", img2);
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			for (k = 1; k <= dim1; k++)
+				row[k - 1] = img[i][j][dim1 - (k - 1)];
+			if ((fwrite (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [box2d]: Writing: %s\n", img2);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fp);
+
+	printf ("Converted: %s to %s\n", img1, img2);
+	free_s3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jan-99
+d15 1
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/box2d/RCS/box2d.c,v 1.1 1999/02/01 20:05:12 tom Exp tom $";
+d90 1
+a90 1
+	fclose (fp);
+d118 1
+a118 1
+	fclose (fp);
+d138 1
+a138 1
+	fclose (fp);
+d154 1
+a154 1
+	fclose (fp);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/box2d/RCS/box2d.c,v 1.1 1999/02/01 20:00:38 tom Exp tom $";
+d17 1
+a17 1
+#include <string.h>
+a19 1
+#include <libimage.h>
+a21 1
+#include <matrixlib.h>
+@

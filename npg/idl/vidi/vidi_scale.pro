@@ -1,0 +1,98 @@
+PRO VIDI_SCALE_EVENT, ev
+   COMMON VIDI
+   
+   catch, error_status
+   IF (error_status NE 0) THEN BEGIN
+      ok = widget_message(!err_string)
+      RETURN
+   END
+   
+   done = 0
+   widget_control, ev.top, get_uvalue=scl
+   
+   CASE ev.id OF
+      
+      scl.stype1: BEGIN
+         dsp[0].type = ev.value
+      END
+      
+      scl.smax1: BEGIN
+         dsp[0].max = ev.value
+      END
+      
+      scl.smin1: BEGIN
+         dsp[0].min = ev.value
+      END
+      
+      scl.sval1: BEGIN
+         dsp[0].range = ev.value
+      END
+      
+      scl.scut1: BEGIN
+         dsp[0].cut = ev.value
+      END
+      
+      scl.stype2: BEGIN
+         dsp[1].type = ev.value
+      END
+      
+      scl.smax2: BEGIN
+         dsp[1].max = ev.value
+      END
+      
+      scl.smin2: BEGIN
+         dsp[1].min = ev.value
+      END
+      
+      scl.sval2: BEGIN
+         dsp[1].range = ev.value
+      END
+            
+      scl.sdone: BEGIN
+         widget_control, ev.top, /destroy
+         done = 1
+      END
+      
+   ENDCASE
+   IF (done EQ 1) THEN RETURN
+END
+
+PRO VIDI_SCALE, tlb
+   COMMON VIDI
+   
+   sbase = widget_base(title='Scaling Options', group_leader=tlb, /ROW, /MODAL)
+   sbase1 = widget_base(sbase, /COLUMN)
+   stitle1 = widget_label(sbase1, value='Image 1')
+   stype1 = cw_bgroup(sbase1, ['Auto','Manual'],/ROW, /EXCLUSIVE, set_value=dsp[0].type)
+   smax1 = cw_field(sbase1, title='Max', /FLOATING, value=dsp[0].max, /RETURN_EVENTS)
+   smin1 = cw_field(sbase1, title='Min', /FLOATING, value=dsp[0].min, /RETURN_EVENTS)
+   sval1 = cw_bgroup(sbase1, ['Pos','Neg','Both'],/ROW, /EXCLUSIVE, set_value=dsp[0].range)
+   scut1 = cw_field(sbase1, title='%Cutoff', /FLOATING, value=dsp[0].cut, /RETURN_EVENTS)
+   
+   sbase2 = widget_base(sbase, /COLUMN)
+   stitle2 = widget_label(sbase2, value='Image 2')
+   stype2 = cw_bgroup(sbase2, ['Auto','Manual'],/ROW, /EXCLUSIVE, set_value=dsp[1].type)
+   smax2 = cw_field(sbase2, title='Max', /FLOATING, value=dsp[1].max, /RETURN_EVENTS)
+   smin2 = cw_field(sbase2, title='Min', /FLOATING, value=dsp[1].min, /RETURN_EVENTS)
+   sval2 = cw_bgroup(sbase2, ['Pos','Neg','Both'],/ROW, /EXCLUSIVE, set_value=dsp[1].range)
+   sdone = widget_button(sbase2, value='Done')
+   
+   scl = {SCALE,		$
+          sbase    : sbase,	$ ; scaling menu id
+          stype1   : stype1,	$ ; scale type id for image 1
+          smax1    : smax1,	$ ; scale max id for image 1
+          smin1    : smin1,	$ ; scale min id for image 1
+          sval1    : sval1,	$ ; scale value id for image 1
+          scut1    : scut1,	$ ; scale cutoff id
+          stype2   : stype2,	$ ; scale type id for image 2
+          smax2    : smax2,	$ ; scale max id for image 2
+          smin2    : smin2,	$ ; scale min id for image 2
+          sval2    : sval2,	$ ; scale value id for image 2
+          sdone    : sdone	$ ; scale done id
+         }
+   
+   widget_control, sbase, set_uvalue=scl
+   widget_control, sbase, xoffset=0, yoffset=0, /realize
+   xmanager, "VIDI_SCALE", sbase, EVENT_HANDLER='VIDI_SCALE_EVENT'
+   RETURN
+END 

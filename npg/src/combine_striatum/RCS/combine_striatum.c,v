@@ -1,0 +1,395 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.13.21.23.05;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2004.02.13.21.21.31;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2001.11.21.19.10.47;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2001.11.21.17.14.31;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/*	$Log: combine_striatum.c,v $
+ * Revision 1.3  2004/02/13  21:21:31  tom
+ * Feb 2004
+ *
+ * Revision 1.2  2001/11/21  19:10:47  tom
+ * objects 5-9 mapped to 9
+ *
+ * Revision 1.1  2001/11/21  17:14:31  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			combine_striatum.c
+ *	Date:			Nov 2001
+ *	Author:			Tom Videen
+ *	Description:	Combine 3 image files:
+ *		Image 1 = 5 vois
+ *			1 = left caudate
+ *			2 = right caudate
+ *			3 = left putamen
+ *			4 = right putamen
+ *			5-9 = occipital
+ *		Image 2 = left ant putamen
+ *			1 = left caudate
+ *			2 = right caudate
+ *			3 = left anterior putamen (with posterior component removed)
+ *			4 = right putamen
+ *			5-9 = occipital
+ *		Image 3 = right ant putamen
+ *			1 = left caudate
+ *			2 = right caudate
+ *			3 = left putamen
+ *			4 = right anterior putamen (with posterior component removed)
+ *			5-9 = occipital
+ *		Output Image
+ *			1 = left caudate
+ *			2 = right caudate
+ *			3 = left anterior putamen
+ *			4 = left posterior putamen
+ *			5 = right anterior putamen
+ *			6 = right posterior putamen
+ *			9 = occipital
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/combine_striatum/RCS/combine_striatum.c,v 1.3 2004/02/13 21:21:31 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+
+/*	----------------------------
+ *	Function:			combine_striatum
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file1;			 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+
+	char           *scan1;			 /* input striatum file */
+	char           *scan2;			 /* input left ant putamen file */
+	char           *scan3;			 /* input right ant putamen file */
+	char           *outfile;		 /* output combined striatum file */
+	int             pdim[3];
+	int             i, j, k;
+	float        ***img1;			 /* input striatum image */
+	float        ***img2;			 /* input anterior striatum image */
+	float        ***imgall;			 /* output composite image */
+
+	if (argc != 5) {
+		fprintf (stderr, "Usage: combine_striatum scan1 scan2 scan3 outfile\n");
+		return (ERROR);
+	}
+	scan1 = argv[1];
+	scan2 = argv[2];
+	scan3 = argv[3];
+	outfile = argv[4];
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*	Get first image */
+
+	file1 = make_imgfile (scan1);
+    if (file1 == NULL) {
+        fprintf (stderr, "ERROR [combine_striatum]: making file1\n");
+        return (ERROR);
+    }
+    if (get_imgh (file1, indx) == ERROR) {
+        fprintf (stderr, "ERROR [combine_striatum]: opening %s\n", scan1);
+        close_imgfile (file1);
+        free_imgfile (file1);
+        return (ERROR);
+    }
+
+	pdim[0] = file1->sh->dim1;
+	pdim[1] = file1->sh->dim2;
+	pdim[2] = file1->sh->dim3;
+	if ((img1 = rdtensor (file1, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot read %s\n", scan1);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+
+/*	Transfer caudate and occipital regions to output image */
+
+	if ((imgall = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot malloc summed image\n");
+		return (ERROR);
+	}
+	for (i = 1; i <= pdim[2]; i++)
+		for (j = 1; j <= pdim[1]; j++)
+			for (k = 1; k <= pdim[0]; k++) {
+				if (img1[i][j][k] == 1)
+					imgall[i][j][k] = 1;
+				else if (img1[i][j][k] == 2)
+					imgall[i][j][k] = 2;
+				else if (img1[i][j][k] >= 5 && img1[i][j][k] <= 9)
+					imgall[i][j][k] = 9;
+				else
+					imgall[i][j][k] = 0;
+			}
+
+/*	Get left anterior putamen image */
+
+	file1->name = scan2;
+	indx.frm = 1;
+    if (file1 == NULL) {
+        fprintf (stderr, "ERROR [combine_striatum]: making file1\n");
+        return (ERROR);
+    }
+    if (get_imgh (file1, indx) == ERROR) {
+        fprintf (stderr, "ERROR [combine_striatum]: opening %s\n", scan2);
+        close_imgfile (file1);
+        free_imgfile (file1);
+        return (ERROR);
+    }
+	if ((img2 = rdtensor (file1, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [combine_striatum] Cannot read %s\n", scan2);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+
+/*	Extract anterior and posterior left putamen */
+
+	for (i = 1; i <= pdim[2]; i++)
+		for (j = 1; j <= pdim[1]; j++)
+			for (k = 1; k <= pdim[0]; k++) {
+				if (img1[i][j][k] == 3) {
+					if (img2[i][j][k] == 3)
+						imgall[i][j][k] = 3;
+					else
+						imgall[i][j][k] = 4;
+				}
+			}
+
+	free_f3tensor (img2, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+
+/*	Get right anterior putamen image */
+
+	file1->name = scan3;
+	indx.frm = 1;
+    if (file1 == NULL) {
+        fprintf (stderr, "ERROR [combine_striatum]: making file1\n");
+        return (ERROR);
+    }
+    if (get_imgh (file1, indx) == ERROR) {
+        fprintf (stderr, "ERROR [combine_striatum]: opening %s\n", scan3);
+        close_imgfile (file1);
+        free_imgfile (file1);
+        return (ERROR);
+    }
+	if ((img2 = rdtensor (file1, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [combine_striatum] Cannot read %s\n", scan3);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+
+/*	Extract anterior and posterior right putamen */
+
+	for (i = 1; i <= pdim[2]; i++)
+		for (j = 1; j <= pdim[1]; j++)
+			for (k = 1; k <= pdim[0]; k++) {
+				if (img1[i][j][k] == 4) {
+					if (img2[i][j][k] == 4)
+						imgall[i][j][k] = 5;
+					else
+						imgall[i][j][k] = 6;
+				}
+			}
+
+/*	Write combined image */
+
+	file1->name = outfile;
+	(void) strcpy (file1->mode, "w");
+	indx.frm = 1;
+	fprintf (stdout, "Writing %s\n", outfile);
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot open %s\n", outfile);
+		return (ERROR);
+	}
+	file1->mh->nframe = indx.frm;
+	file1->mh->orientation = 0;
+	if (put_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum] writing header %s\n", outfile);
+		return (ERROR);
+	}
+	if (writetensor (file1, &indx, imgall) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum] writing image %s\n", outfile);
+		return (ERROR);
+	}
+	close_imgfile (file1);
+	free_f3tensor (img1, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (img2, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (imgall, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	return (OK);
+}
+@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@d2 3
+d46 1
+a46 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/combine_striatum/RCS/combine_striatum.c,v 1.2 2001/11/21 19:10:47 tom Exp tom $";
+@
+
+
+1.2
+log
+@objects 5-9 mapped to 9
+@
+text
+@d2 3
+d41 1
+d43 1
+a43 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/combine_striatum/RCS/combine_striatum.c,v 1.1 2001/11/21 17:14:31 tom Exp tom $";
+d93 11
+a103 19
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot open %s\n", scan1);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot get MainHeader from %s\n", scan1);
+		return (ERROR);
+	}
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [combine_striatum]: Cannot read scan %s frame %d\n", scan1, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot read file subheader in %s\n", scan1);
+		return (ERROR);
+	}
+d107 1
+a107 2
+
+	if ((img1 = rdtensor (scan1, &indx, pdim)) == NULL) {
+d136 11
+a146 20
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot open %s\n", scan2);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot get MainHeader from %s\n", scan2);
+		return (ERROR);
+	}
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [combine_striatum]: Cannot read scan %s frame %d\n", scan2, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot read file subheader in %s\n", scan2);
+		return (ERROR);
+	}
+	if ((img2 = rdtensor (scan2, &indx, pdim)) == NULL) {
+d171 11
+a181 20
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot open %s\n", scan3);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot get MainHeader from %s\n", scan3);
+		return (ERROR);
+	}
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [combine_striatum]: Cannot read scan %s frame %d\n", scan3, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [combine_striatum]: Cannot read file subheader in %s\n", scan3);
+		return (ERROR);
+	}
+	if ((img2 = rdtensor (scan3, &indx, pdim)) == NULL) {
+d208 1
+a208 1
+		exit (ERROR);
+d214 1
+a214 1
+		exit (ERROR);
+d218 1
+a218 1
+		exit (ERROR);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d15 1
+a15 1
+ *			5 = occipital
+d21 1
+a21 1
+ *			5 = occipital
+d27 1
+a27 1
+ *			5 = occipital
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/combine_striatum/RCS/combine_striatum.c,v 1.8 1999/12/16 17:55:43 tom Exp $";
+d131 1
+a131 1
+				else if (img1[i][j][k] == 5)
+@

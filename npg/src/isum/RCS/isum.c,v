@@ -1,0 +1,769 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	2004.02.20.16.13.34;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2004.02.16.19.35.36;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.11.26.22.40.36;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.12.16.26.03;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.17.07.45;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.04.21.16.20;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Feb 2004
+@
+text
+@/* $Log: isum.c,v $
+ * Revision 1.5  2004/02/16  19:35:36  tom
+ * Feb 2004
+ *
+ * Revision 1.4  2002/11/26  22:40:36  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  1996/11/12  16:26:03  tom
+ * set orientation flag in output image!
+ *
+ * Revision 1.2  1996/11/06  17:07:45  tom
+ * add scaling for processed images
+ *
+ * Revision 1.1  1996/11/04  21:16:20  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			isum.c
+ *	Date:			Nov 1996
+ *	Author:			Tom Videen
+ *	Description:
+ *		Sum PET images without atlas transformation (do not divide as in imean).
+ *		Optionally create summed images (difference, mean, or single).
+ *		Optionally process images as cvf, cbv, oef, cmro2.
+ *	Input Files:
+ *		parameter file  (prm (5))
+ *		image list      (imglist5))
+ *		PET image files (PETT VI, ECAT image format; any readable by getrealimg)
+ *		hdr files       (hdr (5))
+ *	Output Files:
+ *		composite image     (ECAT image format)
+ *		rec file        (rec (5))
+ *		hdr file        (hdr (5))
+ *		sd image        (ECAT image format)
+ *		n image         (ECAT image format)
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/isum/RCS/isum.c,v 1.5 2004/02/16 19:35:36 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <libimage.h>
+#include <imgutil.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	void            image_sub ();
+	void            image_sum ();
+	void            image_scale ();
+	int             getprms_isum ();
+
+	FILE           *recfp;
+	ImageFile      *file1;			 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+	IMAGE_LIST_DATA *imglist;		 /* list of files to process */
+	PARAMETER_DATA  prm;			 /* processing parameters */
+	HEADER_DATA     hdr;			 /* hdr structure */
+	int             oxygen;			 /* oxygen processing */
+	int             paired_images;
+
+	char            program[MAXFNAME];
+	char            version[MAXFNAME];
+	char            runstamp[40];		 /* version, date and userid info */
+
+	char         ***imgname;		 /* image file names */
+	char           *lstfile;
+	char           *prmfile;
+	char           *outfile;
+	char           *recfile;
+	char           *today;
+	char           *userid;
+	char           *scan1, *scan2;		 /* filenames (activation, control primary files) */
+	char           *cbfscan1, *cbvscan1;	 /* filenames (CBF, CBV for activation) */
+	char           *cbfscan2, *cbvscan2;	 /* filenames (CBF, CBV for control) */
+	int             pdim[3];		 /* image dimensions in pixels */
+	int             lstsize = 0;
+	int             image_mode;
+	int             filtmode = IMGFILTER_MODE;
+	int             i, j, k;		 /* array indices */
+	int             n;
+	double          scaler;			 /* scale individual PET images */
+	float        ***sumimg;			 /* composite image */
+	float        ***img1;			 /* first (activation) PET image */
+	float        ***img2;			 /* second (control) PET image */
+	float        ***flowimg;		 /* flow PET image for oxygen processing */
+	float        ***volimg;			 /* volume PET image for oxygen processing */
+
+/*	parameters read from prm file	*/
+
+	float           smg_norm;
+	char           *smg_mode;
+
+/*	Read command line arguments and initialize filenames	*/
+
+	if (argc != 13) {
+		printf ("Usage: isum prmlist imglist outfile recfile date\n");
+		return (ERROR);
+	}
+	prmfile = argv[1];
+	lstfile = argv[2];
+	outfile = argv[3];
+	recfile = argv[4];
+	n = 5;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n+1], argv[n+2], argv[n+4], argv[n+5], argv[n+7]);
+	today = argv[11];
+	userid = argv[12];
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [isum]: cannot open %s\n", recfile);
+		return (ERROR);
+	}
+	(void) sscanf (rcsid, "%s %s", program, version);
+	(void) strcat (program, " ");
+	(void) strcat (program, version);
+	smg_mode = calloc (10, sizeof(char));
+	if (smg_mode == NULL)
+		return (ERROR);
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/* Read parameters into prm	*/
+
+	if (readprm (prmfile, &prm) == ERROR) {
+		fprintf (stderr, "ERROR [isum]: reading %s\n", prmfile);
+		return (ERROR);
+	}
+	if (getprms_isum (prmfile, &smg_norm, smg_mode) == ERROR) {
+		fprintf (stderr, "ERROR [isum]: reading parameter file %s\n", prmfile);
+		return (ERROR);
+	}
+
+/*  Read imagelist into imglist	*/
+
+	imglist = (IMAGE_LIST_DATA *) malloc (MAX_IMAGE_LIST_SIZE * sizeof (IMAGE_LIST_DATA));
+	if (readimglist (lstfile, imglist, &lstsize) == ERROR) {
+		fprintf (stderr, "ERROR [isum]: Cannot read %s\n", lstfile);
+		return (ERROR);
+	}
+	if (lstsize > MAX_IMAGE_LIST_SIZE) {
+		fprintf (stderr, "ERROR [isum]: imglist size %d > %d\n", lstsize, MAX_IMAGE_LIST_SIZE);
+		return (ERROR);
+	}
+
+/*  Complete filenames	*/
+
+	imgname = (char ***) malloc (lstsize * sizeof (char **));
+	if (imgname == NULL)
+		return (ERROR);
+	for (i = 0; i < lstsize; i++) {
+		imgname[i] = (char **) malloc (6 * sizeof (char *));
+		if (imgname[i] == NULL)
+			return (ERROR);
+		for (j = 0; j < 6; j++) {
+			imgname[i][j] = (char *) calloc (MAXPATH, sizeof (char));
+			if (imgname[i][j] == NULL)
+				return (ERROR);
+		}
+	}
+	if ((fillimglist (&prm, imglist, lstsize, filtmode, imgname)) == ERROR) {
+		fprintf (stderr, "ERROR [isum]: Reading input list files\n");
+		return (ERROR);
+	}
+
+/* Initializations based on selected parameters */
+
+	if (prm.processing == PROC_OEF || prm.processing == PROC_CMRO2) {
+		oxygen = 1;
+		image_mode = MULTITRACER_IMAGE_MODE;
+	} else
+		oxygen = 0;
+
+	if (strcmp (smg_mode, "paired") == 0)
+		paired_images = 1;
+	else
+		paired_images = 0;
+
+	if (strcmp (smg_mode, "diff") == 0)
+		image_mode = DIFIMAGE_MODE;
+	else
+		image_mode = STDIMAGE_MODE;
+
+	scan1 = imgname[0][0];
+	file1 = make_imgfile (scan1);
+	if (file1 == NULL) {
+		fprintf (stderr, "ERROR [isum]: making file1\n");
+		return (ERROR);
+	}
+	if (get_imgh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [isum]: Cannot open %s\n", scan1);
+		return (ERROR);
+	}
+	pdim[0] = 128;
+	pdim[1] = 128;
+	pdim[2] = file1->sh->dim3;
+	(void) save_rcs (file1, rcsid, runstamp);
+	close_imgfile (file1);
+
+	if ((sumimg = f3tensor (1, pdim[2], 1, pdim[1], 1, pdim[0])) == NULL) {
+		fprintf (stderr, "ERROR [isum]: Cannot malloc composite image\n");
+		return (ERROR);
+	}
+	for (k = 1; k <= pdim[2]; k++)
+		for (j = 1; j <= pdim[1]; j++)
+			for (i = 1; i <= pdim[0]; i++)
+				sumimg[k][j][i] = 0.;
+
+/*	LOOP for each image or image-pair in the list:
+ *	---------------------------------------------
+ */
+
+	for (i = 0; i < lstsize; ++i) {
+		scan1 = imgname[i][0];
+		if (oxygen) {
+			cbfscan1 = imgname[i][1];
+			cbvscan1 = imgname[i][2];
+			if (paired_images) {
+				scan2 = imgname[i][3];
+				cbfscan2 = imgname[i][4];
+				cbvscan2 = imgname[i][5];
+			}
+		} else if (paired_images) {
+			scan2 = imgname[i][1];
+		}
+
+/*	Read and process First (activation) image
+ *	-----------------------------------------
+ */
+		if ((img1 = rdtensor1 (scan1, pdim)) == NULL) {
+			fprintf (stderr, "ERROR [isum]: Cannot read %s\n", scan1);
+			return (ERROR);
+		}
+		recout (recfp, scan1);
+		printf ("Activation  = %s\n", scan1);
+
+		if (oxygen) {
+			cbfscan1 = imgname[i][1];
+			cbvscan1 = imgname[i][2];
+			if ((flowimg = rdtensor1 (cbfscan1, pdim)) == NULL) {
+				fprintf (stderr, "ERROR [isum]: Cannot read %s\n", cbfscan1);
+				return (ERROR);
+			}
+			recout (recfp, cbfscan1);
+			printf ("   CBF  = %s\n", cbfscan1);
+			if ((volimg = rdtensor1 (cbvscan1, pdim)) == NULL) {
+				fprintf (stderr, "ERROR [isum]: Cannot open %s\n", cbvscan1);
+				return (ERROR);
+			}
+			recout (recfp, cbvscan1);
+			printf ("   CBV  = %s\n", cbvscan1);
+		}
+		if (image_mode == DIFIMAGE_MODE)
+			scaler = 1.0;
+		else if (smg_norm == 0) {
+			fprintf (stderr, "ERROR [isum]: Parameter smg_norm in parameter list is 0\n");
+			return (ERROR);
+		} else if (imglist[i].mean1 == 0) {
+			fprintf (stderr, "ERROR [isum]: Normalization factor in image list is 0\n");
+			return (ERROR);
+		} else
+			scaler = smg_norm / imglist[i].mean1;
+		fprintf (recfp, "Scale %s by %f\n", scan1, scaler);
+
+/*  Oxygen processing or Not */
+
+		if (oxygen) {
+			if (processOxygen (img1, flowimg, volimg, pdim, scaler,
+				    prm.processing, scan1, cbfscan1, cbvscan1, recfp, &hdr) > 0) {
+				fprintf (stderr, "ERROR [isum] processing %s %s %s\n", scan1,
+					 cbfscan1, cbvscan1);
+				return (ERROR);
+			}
+			free_f3tensor (flowimg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+			free_f3tensor (volimg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+
+		} else {
+			if (prm.processing != PROC_NONE) {
+				if (readhdr (scan1, &hdr, recfp) == ERROR) {
+					fprintf (stderr, "ERROR [isum] processing %s\n", scan1);
+					return (ERROR);
+				}
+			}
+			if (processPET (img1, pdim, scaler, prm.processing, &hdr) > 0) {
+				fprintf (stderr, "ERROR [isum] processing %s\n", scan1);
+				return (ERROR);
+			}
+		}
+
+/*	Sum non-paired images, otherwise
+ *	Read and process the second (control) image (for paired lists)
+ *	----------------------------------------------------------
+ */
+
+		if (paired_images == 0) {
+			image_sum (sumimg, img1, pdim);
+			free_f3tensor (img1, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+
+		} else {
+			if (oxygen) {
+				scan2 = imgname[i][3];
+				cbfscan2 = imgname[i][4];
+				cbvscan2 = imgname[i][5];
+				if ((img2 = rdtensor1 (scan2, pdim)) == NULL) {
+					fprintf (stderr, "ERROR [isum] Cannot read %s\n", scan2);
+					return (ERROR);
+				}
+				recout (recfp, scan2);
+				printf ("Control  = %s\n", scan2);
+				if ((flowimg = rdtensor1 (cbfscan2, pdim)) == NULL) {
+					fprintf (stderr, "ERROR [isum] Cannot read %s\n", cbfscan2);
+					return (ERROR);
+				}
+				recout (recfp, cbfscan2);
+				printf ("   CBF  = %s\n", cbfscan2);
+				if ((volimg = rdtensor1 (cbvscan2, pdim)) == NULL) {
+					fprintf (stderr, "ERROR [isum]: Cannot open %s\n", cbvscan2);
+					return (ERROR);
+				}
+				recout (recfp, cbvscan2);
+				printf ("   CBV  = %s\n", cbvscan2);
+			} else {
+				scan2 = imgname[i][1];
+				if ((img2 = rdtensor1 (scan2, pdim)) == NULL) {
+					fprintf (stderr, "ERROR [isum] Cannot read %s\n", scan2);
+					return (ERROR);
+				}
+				recout (recfp, scan2);
+				printf ("Control  = %s\n", scan2);
+			}
+			if (image_mode == DIFIMAGE_MODE)
+				scaler = 1.0;
+			else if (smg_norm == 0) {
+				fprintf (stderr, "ERROR [isum]: Parameter smg_norm in parameter list is 0\n");
+				return (ERROR);
+			} else if (imglist[i].mean1 == 0) {
+				fprintf (stderr, "ERROR [isum]: Normalization factor in image list is 0\n");
+				return (ERROR);
+			} else
+				scaler = smg_norm / imglist[i].mean1;
+			fprintf (recfp, "Scale %s by %f\n", scan1, scaler);
+
+/*  Oxygen processing or Not */
+
+			if (oxygen) {
+				if (processOxygen (img2, flowimg, volimg, pdim, scaler,
+				    prm.processing, scan1, cbfscan1, cbvscan1, recfp, &hdr) > 0) {
+					fprintf (stderr, "ERROR [isum] processing %s %s %s\n", scan1, cbfscan2, cbvscan2);
+					return (ERROR);
+				}
+				free_f3tensor (flowimg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+				free_f3tensor (volimg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+
+			} else {
+				if (readhdr (scan1, &hdr, recfp) == ERROR) {
+					if (prm.processing != PROC_NONE) {
+						fprintf (stderr, "ERROR [isum] processing %s\n", scan1);
+						return (ERROR);
+					}
+				}
+				if (processPET (img2, pdim, scaler, prm.processing, &hdr) > 0) {
+					fprintf (stderr, "ERROR [isum] processing %s\n", scan1);
+					return (ERROR);
+				}
+			}
+			image_sub (img2, img1, pdim);
+			image_sum (sumimg, img2, pdim);
+			free_f3tensor (img1, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+			free_f3tensor (img2, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+		}
+	}
+
+/*	End LOOP	(write to outfile)
+ *	---------
+ */
+
+	scaler = 1.0;
+	if (prm.processing == PROC_CBF)
+		scaler = SCALE_CBF;
+	else if (prm.processing == PROC_CBV)
+		scaler = SCALE_CBV;
+	else if (prm.processing == PROC_OEF)
+		scaler = SCALE_OEF;
+	else if (prm.processing == PROC_CMRO2)
+		scaler = SCALE_CMRO2;
+	if (scaler != 1.0)
+		image_scale (sumimg, pdim, scaler);
+
+	file1->name = outfile;
+	(void) strcpy (file1->mode, "w");
+	indx.frm = 1;
+	printf ("Writing summed image %s, frame %d\n", outfile, indx.frm);
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [sumimg]: Cannot open %s\n", outfile);
+		return (ERROR);
+	}
+	file1->mh->nframe = indx.frm;
+	file1->mh->orientation = 0;
+	if (put_mh (file1) == ERROR)
+		return (ERROR);
+	if (writetensor (file1, &indx, sumimg) == ERROR)
+		return (ERROR);
+
+/*	Write HDR file	*/
+
+	if (prm.processing != PROC_NONE) {
+		if (writehdr (&hdr, outfile, userid, today, prm.processing, (short) pdim[2]) == ERROR) {
+			fprintf (stderr, "ERROR [isum]: writing hdr file\n");
+		}
+	}
+
+/*	Free memory	*/
+
+	(void) fclose (recfp);
+	free_f3tensor (sumimg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_imgfile (file1);
+	for (i = 0; i < lstsize; i++) {
+		for (j = 0; j < 6; j++)
+			free (imgname[i][j]);
+		free (imgname[i]);
+	}
+	free (smg_mode);
+	free (imgname);
+	free (imglist);
+	return (0);
+}
+@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@d2 3
+d38 1
+a38 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/isum/RCS/isum.c,v 1.4 2002/11/26 22:40:36 tom Exp $";
+d198 1
+a198 1
+	if (get_imgh (file1, indx) == ERROR) {
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			Nov-96
+a21 6
+ *
+ *	Command line parameters:
+ *		parameter file
+ *		image list
+ *		output filename
+ *
+a26 1
+ *
+a32 2
+ *
+ *	History:
+d35 1
+a35 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/isum/RCS/isum.c,v 1.3 1996/11/12 16:26:03 tom Exp tom $";
+a44 1
+#define  EARLY_EXIT	3			 /* return status to delete the rec file */
+d56 1
+a56 1
+	ImageFile      *file1;	 		 /* input image file structure */
+d61 2
+a62 2
+	BOOLEAN         oxygen;			 /* oxygen processing */
+	BOOLEAN         paired_images;
+d66 1
+a66 1
+	char            runstamp[40];	 /* version, date and userid info */
+d76 3
+a78 3
+	char           *cbfscan1, *cbvscan1; /* filenames (CBF, CBV for activation) */
+	char           *cbfscan2, *cbvscan2; /* filenames (CBF, CBV for control) */
+	int             pdim[3];			 /* image dimensions in pixels */
+d84 1
+a84 1
+	float           scaler;			 /* scale individual PET images */
+d91 1
+a91 3
+/*
+ *	parameters read from prm file
+ */
+d94 1
+a94 1
+	char            smg_mode[10];
+d96 1
+a96 3
+/*
+ *	Read command line arguments and initialize filenames.
+ */
+a97 2
+	printf ("Copyright 1996, Washington University\n");
+	printf ("All rights reserved. Unauthorized reproduction prohibited.\n");
+d107 1
+a107 1
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[n], argv[n+1], argv[n+2], argv[n+4], argv[n+5], argv[n+7]);
+d117 5
+a121 2
+	strcat (program, " ");
+	strcat (program, version);
+d128 1
+a128 3
+/*
+ * Read parameters into prm
+ */
+a137 3
+/*
+ *  Read imagelist into imglist
+ */
+d139 2
+a149 3
+/*
+ *  Complete filenames
+ */
+d151 2
+d154 2
+d158 7
+a164 2
+		for (j = 0; j < 6; j++)
+			imgname[i][j] = (char *) malloc (MAXPATH);
+d174 1
+a174 1
+		oxygen = TRUE;
+d177 1
+a177 1
+		oxygen = FALSE;
+d180 1
+a180 1
+		paired_images = TRUE;
+d182 1
+a182 1
+		paired_images = FALSE;
+d191 2
+a192 2
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stderr, "ERROR [isum]: Cannot open %s\n", scan1);
+d195 2
+a196 2
+	if (get_mh (file1) == ERROR) {
+		fprintf (stderr, "ERROR [isum]: Cannot get MainHeader from %s\n", scan1);
+a198 11
+	if (existimgfrm (file1, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file1, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [isum]: Cannot read file %s frame %d\n", scan1, indx.frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file1, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [isum]: Cannot read file subheader in %s\n", scan1);
+		return (ERROR);
+	}
+d202 2
+a203 1
+	save_rcs (file1, rcsid, runstamp);
+d214 1
+a214 2
+/*
+ *	LOOP for each image or image-pair in the list:
+d232 1
+a232 2
+/*
+ *	Read and process First (activation) image
+d235 1
+a235 1
+		if ((img1 = rdtensor (scan1, &indx, pdim)) == NULL) {
+d245 1
+a245 1
+			if ((flowimg = rdtensor (cbfscan1, &indx, pdim)) == NULL) {
+d251 1
+a251 1
+			if ((volimg = rdtensor (cbvscan1, &indx, pdim)) == NULL) {
+d274 1
+a274 1
+					   prm.processing, scan1, cbfscan1, cbvscan1, recfp, &hdr) > 0) {
+d295 1
+a295 2
+/*
+ *	Sum non-paired images, otherwise
+d300 1
+a300 1
+		if (!paired_images) {
+d309 1
+a309 1
+				if ((img2 = rdtensor (scan2, &indx, pdim)) == NULL) {
+d315 1
+a315 1
+				if ((flowimg = rdtensor (cbfscan2, &indx, pdim)) == NULL) {
+d321 1
+a321 1
+				if ((volimg = rdtensor (cbvscan2, &indx, pdim)) == NULL) {
+d329 1
+a329 1
+				if ((img2 = rdtensor (scan2, &indx, pdim)) == NULL) {
+d352 2
+a353 3
+					  prm.processing, scan1, cbfscan1, cbvscan1, recfp, &hdr) > 0) {
+					fprintf (stderr, "ERROR [isum] processing %s %s %s\n", scan1,
+						 cbfscan2, cbvscan2);
+d378 2
+a379 3
+/*	End LOOP
+ *	--------
+ *	Write to outfile
+d383 8
+a390 8
+    if (prm.processing == PROC_CBF)
+        scaler = SCALE_CBF;
+    else if (prm.processing == PROC_CBV)
+        scaler = SCALE_CBV;
+    else if (prm.processing == PROC_OEF)
+        scaler = SCALE_OEF;
+    else if (prm.processing == PROC_CMRO2)
+        scaler = SCALE_CMRO2;
+d392 1
+a392 1
+    	image_scale (sumimg, pdim, scaler);
+a393 1
+	close_imgfile (file1);
+d395 1
+a395 1
+	strcpy (file1->mode, "w");
+d400 1
+a400 1
+		exit (ERROR);
+d405 1
+a405 1
+		exit (ERROR);
+d407 1
+a407 1
+		exit (ERROR);
+d409 1
+a409 4
+/*
+ *	Write HDR file
+ *	--------------
+ */
+a415 4
+/*
+ *	Free memory
+ *	-----------
+ */
+d417 3
+d427 1
+a429 1
+	fclose (recfp);
+@
+
+
+1.3
+log
+@set orientation flag in output image!
+@
+text
+@d2 3
+d41 1
+a41 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/isum/RCS/isum.c,v 1.2 1996/11/06 17:07:45 tom Exp tom $";
+a45 1
+#include <math.h>
+d60 1
+d86 1
+a86 1
+	int             lstsize;
+d129 1
+a129 1
+	sscanf (rcsid, "%s %s", program, version);
+d209 1
+a209 1
+			fprintf (stderr, "ERROR [isum]: Cannot read frame %d\n", scan1, indx.frm);
+d223 1
+a223 1
+		fprintf (stderr, "ERROR [isum]: Cannot malloc composite image%s\n");
+@
+
+
+1.2
+log
+@add scaling for processed images
+@
+text
+@d2 3
+d38 1
+a38 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/isum/RCS/isum.c,v 1.1 1996/11/04 21:16:20 tom Exp tom $";
+d423 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d35 1
+a35 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/isum/RCS/isum.c,v 2.16 1996/10/16 16:38:48 tom Exp $";
+d54 1
+d398 12
+@

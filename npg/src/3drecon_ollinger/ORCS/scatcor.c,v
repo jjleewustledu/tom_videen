@@ -1,0 +1,351 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	95.02.21.22.16.24;	author jmo;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.01.28.15.57.02;	author jmo;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.01.27.16.14.37;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.01.20.23.25.45;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.01.20.23.09.00;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@nitial checking in, working version.
+@
+
+
+1.6
+log
+@Append _corr to output file name.
+@
+text
+@/*$Id: scatcor.c,v 1.5 1995/01/28 15:57:02 jmo Exp jmo $*/
+/*$Log: scatcor.c,v $
+ * Revision 1.5  1995/01/28  15:57:02  jmo
+ * Fix problem with frame number specification
+ *
+ * Revision 1.4  1995/01/27  16:14:37  ty7777
+ * Use GetVersion () in the local directory.
+ *
+ * Revision 1.3  1995/01/20  23:25:45  ty7777
+ * Added petutil.h.
+ *
+ * Revision 1.2  1995/01/20  23:09:00  ty7777
+ * Added program version to main header.
+ *
+ * Revision 1.1  1995/01/19  22:40:20  ty7777
+ * Initial revision
+ **/
+
+/*--------------------------------------------------------------------
+
+Program: scatcor
+
+Purpose: Correct a 3D emission sinogram.
+
+Perpetrator: John Ollinger
+
+Date: October 7, 1993
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <petutil/petutil.h>
+#include <petutil/matrix.h>
+#include "cube.h"
+#include "cti_proto.h"
+#include "scatter_953b.h"
+
+static char rcsid [] = "$Header: /home/usrb/jmo/tmp/RCS/scatcor.c,v 1.5 1995/01/28 15:57:02 jmo Exp jmo $";
+
+#define TRUE 1
+#define FALSE 0
+
+/* CUB_WR(filnam,image,xdim,ydim,type,id)*/
+#define CUB_WR(A,B,C,D,E) PutCubePlaneZero(A,B,C,D,E,A);
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+int	i,j,k,plane=1,pad,ring1,ring2,ringdiff,rings[2],outfrm=1,stat,
+	ioff,out_unnorm=FALSE,gate=1,data=0,bed=0,frame=1,numray,numang,
+	lensin,normonly=FALSE,scale_tails = FALSE;
+
+float	**scatin,*scatpln,*sino,*normtr,*normsc,sum1,sum2,sum3,sumtot=0,
+	sumscat=0,*scat_interp(),scatscl(),scl,sclsum=0.;
+
+char	outfil[MAXNAME],*sinofile,*scatfil,*nrmfil_tr,*ofile=NULL,*nrmfil_sc;
+
+Scan_subheader 	*sh;
+Norm_subheader 	*shntr,*shnsc;
+Main_header 	*mh;
+
+struct ringinfo *rng;
+struct scatter_tab *sc;
+
+if(argc < 3) {
+        fprintf(stderr,"Usage: scatcor emis_3d_sinogram scat_estimate -frame frame# -normtrue norm_true_file\n\t\t-normscat norm_scat_file -output_unnormed -normonly -o output_file\n");
+        exit(ERROR);
+        }
+
+rng = (struct ringinfo *)malloc(sizeof(struct ringinfo));
+
+sinofile  = argv[1];
+scatfil = argv[2];
+
+frame = 1;
+for(i=0;i<argc;i++) {
+    if(!strcmp(argv[i],"-frame") & argc > i+1)
+	frame = atoi(argv[i+1]);
+    if(!strcmp(argv[i],"-normtrue") & argc > i+1)
+	nrmfil_tr = argv[i+1];
+    if(!strcmp(argv[i],"-normscat") & argc > i+1)
+	nrmfil_sc = argv[i+1];
+    if(!strcmp(argv[i],"-o") & argc > i+1)
+	ofile = argv[i+1];
+    if(!strcmp(argv[i],"-output_unnormed"))
+	out_unnorm = TRUE;
+    if(!strcmp(argv[i],"-normonly"))
+	normonly = TRUE;
+    }
+
+if(ofile == NULL) {
+    strcpy(outfil,sinofile);
+    for(i=0;i<strlen(sinofile);i++) {
+        if(outfil[i] == '.')
+    	    outfil[i] = NULL;
+        }
+    strcat(outfil,"_corr.scn");
+    }
+else
+    strcpy(outfil,ofile);
+
+if( (mh = getmhdr(sinofile)) == NULL) {
+    printf("Error in getmhdr.\n");
+    exit(ERROR);
+    }
+plane = 1;
+if((sh = getsbhdr(sinofile,plane,frame,gate,data,bed)) == NULL) {
+    printf("Error reading scan subheader, plane %d.\n",plane);
+    exit(ERROR);
+    }
+numray = sh->dimension_1;
+numang = sh->dimension_2;
+lensin = numray*numang;
+
+/* Load scatter data. */
+if(normonly == FALSE)
+    loadscat(scatfil,&scatin,rng);
+
+/* Now loop through all the planes in the sinogram. */
+for(plane=1;plane<=mh->num_planes;plane++) {
+    if((sh = getsbhdr(sinofile,plane,frame,gate,data,bed)) == NULL) {
+        printf("Error reading scan subheader.\n");
+        exit(ERROR);
+        }
+    if((sino=rdimg(sinofile,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",sinofile,plane);
+        exit(ERROR);
+        }
+    if((shntr = getsbhdr(nrmfil_tr,plane,1,gate,data,bed)) == NULL) {
+        printf("Error reading normtr subheader, plane %d.\n",plane);
+        exit(ERROR);
+        }
+    if((normtr=rdimg(nrmfil_tr,plane,1,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",nrmfil_tr,plane);
+        exit(ERROR);
+        }
+    if((shnsc = getsbhdr(nrmfil_sc,plane,1,gate,data,bed)) == NULL) {
+        printf("Error reading normsc subheader, plane %d.\n",plane);
+        exit(ERROR);
+        }
+    if((normsc=rdimg(nrmfil_sc,plane,1,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",nrmfil_sc,plane);
+        exit(ERROR);
+        }
+
+    if(normonly == FALSE) {
+        /* Get interpolated scatter sinogram. */
+        scatpln = scat_interp(scatin,rng,plane);
+
+        for(i=0;i<lensin;i++) {
+            if(normsc[i] > 0)
+                scatpln[i] *= shnsc->scale_factor/normsc[i];
+            }
+
+        /* Calculate statistics for scatter fraction. */
+        for(i=0,sum1=0;i<lensin;i++) 
+    	    sum1+= sino[i];
+        for(i=0,sum2=0;i<lensin;i++)  {
+	    if(normsc[i] > 0)
+	        sum2+= scatpln[i];
+	    }
+        sumtot += sum1;
+        sumscat += sum2;
+	}
+
+    if(normonly == FALSE) {
+        if(out_unnorm == FALSE) {
+            for(i=0;i<lensin;i++) {
+                sino[i] = shntr->scale_factor*normtr[i]*(sino[i] - scatpln[i]);
+	        }
+            }
+        else {
+            for(i=0;i<lensin;i++)
+                sino[i] = sino[i] - scatpln[i];
+            }
+	}
+    else {
+        for(i=0;i<lensin;i++) 
+	    sino[i] *= shntr->scale_factor*normtr[i];
+	sumscat = 0.;
+	sumtot = 1.;
+	}
+
+    mh->num_frames = 1;
+    mh->num_planes = NUM_RINGPAIR;
+    sh->loss_correction_fctr = 1.;
+/*    sh->data_type = SUN_I2;*/
+    memset (mh->physician_name, 0, sizeof (mh->physician_name));
+    if (GetVersion (rcsid, mh->physician_name) == FAIL)
+    {
+      strncpy (mh->physician_name, rcsid + 5, 
+      sizeof (mh->physician_name) - 1);
+    }
+    if ((stat=wrimg(outfil,sino,mh,sh,plane,outfrm,gate,data,bed))==ERROR) {
+	fprintf(stderr,"Error writing to %s\n",outfil);
+        exit(ERROR);
+	}
+    free(sino);
+    free(sh);
+    free(normtr);
+    free(normsc);
+    free(shntr);
+	
+    }
+printf("Scatter fraction: %6.2f%%\n",100.*sumscat/sumtot);
+
+}
+@
+
+
+1.5
+log
+@Fix problem with frame number specification
+@
+text
+@d1 1
+a1 1
+/*$Id: scatcor.c,v 1.4 1995/01/27 16:14:37 ty7777 Exp jmo $*/
+d3 3
+d40 1
+a40 1
+static char rcsid [] = "$Header: /home/usrb/jmo/tmp/RCS/scatcor.c,v 1.4 1995/01/27 16:14:37 ty7777 Exp jmo $";
+d103 1
+a103 1
+    strcat(outfil,".scn");
+@
+
+
+1.4
+log
+@Use GetVersion () in the local directory.
+@
+text
+@d1 1
+a1 1
+/*$Id: scatcor.c,v 1.3 1995/01/20 23:25:45 ty7777 Exp ty7777 $*/
+d3 3
+d37 1
+a37 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/ollinger/new/RCS/scatcor.c,v 1.3 1995/01/20 23:25:45 ty7777 Exp ty7777 $";
+d109 1
+a109 1
+plane = 1; frame = 1;
+@
+
+
+1.3
+log
+@Added petutil.h.
+@
+text
+@d1 1
+a1 1
+/*$Id: scatcor.c,v 1.2 1995/01/20 23:09:00 ty7777 Exp ty7777 $*/
+d3 3
+d34 1
+a34 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/ollinger/new/RCS/scatcor.c,v 1.2 1995/01/20 23:09:00 ty7777 Exp ty7777 $";
+d188 1
+@
+
+
+1.2
+log
+@Added program version to main header.
+@
+text
+@d1 1
+a1 1
+/*$Id: scatcor.c,v 1.1 1995/01/19 22:40:20 ty7777 Exp ty7777 $*/
+d3 3
+d25 1
+d31 1
+a31 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/ollinger/new/RCS/scatcor.c,v 1.1 1995/01/19 22:40:20 ty7777 Exp ty7777 $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d27 1
+a27 1
+static char rcsid [] = "$Header$";
+d90 1
+a90 1
+    strcat(outfil,"_corr.scn");
+d181 6
+a186 1
+    if((stat=wrimg(outfil,sino,mh,sh,plane,outfrm,gate,data,bed))==ERROR) {
+@

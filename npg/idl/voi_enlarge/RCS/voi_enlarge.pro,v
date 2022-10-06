@@ -1,0 +1,108 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.07.02.16.46.05;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@PRO VOI_ENLARGE
+   
+   voi = ptr_new({VOI})
+   (*voi).id = 'VOI'
+   
+   fname = dialog_pickfile(FILE=fname, FILTER='*.voi', /READ)
+   IF (strlen(fname) EQ 0) THEN BEGIN
+      print,'No file entered'
+      exit
+   ENDIF ELSE BEGIN 
+      IF (VOI_READ(voi, fname, msg) NE 0) THEN $
+         print,msg 
+      voilist = VOI_LIST(voi)
+   ENDELSE 
+   n = (*voi).num
+   IF (n NE 1) THEN BEGIN
+      print,'This program is intended for files with a single VOI'
+      exit
+   ENDIF
+
+   old = (*voi).next
+   n = (*old).num               ; total number of points
+   IF ((*old).type NE 3) THEN BEGIN ; Thresholded ROI = filled polygon
+      print,'This program is intended for thresholded VOIs'
+      exit
+   ENDIF
+   
+   xy = [(*(*old).loc)[*,0:n-1]]
+   print,(size(xy))[2], ' points'
+   val = 0
+   read, val, prompt='Number of pixels to enlarge? '
+
+   xmin = min(xy[0,*]) - val
+   xmax = max(xy[0,*]) + val
+   ymin = min(xy[1,*]) - val
+   ymax = max(xy[1,*]) + val
+   new = VOI_APPEND(voi)
+   (*new).id = (*old).id+'_enlarged'
+   (*new).type = (*old).type
+   (*new).orient = (*old).orient
+   (*new).z = (*old).z
+   (*new).r = (*old).r
+   (*new).num = n
+   (*new).loc = ptr_new(lonarr(2,n))
+   (*(*new).loc)[*,0:n-1] = (*(*old).loc)[*,0:n-1]
+
+   k = n-1
+   crit = val^2
+   FOR i=0,k DO BEGIN 
+      x = (*(*old).loc)[0,i]
+      y = (*(*old).loc)[1,i]
+      m = n-1
+      FOR xt=xmin,xmax DO BEGIN 
+         FOR yt=ymin,ymax DO BEGIN
+            xlocs = where(xt EQ (*(*new).loc)[0,0:m]) ; compare with all existing points
+            ylocs = where (yt EQ (*(*new).loc)[1,0:m])
+            IF (max(setintersection(xlocs,ylocs)) EQ -1) THEN BEGIN ; if this is a new point
+               IF ((xt-x)^2 +(yt-y)^2 LE crit) THEN BEGIN ; check distance
+                  IF ((n+10) GE N_ELEMENTS(*(*new).loc)/2) THEN BEGIN ; Extend array
+                     more = ptr_new(lonarr(2,n+100))
+                     (*more)[*,0:n-1] = (*(*new).loc)[*,0:n-1]
+                     ptr_free, (*new).loc
+                     (*new).loc = more
+                  ENDIF
+                  print,n,xt,yt,sqrt(float((xt-x)^2 +(yt-y)^2)),format='(I8,"   (",I3,",",I3,")",F7.1)
+                  (*(*new).loc)[*,n] = [xt,yt] ; add the point
+                  n = n + 1
+                  (*new).num = n
+               ENDIF
+            ENDIF 
+         ENDFOR
+      ENDFOR
+   ENDFOR 
+   
+   fname = dialog_pickfile(FILE=fname, FILTER='*.voi', /WRITE)
+   IF (strlen(fname) EQ 0) THEN BEGIN
+      print,'No file entered'
+      exit
+   ENDIF ELSE BEGIN
+      (*voi).type = 9802        ; version 2.0, 1998
+      (*voi).num =  (*voi).num+1
+      IF (VOI_WRITE(voi, fname, msg) NE 0) THEN print,msg
+   ENDELSE 
+   
+END 
+@

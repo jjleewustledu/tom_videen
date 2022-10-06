@@ -1,0 +1,238 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*--------------------------------------------------------------------
+
+Program: ctistat
+
+Purpose: Resample cti image file by given factor.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <imagio.h>
+#include <cti_proto.h>
+#include <matrix.h>
+
+#define MAXNAME 120
+#define TRUE 1
+#define FALSE 0
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+SubHeader	*shimg;
+SubHeader	*shscan;
+Norm_subheader  *shnrm;
+MainHeader     *mh;
+void		*sh;
+float		*rdimg6();
+
+FILE	*fp;
+
+int	i,j,k,stat,length,arg,lcforce,*pln,npln=1,ipln,
+	outdim,ioff,joff,write_enable=FALSE,sumonly=FALSE,maxonly=FALSE,
+	plane=1,frame=1,gate=1,data=0,bed=0,nodead=FALSE,
+	jc,ic,dim1,dim2,ijc,totals=FALSE,one_plane=FALSE,minpln=1,maxpln=1;
+
+float	*image,max,min,len,scl=1.;
+double	sum,sumsq,mean,var,sdev;
+
+char	ans[MAXNAME],*outfil,*infil;
+
+if(argc < 2) {
+        fprintf(stderr,"Usage: ctistat filnam [-totals -sumonly -maxonly -frame frame -data data -plane plane -nodead]\n");
+        exit(-1);
+        }
+
+infil  = argv[1];
+for(i=1;i<argc;i++) {
+    if(!strcmp(argv[i],"-frame") && (i < argc-1))
+	frame = atoi(argv[i+1]);
+    if(!strcmp(argv[i],"-data") && (i < argc-1))
+	data = atoi(argv[i+1]);
+    if(!strcmp(argv[i],"-plane") && (i < argc-1)) {
+	plane = atoi(argv[i+1]);
+	one_plane = TRUE;
+	}
+    if(!strcmp(argv[i],"-totals"))
+	totals = TRUE;
+    if(!strcmp(argv[i],"-nodead"))
+	nodead = TRUE;
+    if(!strcmp(argv[i],"-sumonly"))
+	sumonly = TRUE;
+    if(!strcmp(argv[i],"-maxonly"))
+	maxonly = TRUE;
+    }
+
+if((mh=getmhdr(infil)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",infil);
+    exit(ERROR);
+    }
+if((sh=(void *)getsbhdr(infil,plane,frame,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",infil);
+    exit(ERROR);
+    }
+if(strstr(infil,".scn")) {
+    shscan = (SubHeader *)sh;
+    dim1 = shscan->dim1;
+    dim2 = shscan->dim2;
+    }
+else if( strstr(infil,".img")) {
+    shimg = (SubHeader *)sh;
+    dim1 = shimg->dim1;
+    dim2 = shimg->dim2;
+    }
+else if( strstr(infil,".nrm")) {
+    shnrm = (Norm_subheader *)sh;
+    dim1 = shnrm->dimension_1;
+    dim2 = shnrm->dimension_2;
+    }
+else {
+    shscan = (SubHeader *)sh;
+    dim1 = shscan->dim1;
+    dim2 = shscan->dim2;
+}
+
+if(one_plane == TRUE) {
+    minpln = plane;
+    maxpln = plane;
+    }
+else {
+    minpln = 1;
+    maxpln = mh->nplane;
+    }
+
+length = dim1*dim2;
+sum = 0.;
+sumsq = 0.;
+for(plane=minpln;plane<=maxpln;plane++) {
+    if(strstr(infil,".scn")) {
+        if((image=rdimg(infil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",infil,plane);
+            exit(ERROR);
+            }
+        if((sh=(void *)getsbhdr(infil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Could not read main header., %s\n",infil);
+            exit(ERROR);
+            }
+        shscan = (SubHeader *)sh;
+	scl = shscan->deadtime_corr;
+	}
+    else if (strstr(infil,".img")) {
+        if((image=rdimg(infil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",infil,plane);
+            exit(ERROR);
+            }
+        if((sh=(void *)getsbhdr(infil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Could not read main header., %s\n",infil);
+            exit(ERROR);
+            }
+        shimg = (SubHeader *)sh;
+    	scl = 1.;
+	}
+    else if (strstr(infil,".nrm")) {
+        if((image=rdimg6(infil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",infil,plane);
+            exit(ERROR);
+            }
+        if((sh=(void *)getsbhdr6(infil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Could not read main header., %s\n",infil);
+            exit(ERROR);
+            }
+        shnrm = (Norm_subheader *)sh;
+    	scl = 1.;
+	for(i=0;i<length;i++)
+	    image[i] *= shnrm->scale_factor;
+	}
+    else {
+        if((image=rdimg(infil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",infil,plane);
+            exit(ERROR);
+            }
+        if((sh=(SubHeader *)getsbhdr(infil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Could not read main header., %s\n",infil);
+            exit(ERROR);
+            }
+	}
+
+    if(nodead == TRUE) {
+        for(i=0;i<length;i++)
+    	    image[i] /= scl;
+    	}
+
+    if(totals == FALSE) {
+        sum = 0.;
+        sumsq = 0.;
+    }
+    max = -1.e20;
+    min =  1.e20;
+    for(i=0;i<length;i++) {
+	sum += (double)image[i];
+	sumsq += (double)image[i]*image[i];
+	if(image[i] > max) max = image[i];
+	if(image[i] < min) min = image[i];
+        }
+    if(totals == FALSE && sumonly == FALSE && maxonly == FALSE) {
+        mean = sum/length;
+        var = (length*sumsq - sum*sum)/((double)length*(length-1));
+        sdev = sqrt(var);
+        fprintf(stdout,"\n\tFile: %s\n\tPlane: %d\tFrame: %d, Data: %d\n",infil,plane,frame,data); 
+        fprintf(stdout,"\tDimensions: %dx%dx%d\tNonzero pixels: %d\n\tMinimum: %f\tMaximum: %f\n\tSum: %g\tSumSq: %g\n\tMean: %g\tStdDev: %g\n\tVariance: %g\tNormalized Standard Deviation: %g%%\n",dim1,dim2,mh->nplane,(int)length,min,max,sum,sumsq,mean,sdev,var,100.*sdev/mean);
+  	}
+    else if(sumonly == TRUE && totals == FALSE)
+	fprintf(stdout,"Plane: %d, Sum: %f\n",plane,sum);
+    else if(maxonly == TRUE)
+	fprintf(stdout,"Plane: %d, Maximum: %f\n",plane,max);
+
+    free(image);
+    }
+if(totals == TRUE) {
+    if(sumonly == TRUE)
+	fprintf(stdout,"%f",sum);
+    else {
+        len = length*mh->nplane;
+        mean = sum/len;
+        var = (len*sumsq - sum*sum)/((double)len*(len-1));
+        sdev = sqrt(var);
+        fprintf(stdout,"\n\tFile: %s\n\tPlane: %d\tFrame: %d\n",infil,plane,frame); 
+        fprintf(stdout,"\tDimensions: %dx%dx%d\tNonzero pixels: %d\n\tMinimum: %f\tMaximum: %f\n\tSum: %g\tSumSq: %g\n\tMean: %g\tStdDev: %g\n\tVariance: %g\tNormalized Standard Deviation: %g%%\n",dim1,dim2,mh->nplane,(int)length,min,max,sum,sumsq,mean,sdev,var,100.0*sdev/mean);
+        }
+
+
+    }
+
+}
+@

@@ -1,0 +1,136 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	93.10.21.17.19.00;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*_________________________________________________________________
+  Description:	This program check the if an image is rotated 
+		correctly. The input image will be deleted is
+		the rotation angle is wrong.
+
+  History:	Created by Tom Yang on 03/11/93. 
+_________________________________________________________________*/
+
+#include <fcntl.h>
+#include <petutil/petutil.h>
+#include <petutil/matrix.h>
+
+char rcsid [] = "$Id$";
+
+#define IMAGE_ROTATION	15.0		/* Image rotation in degrees */
+#define ERROR_BOUND	0.000001	/* Error bound */
+
+char list [] = "*;*;*;*"; /* any frame plane gate bed */
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	MatrixData	*matrix_read ();
+
+	Image_subheader	*image_subheader;
+	Main_header	*main_header;
+	MatrixData	*matrix_data;
+	MatrixFile	*fptr;
+	Mlist		*mlist;
+	char		*ecat_image_file;
+	float		pixel_size;
+	float		plane_separation;
+	int		diff;  /* number of differences between spec and actual */
+	int		i;
+	short		width;
+	short		height;
+	short		num_slices;
+	struct Matval	matval;
+
+	/*______________________________________________________
+	 * Get command line arguments.
+	 *______________________________________________________*/
+	ecat_image_file		= argv [1];
+
+	/*______________________________________________________
+	 * Open ECAT image and get image dimensions and voxel sizes.
+	 *______________________________________________________*/
+	/*
+	 * Assign default values for matval.
+	 */
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+	fptr	= OpenEcat (ecat_image_file, &num_slices, &width, &height, 
+				&pixel_size, &plane_separation, matval);
+	if (fptr == (MatrixFile *) NULL)
+	{
+		fprintf (stderr, "OpenEcat error in check_rotation.c.\n");
+		exit (FAIL);
+	}
+
+	/*
+	 * The number of mats in a list always gives the correct number of
+	 * slices.
+	 */
+	mlist	= make_list (ecat_image_file, (char *) NULL, list, &diff);
+	if (!mlist) 
+	{
+		fprintf (stderr, "make_list error.\n");
+		matrix_close (fptr);
+		exit (FAIL);
+	}
+	num_slices	= mlist->nmats;
+
+	main_header	= fptr->mhptr;
+	if (main_header->data_type == IMAGE_DATA)
+	{
+		for (i = 1; i <= num_slices; i++)
+		{
+			matrix_data	= matrix_read (fptr, mlist->list [i - 1]);
+			if (matrix_data == NULL)
+			{
+				fprintf (stderr, "matrixx_read error in get3dreal.\n");
+				return FAIL;
+			}
+
+       			image_subheader	= (Image_subheader *) matrix_data->shptr;
+
+			if (pkg_abs (image_subheader->image_rotation - IMAGE_ROTATION) > ERROR_BOUND)
+			{
+				
+				printf ("Rotation angle = %.2f is wrong. File %s is deleted.\n", 
+					image_subheader->image_rotation, ecat_image_file);
+				remove (ecat_image_file);
+				free_matrix_data (matrix_data);
+				break;
+			}
+
+			free_matrix_data (matrix_data);
+		}
+	}
+
+	free_Mlist (mlist);
+	matrix_close (fptr);
+}
+@

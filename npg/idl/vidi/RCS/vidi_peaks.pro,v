@@ -1,0 +1,435 @@
+head	2.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+2.1
+date	2008.06.18.16.59.57;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2004.02.03.16.33.49;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2004.02.03.16.31.10;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2003.05.06.20.21.47;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2002.05.17.18.51.41;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2002.05.06.16.38.50;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.02.11.20.28.14;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2000.08.24.18.01.53;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.08.14.20.39.33;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.09.01.18.20.30;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.09.01.17.45.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.1
+log
+@widget on top after read
+@
+text
+@;+
+; NAME:
+;	VIDI_PEAKS
+;
+; PURPOSE:
+;	Widget to read and display voi coordinates.
+;	Reads and writes voistat voi files.
+; CATEGORY:
+;	Regions of interest, graphics.
+; CALLING SEQUENCE:
+;	Result = VIDI_PEAKS(uv, orient, zoom)
+; RESTRICTIONS:
+;	This is a MODAL widget.  No other widget applications will be
+;	responsive while this widget is in use.
+;
+; MODIFICATION HISTORY:
+;	Tom Videen, Sept 1999.
+;-
+
+PRO VIDI_PEAKS_DRAW, s
+; Draw outline around voi peak
+; Image coordinates are tranposed to screen coordinates before
+; drawing.
+   
+   FOR k=0,2 DO BEGIN
+      IF (s.win[k] GT 0) THEN BEGIN 
+         WSET, s.win[k]
+         xsave = !x.s & ysave = !y.s ; Set scaling to pixel coords
+         !x.s = [0, s.zoom/float(!d.x_size)]
+         !y.s = [0, s.zoom/float(!d.y_size)]
+         ydim = s.img.dim[1]
+         DEVICE, SET_GRAPHICS_FUNCTION=s.color	; XOR
+         n = 32                 ; #points to define the circle
+         a = findgen(n+1) * (2 * !pi/(n-1))
+         x = s.x
+         y = s.y
+         r = s.r
+         xy = transpose([[x + r * cos(a)], [y + r * sin(a)]])
+         xy = VOI_TRANSPOSE(xy, ydim, /DISPLAY)
+         plots, xy
+         !x.s = xsave & !y.s = ysave
+         DEVICE, SET_GRAPHICS_FUNCTION=3 ; Copy mode   
+      ENDIF 
+   ENDFOR 
+END   
+  
+PRO VIDI_PEAKS, uv, orient, zoom
+   COMMON VIDI
+   
+   win = [0L,0L,0L]
+   FOR k=2,0,-1 DO BEGIN 
+      draw = uv.wid.win[k]
+      IF (draw GT 0) THEN BEGIN 
+         WIDGET_CONTROL, draw, GET_VALUE=tmp
+         IF (tmp GT 0) THEN BEGIN 
+            win[k] = tmp
+            IF (k LT 2) THEN img = uv.img[k]
+         ENDIF 
+      ENDIF ELSE  win[k] = 0
+   ENDFOR 
+   group = uv.wid.base   
+   
+   base = WIDGET_BASE(title='Peak Identification', group_leader=group, /ROW)   
+   base1 = WIDGET_BASE(base,/COLUMN)   
+   base2 = WIDGET_BASE(base1, /ROW)
+   temp = CW_BGROUP(base2, /COLUMN, /NO_RELEASE, /RETURN_NAME,  $
+                    ['Exit', 'Read', 'Draw', 'Next']  )
+   select1 = ['1\Radius','0\ 1 ','0\ 2 ','0\ 3 ','0\ 4 ','0\ 5 ','0\ 6 ','0\ 7 ','0\ 8 ', $
+              '0\ 9 ', '0\ 10 ']
+   radius = CW_PDMENU(base1, select1)
+   color = 6
+   cval = cw_bgroup(base1, ['XOR','White'],/ROW, /EXCLUSIVE, set_value=0)
+
+   base3 = WIDGET_BASE(base,/COLUMN)
+   msg = WIDGET_TEXT(base3, YSIZE=1)
+   list = WIDGET_LIST(base3, XSIZE=30, YSIZE=10)
+   
+   peaks = {PEAK_STR, $
+            id:	'', $
+            x:	0, $
+            y:	0, $
+            z:	0 $
+           }
+   
+   s = {PEAK_STATE, $           ; Structure containing state
+        base: base, $           ; Main base widget
+        msg : msg, $            ; Message window
+        win:  win, $            ; draw widget window #
+        zoom : zoom, $          ; zoom factor
+        img : img, $		; pointer to image data
+        id  : '', $		; current VOI id
+        x : 0.0, $              ; x coorinate
+        y : 0.0, $              ; y coordinate
+        z : 0.0, $              ; z coordinate
+        r : 5, $                ; radius in pixels
+        color : color $         ; color (XOR or White)
+       }
+   
+   WIDGET_CONTROL, base, /REALIZE, xoffset=445, yoffset=0
+   widget_control, s.msg, set_value='Plots points from a voi/peaks file'
+
+   peaknum = 0
+   WHILE 1 DO BEGIN             ; Internal event loop   
+      ev = WIDGET_EVENT(base)
+      CASE ev.id OF
+         
+         list: BEGIN
+            n = ev.index
+            peaknum = n
+            s.id = peak[n].id
+            IF (orient EQ 0) THEN BEGIN
+               s.x = peak[n].x
+               s.y = peak[n].y
+               s.z = peak[n].z
+            ENDIF ELSE IF (orient EQ 1) THEN BEGIN
+               s.x = peak[n].x
+               s.y = peak[n].z
+               s.z = peak[n].y
+            ENDIF ELSE BEGIN
+               s.x = peak[n].y
+               s.y = peak[n].z
+               s.z = peak[n].x
+            ENDELSE
+            widget_control, s.msg, set_value=s.id
+         ENDCASE 
+         
+         radius: s.r = ev.value
+
+         cval: BEGIN
+            IF (ev.value EQ 0) THEN s.color = 6 $
+            ELSE s.color = 3
+         ENDCASE
+
+         
+         ELSE: CASE ev.value OF
+            
+            'Draw': BEGIN
+               IF (s.id EQ '') THEN BEGIN
+                  widget_control, s.msg, set_value='No voi has been identified'
+               ENDIF ELSE BEGIN
+                  s.img.p = s.z
+                  uv.img[0].p = s.z
+                  uv.img[1].p = s.z
+                  widget_control, uv.wid.slider, set_value=s.img.p
+                  VIDI_DISPLAY, uv
+                  VIDI_PEAKS_DRAW, s
+               ENDELSE
+            ENDCASE
+            
+            'Next': BEGIN
+               peaknum = peaknum + 1
+               IF (peaknum GE npeaks) THEN peaknum = 0
+               n = peaknum
+               s.id = peak[n].id
+               IF (s.id EQ '') THEN BEGIN
+                  widget_control, s.msg, set_value='No voi has been identified'
+               ENDIF ELSE BEGIN
+                  IF (orient EQ 0) THEN BEGIN
+                     s.x = peak[n].x
+                     s.y = peak[n].y
+                     s.z = peak[n].z
+                  ENDIF ELSE IF (orient EQ 1) THEN BEGIN
+                     s.x = peak[n].x
+                     s.y = peak[n].z
+                     s.z = peak[n].y
+                  ENDIF ELSE BEGIN
+                     s.x = peak[n].y
+                     s.y = peak[n].z
+                     s.z = peak[n].x
+                  ENDELSE
+                  widget_control, s.msg, set_value=s.id
+                  s.img.p = s.z
+                  uv.img[0].p = s.z
+                  uv.img[1].p = s.z
+                  widget_control, uv.wid.slider, set_value=s.img.p
+                  VIDI_DISPLAY, uv
+                  VIDI_PEAKS_DRAW, s
+               ENDELSE
+            ENDCASE
+            
+            'Read': BEGIN
+               fname = dialog_pickfile(FILE=img.fname, FILTER='*.voi', /READ)
+               IF (strlen(fname) EQ 0) THEN BEGIN
+                  widget_control, s.msg, set_value='No file entered'
+               ENDIF ELSE BEGIN 
+                  openr,lun, fname, ERROR=err, /GET_LUN
+                  IF (err NE 0) THEN widget_control, s.msg, set_value='Cannot open '+fname $
+                  ELSE BEGIN 
+                     str = ''
+                     npeaks =  0L
+                     id = ''
+                     x = 0.0
+                     y = 0.0
+                     z = 0.0
+                     listing = ['']
+                     readf, lun, str
+                     readf, lun, str
+                     readf, lun, npeaks
+                     FOR n=0,npeaks-1 DO BEGIN
+                        readf, lun, str
+                        IF (min('' EQ listing) EQ 1) THEN BEGIN
+                           listing = [str]
+                           peak = [peaks]
+                        ENDIF ELSE BEGIN 
+                           listing = [listing,str]
+                           peak = [peak, peaks]
+                        ENDELSE 
+                        k = strpos(str,' ')
+                        id = strmid(str,0,k)
+                        str = strmid(str,k)
+                        reads, str, x, y, z
+                        peak[n].id = id
+                        peak[n].x = x
+                        peak[n].y = y 
+                        peak[n].z = z
+                     ENDFOR 
+                     close, lun
+                     free_lun, lun
+                     widget_control,list, set_value=listing
+                     widget_control, s.msg, set_value='Peaks from '+fname 
+                     widget_control, list, /SHOW
+                  ENDELSE 
+               ENDELSE 
+            ENDCASE 
+            
+            'Exit':  BEGIN
+               WIDGET_CONTROL, base, /DESTROY
+               RETURN
+            ENDCASE 
+            
+         ENDCASE   
+      ENDCASE 
+   ENDWHILE
+END   
+@
+
+
+2.0
+log
+@03 Feb 2004
+@
+text
+@d221 1
+@
+
+
+1.9
+log
+@3 Feb 2004
+@
+text
+@@
+
+
+1.8
+log
+@fix atlas display on 24-bit color
+@
+text
+@@
+
+
+1.7
+log
+@xoffset
+@
+text
+@a145 1
+                  VIDI_ATLAS, uv
+a176 1
+                  VIDI_ATLAS, uv
+@
+
+
+1.6
+log
+@xoffset
+@
+text
+@d99 1
+a99 1
+   WIDGET_CONTROL, base, /REALIZE, xoffset=506, yoffset=0
+@
+
+
+1.5
+log
+@draw atlas
+@
+text
+@d99 1
+a99 1
+   WIDGET_CONTROL, base, /REALIZE, xoffset=0, yoffset=0
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d146 1
+d178 1
+d184 1
+a184 1
+               fname = dialog_pickfile(FILE=img.fname, FILTER='*', /READ)
+@
+
+
+1.3
+log
+@add Next
+change default extension to peaks
+@
+text
+@d144 1
+a144 1
+                  widget_control, uv.wid.slider, set_value=s.z
+d175 1
+a175 1
+                  widget_control, uv.wid.slider, set_value=s.z
+d182 1
+a182 1
+               fname = dialog_pickfile(FILE=img.fname, FILTER='*.peaks', /READ)
+@
+
+
+1.2
+log
+@add XOR/White option
+@
+text
+@d67 1
+a67 1
+                    ['Exit', 'Read', 'Draw'])  
+d100 1
+a100 1
+   widget_control, s.msg, set_value='Plots points from a voi file'
+d102 1
+d109 1
+d150 31
+d182 1
+a182 1
+               fname = dialog_pickfile(FILE=img.fname, FILTER='*.voi', /READ)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d32 1
+a32 1
+         DEVICE, SET_GRAPHICS_FUNCTION=6	; XOR
+d71 2
+d95 2
+a96 1
+        r : 5 $                 ; radius in pixels
+d126 7
+a132 1
+           
+@

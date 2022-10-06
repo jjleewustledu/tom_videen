@@ -1,0 +1,682 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.8
+date	97.06.04.19.16.56;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.04.24.16.46.19;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	94.04.22.21.26.27;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.01.21.17.01.09;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.12.28.16.30.18;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.12.22.19.20.17;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.11.26.22.47.03;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.11.17.19.04.34;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@X window version, first release.
+@
+
+
+1.8
+log
+@close file if error
+@
+text
+@C$Id: t1region.f,v 1.7 1997/04/24 16:46:19 tom Exp tom $
+C$Log: t1region.f,v $
+c Revision 1.7  1997/04/24  16:46:19  tom
+c eliminate slice number check
+c
+c Revision 1.6  1994/04/22  21:26:27  ty7777
+c Process 75-slice images.
+c
+c Revision 1.5  1994/01/21  17:01:09  ty7777
+c Before adding copyright logo.
+c
+c Revision 1.4  1993/12/28  16:30:18  ty7777
+c Added interface and processing for spherical regions.
+c
+c Revision 1.3  1993/12/22  19:20:17  ty7777
+c Added user interface for spherical regions.
+c
+c Revision 1.2  1993/11/26  22:47:03  ty7777
+c Before adding the midlines.
+c
+c Revision 1.1  1993/11/17  19:04:34  ty7777
+c Initial revision
+c
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   T1REGION.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         01-Oct-90
+C  Written For:  RAPTURE
+C
+C  History:
+C     Modified 20-Nov-90 by TOV to set default for region creation
+C        to 'S' for seed value instead of cursor.
+C     Modified 30-Nov-90 to change MAG=1.
+C     Modified 03-Dec-90 to eliminate resetting of display parameters on entry.
+C     Modified 04-Dec-90 to add call to RAMRST before T1DISP1.
+C     Change name from T1CREATE --> T1REGION.
+C     Modified 17-Nov-93 by Tom Yang to port to X window.
+C     Modified 23-Nov-93 by Tom Yang to add interface for spherical regions.
+C     Modified 06-Jan-94 by Tom Yang to make zeroing of regions work.
+C     Modified 22-Apr-94 by Tom Yang to process 75-slice images.
+C     Modified Apr-97 TOV to eliminate 49,75 slice requirement.
+C     Modified May-97 TOV to add t1clot
+C
+C  Intent:
+C     Create a region.
+C
+C  Uses:
+C     T1CURSOR - set cursor within region of interest
+C     T1DISP1  - display one slice
+C     T1DSPLIM - display limits on the range of a region
+C     T1DSPREG - display region on current slice
+C     T1FILE   - get an image file
+C     T1LIMIT  - set limits on the range of a region
+C     T1NEXT   - generate region for next slice
+C     T1PIXELS - count pixels in single slice region
+C     T1POINT  - plot a point
+C     T1SCALE  - scale image for display
+C     T1SUMSLC - get total pixels and slices; set ZMIN,ZMAX
+C     T1THRESH - generate a region from a threshold and point within
+C     T1TRACE  - trace the outline of the region
+C     T1TRIM   - remove points from region
+C
+C     RAMERS   - erase a rectangular region on Ramtek
+C     RAMRST   - reset Ramtek
+C
+C     TCONTROL - terminal control
+C     GETINT   - get integer
+C     GETCHAR  - get a character
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE T1REGION
+C
+      INCLUDE 'rapture.inc'
+C
+      INTEGER*4  DIM         ! dimension on Ramtek (MAG*SIZE)
+      INTEGER*4  X, Y        ! location of cursor
+      INTEGER*4  PSLICE      ! previous slice
+      INTEGER*4  NSLICE      ! new slice
+      INTEGER*4  NUMSLCS     ! number of slices
+      INTEGER*4  NUMPETT     ! PETT number
+      INTEGER*4  DIRECTION   ! direction to increment (-1 or +1)
+      INTEGER*4  DPLANE      ! plane to display point in
+      INTEGER*4  I           ! local
+      INTEGER*4  RIM
+      INTEGER*4  SKIP
+      INTEGER*4  THRESH1, THRESH2
+C
+      INTEGER*2  HDR(128)    ! slice header
+C
+      CHARACTER*1   CH       ! character input
+      CHARACTER*20  NULL     ! blank string
+      CHARACTER*30  MENU(11) ! main menu
+      CHARACTER*80  CHARSET  ! character set
+      CHARACTER*80  Q        ! query to user
+      CHARACTER*256 RCSHEADER
+C
+      LOGICAL*1     DISPLAY  ! true--> display while processing
+      LOGICAL*1     HDRONLY  ! read header only
+      LOGICAL*1     ERROR    ! error reading image
+      LOGICAL*1     RGNTEST  ! flag used for defining new regions.
+      LOGICAL*1     FIRST    ! first region defined
+C
+C  Menu
+      RCSHEADER = '$Id: t1region.f,v 1.7 1997/04/24 16:46:19 tom Exp tom $'
+C
+      MENU(1) = 'D = Display a slice'
+      MENU(2) = 'R = Region definition'
+      MENU(3) = 'L = Limit region extent'
+      MENU(4) = 'E = Extent of limits displayed'
+      MENU(5) = 'T = Trim pixels'
+      MENU(6) = 'Z = Zero region for this slice'
+      MENU(7) = 'O = Outline'
+      MENU(8) = 'C = Current region display'
+      MENU(9) = 'N = Next slice'
+      MENU(10)= 'M = Main menu'
+C
+      DIM = MAG*SIZE
+      DIRECTION = 1
+      X = XSEED
+      Y = YSEED
+      IF (X.LT.XFIRST .OR. X.GT.XLAST) X=64
+      IF (Y.LT.YFIRST .OR. Y.GT.YLAST) Y=64
+      DPLANE = PLANE
+      NULL = '                    '
+      HDRONLY = .FALSE.
+C
+100   CALL TCONTROL(1,0,0)
+      CALL TCONTROL(2,0,0)
+      WRITE(USEROUT,*) 'S = Scale the image',
+     &  '                                      << REGION MENU >>'
+      DO 110 I=1,10
+        WRITE(USEROUT,*) MENU(I)
+110   CONTINUE
+      CALL T1SUMSLC
+C
+      WRITE (USEROUT, *)
+      WRITE (USEROUT, *) 'File = ', CFNAME (1:20), '   Slice = ', SLICE,
+     &  '     Scaler for Display = ', SCALER
+      WRITE(USEROUT,*) 'Slice Range = ',DMIN,' to ',DMAX
+      IF (SIGN.EQ.1) THEN
+        WRITE(USEROUT,*) 'Inclusion Threshold >= ',THRESH
+      ELSE
+        WRITE(USEROUT,*) 'Inclusion Threshold <= ',THRESH
+      END IF
+      WRITE(USEROUT,*) 'Points Defining Limit = ',LIMIT
+      WRITE(USEROUT,*) 'Slice Pixels = ',RN(SLICE),
+     &  '   Total Pixels = ',RPIXELS
+      WRITE(USEROUT,*) 'Slices Processed:'
+      IF (RPIXELS.EQ.0) THEN
+        WRITE(USEROUT,*) '    NONE'
+      ELSE
+        WRITE(USEROUT,8000) (I,I=ZMIN,ZMAX)
+      END IF
+      WRITE(USEROUT,*) '-----------------------',
+     &  '------------------------------------------------'
+8000  FORMAT(1X,25I3)
+C
+      Q = 'Selection'
+      CHARSET = 'SDRLETZOCNMsdrletzocnm'
+      CALL GETCHAR(Q,CH,CHARSET)
+C
+C  Set a scaling factor for display
+C
+      IF (CH.EQ.'S' .OR. CH.EQ.'s') THEN
+        CALL T1SCALE
+C
+C  Display 1 Slice
+C
+      ELSE IF (CH .EQ. 'D' .OR. CH .EQ. 'd') THEN
+        Q = 'Slice'
+        CALL GETINT (Q, SLICE, 1, 75)
+        CALL T1FILE
+        CALL RAMRST (RMD)
+        CALL T1DISP1
+        DISPLAY = .TRUE.
+C
+C  and read mask for this slice
+C
+        IF (MASKNAME .NE. NULL) THEN
+          CALL GETIMG (SETM, HDR, MASKNAME, SLICE, NUMSLCS,
+     &      NUMPETT, MASK, USEROUT, HDRONLY, ERROR)
+          IF (ERROR) THEN
+            WRITE (USEROUT, 8001) MASKNAME (1:20), CHAR (7)
+          ELSE
+            WRITE (USEROUT, *) 'Read ', MASKNAME (1:20)
+          END IF
+        END IF
+8001    FORMAT (1X, '*** Error reading ', A, A1)
+C
+C  Define Region on Current Slice
+C
+      ELSE IF (CH .EQ. 'R' .OR. CH .EQ. 'r') THEN
+        IF (CFNAME .EQ. NULL) THEN
+          WRITE (USEROUT, *) 'Display file before defining region'
+          GO TO 100
+        END IF
+        Q = 'Use Cursor or Seed coordinates (C, S)'
+        CHARSET = 'CScs'
+        CH = 'S'
+        CALL GETCHAR (Q, CH, CHARSET)
+        IF (CH .EQ. 'C' .OR. CH .EQ. 'c') then
+          CALL T1CURSOR (X, Y)
+        ELSE
+          Q = 'X'
+          CALL GETINT (Q, X, 1, 128)
+          Q = 'Y'
+          CALL GETINT (Q, Y, 1, 128)
+        END IF
+        Q = 'Spherical, Threshold or Rim (S, T, R)'
+        CHARSET = 'STRrst'
+        CH = 'T'
+        CALL GETCHAR (Q, CH, CHARSET)
+        IF (CH .EQ. 'S' .OR. CH .EQ. 's') THEN
+          Q = 'Radius'
+          CALL GETINT (Q, RADIUS, 1, 7)
+          RGNTEST = .TRUE.
+
+        ELSE IF (CH .EQ. 'T' .OR. CH .EQ. 't') THEN
+          WRITE (USEROUT, *) 'Slice Max = ', DMAX,'   Pixel Max = ', IMAGE (X, Y)
+          Q = 'Boundary threshold (0 to cancel)'
+          CALL GETINT (Q, THRESH, DMIN, DMAX)
+          IF (THRESH .EQ. 0) THEN
+            GO TO 100
+          ELSE IF (THRESH .GT. 0) THEN
+            SIGN = 1
+          ELSE
+            SIGN = -1
+          END IF
+          WRITE (USEROUT, *) 'Do you want to use values above or below ',
+     &    'this threshold?'
+          Q = 'Direction of Values (-1 or +1)'
+          CALL GETINT (Q, SIGN, -1, 1)
+          RGNTEST = INT (SIGN * IMAGE (X, Y)) .GE. SIGN * THRESH 
+
+        ELSE IF (CH .eq.'R' .or. ch .eq. 'r') THEN
+          Q = 'Lower threshold'
+          IF (DMAX .EQ. 0) DMAX = 10000
+          CALL GETINT (Q, THRESH1, 0, DMAX)
+          Q = 'Upper threshold'
+          CALL GETINT (Q, THRESH2, THRESH1, DMAX)
+          Q = 'Separation between clot and ROI (pixels)'
+          CALL GETINT (Q, SKIP, 0, 50)
+          Q = 'Thickness of ROI (pixels; 0 to cancel)'
+          CALL GETINT (Q, RIM, 0, 50)
+          IF (RIM .EQ. 0) GO TO 100
+          RGNTEST = .TRUE.
+        END IF
+C
+        IF (RGNTEST .AND. .NOT. SETC (X, Y)) THEN
+          IF (SETM (X, Y) .GT. 0) THEN
+            XMIN = X
+            XMAX = X
+            YMIN = Y
+            YMAX = Y
+            SFNAME = CFNAME
+            SETA (X, Y) = .TRUE.
+            CALL T1POINT (X, Y, DPLANE)
+	        IF (CH .EQ. 'T' .OR. CH .EQ. 't') THEN
+              CALL T1THRESH (DISPLAY)
+	        ELSE IF (CH .EQ. 'S' .OR. CH .EQ. 's') THEN
+	          FIRST     = .TRUE.
+	          SPHERICAL = .TRUE.
+              CALL T1SPHERI (X, Y, SLICE, FIRST, RADIUS, DISPLAY)
+	        ELSE IF (CH .EQ. 'R' .OR. CH .EQ. 'r') THEN
+              CALL T1CLOT (X, Y, RIM, SKIP, THRESH1, THRESH2, DISPLAY)
+	        ENDIF
+            CALL T1PIXELS
+            XSEED = X
+            YSEED = Y
+            ZSEED = SLICE
+          ELSE
+            WRITE (USEROUT, 8003) X, Y, SLICE, MASKNAME (1:20), CHAR (7)
+          END IF
+8003      FORMAT (1X, '*** ', 2I, ' is not defined on slice ', I, ' of ', A, A1)
+        END IF
+C
+C  Set Limits on Expansion of Region
+C
+      ELSE IF (CH .EQ. 'L' .OR. CH .EQ. 'l') THEN
+        CALL T1LIMIT
+C
+C  Display Points Defining Limits on Expansion of Region
+C
+      ELSE IF (CH .EQ. 'E' .OR. CH .EQ. 'e') THEN
+        CALL T1DSPLIM
+C
+C  Trim Region Pixels
+C
+      ELSE IF (CH.EQ.'T' .OR. CH.EQ.'t') THEN
+        CALL T1TRIM
+        CALL T1PIXELS
+C
+C  Erase Region for this slice
+C
+      ELSE IF (CH .EQ. 'Z' .OR. CH .EQ. 'z') THEN
+            XMIN = XSEED
+            XMAX = XSEED
+            YMIN = YSEED
+            YMAX = YSEED
+            SFNAME = CFNAME
+            SETA (XSEED, YSEED) = .TRUE.
+            CALL T1POINT (XSEED, YSEED, DPLANE)
+            CALL T1THRESH (DISPLAY)
+            CALL T1PIXELS
+C        CALL RAMERS (XST, YST, DIM, DIM, PLANE, RMD)   
+        DO 220 J = 1, 128
+          DO 210 I = 1, 128
+            SETA (I, J) = .FALSE.
+210       CONTINUE
+220     CONTINUE
+        RN (SLICE) = 0
+        CALL T1DISP1
+C
+C  Outline Region Boundaries
+C
+      ELSE IF (CH.EQ.'O' .OR. CH.EQ.'o') THEN
+        CALL T1TRACE
+        CALL RAMERS (XST, YST, DIM, DIM, PLANE, RMD)
+C
+C  Display region on current slice
+C
+      ELSE IF (CH.EQ.'C' .OR. CH.EQ.'c') THEN
+        CALL T1DSPREG
+C
+C  Next Slice
+C
+      ELSE IF (CH .EQ. 'N' .OR. CH .EQ. 'n') THEN
+        IF (RPIXELS .GT. 0) THEN
+C
+300       PSLICE = SLICE
+          Q = 'Comparison slice'
+          CALL GETINT (Q, PSLICE, 0, 75)
+          IF (PSLICE .EQ. 0) THEN
+            RETURN
+          ELSE IF (RN (PSLICE) .LE. 0) THEN
+            WRITE (USEROUT, *) '*** Region not been defined on ', PSLICE
+            GO TO 300
+          END IF
+C
+320       Q = 'New slice for defining region'
+          IF (IABS (DIRECTION) .EQ. 1) THEN
+            NSLICE = PSLICE + DIRECTION
+          ELSE
+            NSLICE = PSLICE + 1
+          END IF
+          CALL GETINT (Q, NSLICE, 0, 75)
+          IF (NSLICE .EQ. 0) GO TO 100
+          IF (IABS (PSLICE - NSLICE) .NE. 1) THEN
+            WRITE (USEROUT, *) '*** Slices are not adjacent'
+            GO TO 320
+          END IF
+          DIRECTION = NSLICE - PSLICE
+          SLICE = NSLICE
+C
+          CALL T1NEXT (PSLICE, NSLICE, DISPLAY)
+        END IF
+C
+C  Exit
+C
+      ELSE IF (CH.EQ.'M' .OR. CH.EQ.'m') THEN
+        RETURN
+      END IF
+      GO TO 100
+C
+      END
+@
+
+
+1.7
+log
+@eliminate slice number check
+@
+text
+@d1 1
+a1 1
+C$Id: t1region.f,v 1.6 1994/04/22 21:26:27 ty7777 Exp tom $
+d3 3
+d45 1
+d88 3
+d108 1
+a108 1
+      RCSHEADER = '$Id: t1region.f,v 1.6 1994/04/22 21:26:27 ty7777 Exp tom $'
+d213 2
+a214 2
+        Q = 'Spherical or define by Threshold (S, T)'
+        CHARSET = 'STst'
+d220 3
+a222 2
+	  RGNTEST = .TRUE.
+        ELSE
+a225 1
+C
+d237 14
+a250 1
+	  RGNTEST = INT (SIGN * IMAGE (X, Y)) .GE. SIGN * THRESH 
+d262 1
+a262 1
+	    IF (CH .EQ. 'T' .OR. CH .EQ. 't') THEN
+d264 3
+a266 3
+	    ELSE
+	      FIRST     = .TRUE.
+	      SPHERICAL = .TRUE.
+d268 3
+a270 1
+	    ENDIF
+@
+
+
+1.6
+log
+@Process 75-slice images.
+@
+text
+@d1 1
+a1 1
+C$Id: t1region.f,v 1.5 1994/01/21 17:01:09 ty7777 Exp ty7777 $
+d3 3
+d41 1
+d101 1
+a101 1
+      RCSHEADER = '$Id: t1region.f,v 1.5 1994/01/21 17:01:09 ty7777 Exp ty7777 $'
+a180 2
+          ELSE IF (NUMSLCS .NE. 49 .AND. NUMSLCS .NE. 75) THEN
+            WRITE (USEROUT, 8002) MASKNAME (1:20), CHAR (7)
+a185 1
+8002    FORMAT (1X, '*** ', A, ' is not 49-slice or 75-slice image.', A1)
+@
+
+
+1.5
+log
+@Before adding copyright logo.
+@
+text
+@d1 1
+a1 1
+C$Id: t1region.f,v 1.4 1993/12/28 16:30:18 ty7777 Exp ty7777 $
+d3 3
+d37 1
+d97 1
+a97 1
+      RCSHEADER = '$Id: t1region.f,v 1.4 1993/12/28 16:30:18 ty7777 Exp ty7777 $'
+d164 1
+a164 1
+        CALL GETINT (Q, SLICE, 1, 49)
+d177 1
+a177 1
+          ELSE IF (NUMSLCS .NE. 49) THEN
+d184 1
+a184 1
+8002    FORMAT (1X, '*** ', A, ' is not 49-slice image.', A1)
+d313 1
+a313 1
+          CALL GETINT (Q, PSLICE, 0, 49)
+d327 1
+a327 1
+          CALL GETINT (Q, NSLICE, 0, 49)
+@
+
+
+1.4
+log
+@Added interface and processing for spherical regions.
+@
+text
+@d1 1
+a1 1
+C$Id: t1region.f,v 1.3 1993/12/22 19:20:17 ty7777 Exp ty7777 $
+d3 3
+d33 1
+a86 1
+      LOGICAL*1     A        ! answer to Yes/No
+d93 1
+a93 1
+      RCSHEADER = '$Id: t1region.f,v 1.3 1993/12/22 19:20:17 ty7777 Exp ty7777 $'
+d282 1
+a282 2
+C        CALL RAMERS (XST, YST, DIM, DIM, PLANE, RMD)   Yang
+C        CALL RAMERS (XST, YST, DIM, DIM, OPLANE, RMD)  Yang
+d289 1
+@
+
+
+1.3
+log
+@Added user interface for spherical regions.
+@
+text
+@d1 1
+a1 1
+C$Id: t1region.f,v 1.2 1993/11/26 22:47:03 ty7777 Exp ty7777 $
+d3 3
+d29 1
+a29 1
+C     Modified 23-Nov-93 by Tom Yang to add spherical regions.
+a71 1
+      INTEGER*4  RADIUS      ! radius for spherical regions
+d86 2
+d90 1
+a90 1
+      RCSHEADER = '$Id: t1region.f,v 1.2 1993/11/26 22:47:03 ty7777 Exp ty7777 $'
+d198 1
+a198 1
+        Q = 'Spherical region or define by Threshold (S, T)'
+d205 1
+a205 1
+	  WRITE (*, *) RADIUS
+d222 2
+d225 10
+a234 10
+          IF (INT (SIGN * IMAGE (X, Y)) .GE. SIGN * THRESH .AND.
+     &      .NOT. SETC (X, Y)) THEN
+            IF (SETM (X, Y) .GT. 0) THEN
+              XMIN = X
+              XMAX = X
+              YMIN = Y
+              YMAX = Y
+              SFNAME = CFNAME
+              SETA (X, Y) = .TRUE.
+              CALL T1POINT (X, Y, DPLANE)
+d236 11
+a246 7
+              CALL T1PIXELS
+              XSEED = X
+              YSEED = Y
+              ZSEED = SLICE
+            ELSE
+              WRITE (USEROUT, 8003) X, Y, SLICE, MASKNAME (1:20), CHAR (7)
+            END IF
+d248 1
+a248 1
+8003      FORMAT(1X,'*** ',2I,' is not defined on slice ',I,' of ',A,A1)
+@
+
+
+1.2
+log
+@Before adding the midlines.
+@
+text
+@d1 1
+a1 1
+C$Id: t1region.f,v 1.1 1993/11/17 19:04:34 ty7777 Exp ty7777 $
+d3 3
+d26 1
+d69 1
+d86 1
+a86 1
+      RCSHEADER = '$Id: t1region.f,v 1.1 1993/11/17 19:04:34 ty7777 Exp ty7777 $'
+d194 12
+a205 3
+        WRITE (USEROUT, *) 'Slice Max = ', DMAX,'   Pixel Max = ', IMAGE (X, Y)
+        Q = 'Boundary threshold (0 to cancel)'
+        CALL GETINT (Q, THRESH, DMIN, DMAX)
+d207 8
+a214 8
+        IF (THRESH .EQ. 0) THEN
+          GO TO 100
+        ELSE IF (THRESH .GT. 0) THEN
+          SIGN = 1
+        ELSE
+          SIGN = -1
+        END IF
+        WRITE (USEROUT, *) 'Do you want to use values above or below ',
+d216 2
+a217 2
+        Q = 'Direction of Values (-1 or +1)'
+        CALL GETINT (Q, SIGN, -1, 1)
+d219 1
+a219 1
+        IF (INT (SIGN * IMAGE (X, Y)) .GE. SIGN * THRESH .AND.
+d221 16
+a236 15
+          IF (SETM(X,Y).GT.0) THEN
+            XMIN = X
+            XMAX = X
+            YMIN = Y
+            YMAX = Y
+            SFNAME = CFNAME
+            SETA (X, Y) = .TRUE.
+            CALL T1POINT (X, Y, DPLANE)
+            CALL T1THRESH (DISPLAY)
+            CALL T1PIXELS
+            XSEED = X
+            YSEED = Y
+            ZSEED = SLICE
+          ELSE
+            WRITE (USEROUT, 8003) X, Y, SLICE, MASKNAME (1:20), CHAR (7)
+d238 1
+a239 1
+8003    FORMAT(1X,'*** ',2I,' is not defined on slice ',I,' of ',A,A1)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d81 1
+a81 1
+      RCSHEADER = '$Id$'
+d160 1
+a160 1
+            WRITE (USEROUT, 8001) MASKNAME, CHAR (7)
+d162 1
+a162 1
+            WRITE (USEROUT, 8002) MASKNAME, CHAR (7)
+d164 1
+a164 1
+            WRITE (USEROUT, *) 'Read ', MASKNAME
+d221 1
+a221 1
+            WRITE (USEROUT, 8003) X, Y, SLICE, MASKNAME, CHAR (7)
+@

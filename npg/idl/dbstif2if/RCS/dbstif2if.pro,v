@@ -1,0 +1,479 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	2005.08.18.20.41.28;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2005.08.17.13.17.06;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2005.08.12.18.54.46;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@; $Id: dbstif2if.pro,v 1.2 2005/08/17 13:17:06 tom Exp tom $
+;+
+; NAME:
+;   DBSTIF2IF
+;
+; PURPOSE:
+;   Convert TIF to Interfile 
+;
+; CATEGORY:
+;   Image processing
+;
+; CALLING SEQUENCE:
+;   DBSTIF2IF File
+;
+; INPUTS: passed from Environment variables
+;   File1:  TIF without tracings (gray)
+;   File2:  TIF with JSP tracings (color)
+;   File3:  TIF with Samer tracings (color)
+;
+; OUTPUTS:	in Interfile format
+;   Out1: 3 planes
+;   Out2: MR only
+;   Out3: JSP tracing
+;   Out4: Samer tracing
+;
+; PROCEDURE:
+;   Read 3 coronal TIF files (1 B&W and 2 RGB) and combine them to
+;   create a 3-slice coronal image in Interfile format.
+;
+; MODIFICATION HISTORY:
+;   Tom Videen, Aug 2005
+;-
+
+PRO DBSTIF2IF
+@@IMAGE_UTILS.h
+
+   on_error,2
+   root = getenv('ROOT')
+   file1 = strcompress(root+'_mri.tif', /remove_all)
+   file2 = strcompress(root+'_jsp.tif', /remove_all)
+   file3 = strcompress(root+'_samer.tif', /remove_all)
+   hname = strcompress(root+'.ifh', /remove_all)
+   fname = strcompress(root+'.img', /remove_all)
+   xdim = 768
+   image =  intarr(xdim,xdim,3)
+   dim = lonarr(4)
+   dim[0] = xdim
+   dim[1] = xdim
+   dim[2] = 3
+   dim[3] = 1
+   pdim = fltarr(4)
+   pdim[0] = 0.976562/3
+   pdim[1] = 0.976562/3
+   pdim[2] = 2.0
+   pdim[3] = 0
+
+   ;; Gray scale TIF file
+
+   print, 'Reading '+file1
+   img = read_tiff(file1)
+   print,size(img)
+   tmp = reform(fix(img),xdim,xdim)
+   image[*,*,0] = tmp
+
+   ;; JSP RGB TIF file
+
+   print, 'Reading '+file2
+   img = read_tiff(file2)
+   print,size(img)
+   tmp = reform(fix(img),3,xdim,xdim)
+   img1 = tmp[0,*,*] + tmp[1,*,*] + tmp[2,*,*]
+   pix = where (img1 NE 550)
+   img1[pix] = 0
+   image[*,*,1] = img1
+
+   ;; Samer RGB TIF file
+
+   print, 'Reading '+file3
+   img = read_tiff(file3)
+   print,size(img)
+   tmp = reform(fix(img),3,xdim,xdim)
+   img2 = tmp[0,*,*] + tmp[1,*,*] + tmp[2,*,*]
+   pix = where (img2 NE 304)
+   img2[pix] = 0
+   image[*,*,2] = img2
+
+   ;; -------------------------------------------
+   ;; Composite Image
+   ;; New ifh (lu1)
+
+   openw,lu1, hname, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+hname
+      RETURN
+   ENDIF
+   
+   ;; New img (lu2)
+
+   openw,lu2, fname, ERROR=err, APPEND=append, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+fname
+      close, lu1
+      free_lun, lu1
+      RETURN
+   ENDIF
+   writeu,lu2,image
+   close,lu2
+
+   name = fname
+   k = rstrpos(name,'/')
+   IF (k GT 0) THEN name = strmid(name,k+1)
+   maxval = MAX(image, MIN=minval)
+   
+   ;; File Identification
+
+   printf, lu1, 'INTERFILE :='
+   printf, lu1, 'version of keys    := 3.3'
+   printf, lu1, 'date of keys       := 1992:01:01'
+   printf, lu1, 'conversion program := dbstif2if.pro'
+   printf, lu1, 'program date       := 2005:08:16'
+   printf, lu1, 'conversion date    := ' +systime(0)
+   printf, lu1, ';'
+
+   ;; General Data
+
+   printf, lu1, 'GENERAL DATA :='
+   printf, lu1, 'original institution := Washington University'
+   printf, lu1, 'data starting block  := 0'
+   printf, lu1, 'name of data file  := '+strtrim(name,2)
+   printf, lu1, ';'
+
+   ;; General Image Data
+
+   printf, lu1, 'GENERAL IMAGE DATA :='
+   printf, lu1, 'type of data := tomographic'
+   printf, lu1, 'total number of images := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'imagedata byte order   := bigendian'
+   printf, lu1, ';'
+
+   ;; Study Data
+
+   printf, lu1, 'number of dimensions   := 3'
+   printf, lu1, 'number of slices := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'matrix size [1]    := '+strtrim(string(dim[0]),2)
+   printf, lu1, 'matrix size [2]    := '+strtrim(string(dim[1]),2)
+   printf, lu1, 'matrix size [3]    := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'matrix size [4]    := '+strtrim(string(dim[3]),2)
+   printf, lu1, 'number format      := signed integer'
+   printf, lu1, 'number of bytes per pixel  := 2'
+   printf, lu1, 'scaling factor (mm/pixel) [1]  := '+strtrim(string(pdim[0]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [2]  := '+strtrim(string(pdim[1]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [3]  := '+strtrim(string(pdim[2]),2)
+   printf, lu1, 'matrix initial element [1] := left'
+   printf, lu1, 'matrix initial element [2] := anterior'
+   printf, lu1, 'matrix initial element [3] := inferior'
+   printf, lu1, 'maximum pixel count := '+strtrim(string(maxval),2)
+   printf, lu1, 'minimum pixel count := '+strtrim(string(minval),2)
+   printf, lu1, 'END OF INTERFILE :='
+   close,lu1
+   print, 'Created '+fname
+
+   ;; -------------------------------------------
+   ;; MR Image
+   hname = strcompress(root+'_mri.ifh', /remove_all)
+   fname = strcompress(root+'_mri.img', /remove_all)
+   dim[2] = 1
+
+   openw,lu1, hname, ERROR=err
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+hname
+      RETURN
+   ENDIF
+   
+   openw,lu2, fname, ERROR=err, APPEND=append, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+fname
+      close, lu1
+      free_lun, lu1
+      free_lun, lu2
+      RETURN
+   ENDIF
+   img = image[*,*,0]
+   writeu,lu2,img
+   close,lu2
+
+   name = fname
+   k = rstrpos(name,'/')
+   IF (k GT 0) THEN name = strmid(name,k+1)
+   maxval = MAX(image, MIN=minval)
+   
+   ;; File Identification
+
+   printf, lu1, 'INTERFILE :='
+   printf, lu1, 'version of keys    := 3.3'
+   printf, lu1, 'date of keys       := 1992:01:01'
+   printf, lu1, 'conversion program := dbstif2if.pro'
+   printf, lu1, 'program date       := 2005:08:16'
+   printf, lu1, 'conversion date    := ' +systime(0)
+   printf, lu1, ';'
+
+   ;; General Data
+
+   printf, lu1, 'GENERAL DATA :='
+   printf, lu1, 'original institution := Washington University'
+   printf, lu1, 'data starting block  := 0'
+   printf, lu1, 'name of data file  := '+strtrim(name,2)
+   printf, lu1, ';'
+
+   ;; General Image Data
+
+   printf, lu1, 'GENERAL IMAGE DATA :='
+   printf, lu1, 'type of data := tomographic'
+   printf, lu1, 'total number of images := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'imagedata byte order   := bigendian'
+   printf, lu1, ';'
+
+   ;; Study Data
+
+   printf, lu1, 'number of dimensions   := 3'
+   printf, lu1, 'number of slices := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'matrix size [1]    := '+strtrim(string(dim[0]),2)
+   printf, lu1, 'matrix size [2]    := '+strtrim(string(dim[1]),2)
+   printf, lu1, 'matrix size [3]    := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'matrix size [4]    := '+strtrim(string(dim[3]),2)
+   printf, lu1, 'number format      := signed integer'
+   printf, lu1, 'number of bytes per pixel  := 2'
+   printf, lu1, 'scaling factor (mm/pixel) [1]  := '+strtrim(string(pdim[0]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [2]  := '+strtrim(string(pdim[1]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [3]  := '+strtrim(string(pdim[2]),2)
+   printf, lu1, 'matrix initial element [1] := left'
+   printf, lu1, 'matrix initial element [2] := anterior'
+   printf, lu1, 'matrix initial element [3] := inferior'
+   printf, lu1, 'maximum pixel count := '+strtrim(string(maxval),2)
+   printf, lu1, 'minimum pixel count := '+strtrim(string(minval),2)
+   printf, lu1, 'END OF INTERFILE :='
+   close,lu1
+   print, 'Created '+fname
+
+   ;; -------------------------------------------
+   ;; JSP Image
+   hname = strcompress(root+'_jsp.ifh', /remove_all)
+   fname = strcompress(root+'_jsp.img', /remove_all)
+   dim[2] = 1
+
+   openw,lu1, hname, ERROR=err
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+hname
+      RETURN
+   ENDIF
+   
+   openw,lu2, fname, ERROR=err, APPEND=append, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+fname
+      close, lu1
+      free_lun, lu1
+      free_lun, lu2
+      RETURN
+   ENDIF
+   img = image[*,*,1]
+   writeu,lu2,img
+   close,lu2
+
+   name = fname
+   k = rstrpos(name,'/')
+   IF (k GT 0) THEN name = strmid(name,k+1)
+   maxval = MAX(image, MIN=minval)
+   
+   ;; File Identification
+
+   printf, lu1, 'INTERFILE :='
+   printf, lu1, 'version of keys    := 3.3'
+   printf, lu1, 'date of keys       := 1992:01:01'
+   printf, lu1, 'conversion program := dbstif2if.pro'
+   printf, lu1, 'program date       := 2005:08:16'
+   printf, lu1, 'conversion date    := ' +systime(0)
+   printf, lu1, ';'
+
+   ;; General Data
+
+   printf, lu1, 'GENERAL DATA :='
+   printf, lu1, 'original institution := Washington University'
+   printf, lu1, 'data starting block  := 0'
+   printf, lu1, 'name of data file  := '+strtrim(name,2)
+   printf, lu1, ';'
+
+   ;; General Image Data
+
+   printf, lu1, 'GENERAL IMAGE DATA :='
+   printf, lu1, 'type of data := tomographic'
+   printf, lu1, 'total number of images := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'imagedata byte order   := bigendian'
+   printf, lu1, ';'
+
+   ;; Study Data
+
+   printf, lu1, 'number of dimensions   := 3'
+   printf, lu1, 'number of slices := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'matrix size [1]    := '+strtrim(string(dim[0]),2)
+   printf, lu1, 'matrix size [2]    := '+strtrim(string(dim[1]),2)
+   printf, lu1, 'matrix size [3]    := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'matrix size [4]    := '+strtrim(string(dim[3]),2)
+   printf, lu1, 'number format      := signed integer'
+   printf, lu1, 'number of bytes per pixel  := 2'
+   printf, lu1, 'scaling factor (mm/pixel) [1]  := '+strtrim(string(pdim[0]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [2]  := '+strtrim(string(pdim[1]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [3]  := '+strtrim(string(pdim[2]),2)
+   printf, lu1, 'matrix initial element [1] := left'
+   printf, lu1, 'matrix initial element [2] := anterior'
+   printf, lu1, 'matrix initial element [3] := inferior'
+   printf, lu1, 'maximum pixel count := '+strtrim(string(maxval),2)
+   printf, lu1, 'minimum pixel count := '+strtrim(string(minval),2)
+   printf, lu1, 'END OF INTERFILE :='
+   close,lu1
+   print, 'Created '+fname
+
+   ;; -------------------------------------------
+   ;; Samer Image
+   hname = strcompress(root+'_samer.ifh', /remove_all)
+   fname = strcompress(root+'_samer.img', /remove_all)
+   dim[2] = 1
+
+   openw,lu1, hname, ERROR=err
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+hname
+      RETURN
+   ENDIF
+   
+   openw,lu2, fname, ERROR=err, APPEND=append, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot open '+fname
+      close, lu1
+      free_lun, lu1
+      free_lun, lu2
+      RETURN
+   ENDIF
+   img = image[*,*,2]
+   writeu,lu2,img
+   close,lu2
+
+   name = fname
+   k = rstrpos(name,'/')
+   IF (k GT 0) THEN name = strmid(name,k+1)
+   maxval = MAX(image, MIN=minval)
+   
+   ;; File Identification
+
+   printf, lu1, 'INTERFILE :='
+   printf, lu1, 'version of keys    := 3.3'
+   printf, lu1, 'date of keys       := 1992:01:01'
+   printf, lu1, 'conversion program := dbstif2if.pro'
+   printf, lu1, 'program date       := 2005:08:16'
+   printf, lu1, 'conversion date    := ' +systime(0)
+   printf, lu1, ';'
+
+   ;; General Data
+
+   printf, lu1, 'GENERAL DATA :='
+   printf, lu1, 'original institution := Washington University'
+   printf, lu1, 'data starting block  := 0'
+   printf, lu1, 'name of data file  := '+strtrim(name,2)
+   printf, lu1, ';'
+
+   ;; General Image Data
+
+   printf, lu1, 'GENERAL IMAGE DATA :='
+   printf, lu1, 'type of data := tomographic'
+   printf, lu1, 'total number of images := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'imagedata byte order   := bigendian'
+   printf, lu1, ';'
+
+   ;; Study Data
+
+   printf, lu1, 'number of dimensions   := 3'
+   printf, lu1, 'number of slices := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'matrix size [1]    := '+strtrim(string(dim[0]),2)
+   printf, lu1, 'matrix size [2]    := '+strtrim(string(dim[1]),2)
+   printf, lu1, 'matrix size [3]    := '+strtrim(string(dim[2]),2)
+   printf, lu1, 'matrix size [4]    := '+strtrim(string(dim[3]),2)
+   printf, lu1, 'number format      := signed integer'
+   printf, lu1, 'number of bytes per pixel  := 2'
+   printf, lu1, 'scaling factor (mm/pixel) [1]  := '+strtrim(string(pdim[0]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [2]  := '+strtrim(string(pdim[1]),2)
+   printf, lu1, 'scaling factor (mm/pixel) [3]  := '+strtrim(string(pdim[2]),2)
+   printf, lu1, 'matrix initial element [1] := left'
+   printf, lu1, 'matrix initial element [2] := anterior'
+   printf, lu1, 'matrix initial element [3] := inferior'
+   printf, lu1, 'maximum pixel count := '+strtrim(string(maxval),2)
+   printf, lu1, 'minimum pixel count := '+strtrim(string(minval),2)
+   printf, lu1, 'END OF INTERFILE :='
+   close,lu1
+   print, 'Created '+fname
+
+   free_lun,lu1
+   free_lun,lu2
+   RETURN
+END
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+; $Id: dbstif2if.pro,v 1.1 2005/08/12 18:54:46 tom Exp tom $
+d39 1
+a39 1
+   file1 = strcompress(root+'.tif', /remove_all)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+; $Id$
+d20 5
+a24 2
+; OUTPUTS:
+;   Outfile: image file in Interfile format
+d52 2
+a53 2
+   pdim[0] = 0.976562
+   pdim[1] = 0.976562
+d63 1
+a63 1
+   image[*,*,0] = tmp[*,*]
+d87 2
+a107 1
+   free_lun,lu2
+d120 1
+a120 1
+   printf, lu1, 'program date       := 2005:08:12'
+d154 2
+a155 2
+   printf, lu1, 'matrix initial element [2] := superior'
+   printf, lu1, 'matrix initial element [3] := anterior'
+d160 233
+d394 1
+a394 1
+   print, 'Converted to '+fname
+@

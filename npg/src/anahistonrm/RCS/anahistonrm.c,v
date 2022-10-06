@@ -1,0 +1,255 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2009.04.29.15.29.46;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/*	===============================================================================
+ *	Module:			anahistonrm.c
+ *	Date:			Apr 2009
+ *	Author:			Tom Videen
+ *	Description:	Normalize slices of an Analyze image to peak counts in histogram.
+ *					Finds the midpoint using the half-maximum of the peak counts.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anahistonrm/RCS/anahistonrm.c,v 2.2 2008/12/26 22:11:36 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+int main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	long            dim1, dim2, dim3; /* dimensions of image */
+	long            num, pln;
+	long            z, z0, i;
+	float			midn, val, scale;
+	int				range;
+	int				v, peakv;
+	short           n, minn, maxn, peakn;
+	int            *hist;
+	short          *img;
+	char           *cimg;
+
+	if (argc != 7) {
+		fprintf (stderr, "Usage: anahistonrm img1 hdr1 img2 hdr2 nrmvalue range\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	val = atof(argv[5]);
+	range = atoi(argv[6]);
+
+/*	Read image */
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anahistonrm]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anahistonrm]: reading %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [anahistonrm]: reading %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 2 && hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [anahistonrm]: reading %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 8 && hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anahistonrm]: reading %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+	pln = dim1 * dim2;
+	num = pln * dim3;
+
+	if (hdr.dime.bitpix == 8) {
+		cimg = (char *) calloc (num, sizeof (char));
+		if (cimg == NULL) {
+			fprintf (stderr, "ERROR [anahistonrm]: calloc cimg\n");
+			return (ERROR);
+		}
+		if ((fd_img = fopen (img1, "r")) == 0) {
+			fprintf (stderr, "ERROR [anahistonrm]: opening %s\n", img1);
+			return (ERROR);
+		}
+		if ((fread (cimg, sizeof (char), num, fd_img)) != num) {
+			fprintf (stderr, "ERROR [anahistonrm]: reading %s\n", img1);
+			return (ERROR);
+		}
+		(void) fclose (fd_img);
+		fprintf (stdout, "Read %s\n", img1);
+		fprintf (stdout, "Pln Peak Pixels Midpt Scale\n");
+
+		/*	Scale each slices (All pixel ordering is reversed) */
+
+		for (z = 0; z < dim3; z++) {
+			hist = (int *) calloc (range, sizeof (int));
+			z0 = z * pln;
+			for (i = 0; i < pln; i++) {
+				n = cimg[z0 + i];
+				if (n < range)
+					hist[n]++;
+			}
+			peakn = 0;
+			peakv = 0;
+			for (i = 0; i < range; i++) {
+				if (hist[i] > peakv) {
+					peakv = hist[i];
+					peakn = i;
+				}
+			}
+			i = 0;
+			v = hist[i];
+			while (v < peakv/2) {
+				i++;
+				v = hist[i];
+			}
+			minn = i;
+			while (v >= peakv/2) {
+				i++;
+				v = hist[i];
+			}
+			maxn = i-1;
+			midn = (float)(minn + maxn) / 2;
+			scale = val / midn;
+			fprintf (stdout, "%3ld %4d %d %.1f %6.3f\n", z, peakn, peakv, midn, scale);
+			free (hist);
+			for (i = 0; i < pln; i++) 
+				cimg[z0 + i] = (short) (scale * cimg[z0 + i]);
+		}
+
+		/*	Write scaled image */
+
+		if ((fd_img = fopen (img2, "w")) == 0) {
+			fprintf (stderr, "ERROR [anahistonrm]: opening %s\n", img2);
+			return (ERROR);
+		}
+		if ((fwrite (cimg, sizeof (char), num, fd_img)) != num) {
+			fprintf (stderr, "ERROR [anahistonrm]: writing %s\n", img2);
+			return (ERROR);
+		}
+		(void) fclose (fd_img);
+		free (cimg);
+
+	} else {
+		img = (short *) calloc (num, sizeof (short));
+		if (img == NULL) {
+			fprintf (stderr, "ERROR [anahistonrm]: calloc img\n");
+			return (ERROR);
+		}
+		if ((fd_img = fopen (img1, "r")) == 0) {
+			fprintf (stderr, "ERROR [anahistonrm]: opening %s\n", img1);
+			return (ERROR);
+		}
+		if ((fread (img, sizeof (short), num, fd_img)) != num) {
+			fprintf (stderr, "ERROR [anahistonrm]: reading %s\n", img1);
+			return (ERROR);
+		}
+		(void) fclose (fd_img);
+		fprintf (stdout, "Read %s\n", img1);
+		fprintf (stdout, "Pln Peak Pixels Midpt Scale\n");
+
+		/*	Scale each slices (All pixel ordering is reversed) */
+
+		for (z = 0; z < dim3; z++) {
+			hist = (int *) calloc (range, sizeof (int));
+			z0 = z * pln;
+			for (i = 0; i < pln; i++) {
+				n = img[z0 + i];
+				if (n < range)
+					hist[n]++;
+			}
+			peakn = 0;
+			peakv = 0;
+			for (i = 0; i < range; i++) {
+				if (hist[i] > peakv) {
+					peakv = hist[i];
+					peakn = i;
+				}
+			}
+			i = 0;
+			v = hist[i];
+			while (v < peakv/2) {
+				i++;
+				v = hist[i];
+			}
+			minn = i;
+			while (v >= peakv/2) {
+				i++;
+				v = hist[i];
+			}
+			maxn = i-1;
+			midn = (float)(minn + maxn) / 2;
+			scale = val / midn;
+			fprintf (stdout, "%3ld %4d %d %.1f %6.3f\n", z, peakn, peakv, midn, scale);
+			free (hist);
+			for (i = 0; i < pln; i++) 
+				img[z0 + i] = (short) (scale * img[z0 + i]);
+		}
+
+		/*	Write scaled image */
+
+		if ((fd_img = fopen (img2, "w")) == 0) {
+			fprintf (stderr, "ERROR [anahistonrm]: opening %s\n", img2);
+			return (ERROR);
+		}
+		if ((fwrite (img, sizeof (short), num, fd_img)) != num) {
+			fprintf (stderr, "ERROR [anahistonrm]: writing %s\n", img2);
+			return (ERROR);
+		}
+		(void) fclose (fd_img);
+		free (img);
+	}
+
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anahistonrm]: opening %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anahistonrm]: writing %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	return (OK);
+}
+@

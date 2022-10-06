@@ -1,0 +1,702 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2010.05.21.15.53.44;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2010.05.21.15.48.06;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2010.05.21.14.01.09;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@jon's original
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@/*  ===============================================================================
+ *  Module:         logan.c
+ *  Date:           May 2010
+ *  Author:         Jon Koller
+ *  Modified:       Tom Videen
+ *  Description:    Compute Logan BP using input read as decay-corrected values
+ *  ===============================================================================
+ */
+
+#include <math.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "dtypes.h"
+#include "list_to_filenames.h"
+#include "ifh.h"
+#include "stats.h"
+#include "filesize.h"
+#include "file_open.h"
+
+enum {
+MAX_LEN = 100};
+
+int             main (int argc, char *argv[])
+{
+
+	int             start_frame;
+	int             n_frames;
+	float          *image_data[MAX_LEN];
+
+	FILE           *dat;
+	FILE           *dvr_f;
+	FILE           *mean_f;
+	FILE           *r_f;
+	FILE           *images[MAX_LEN];
+	LST_DATA        lst;
+	IFH_INFO        ifh1, ifh2;
+	F2              logan_points[MAX_LEN];
+	R_DATA          output;
+
+	char           *fname;
+	char           *refdata;
+	char           *outroot;
+	char            dvr_name[MAX_LEN];
+	char            mean_name[MAX_LEN];
+	char            r_name[MAX_LEN];
+	char            dat_line[MAX_LEN];
+
+	float           mean_time[MAX_LEN];
+	float           dat_counts[MAX_LEN];
+	float           dat_start[MAX_LEN];
+	float           dat_dur[MAX_LEN];
+	float           decay_cor[MAX_LEN];
+	float           dat_int[MAX_LEN];
+	float           vox_int[MAX_LEN];
+
+	float          *dvr_img;
+	float          *mean_img;
+	float          *r_img;
+	float           vox_sum;
+	float           k2;
+
+	int             last_frame;
+	int             rflg;
+	int             cnt;
+	int             i, j;
+
+	char            meantime[] = "Mid_Time";
+	int             file_size1 = 0;
+	int             file_size2 = 0;
+
+	if (argc != 7) {
+		fprintf (stderr, "Usage: logan lst ref_data output start_frame number_frames k2\n");
+		return (1);
+	}
+	fname = argv[1];
+	refdata = argv[2];
+	outroot = argv[3];
+	start_frame = atoi (argv[4]);
+	n_frames = atoi (argv[5]);
+	k2 = atof (argv[6]);
+
+/* Open input files and output files */
+
+	if ((dat = fopen (refdata, "r")) == NULL) {
+		perror (fname);
+		return (1);
+	}
+	lst = lst2filenames (fname, 0);
+
+	strcpy (dvr_name, outroot);
+	strcat (dvr_name, "_dvr.4dfp.img");
+	dvr_f = open_4dfp (dvr_name, "wb");
+
+	strcpy (mean_name, argv[3]);
+	strcat (mean_name, "_mean.4dfp.img");
+	mean_f = open_4dfp (mean_name, "wb");
+
+	strcpy (r_name, argv[3]);
+	strcat (r_name, "_r.4dfp.img");
+	r_f = open_4dfp (r_name, "wb");
+
+/* Read in dat file data */
+
+	rflg = 0;
+	cnt = 0;
+	while (fgets (dat_line, MAX_LEN, dat) != NULL) {
+		if (rflg == 1) {
+			if (strlen (dat_line) > 3) {
+				(void) sscanf (dat_line, "%f%f%f%f%f", &mean_time[cnt], &dat_counts[cnt], &dat_start[cnt], &dat_dur[cnt], &decay_cor[cnt]);
+				cnt++;
+			} else
+				rflg = 0;
+		} else {
+			if (strstr (dat_line, meantime) != NULL)
+				rflg = 1;
+		}
+	}
+	(void) fclose (dat);
+
+	last_frame = (start_frame + n_frames) - 1;
+
+	printf ("Fit to frames: %d - %d\n", start_frame, last_frame);
+
+/* check input options and print status info to user */
+
+	if (start_frame + n_frames - 1 > cnt) {
+		printf ("ERROR [logan]: too many frames requested\n");
+		printf ("start frame = %d\nframes to use = %d\nnumber of total frames in dat file and lst file = %d\n", start_frame, n_frames, cnt);
+		return (1);
+	}
+	if (cnt == 0) {
+		printf ("ERROR [logan]: problem with %s, number of frames = 0\n", argv[2]);
+		return (1);
+	}
+	if (cnt != lst.imgnum) {
+		printf ("ERROR [logan]: number of images in %s does not equal number of frames in %s\n", argv[1], argv[2]);
+		printf ("Frames in %s: %d\n", fname, lst.imgnum);
+		printf ("Frames in %s: %d\n", refdata, cnt);
+		return (1);
+	}
+/* Open files from list file */
+
+	for (i = 0; i < last_frame; i++)
+		images[i] = open_4dfp (lst.names[i], "rb");
+
+/* Check ifh files */
+
+	for (i = 0; i < last_frame; i++) {
+		ifh1 = readifh (lst.names[i], 0);
+		if (i != 0 && checkifh (&ifh1, &ifh2, 1) != 0) {
+			printf ("ERROR [logan]: info in ifh files %s and %s do not match\n", ifh2.name, ifh1.name);
+			return (1);
+		}
+		ifh2 = ifh1;
+	}
+
+/* Find file sizes of input files */
+
+	for (i = 0; i < last_frame; i++) {
+		file_size1 = filesize (images[i]);
+		if (i != 0 && file_size1 != file_size2) {
+			printf ("ERROR [logan]: input files %s and %s have unequal sizes\n", lst.names[i-1], lst.names[i]);
+			return (1);
+		}
+		file_size2 = file_size1;
+	}
+	if (file_size1 == 0) {
+		printf ("ERROR [logan]: input files may have no data\n");
+		return (1);
+	}
+/* Allocate memory for image files */
+
+	for (i = 0; i < last_frame; i++) {
+		image_data[i] = calloc (file_size1 / sizeof (float), sizeof (float));
+		if (image_data[i] == NULL) {
+			printf ("ERROR [logan]: failed to allocate memory for %s\n", lst.names[i]);
+			return (1);
+		}
+	}
+
+/* Load image files from disk to memory and close image files */
+
+	for (i = 0; i < last_frame; i++) {
+		(void) fread (image_data[i], file_size1, 1, images[i]);
+		(void) fclose (images[i]);
+	}
+
+/* Allocate memory for output files */
+
+	dvr_img = calloc (file_size1 / sizeof (float), sizeof (float));
+	if (dvr_img == NULL) {
+		printf ("ERROR [logan]: failed to allocate memory for dvr image\n");
+		return (1);
+	}
+	mean_img = calloc (file_size1 / sizeof (float), sizeof (float));
+	if (mean_img == NULL) {
+		printf ("ERROR [logan]: failed to allocate memory for mean image\n");
+		return (1);
+	}
+	r_img = calloc (file_size1 / sizeof (float), sizeof (float));
+	if (r_img == NULL) {
+		printf ("ERROR [logan]: failed to allocate memory for r_image\n");
+		return (1);
+	}
+/* Compute slope for each voxel */
+/* Note: reference region .dat file has counts/sec; image file is read as counts/frame and must be divided by frame duration */
+
+	for (j = 0; j < last_frame; j++) {
+		if (j == 0)
+			dat_int[0] = dat_counts[0] * mean_time[0];
+		else
+			dat_int[j] = (dat_counts[j] * mean_time[j]) + dat_int[j-1] + (dat_counts[j-1] * (dat_dur[j-1] - mean_time[j-1]));
+	}
+
+	for (i = 0; i < file_size1 / sizeof (float); i++) {
+		vox_sum = 0;
+		for (j = 0; j < last_frame; j++) {
+			vox_sum = vox_sum + *(image_data[j] + i);
+			*(image_data[j] + i) = *(image_data[j] + i) / dat_dur[j];
+			if (j == 0)
+				vox_int[0] = *(image_data[0] + i) * mean_time[0];
+			else
+				vox_int[j] = (*(image_data[j] + i) * mean_time[j]) + vox_int[j-1] + (*(image_data[j-1] + i) * (dat_dur[j-1] - mean_time[j-1]));
+			if (j+1 >= start_frame) {
+				logan_points[(j+1) - start_frame].x = (dat_int[j] + dat_counts[j] / k2) / *(image_data[j] + i);
+				logan_points[(j+1) - start_frame].y = vox_int[j] / *(image_data[j] + i);
+			}
+		}
+		output = regress (logan_points, n_frames);
+		*(dvr_img + i) = output.m;
+		*(mean_img + i) = vox_sum / last_frame;
+		*(r_img + i) = output.r;
+	}
+
+/* Write output files to disk */
+
+	(void) fwrite (dvr_img, 1, file_size1, dvr_f);
+	free (dvr_img);
+	(void) fclose (dvr_f);
+	writeifh (dvr_name, &ifh1, argv[0], 0);
+
+	(void) fwrite (mean_img, 1, file_size1, mean_f);
+	free (mean_img);
+	(void) fclose (mean_f);
+	writeifh (mean_name, &ifh1, argv[0], 0);
+
+	(void) fwrite (r_img, 1, file_size1, r_f);
+	free (r_img);
+	(void) fclose (r_f);
+	writeifh (r_name, &ifh1, argv[0], 0);
+
+	for (i = 0; i < last_frame ; i++)
+		if (image_data[i] != NULL)
+			free(image_data[i]);
+	return (0);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@a60 1
+	float           frame1_start;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d22 2
+a23 1
+enum {MAX_LEN = 100};
+d25 2
+a26 1
+int main(int argc, char *argv[]){
+d28 3
+a30 98
+	int c;
+	int i;
+   	optind = 4;
+   	opterr = 0;
+   	int sflg = 0;
+   	int nflg = 0;
+   	int mflg = 0;
+   	int rflg = 0;
+   	int pflg = 0;
+   	int hflg = 0;
+   	int kflg = 0;
+   	int vflg = 0;
+   	int errflg = 0;
+   	int start_frame = 1;
+   	int n_frames = 0;
+   	float pfactor = 1;
+   	float halflife = 0;
+   	float k2 = 0.16;
+   	float dc = 0;
+   
+   	while ((c = getopt(argc,argv, "s:n:p:h:k:rmv")) != EOF)
+   		switch (c) {
+   		case 's':
+   			sflg++;
+   			sscanf(optarg,"%d",&start_frame);
+   			break;
+   		case 'n':
+   			nflg++;
+   			sscanf(optarg,"%d",&n_frames);
+   			break;
+   		case 'p':
+   			pflg++;
+   			sscanf(optarg,"%f",&pfactor);
+   			break;
+   		case 'h':
+   			hflg++;
+   			sscanf(optarg,"%f",&halflife);
+   			break;
+   		case 'k':
+   			kflg++;
+   			sscanf(optarg,"%f",&k2);
+   			break;
+   		case 'r':
+   			rflg++;
+   			break;
+   		case 'm':
+   			mflg++;
+   			break;
+   		case 'v':
+   			vflg++;
+   			break;
+   		case '?':
+   			errflg = optind - 1;
+   			break;
+   		default:
+   			printf("didn't detect any options\n");
+   		}	
+	
+/* command line info and print status to user */
+	if (argc < 3 || errflg ) {
+		if ( errflg )
+			printf("ERROR: option %s not defined for this program\n\n",argv[errflg]);
+		printf("Usage: logan_slope list_file dat_file  outroot -options\n");
+		printf("e.g.,  logan_slope p2804.lst p2804.dat p2804\n");
+		printf("e.g.,  logan_slope p2804.lst p2804.dat p2804   -s15 -n18 -h109.72 -p5.4418 -m -r\n\n");
+		printf("list_file = list of 4dfp files\n");
+		printf("dat_file  = output of /usr/local/npg/bin/vstat\n");
+		printf("outroot   = output image root\n\n");
+		printf("options:\n");
+		printf("  -s[start frame] (default 1)\n");
+		printf("  -n[number of frames to use for slope calculations]\n");
+		printf("      (default = from start frame to last frame)\n");
+		printf("  -h[halflife]\n");
+		printf("  -p[pie factor]\n");
+		printf("  -m create mean of images from list file, called _mean.4dfp.img\n");
+		printf("  -r create correlation image, called _r.4dfp.img\n");
+		printf("  -v verbose mode\n");
+		exit(1);
+	}
+	
+	if ( vflg ){
+		printf("vflg = %d, using verbose mode\n",vflg);
+		printf("sflg = %d\n",sflg);
+   		printf("nflg = %d\n",nflg);
+  		printf("rflg = %d\n",rflg);
+  		printf("mflg = %d\n",mflg);
+  		printf("pflg = %d\n",pflg);
+  		printf("hflg = %d\n",hflg);
+  		printf("kflg = %d\n",kflg);
+  	}
+	
+	if ( argc == 3 )
+		printf("WARNING: no options specified, using default options\n");
+	
+	if ( pflg != hflg ){
+		printf("ERROR: must specify both half life and pie factor if specifying one\n");
+		exit(1);
+	}	
+d32 9
+a40 2
+/* open input files and output files */
+	LST_DATA lst = lst2filenames( argv[1], 0 );
+d42 7
+a48 1
+	FILE *dat;
+d50 7
+a56 9
+	if ((dat = fopen(argv[2], "r")) == NULL) {
+		perror(argv[2]);
+		exit(1);
+	}
+	
+	char dvr_name[MAX_LEN];
+	strcpy(dvr_name,argv[3]);
+	strcat(dvr_name,"_dvr.4dfp.img");
+	FILE *dvr_f = open_4dfp( dvr_name, "wb" );	
+d58 19
+a76 6
+	FILE *mean_f;
+	char mean_name[MAX_LEN];
+	if ( mflg ){
+		strcpy(mean_name,argv[3]);
+		strcat(mean_name,"_mean.4dfp.img");
+		mean_f = open_4dfp( mean_name, "wb" );
+d78 6
+d85 5
+a89 6
+	FILE *r_f;
+	char r_name[MAX_LEN];
+	if ( rflg ){
+		strcpy(r_name,argv[3]);
+		strcat(r_name,"_r.4dfp.img");
+		r_f = open_4dfp( r_name, "wb" );
+d91 1
+d93 23
+a115 17
+/* read in dat file data */
+	char dat_line[MAX_LEN];
+	float buff[2];
+	char meantime[] = "Mean_Time";
+	int read = 0;
+	int dat_num = 0;
+	float dat_counts[MAX_LEN];
+	float dat_dur[MAX_LEN];
+	float dat_start[MAX_LEN];
+	while (fgets(dat_line, MAX_LEN, dat) != NULL){
+		if ( read == 1 ){
+			if ( strlen(dat_line) > 3 ){
+				sscanf(dat_line,"%f%f%f%f%f",&buff[0],&buff[1],&dat_start[dat_num],&dat_dur[dat_num],&dat_counts[dat_num]);
+				dat_num++;
+			} else {
+				read = 0;
+			}
+d117 2
+a118 2
+			if ( strstr(dat_line,meantime) != NULL )
+				read = 1;
+d121 1
+a121 1
+	fclose(dat);
+d123 4
+d128 5
+a132 13
+	if ( nflg == 0 )
+		n_frames = (dat_num - start_frame) + 1;
+	
+	printf("start frame for slope calculations       = %d\n",start_frame);
+	printf("number of frames used to calculate slope = %d\n",n_frames);
+	printf("number of frames in %s = %d\n",argv[1],lst.imgnum);
+	printf("number of frames in %s = %d\n",argv[2],dat_num);
+	
+	if ( hflg ){
+		printf("decay correction requested\n");
+		printf("pie factor            = %f\n",pfactor);
+		printf("halflife (in minutes) = %f\n",halflife);
+		dc = (log(2))/(halflife*60);
+d134 3
+a136 5
+	
+	if ( start_frame + n_frames - 1 > dat_num ){
+		printf("ERROR: too many frames requested\n");
+		printf("start frame = %d\nframes to use = %d\nnumber of total frames in dat file and lst file = %d\n",start_frame, n_frames, dat_num);
+		exit(1);
+d138 5
+a142 4
+
+	if ( dat_num == 0 ){
+		printf("ERROR: problem with %s, number of frames = 0\n",argv[2]);
+		exit(1);
+d144 1
+d146 2
+a147 4
+	if ( dat_num != lst.imgnum ){
+		printf("ERROR: number of images in %s does not equal number of frames in %s\n",argv[1],argv[2]);
+		exit(1);
+	}
+d149 1
+a149 7
+/* correct for start time of frame 1 greater than 0 */
+	if ( vflg )
+		printf("WARNING: start time of first frame in %s is not zero, correcting all start times\n",argv[2]);
+	
+	float frame1_start = dat_start[0];
+	for ( i = 0 ; i < dat_num ; i++ )
+		dat_start[i] = dat_start[i] - frame1_start;
+d151 5
+a155 16
+/* define last frame */
+	int last_frame = (start_frame + n_frames) - 1;
+
+/* open files from list file */
+	FILE *images[last_frame];
+	for ( i = 0 ; i < last_frame ; i++ )
+		images[i] = open_4dfp( lst.names[i], "rb" );
+
+/* check ifh files */
+	IFH_INFO ifh1;
+	IFH_INFO ifh2;
+	for ( i = 0; i < last_frame; i++ ){
+		ifh1 = readifh(lst.names[i], 0);
+		if ( i != 0 && checkifh(&ifh1,&ifh2,1) ){
+			printf("ERROR: info in ifh files %s and %s do not match\n",ifh2.name,ifh1.name);
+			exit(1);
+d160 7
+a166 7
+/* find file sizes of input files */
+	int file_size1, file_size2;
+	for ( i = 0 ; i < last_frame ; i++ ){	
+		file_size1 = filesize(images[i]);
+		if ( i != 0 && file_size1 != file_size2 ){
+			printf("ERROR: input files %s and %s have unequal sizes\n",lst.names[i-1],lst.names[i]);
+			exit(1);
+d170 3
+a172 4
+	
+	if ( file_size1 == 0 ){
+		printf("ERROR: input files may have no data\n");
+		exit(1);
+a173 1
+	
+d175 6
+a180 9
+	float *image_data[last_frame];
+	
+	if ( vflg )
+		printf("allocating memory for image files\n");
+	for ( i = 0 ; i < last_frame ; i++ ){
+		image_data[i] = calloc( file_size1 / sizeof(float) , sizeof(float));
+		if (image_data[i] == NULL){
+			printf("ERROR: failed to allocate memory for %s\n",lst.names[i]);
+			exit(1);
+a181 1
+			
+d184 1
+a184 7
+/* load image files from disk to memory and close image files */
+	for ( i = 0 ; i < last_frame ; i++ ){
+		fread(image_data[i],file_size1,1,images[i]);
+		fclose(images[i]);
+	}
+	if ( vflg )
+		printf("loaded image files into memory\n");
+d186 3
+a188 7
+/* allocate memory for output files */
+	float *dvr_img;
+	printf("allocating memory for %s\n",dvr_name);
+	dvr_img = calloc( file_size1 / sizeof(float), sizeof(float));
+	if (dvr_img == NULL){
+		printf("ERROR: failed to allocate memory for dvr image\n");
+		exit(1);
+d191 1
+a191 9
+	float *mean_img;
+	if ( mflg ){
+		printf("allocating memory for %s\n",mean_name);
+		mean_img = calloc( file_size1 / sizeof(float), sizeof(float));
+		if (mean_img == NULL){
+			printf("ERROR: failed to allocate memory for mean image\n");
+			exit(1);
+		}
+	}
+d193 4
+a196 8
+	float *r_img;
+	if ( rflg ){
+		printf("allocating memory for %s\n",r_name);
+		r_img = calloc( file_size1 / sizeof(float), sizeof(float));
+		if (r_img == NULL){
+			printf("ERROR: failed to allocate memory for r_image\n");
+			exit(1);
+		}
+d198 12
+d211 2
+a212 21
+/* compute slope for each voxel */
+	printf("running slope calculations\n");
+	int j;
+	float dat_int[last_frame];
+	float vox_int[last_frame];
+	F2 logan_points[n_frames];
+	float mean_time[last_frame], correction[last_frame];
+	R_DATA output;
+	float vox_sum;
+	
+	for ( j = 0; j < last_frame ; j++ ){
+		if ( hflg ){
+			mean_time[j] = (-1/dc)*log(0.5*(exp(-(dc*dat_dur[j])) + 1));
+			correction[j] = (60*pfactor*pow(2, ((mean_time[j] + dat_start[j])/60) / halflife )) / dat_dur[j];
+			dat_counts[j] = dat_counts[j]*correction[j];
+		} else {
+			correction[j] = 1/dat_dur[j];
+			dat_counts[j] = dat_counts[j]*correction[j];
+		}
+		
+		if ( j == 0 ){
+d214 2
+a215 3
+		} else {
+			dat_int[j] = (dat_counts[j] * mean_time[j]) + dat_int[j - 1] + (dat_counts[j - 1] * (dat_dur[j - 1] - mean_time[j - 1]));
+		}
+d217 2
+a218 2
+	
+	for ( i = 0 ; i < file_size1 / sizeof(float) ; i++ ){
+d220 4
+a223 8
+		for ( j = 0; j < last_frame ; j++ ){
+			if ( mflg )
+				vox_sum = vox_sum + *(image_data[j] + i);
+				
+			*(image_data[j] + i) = *(image_data[j] + i) * correction[j];
+			
+			
+			if ( j == 0 ){
+d225 5
+a229 2
+			} else {
+				vox_int[j] = (*(image_data[j] + i) * mean_time[j]) + vox_int[j - 1] + (*(image_data[j - 1] + i) * (dat_dur[j - 1] - mean_time[j - 1]));
+a230 5
+			
+			if ( j + 1 >= start_frame ){
+				logan_points[(j + 1) - start_frame].x = (dat_int[j] + dat_counts[j]/k2)/ *(image_data[j] + i);
+				logan_points[(j + 1) - start_frame].y = vox_int[j] / *(image_data[j] + i);
+			}		
+d232 1
+a232 2
+		
+		output = regress( logan_points, n_frames );
+d234 2
+a235 4
+		if ( mflg )
+			*(mean_img + i) = vox_sum / last_frame;
+		if ( rflg )
+			*(r_img + i) = output.r;	
+d237 22
+a258 27
+	
+/* write output files to disk */
+	printf("writing output files to disk\n");
+	fwrite(dvr_img,1,file_size1,dvr_f);
+	free(dvr_img);
+	fclose(dvr_f);
+	writeifh( dvr_name, &ifh1, argv[0], 0 );
+	
+	if ( mflg ){
+		fwrite(mean_img,1,file_size1,mean_f);
+		free(mean_img);
+		fclose(mean_f);
+		writeifh( mean_name, &ifh1, argv[0], 0 );
+	}
+	
+	if ( rflg ){
+		fwrite(r_img,1,file_size1,r_f);
+		free(r_img);
+		fclose(r_f);
+		writeifh( r_name, &ifh1, argv[0], 0 );
+	}	
+	
+/* free memory */
+	/* taken out for now, it crashes
+	for ( j = 0 ; j < lst.imgnum ; j++ )
+		free(image_data[j]); */
+	
+@

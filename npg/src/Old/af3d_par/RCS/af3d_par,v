@@ -1,0 +1,605 @@
+head	1.9;
+access;
+symbols;
+locks
+	ty7777:1.9; strict;
+comment	@# @;
+
+
+1.9
+date	95.05.01.17.05.32;	author ty7777;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.04.28.18.09.28;	author ty7777;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.04.28.15.25.10;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.04.27.19.50.12;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.04.26.19.06.05;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.04.26.16.33.58;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.04.26.16.30.51;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.04.14.17.47.12;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.04.07.20.19.55;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.9
+log
+@Copy prm and list from the t88.rec file.
+@
+text
+@#!/bin/csh
+#
+#	Porgram:	af3d_par
+#	Date:		March 16, 1995.
+#	Author:		Tom Yang
+#	Use:		Find peaks in an image.
+
+# Set library path and bin path
+set libpath	= /usr/local/lib/af3d_par
+set binpath 	= /usr/local/npg
+#set binpath 	= .
+
+# Set default parameters
+set program		= af3d_par
+set argc		= $#argv
+set image_file		= $1
+set prmfile		= $2
+set image_root		= `echo $1 | awk -F. '{print $1}'`
+set output		= ${image_root}
+set sign		= 1
+set hdrpath		= null
+set inputlist		= null
+set region		= ${libpath}/cmrad.dat 
+set header_root		= ${hdrpath}/${image_root}
+set hdrfile		= null
+set average		= 0
+set use_header		= 0
+set now 		= `date`
+set uid 		= `whoami`
+
+if ($argc < 1 || $argc > 5) then
+	echo " Usage:   af3d_par image_root prm [output hdrpath inputlist]" 
+	echo " Examples: af3d_par test prm"
+	echo "           af3d_par test.t88 prm test"
+	echo "           af3d_par test.t88 prm test /home/petsun4/ty7777/hdrs"
+	echo "           af3d_par test.t88 prm test null mylist"
+	exit
+endif
+
+switch ($argc)
+	case 3:
+		set output	= $3
+		breaksw
+	case 4:
+		set output		= $3
+		set hdrpath		= $4
+		set header_root		= ${hdrpath}/${image_root}
+		set use_header		= 1
+		breaksw
+	case 5:
+		set output		= $3
+		set hdrpath		= $4
+		set inputlist		= $5
+		set average		= 1
+		breaksw
+	default:
+		breaksw
+endsw
+
+# Check if the input image file exists.
+if (!(-r ${image_file})) then
+	set image_file	= ${image_root}.t88
+
+	if (!(-r ${image_file})) then
+		set image_file	= ${image_root}.smg
+
+		if (!(-r ${image_file})) then
+			set image_file	= ${image_root}.SMG
+
+			if (!(-r ${image_file})) then
+				set image_file	= ${image_root}.csg
+
+				if (!(-r ${image_file})) then
+					set image_file	= ${image_root}.CSG
+					if (!(-r ${image_file})) then
+						echo " Error: input file (${image_file}) does not exist."
+						exit
+					endif
+				endif
+			endif
+		endif
+	endif
+endif
+
+# Check if the region file exists.
+if (!(-r $region)) then
+	echo " Error: Region file ($region) does not exist."
+	exit
+endif
+
+# Check if the header file exists.
+if ($use_header == "1") then
+	if (${hdrpath} == "null" || ${hdrpath} == "NULL" || (!(-d ${hdrpath}))) then
+		echo " Error: header path (${hdrpath}) does not exist."
+		exit
+	endif
+
+	set hdrfile	= ${header_root}.hdr
+	if (!(-r ${hdrfile})) then
+		set hdrfile	= ${header_root}.HDR
+		if (!(-r ${hdrfile})) then
+			echo " Error: header file (${hdrfile}) does not exist."
+			exit
+		endif
+	endif
+endif
+
+# Check if the input list exists.
+if ($argc == 5) then
+	if (!(-r ${inputlist})) then
+		echo " Error: input list file (${inputlist}) does not exist."
+		exit
+	endif
+endif
+
+# Call af3d_par.bin and generate .3sp file 
+${binpath}/af3d_par.bin ${image_file} ${prmfile} $hdrfile $inputlist $output $sign ${region} $use_header $average $now $uid
+
+if (${average} == 0) then
+	# Add tail to the .3sp file
+	set output_atlas	= ${output}.3sp
+
+	echo "" >> ${output_atlas}
+	echo "${now} ${uid}" >> ${output_atlas}
+	echo "${program} $1 $2 $3 $4 $5" >> ${output_atlas}
+	ident ${binpath}/af3d_par.bin | grep ${program}.c >> ${output_atlas}
+
+	echo "" >> ${output_atlas}
+	echo "prmfile" >> ${output_atlas}
+	cat ${prmfile} >> ${output_atlas}
+	echo "endprm" >> ${output_atlas}
+
+	if (-e ${image_file}.rec) then
+		echo "" >> ${output_atlas}
+		csplit -f /tmp/af3d_par ${image_file}.rec /endimglst/+1
+		cat /tmp/af3d_par00 >> ${output_atlas}
+		echo "endrec" >> ${output_atlas}
+		/bin/rm /tmp/af3d_par??
+	endif
+
+	# Call af3d_par.bin and generate .3sn file
+	@@ sign	*= -1 
+	${binpath}/af3d_par.bin ${image_file} ${prmfile} $hdrfile $inputlist $output $sign ${region} $use_header $average $now $uid
+
+	# Add tail to the .3sn file
+	set output_atlas	= ${output}.3sn
+
+	echo "" >> ${output_atlas}
+	echo "${now} ${uid}" >> ${output_atlas}
+	echo "${program} $1 $2 $3 $4 $5" >> ${output_atlas}
+	ident ${binpath}/af3d_par.bin | grep ${program}.c >> ${output_atlas}
+
+	echo "" >> ${output_atlas}
+	echo "prmfile" >> ${output_atlas}
+	cat ${prmfile} >> ${output_atlas}
+	echo "endprm" >> ${output_atlas}
+
+	if (-e ${image_file}.rec) then
+		echo "" >> ${output_atlas}
+		csplit -f /tmp/af3d_par ${image_file}.rec /endimglst/+1
+		cat /tmp/af3d_par00 >> ${output_atlas}
+		echo "endrec" >> ${output_atlas}
+		/bin/rm /tmp/af3d_par??
+	endif
+endif
+@
+
+
+1.8
+log
+@Added prm file to the .3sp and .3sn files.
+@
+text
+@d10 2
+a11 2
+#set binpath 	= /usr/local/npg
+set binpath 	= .
+d135 4
+a138 1
+		cat ${image_file}.rec >> ${output_atlas}
+d160 4
+a163 1
+		cat ${image_file}.rec >> ${output_atlas}
+@
+
+
+1.7
+log
+@Same as the last version.
+@
+text
+@d10 2
+a11 2
+set binpath 	= /usr/local/npg
+#set binpath 	= .
+d116 2
+a117 1
+set recfile	= ${output}.rec
+d119 3
+a121 6
+if (-e ${recfile}) then
+	rm ${recfile}
+endif
+echo "rec ${output}.3sp ${output}.3sn ${now} ${uid}" > ${recfile}
+echo "${program} $1 $2 $3 $4 $5" >> ${recfile}
+ident ${binpath}/af3d_par.bin | grep ${program}.c >> ${recfile}
+d123 4
+a126 4
+echo "" >> ${recfile}
+echo "prmfile" >> ${recfile}
+cat ${prmfile} >> ${recfile}
+echo "endprm" >> ${recfile}
+d128 4
+a131 2
+# Call af3d_par.bin and generate .3sp file 
+${binpath}/af3d_par.bin ${image_file} ${prmfile} $hdrfile $inputlist $output $sign ${region} $use_header $average $now $uid
+d133 5
+a137 1
+if (${average} == 0) then
+a140 1
+endif
+d142 17
+a158 3
+if (-e ${image_file}.rec) then
+	echo "" >> ${recfile}
+	cat ${image_file}.rec >> ${recfile}
+a159 3
+
+echo "" >> ${recfile}
+echo "endrec" >> ${recfile}
+@
+
+
+1.6
+log
+@Use prm files.
+@
+text
+@@
+
+
+1.5
+log
+@Added rec file.
+@
+text
+@d3 4
+a6 4
+#	Module:	af3d_par
+#	Date:	March 16, 1995.
+#	Author:	Tom Yang
+#	Use:	Find peaks in an image.
+d10 2
+a11 2
+#set binpath 	= /usr/local/npg
+set binpath 	= .
+a143 1
+# Add tail to recfile
+a144 13
+set output_atlas	= ${output}.3sp
+set t88mean_keyword = `more ${output_atlas} | grep t88mean | cut -c2-8`
+if (${t88mean_keyword} != "t88mean") then
+	echo "" >> ${recfile}
+	echo "PROCESSING STREAM" >> ${recfile}
+	smginfo ${image_file} >> ${recfile}
+endif
+
+echo "" >> ${recfile}
+echo "af3d_par 04/26/95" >> ${recfile}
+date '+%D %T' >> ${recfile}
+echo "LM" >> ${recfile}
+
+@
+
+
+1.4
+log
+@Use prm file.
+@
+text
+@d10 1
+a10 1
+#set binpath 	= /usr/local/bin
+d14 1
+d109 1
+a109 1
+if ($argc == 12) then
+d116 14
+a133 15
+	set output_atlas	= ${output}.3sp
+
+	# Add tail to output file
+	set t88mean_keyword = `more ${output_atlas} | grep t88mean | cut -c2-8`
+	if (${t88mean_keyword} != "t88mean") then
+		echo "" >> ${output_atlas}
+		echo "PROCESSING STREAM" >> ${output_atlas}
+		smginfo ${image_file} >> ${output_atlas}
+	endif
+
+	echo "" >> ${output_atlas}
+	echo "af3d_par 03/31/95" >> ${output_atlas}
+	date '+%D %T' >> ${output_atlas}
+	echo "LM" >> ${output_atlas}
+
+d137 1
+d139 4
+a142 1
+	set output_atlas	= ${output}.3sn
+d144 9
+a152 7
+	# Add tail to output file
+	set t88mean_keyword = `more ${output_atlas} | grep t88mean | cut -c2-8`
+	if (${t88mean_keyword} != "t88mean") then
+		echo "" >> ${output_atlas}
+		echo "PROCESSING STREAM" >> ${output_atlas}
+		smginfo ${image_file} >> ${output_atlas}
+	endif
+d154 6
+a159 5
+	echo "" >> ${output_atlas}
+	echo "af3d_par 03/31/95" >> ${output_atlas}
+	date '+%D %T' >> ${output_atlas}
+	echo "LM" >> ${output_atlas}
+endif
+@
+
+
+1.3
+log
+@Use /usr/local/npg.
+@
+text
+@d10 1
+a10 1
+#set binpath 	= /usr/local/npg
+d16 1
+a17 4
+set filter_radius	= 0
+set adjpeak_radius	= 6
+set centermass_radius	= 3
+set mag_radius		= $centermass_radius
+a18 2
+set cutoff		= 0.0
+set mask		= ${libpath}/pett6_n99.t88.msk 
+a26 2
+set sphere_center	= 0
+set output_both		= 1
+d30 6
+a35 15
+if ($argc < 1 || $argc > 12) then
+	echo " Usage:   af3d_par image_root [filter_radius adjpeak_radius centermass_radius mag_radius sphere_center output cutoff mask sign hdrpath inputlist]" 
+	echo " Examples: af3d_par test"
+	echo "           af3d_par test.smg 3"
+	echo "           af3d_par test.smg 3 6"
+	echo "           af3d_par test.smg 3 6 3"
+	echo "           af3d_par test.smg 3 6 3 3"
+	echo "           af3d_par test.smg 3 6 3 3 0"
+	echo "           af3d_par test.smg 3 6 3 3 0 test"
+	echo "           af3d_par test.smg 3 6 3 3 0 test 0.0"
+	echo "           af3d_par test.smg 3 6 3 3 0 test 0.0 /usr/local/lib/af3d_par/atmplt40.smg"
+	echo "           af3d_par test.t88 3 6 3 3 0 test 0.0 /usr/local/lib/af3d_par/pett6_n99.t88.msk 1"
+	echo "           af3d_par test.t88 3 6 3 3 0 test 0.0 /usr/local/lib/af3d_par/pstd1how.msk -1 /home/petsun4/hdrs"
+	echo "           af3d_par test.t88 3 6 3 3 0 test 0.0 /usr/local/lib/af3d_par/pett6_n99.t88.msk 1 null mylist"
+	echo "           af3d_par test.t88 3 6 3 3 0 test 0.0 /usr/local/lib/af3d_par/pstd1how.msk 1 /home/petsun4/hdrs mylist"
+a39 3
+	case 2:
+		set filter_radius	= $2
+		breaksw
+d41 1
+a41 2
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+d44 2
+a45 68
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+		set centermass_radius	= $4
+		set mag_radius		= $centermass_radius
+		breaksw
+	case 5:
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+		set centermass_radius	= $4
+		set mag_radius		= $5
+		breaksw
+	case 6:
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+		set centermass_radius	= $4
+		set mag_radius		= $5
+		set sphere_center	= $6
+		breaksw
+	case 7:
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+		set centermass_radius	= $4
+		set mag_radius		= $5
+		set sphere_center	= $6
+		set output		= $7
+		breaksw
+	case 8:
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+		set centermass_radius	= $4
+		set mag_radius		= $5
+		set sphere_center	= $6
+		set output		= $7
+		set cutoff		= $8
+		breaksw
+	case 9:
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+		set centermass_radius	= $4
+		set mag_radius		= $5
+		set sphere_center	= $6
+		set output		= $7
+		set cutoff		= $8
+		set mask		= $9
+		breaksw
+	case 10:
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+		set centermass_radius	= $4
+		set mag_radius		= $5
+		set sphere_center	= $6
+		set output		= $7
+		set cutoff		= $8
+		set mask		= $9
+		set sign		= $10
+		set output_both		= 0
+		breaksw
+	case 11:
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+		set centermass_radius	= $4
+		set mag_radius		= $5
+		set sphere_center	= $6
+		set output		= $7
+		set cutoff		= $8
+		set mask		= $9
+		set sign		= $10
+		set hdrpath		= $11
+a46 1
+		set output_both		= 0
+d49 4
+a52 12
+	case 12:
+		set filter_radius	= $2
+		set adjpeak_radius	= $3
+		set centermass_radius	= $4
+		set mag_radius		= $5
+		set sphere_center	= $6
+		set output		= $7
+		set cutoff		= $8
+		set mask		= $9
+		set sign		= $10
+		set hdrpath		= $11
+		set inputlist		= $12
+a53 1
+		set output_both		= 0
+a83 6
+# Check if the mask file exists.
+if (!(-r $mask)) then
+	echo " Error: Mask file ($mask) does not exist."
+	exit
+endif
+
+a89 5
+# Check if the sign is valid or not.
+if ($sign != 1 && $sign != -1) then
+	set sign	= 1
+endif
+
+d115 2
+a116 2
+# Call af3d_par.bin and generate .3sp files if sign is 1
+${binpath}/af3d_par.bin ${image_file} $filter_radius $adjpeak_radius $centermass_radius $mag_radius $sphere_center $output $cutoff $mask $sign $hdrfile $inputlist ${region} $use_header $average $now $uid
+d119 1
+a119 5
+	if ($sign == 1) then
+		set output_atlas	= ${output}.3sp
+	else
+		set output_atlas	= ${output}.3sn
+	endif
+a131 1
+	echo "$filter_radius $adjpeak_radius $centermass_radius $mag_radius $sphere_center" >> ${output_atlas}
+a132 2
+	echo "$cutoff" >> ${output_atlas} 
+endif
+d134 1
+a134 2
+# Call af3d_par.bin and generate .3sn files if sign is -1
+if (${output_both} == 1) then
+d136 1
+a136 1
+	${binpath}/af3d_par.bin ${image_file} $filter_radius $adjpeak_radius $centermass_radius $mag_radius $sphere_center $output $cutoff $mask $sign $hdrfile $inputlist ${region} $use_header $average $now $uid
+d138 1
+a138 5
+	if ($sign == 1) then
+		set output_atlas	= ${output}.3sp
+	else
+		set output_atlas	= ${output}.3sn
+	endif
+a150 1
+	echo "$filter_radius $adjpeak_radius $centermass_radius $mag_radius $sphere_center" >> ${output_atlas}
+a151 1
+	echo "$cutoff" >> ${output_atlas} 
+a152 1
+
+@
+
+
+1.2
+log
+@Final release.
+@
+text
+@d10 2
+a11 2
+set binpath 	= /usr/local/bin
+#set binpath 	= .
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d10 2
+a11 1
+set binpath 	= .
+d27 1
+d186 6
+d223 1
+a223 1
+${binpath}/af3d_par.bin ${image_file} $filter_radius $adjpeak_radius $centermass_radius $mag_radius $sphere_center $output $cutoff $mask $sign $hdrfile $inputlist $use_header $average $now $uid
+d251 1
+a251 1
+	${binpath}/af3d_par.bin ${image_file} $filter_radius $adjpeak_radius $centermass_radius $mag_radius $sphere_center $output $cutoff $mask $sign $hdrfile $inputlist $use_header $average $now $uid
+@

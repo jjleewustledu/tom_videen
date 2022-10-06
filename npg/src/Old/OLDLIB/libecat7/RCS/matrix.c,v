@@ -1,0 +1,2666 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.12.01.15.13.26;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.09.16.48.51;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking, working version.
+@
+
+
+1.2
+log
+@TY's Nov 27 1995
+@
+text
+@/* @@(#)matrix.c	1.11 6/7/93 */
+#include	"matrix.h"
+
+static char     sccsid[] = "@@(#)matrix.c	1.11 6/7/93 Copyright 1989 CTI, Inc.";
+
+static char    *magicNumber = "MATRIX";
+static int      ecat_default_version = 6;
+static char    *dstypecode[NumDataSetTypes] =
+{"u", "s", "i", "a", "n", "pm", "v8", "v", "p8", "p", "i8", "S", "S8", "N"};
+
+FILE           *mat_open (fname, fmode)
+	char           *fname, *fmode;
+{
+	FILE           *fopen (), *fptr;
+
+	fptr = fopen (fname, fmode);
+	return (fptr);
+
+}
+
+mat_close (fptr)
+	FILE           *fptr;
+{
+	return fclose (fptr);
+}
+
+int             mat_rblk (fptr, blkno, bufr, nblks)
+	FILE           *fptr;
+	int             blkno, nblks;
+	char           *bufr;
+{
+	int             err;
+
+	err = fseek (fptr, (blkno - 1) * MatBLKSIZE, 0);
+	if (err)
+		return (err);
+	err = fread (bufr, 1, nblks * MatBLKSIZE, fptr);
+	if (err != nblks * MatBLKSIZE)
+		return (-1);
+	return (0);
+}
+
+int             mat_list (fptr, mlist, lmax)
+	FILE           *fptr;
+	struct MatDir   mlist[];
+	int             lmax;
+{
+	int             blk, num_entry, num_stored, i, err, mat_rblk ();
+	int             nfree, nxtblk, prvblk, nused, matnum, strtblk, endblk, matstat;
+	int             dirbufr[MatBLKSIZE / 4];
+	char            bytebufr[MatBLKSIZE];
+
+	blk = MatFirstDirBlk;
+	num_entry = 0;
+	num_stored = 0;
+	while (1) {
+		err = mat_rblk (fptr, blk, bytebufr, 1);
+		swap_byte (bytebufr, dirbufr, MatBLKSIZE);
+		swaw (dirbufr, dirbufr, MatBLKSIZE / 2);
+		nfree = dirbufr[0];
+		nxtblk = dirbufr[1];
+		prvblk = dirbufr[2];
+		nused = dirbufr[3];
+		for (i = 4; i < MatBLKSIZE / 4; i += 4) {
+			matnum = dirbufr[i];
+			strtblk = dirbufr[i + 1];
+			endblk = dirbufr[i + 2];
+			matstat = dirbufr[i + 3];
+			if (matnum && num_stored < lmax) {
+				mlist[num_stored].matnum = matnum;
+				mlist[num_stored].strtblk = strtblk;
+				mlist[num_stored].endblk = endblk;
+				mlist[num_stored].matstat = matstat;
+				num_stored++;
+			}
+			if (matnum)
+				num_entry++;
+		}
+		blk = nxtblk;
+		if (blk == MatFirstDirBlk)
+			break;
+	}
+
+	return (num_entry);
+}
+
+swap_byte (from, to, length)
+	char            from[], to[];
+	int             length;
+{
+	char            temp;
+	int             i;
+
+	for (i = 0; i < length; i += 2) {
+		temp = from[i + 1];
+		to[i + 1] = from[i];
+		to[i] = temp;
+	}
+	return 0;
+}
+
+swaw (from, to, length)
+	short int       from[], to[];
+	int             length;
+{
+	short int       temp;
+	int             i;
+
+	for (i = 0; i < length; i += 2) {
+		temp = from[i + 1];
+		to[i + 1] = from[i];
+		to[i] = temp;
+	}
+}
+
+int             mat_numcod (frame, plane, gate, data, bed)
+	int             frame, plane, gate, data, bed;
+{
+	return ((frame) | ((bed & 0xF) << 12) | ((plane & 0xFF) << 16) | (((plane & 0x300) >> 8) << 9) |
+		((gate & 0x3F) << 24) | ((data & 0x3) << 30) | ((data & 0x4) << 9));
+}
+
+int             mat_numdoc (matnum, matval)
+	int             matnum;
+	struct Matval  *matval;
+{
+	matval->frame = matnum & 0x1FF;
+	matval->plane = ((matnum >> 16) & 0xFF) + (((matnum >> 9) & 0x3) << 8);
+	matval->gate = (matnum >> 24) & 0x3F;
+	matval->data = ((matnum >> 9) & 0x4) | (matnum >> 30) & 0x3;
+	matval->bed = (matnum >> 12) & 0xF;
+	return 1;
+}
+
+int             mat_lookup (file, matnum, entry)
+	MatrixFile     *file;
+	int             matnum;
+	struct MatDir  *entry;
+{
+
+	int             blk, i, err;
+	int             nfree, nxtblk, prvblk, nused, matnbr, strtblk, endblk, matstat;
+	int             dirbufr[MatBLKSIZE / 4];
+
+	if (file->mhptr->sw_version < V7)
+		return mat_lookup_64 (file->fptr, matnum, entry);
+	blk = MatFirstDirBlk;
+	while (1) {
+		read_matrix_data (file->fptr, blk, 1, (char *) dirbufr, SunLong);
+		nfree = dirbufr[0];
+		nxtblk = dirbufr[1];
+		prvblk = dirbufr[2];
+		nused = dirbufr[3];
+		for (i = 4; i < MatBLKSIZE / 4; i += 4) {
+			matnbr = dirbufr[i];
+			strtblk = dirbufr[i + 1];
+			endblk = dirbufr[i + 2];
+			matstat = dirbufr[i + 3];
+			if (matnum == matnbr) {
+				entry->matnum = matnbr;
+				entry->strtblk = strtblk;
+				entry->endblk = endblk;
+				entry->matstat = matstat;
+				return (1);
+			}
+		}
+		blk = nxtblk;
+		if (blk == MatFirstDirBlk)
+			break;
+	}
+	return (0);
+}
+
+int             unmap_main_header (bufr, header)
+	char           *bufr;
+	Main_header    *header;
+{
+	int             i = MagicNumLen;	 /* skip magic number */
+	int             j = 0;
+
+	bufRead (header->original_file_name, bufr, &i, NameLen);
+	header->original_file_name[NameLen - 1] = '\0';
+	bufRead_s (&header->sw_version, bufr, &i);
+	bufRead_s (&header->system_type, bufr, &i);
+	bufRead_s (&header->file_type, bufr, &i);
+	bufRead (header->serial_number, bufr, &i, 10);
+	header->serial_number[9] = '\0';
+	bufRead_i (&header->scan_start_time, bufr, &i);
+	bufRead (header->isotope_code, bufr, &i, 8);
+	header->isotope_code[7] = '\0';
+	bufRead_f (&header->isotope_halflife, bufr, &i);
+	bufRead (header->radiopharmaceutical, bufr, &i, NameLen);
+	header->radiopharmaceutical[NameLen - 1] = '\0';
+	bufRead_f (&header->gantry_tilt, bufr, &i);
+	bufRead_f (&header->gantry_rotation, bufr, &i);
+	bufRead_f (&header->bed_elevation, bufr, &i);
+	bufRead_f (&header->intrinsic_tilt, bufr, &i);
+	bufRead_s (&header->wobble_speed, bufr, &i);
+	bufRead_s (&header->transm_source_type, bufr, &i);
+	bufRead_f (&header->distance_scanned, bufr, &i);
+	bufRead_f (&header->transaxial_fov, bufr, &i);
+	bufRead_s (&header->angular_compression, bufr, &i);
+	bufRead_s (&header->coin_samp_mode, bufr, &i);
+	bufRead_s (&header->axial_samp_mode, bufr, &i);
+	bufRead_f (&header->calibration_factor, bufr, &i);
+	bufRead_s (&header->calibration_units, bufr, &i);
+	bufRead_s (&header->calibration_units_label, bufr, &i);
+	bufRead_s (&header->compression_code, bufr, &i);
+	bufRead (header->study_name, bufr, &i, 12);
+	header->study_name[11] = '\0';
+	bufRead (header->patient_id, bufr, &i, IDLen);
+	header->patient_id[IDLen - 1] = '\0';
+	bufRead (header->patient_name, bufr, &i, NameLen);
+	header->patient_name[NameLen - 1] = '\0';
+	bufRead (header->patient_sex, bufr, &i, 1);
+	bufRead (header->patient_dexterity, bufr, &i, 1);
+	bufRead_f (&header->patient_age, bufr, &i);
+	bufRead_f (&header->patient_height, bufr, &i);
+	bufRead_f (&header->patient_weight, bufr, &i);
+	bufRead_i (&header->patient_birth_date, bufr, &i);
+	bufRead (header->physician_name, bufr, &i, NameLen);
+	header->physician_name[NameLen - 1] = '\0';
+	bufRead (header->operator_name, bufr, &i, NameLen);
+	header->operator_name[NameLen - 1] = '\0';
+	bufRead (header->study_description, bufr, &i, NameLen);
+	header->study_description[NameLen - 1] = '\0';
+	bufRead_s (&header->acquisition_type, bufr, &i);
+	bufRead_s (&header->patient_orientation, bufr, &i);
+	bufRead (header->facility_name, bufr, &i, 20);
+	header->facility_name[19] = '\0';
+	bufRead_s (&header->num_planes, bufr, &i);
+	bufRead_s (&header->num_frames, bufr, &i);
+	bufRead_s (&header->num_gates, bufr, &i);
+	bufRead_s (&header->num_bed_pos, bufr, &i);
+	bufRead_f (&header->init_bed_position, bufr, &i);
+	for (j = 0; j < 15; j++)
+		bufRead_f (&header->bed_offset[j], bufr, &i);
+	bufRead_f (&header->plane_separation, bufr, &i);
+	bufRead_s (&header->lwr_sctr_thres, bufr, &i);
+	bufRead_s (&header->lwr_true_thres, bufr, &i);
+	bufRead_s (&header->upr_true_thres, bufr, &i);
+	bufRead (header->user_process_code, bufr, &i, 10);
+	header->user_process_code[9] = '\0';
+	bufRead_s (&header->acquisition_mode, bufr, &i);
+	bufRead_f (&header->bin_size, bufr, &i);
+	bufRead_f (&header->branching_fraction, bufr, &i);
+	bufRead_i (&header->dose_start_time, bufr, &i);
+	bufRead_f (&header->dosage, bufr, &i);
+	bufRead_f (&header->well_counter_factor, bufr, &i);
+	bufRead (header->data_units, bufr, &i, 32);
+	header->data_units[31] = '\0';
+	bufRead_s (&header->septa_state, bufr, &i);
+	return 0;
+}
+
+int             mat_read_main_header (fptr, header)
+	FILE           *fptr;
+	Main_header    *header;
+{
+	int             i = 0;
+	char            bufr[MatBLKSIZE];
+
+	/* check magic number */
+	mat_rblk (fptr, 1, bufr, 1);
+	bufRead (header->magic_number, bufr, &i, MagicNumLen);
+	header->magic_number[MagicNumLen - 1] = '\0';
+	if (strncmp (header->magic_number, magicNumber, strlen (magicNumber))) {
+		return unmap64_main_header (bufr, header);
+	} else
+		return unmap_main_header (bufr, header);
+}
+
+int             mat_read_matrix_data (file, blk, nblks, bufr)
+	MatrixFile     *file;
+	int             blk, nblks;
+	short          *bufr;
+{
+	if (file->mhptr->sw_version < V7)
+		return read_matrix_data (file->fptr, blk, nblks, (char *) bufr, VAX_Ix2);
+	else
+		return read_matrix_data (file->fptr, blk, nblks, (char *) bufr, SunShort);
+}
+
+int             unmap_scan_header (buf, header)
+	char           *buf;
+	Scan_subheader *header;
+{
+	int             i = 0, j = 0;
+
+	bufRead_s (&header->data_type, buf, &i);
+	bufRead_s (&header->num_dimensions, buf, &i);
+	bufRead_s (&header->num_r_elements, buf, &i);
+	bufRead_s (&header->num_angles, buf, &i);
+	bufRead_s (&header->corrections_applied, buf, &i);
+	bufRead_s (&header->num_z_elements, buf, &i);
+	bufRead_s (&header->ring_difference, buf, &i);
+	bufRead_f (&header->x_resolution, buf, &i);
+	bufRead_f (&header->y_resolution, buf, &i);
+	bufRead_f (&header->z_resolution, buf, &i);
+	bufRead_f (&header->w_resolution, buf, &i);
+	i += 6 * sizeof (short);		 /* space reserved for future gating info */
+	bufRead_i (&header->gate_duration, buf, &i);
+	bufRead_i (&header->r_wave_offset, buf, &i);
+	bufRead_i (&header->num_accepted_beats, buf, &i);
+	bufRead_f (&header->scale_factor, buf, &i);
+	bufRead_s (&header->scan_min, buf, &i);
+	bufRead_s (&header->scan_max, buf, &i);
+	bufRead_i (&header->prompts, buf, &i);
+	bufRead_i (&header->delayed, buf, &i);
+	bufRead_i (&header->multiples, buf, &i);
+	bufRead_i (&header->net_trues, buf, &i);
+	for (j = 0; j < 16; j++)
+		bufRead_f (&header->cor_singles[j], buf, &i);
+	for (j = 0; j < 16; j++)
+		bufRead_f (&header->uncor_singles[j], buf, &i);
+	bufRead_f (&header->tot_avg_cor, buf, &i);
+	bufRead_f (&header->tot_avg_uncor, buf, &i);
+	bufRead_i (&header->total_coin_rate, buf, &i);
+	bufRead_i (&header->frame_start_time, buf, &i);
+	bufRead_i (&header->frame_duration, buf, &i);
+	bufRead_f (&header->loss_correction_fctr, buf, &i);
+	for (j = 0; j < 8; j++)
+		bufRead_s (&header->phy_planes[j], buf, &i);
+	return 0;
+}
+
+int             unmap_Scan3D_header (buf, header)
+	char           *buf;
+	Scan3D_subheader *header;
+{
+	int             i = 0;
+	int             j;
+
+	bufRead_s (&header->data_type, buf, &i);
+	bufRead_s (&header->num_dimensions, buf, &i);
+	bufRead_s (&header->num_r_elements, buf, &i);
+	bufRead_s (&header->num_angles, buf, &i);
+	bufRead_s (&header->corrections_applied, buf, &i);
+	for (j = 0; j < 64; j++)
+		bufRead_s (&header->num_z_elements[j], buf, &i);
+	bufRead_s (&header->ring_difference, buf, &i);
+	bufRead_s (&header->storage_order, buf, &i);
+	bufRead_s (&header->axial_compression, buf, &i);
+	bufRead_f (&header->x_resolution, buf, &i);
+	bufRead_f (&header->v_resolution, buf, &i);
+	bufRead_f (&header->z_resolution, buf, &i);
+	bufRead_f (&header->w_resolution, buf, &i);
+	i += 6 * sizeof (short);		 /* space reserved for future gating info */
+	bufRead_i (&header->gate_duration, buf, &i);
+	bufRead_i (&header->r_wave_offset, buf, &i);
+	bufRead_i (&header->num_accepted_beats, buf, &i);
+	bufRead_f (&header->scale_factor, buf, &i);
+	bufRead_s (&header->scan_min, buf, &i);
+	bufRead_s (&header->scan_max, buf, &i);
+	bufRead_i (&header->prompts, buf, &i);
+	bufRead_i (&header->delayed, buf, &i);
+	bufRead_i (&header->multiples, buf, &i);
+	bufRead_i (&header->net_trues, buf, &i);
+	bufRead_f (&header->tot_avg_cor, buf, &i);
+	bufRead_f (&header->tot_avg_uncor, buf, &i);
+	bufRead_i (&header->total_coin_rate, buf, &i);
+	bufRead_i (&header->frame_start_time, buf, &i);
+	bufRead_i (&header->frame_duration, buf, &i);
+	bufRead_f (&header->loss_correction_fctr, buf, &i);
+	i += 90 * sizeof (short);		 /* CTI reserved space */
+	i += 50 * sizeof (short);		 /* user reserved space */
+	for (j = 0; j < 128; j++)
+		bufRead_f (&header->uncor_singles[j], buf, &i);
+	return 0;
+}
+
+int             map_Scan3D_header (buf, header)
+	char           *buf;
+	Scan3D_subheader *header;
+{
+	int             i = 0;
+	int             j;
+
+	bufWrite_s (header->data_type, buf, &i);
+	bufWrite_s (header->num_dimensions, buf, &i);
+	bufWrite_s (header->num_r_elements, buf, &i);
+	bufWrite_s (header->num_angles, buf, &i);
+	bufWrite_s (header->corrections_applied, buf, &i);
+	for (j = 0; j < 64; j++)
+		bufWrite_s (header->num_z_elements[j], buf, &i);
+	bufWrite_s (header->ring_difference, buf, &i);
+	bufWrite_s (header->storage_order, buf, &i);
+	bufWrite_s (header->axial_compression, buf, &i);
+	bufWrite_f (header->x_resolution, buf, &i);
+	bufWrite_f (header->v_resolution, buf, &i);
+	bufWrite_f (header->z_resolution, buf, &i);
+	bufWrite_f (header->w_resolution, buf, &i);
+	i += 6 * sizeof (short);		 /* space reserved for future gating info */
+	bufWrite_i (header->gate_duration, buf, &i);
+	bufWrite_i (header->r_wave_offset, buf, &i);
+	bufWrite_i (header->num_accepted_beats, buf, &i);
+	bufWrite_f (header->scale_factor, buf, &i);
+	bufWrite_s (header->scan_min, buf, &i);
+	bufWrite_s (header->scan_max, buf, &i);
+	bufWrite_i (header->prompts, buf, &i);
+	bufWrite_i (header->delayed, buf, &i);
+	bufWrite_i (header->multiples, buf, &i);
+	bufWrite_i (header->net_trues, buf, &i);
+	bufWrite_f (header->tot_avg_cor, buf, &i);
+	bufWrite_f (header->tot_avg_uncor, buf, &i);
+	bufWrite_i (header->total_coin_rate, buf, &i);
+	bufWrite_i (header->frame_start_time, buf, &i);
+	bufWrite_i (header->frame_duration, buf, &i);
+	bufWrite_f (header->loss_correction_fctr, buf, &i);
+	i += 90 * sizeof (short);		 /* CTI reserved space */
+	i += 50 * sizeof (short);		 /* user reserved space */
+	for (j = 0; j < 128; j++)
+		bufWrite_f (header->uncor_singles[j], buf, &i);
+	return 0;
+}
+
+int             mat_read_Scan3D_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Scan3D_subheader *header;
+{
+	char            buf[2 * MatBLKSIZE];
+
+	if (file->acs) {
+		rtsRblk (file->fname, blknum, buf);
+		rtsRblk (file->fname, blknum + 1, buf + MatBLKSIZE);
+	} else
+		mat_rblk (file->fptr, blknum, buf, 2);
+	return unmap_Scan3D_header (buf, header);
+}
+
+int             mat_read_scan_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Scan_subheader *header;
+{
+	char            buf[MatBLKSIZE];
+
+	if (file->acs)
+		rtsRblk (file->fname, blknum, buf);
+	else
+		mat_rblk (file->fptr, blknum, buf, 1);
+	if (file->mhptr->sw_version < V7)
+		return unmap64_scan_header (buf, header, file->mhptr);
+	return unmap_scan_header (buf, header);
+}
+
+int             unmap_image_header (buf, header)
+	char           *buf;
+	Image_subheader *header;
+{
+	int             i = 0;
+
+	bufRead_s (&header->data_type, buf, &i);
+	bufRead_s (&header->num_dimensions, buf, &i);
+	bufRead_s (&header->x_dimension, buf, &i);
+	bufRead_s (&header->y_dimension, buf, &i);
+	bufRead_s (&header->z_dimension, buf, &i);
+	bufRead_f (&header->z_offset, buf, &i);
+	bufRead_f (&header->x_offset, buf, &i);
+	bufRead_f (&header->y_offset, buf, &i);
+	bufRead_f (&header->recon_zoom, buf, &i);
+	bufRead_f (&header->scale_factor, buf, &i);
+	bufRead_s (&header->image_min, buf, &i);
+	bufRead_s (&header->image_max, buf, &i);
+	bufRead_f (&header->x_pixel_size, buf, &i);
+	bufRead_f (&header->y_pixel_size, buf, &i);
+	bufRead_f (&header->z_pixel_size, buf, &i);
+	bufRead_i (&header->frame_duration, buf, &i);
+	bufRead_i (&header->frame_start_time, buf, &i);
+	bufRead_s (&header->filter_code, buf, &i);
+	bufRead_f (&header->x_resolution, buf, &i);
+	bufRead_f (&header->y_resolution, buf, &i);
+	bufRead_f (&header->z_resolution, buf, &i);
+	bufRead_f (&header->num_r_elements, buf, &i);
+	bufRead_f (&header->num_angles, buf, &i);
+	bufRead_f (&header->z_rotation_angle, buf, &i);
+	bufRead_f (&header->decay_corr_fctr, buf, &i);
+	bufRead_i (&header->processing_code, buf, &i);
+	bufRead_i (&header->gate_duration, buf, &i);
+	bufRead_i (&header->r_wave_offset, buf, &i);
+	bufRead_i (&header->num_accepted_beats, buf, &i);
+	bufRead_f (&header->filter_cutoff_frequency, buf, &i);
+	bufRead_f (&header->filter_resolution, buf, &i);
+	bufRead_f (&header->filter_ramp_slope, buf, &i);
+	bufRead_s (&header->filter_order, buf, &i);
+	bufRead_f (&header->filter_scatter_fraction, buf, &i);
+	bufRead_f (&header->filter_scatter_slope, buf, &i);
+	bufRead (header->annotation, buf, &i, 40);
+	bufRead_f (&header->mt_1_1, buf, &i);
+	bufRead_f (&header->mt_1_2, buf, &i);
+	bufRead_f (&header->mt_1_3, buf, &i);
+	bufRead_f (&header->mt_2_1, buf, &i);
+	bufRead_f (&header->mt_2_2, buf, &i);
+	bufRead_f (&header->mt_2_3, buf, &i);
+	bufRead_f (&header->mt_3_1, buf, &i);
+	bufRead_f (&header->mt_3_2, buf, &i);
+	bufRead_f (&header->mt_3_3, buf, &i);
+	bufRead_f (&header->rfilter_cutoff, buf, &i);
+	bufRead_f (&header->rfilter_resolution, buf, &i);
+	bufRead_s (&header->rfilter_code, buf, &i);
+	bufRead_s (&header->rfilter_order, buf, &i);
+	bufRead_f (&header->zfilter_cutoff, buf, &i);
+	bufRead_f (&header->zfilter_resolution, buf, &i);
+	bufRead_s (&header->zfilter_code, buf, &i);
+	bufRead_s (&header->zfilter_order, buf, &i);
+	bufRead_f (&header->mt_1_4, buf, &i);
+	bufRead_f (&header->mt_2_4, buf, &i);
+	bufRead_f (&header->mt_3_4, buf, &i);
+	bufRead_s (&header->scatter_type, buf, &i);
+	bufRead_s (&header->recon_type, buf, &i);
+	bufRead_s (&header->recon_views, buf, &i);
+	return 0;
+}
+
+int             mat_read_image_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Image_subheader *header;
+{
+	char            buf[MatBLKSIZE];
+
+	if (file->acs)
+		rtsRblk (file->fname, blknum, buf);
+	else
+		mat_rblk (file->fptr, blknum, buf, 1);
+	if (file->mhptr->sw_version < V7) {
+		return unmap64_image_header (buf, header, file->mhptr);
+	}
+	return unmap_image_header (buf, header);
+}
+
+Mat_dir         mat_read_dir (file, selector)
+	MatrixFile     *file;
+	char           *selector;
+{
+	int             i, n, blk, nxtblk, ndblks, bufr[128];
+	Mat_dir         dir;
+	FILE           *fptr = file->fptr;
+
+	blk = MatFirstDirBlk;
+	nxtblk = 0;
+	for (ndblks = 0; nxtblk != MatFirstDirBlk; ndblks++) {
+		if (file->mhptr->sw_version < V7)
+			read_matrix_data (fptr, blk, 1, (char *) bufr, VAX_Ix4);
+		else
+			read_matrix_data (fptr, blk, 1, (char *) bufr, SunLong);
+		nxtblk = bufr[1];
+		blk = nxtblk;
+	}
+	dir = (Mat_dir) malloc (sizeof (struct matdir));
+	dir->nmats = 0;
+	dir->nmax = 31 * ndblks;
+	dir->entry = (struct MatDir *) malloc (31 * ndblks * sizeof (struct MatDir));
+	for (n = 0, nxtblk = 0, blk = MatFirstDirBlk; nxtblk != MatFirstDirBlk; blk = nxtblk) {
+		if (file->mhptr->sw_version < V7)
+			read_matrix_data (fptr, blk, 1, (char *) bufr, VAX_Ix4);
+		else
+			read_matrix_data (fptr, blk, 1, (char *) bufr, SunLong);
+		nxtblk = bufr[1];
+		for (i = 4; i < MatBLKSIZE / 4; n++) {
+			dir->entry[n].matnum = bufr[i++];
+			dir->entry[n].strtblk = bufr[i++];
+			dir->entry[n].endblk = bufr[i++];
+			dir->entry[n].matstat = bufr[i++];
+			if (dir->entry[n].matnum != 0)
+				dir->nmats++;
+		}
+	}
+	return dir;
+}
+
+
+int             mat_wblk (fptr, blkno, bufr, nblks)
+	FILE           *fptr;
+	int             blkno, nblks;
+	char           *bufr;
+{
+	int             err;
+
+	/* seek to position in file */
+	err = fseek (fptr, (blkno - 1) * MatBLKSIZE, 0);
+	if (err)
+		return (err);
+
+	/* write matrix data */
+	err = fwrite (bufr, 1, nblks * MatBLKSIZE, fptr);
+	if (err != nblks * MatBLKSIZE)
+		return (-1);
+	return (0);
+}
+
+FILE           *mat_create (fname, mhead)
+	char           *fname;
+	Main_header    *mhead;
+{
+	FILE           *fptr;
+	int             i, bufr[MatBLKSIZE / sizeof (int)];
+
+	fptr = mat_open (fname, "w+");
+	if (!fptr)
+		return fptr;
+	mat_write_main_header (fptr, mhead);
+	memset (bufr, 0, MatBLKSIZE);
+	bufr[0] = 31;
+	bufr[1] = 2;
+	if (mhead->sw_version < V7)
+		write_matrix_data (fptr, MatFirstDirBlk, 1, (char *) bufr, VAX_Ix4);
+	else
+		write_matrix_data (fptr, MatFirstDirBlk, 1, (char *) bufr, SunLong);
+	return (fptr);
+}
+
+int             mat_enter (file, matnum, nblks)
+	MatrixFile     *file;
+	int             matnum, nblks;
+{
+
+	struct MatDir   entry;
+	int             dirblk, dirbufr[128], i, nxtblk, busy, oldsize;
+	FILE           *fptr = file->fptr;
+	short           sw_version = file->mhptr->sw_version;
+
+	dirblk = MatFirstDirBlk;
+	fseek (fptr, 0, 0);
+/* nfs locks are very time consuming
+	lockf( fileno(fptr), F_LOCK, 0);
+*/
+	if (sw_version < V7)
+		read_matrix_data (fptr, dirblk, 1, (char *) dirbufr, VAX_Ix4);
+	else
+		read_matrix_data (fptr, dirblk, 1, (char *) dirbufr, SunLong);
+	busy = 1;
+	while (busy) {
+		nxtblk = dirblk + 1;
+		for (i = 4; i < 128; i += 4) {
+			if (dirbufr[i] == 0) {
+				busy = 0;
+				break;
+			} else if (dirbufr[i] == matnum) {
+				oldsize = dirbufr[i + 2] - dirbufr[i + 1] + 1;
+				if (oldsize < nblks) {
+					dirbufr[i] = 0xFFFFFFFF;
+					if (sw_version < V7)
+						write_matrix_data (fptr, dirblk, 1, dirbufr, VAX_Ix4);
+					else
+						write_matrix_data (fptr, dirblk, 1, dirbufr, SunLong);
+					nxtblk = dirbufr[i + 2] + 1;
+				} else {
+					nxtblk = dirbufr[i + 1];
+					dirbufr[0]++;
+					dirbufr[3]--;
+					busy = 0;
+					break;
+				}
+			} else
+				nxtblk = dirbufr[i + 2] + 1;
+		}
+		if (!busy)
+			break;
+		if (dirbufr[1] != MatFirstDirBlk) {
+			dirblk = dirbufr[1];
+			if (sw_version < V7)
+				read_matrix_data (fptr, dirblk, 1, (char *) dirbufr, VAX_Ix4);
+			else
+				read_matrix_data (fptr, dirblk, 1, (char *) dirbufr, SunLong);
+		} else {
+			dirbufr[1] = nxtblk;
+			if (sw_version < V7)
+				write_matrix_data (fptr, dirblk, 1, (char *) dirbufr, VAX_Ix4);
+			else
+				write_matrix_data (fptr, dirblk, 1, (char *) dirbufr, SunLong);
+			dirbufr[0] = 31;
+			dirbufr[1] = MatFirstDirBlk;
+			dirbufr[2] = dirblk;
+			dirbufr[3] = 0;
+			dirblk = nxtblk;
+			for (i = 4; i < 128; i++)
+				dirbufr[i] = 0;
+		}
+	}
+	dirbufr[i] = matnum;
+	dirbufr[i + 1] = nxtblk;
+	dirbufr[i + 2] = nxtblk + nblks;
+	dirbufr[i + 3] = 1;
+	dirbufr[0]--;
+	dirbufr[3]++;
+	if (sw_version < V7)
+		write_matrix_data (fptr, dirblk, 1, dirbufr, VAX_Ix4);
+	else
+		write_matrix_data (fptr, dirblk, 1, dirbufr, SunLong);
+	fseek (fptr, 0, 0);
+/* nfs locks are very time consuming
+	lockf( fileno(fptr), F_UNLOCK, 0);
+*/
+	return (nxtblk);
+}
+
+int             mat_write_data (fptr, blk, nbytes, data, dtype)
+	FILE           *fptr;
+	int             blk, nbytes, dtype;
+	char           *data;
+{
+	int             nblks;
+
+	nblks = (511 + nbytes) / 512;
+	return write_matrix_data (fptr, blk, nblks, data, dtype);
+}
+
+int             mat_read_data (fptr, blk, nbytes, data, dtype)
+	FILE           *fptr;
+	int             blk, nbytes, dtype;
+	char           *data;
+{
+	int             nblks;
+
+	nblks = (511 + nbytes) / 512;
+	return read_matrix_data (fptr, blk, nblks, data, dtype);
+}
+
+int             matrix_selector (matnum, ranges)
+	int             matnum, ranges[2][5];
+{
+	struct Matval   m;
+
+	mat_numdoc (matnum, &m);
+	if (ranges[0][0] != -1)
+		if (m.frame < ranges[0][0] || m.frame > ranges[1][0])
+			return (0);
+	if (ranges[0][1] != -1)
+		if (m.plane < ranges[0][1] || m.plane > ranges[1][1])
+			return (0);
+	if (ranges[0][2] != -1)
+		if (m.gate < ranges[0][2] || m.gate > ranges[1][2])
+			return (0);
+	if (ranges[0][3] != -1)
+		if (m.data < ranges[0][3] || m.data > ranges[1][3])
+			return (0);
+	if (ranges[0][4] != -1)
+		if (m.bed < ranges[0][4] || m.bed > ranges[1][4])
+			return (0);
+	return (matnum);
+}
+
+decode_selector (s1, ranges)
+	char           *s1;
+	int             ranges[2][5];
+{
+	char            xword[16], *next_word ();
+	int             i;
+
+	fix_selector (s1, s1);
+	for (i = 0; i < 5; i++) {		 /* set all ranges to all (-1) */
+		ranges[0][i] = ranges[1][i] = -1;
+		s1 = next_word (s1, xword);
+		if (xword[0] == '*')
+			continue;
+		else if (strchr (xword, ':'))
+			sscanf (xword, "%d:%d", &ranges[0][i], &ranges[1][i]);
+		else {
+			sscanf (xword, "%d", &ranges[0][i]);
+			ranges[1][i] = ranges[0][i];
+		}
+	}
+}
+
+str_find (s1, s2)
+	char           *s1, *s2;
+{
+	int             i, j, k;
+
+	for (i = 0; s1[i]; i++) {
+		for (j = i, k = 0; s2[k] != '\0' && s1[j] == s2[k]; j++, k++);
+		if (s2[k] == '\0')
+			return (i);
+	} return (-1);
+}
+
+str_replace (s1, s2, s3, s4)
+	char           *s1, *s2, *s3, *s4;
+{
+	int             nf = 0, n;
+
+	*s1 = '\0';
+	while (1) {
+		if ((n = str_find (s2, s3)) == -1) {
+			strcat (s1, s2);
+			return (nf);
+		} else {
+			strncat (s1, s2, n);
+			strcat (s1, s4);
+			s2 += n + strlen (s3);
+			nf++;
+		}
+	}
+}
+
+string_replace (s1, s2, s3, s4)
+	char           *s1, *s2, *s3, *s4;
+{
+	char            temp[256];
+
+	strcpy (temp, s2);
+	while (str_replace (s1, temp, s3, s4) > 0)
+		strcpy (temp, s1);
+}
+
+fix_selector (s1, s2)
+	char           *s1, *s2;
+{
+	char            temp[256];
+
+	string_replace (temp, s2, ",", " ");
+	string_replace (s1, temp, "..", ":");
+	string_replace (temp, s1, ".", ":");
+	string_replace (s1, temp, "-", ":");
+	string_replace (temp, s1, "**", "*");
+	string_replace (s1, temp, "  ", " ");
+	string_replace (temp, s1, " :", ":");
+	string_replace (s1, temp, ": ", ":");
+}
+
+char           *next_word (s, w)
+	char           *s, *w;
+{
+	while (*s && *s != ' ')
+		*w++ = *s++;
+	*w = '\0';
+	if (*s)
+		s++;
+	return (s);
+}
+
+int             map_main_header (bufr, header)
+	char           *bufr;
+	Main_header    *header;
+{
+
+	int             i = 0, j = 0;
+	char            mn[20];
+
+	/* set magic number */
+	sprintf (mn, "%s%d%s\n", magicNumber, header->sw_version,
+		 dstypecode[header->file_type]);
+	bufWrite (mn, bufr, &i, 14);
+
+	/* copy buffer into struct */
+	bufWrite (header->original_file_name, bufr, &i, NameLen);
+	bufWrite_s (header->sw_version, bufr, &i);
+	bufWrite_s (header->system_type, bufr, &i);
+	bufWrite_s (header->file_type, bufr, &i);
+	bufWrite (header->serial_number, bufr, &i, 10);
+	bufWrite_i (header->scan_start_time, bufr, &i);
+	bufWrite (header->isotope_code, bufr, &i, 8);
+	bufWrite_f (header->isotope_halflife, bufr, &i);
+	bufWrite (header->radiopharmaceutical, bufr, &i, NameLen);
+	bufWrite_f (header->gantry_tilt, bufr, &i);
+	bufWrite_f (header->gantry_rotation, bufr, &i);
+	bufWrite_f (header->bed_elevation, bufr, &i);
+	bufWrite_f (header->intrinsic_tilt, bufr, &i);
+	bufWrite_s (header->wobble_speed, bufr, &i);
+	bufWrite_s (header->transm_source_type, bufr, &i);
+	bufWrite_f (header->distance_scanned, bufr, &i);
+	bufWrite_f (header->transaxial_fov, bufr, &i);
+	bufWrite_s (header->angular_compression, bufr, &i);
+	bufWrite_s (header->coin_samp_mode, bufr, &i);
+	bufWrite_s (header->axial_samp_mode, bufr, &i);
+	bufWrite_f (header->calibration_factor, bufr, &i);
+	bufWrite_s (header->calibration_units, bufr, &i);
+	bufWrite_s (header->calibration_units_label, bufr, &i);
+	bufWrite_s (header->compression_code, bufr, &i);
+	bufWrite (header->study_name, bufr, &i, 12);
+	bufWrite (header->patient_id, bufr, &i, IDLen);
+	bufWrite (header->patient_name, bufr, &i, NameLen);
+	bufWrite (header->patient_sex, bufr, &i, 1);
+	bufWrite (header->patient_dexterity, bufr, &i, 1);
+	bufWrite_f (header->patient_age, bufr, &i);
+	bufWrite_f (header->patient_height, bufr, &i);
+	bufWrite_f (header->patient_weight, bufr, &i);
+	bufWrite_i (header->patient_birth_date, bufr, &i);
+	bufWrite (header->physician_name, bufr, &i, NameLen);
+	bufWrite (header->operator_name, bufr, &i, NameLen);
+	bufWrite (header->study_description, bufr, &i, NameLen);
+	bufWrite_s (header->acquisition_type, bufr, &i);
+	bufWrite_s (header->patient_orientation, bufr, &i);
+	bufWrite (header->facility_name, bufr, &i, 20);
+	bufWrite_s (header->num_planes, bufr, &i);
+	bufWrite_s (header->num_frames, bufr, &i);
+	bufWrite_s (header->num_gates, bufr, &i);
+	bufWrite_s (header->num_bed_pos, bufr, &i);
+	bufWrite_f (header->init_bed_position, bufr, &i);
+	for (j = 0; j < 15; j++)
+		bufWrite_f (header->bed_offset[j], bufr, &i);
+	bufWrite_f (header->plane_separation, bufr, &i);
+	bufWrite_s (header->lwr_sctr_thres, bufr, &i);
+	bufWrite_s (header->lwr_true_thres, bufr, &i);
+	bufWrite_s (header->upr_true_thres, bufr, &i);
+	bufWrite (header->user_process_code, bufr, &i, 10);
+	bufWrite_s (header->acquisition_mode, bufr, &i);
+	bufWrite_f (header->bin_size, bufr, &i);
+	bufWrite_f (header->branching_fraction, bufr, &i);
+	bufWrite_i (header->dose_start_time, bufr, &i);
+	bufWrite_f (header->dosage, bufr, &i);
+	bufWrite_f (header->well_counter_factor, bufr, &i);
+	bufWrite (header->data_units, bufr, &i, 32);
+	bufWrite_s (header->septa_state, bufr, &i);
+	return 1;
+}
+
+int             mat_write_main_header (fptr, header)
+	FILE           *fptr;
+	Main_header    *header;
+{
+	char            bufr[MatBLKSIZE];
+
+	if (header->sw_version < V7)
+		map64_main_header (bufr, header);
+	else
+		map_main_header (bufr, header);
+	return mat_wblk (fptr, 1, bufr, 1);	 /* write main header at block 1 */
+}
+
+int             map_image_header (buf, header)
+	char           *buf;
+	Image_subheader *header;
+{
+	int             i = 0;
+
+	bufWrite_s (header->data_type, buf, &i);
+	bufWrite_s (header->num_dimensions, buf, &i);
+	bufWrite_s (header->x_dimension, buf, &i);
+	bufWrite_s (header->y_dimension, buf, &i);
+	bufWrite_s (header->z_dimension, buf, &i);
+	bufWrite_f (header->z_offset, buf, &i);
+	bufWrite_f (header->x_offset, buf, &i);
+	bufWrite_f (header->y_offset, buf, &i);
+	bufWrite_f (header->recon_zoom, buf, &i);
+	bufWrite_f (header->scale_factor, buf, &i);
+	bufWrite_s (header->image_min, buf, &i);
+	bufWrite_s (header->image_max, buf, &i);
+	bufWrite_f (header->x_pixel_size, buf, &i);
+	bufWrite_f (header->y_pixel_size, buf, &i);
+	bufWrite_f (header->z_pixel_size, buf, &i);
+	bufWrite_i (header->frame_duration, buf, &i);
+	bufWrite_i (header->frame_start_time, buf, &i);
+	bufWrite_s (header->filter_code, buf, &i);
+	bufWrite_f (header->x_resolution, buf, &i);
+	bufWrite_f (header->y_resolution, buf, &i);
+	bufWrite_f (header->z_resolution, buf, &i);
+	bufWrite_f (header->num_r_elements, buf, &i);
+	bufWrite_f (header->num_angles, buf, &i);
+	bufWrite_f (header->z_rotation_angle, buf, &i);
+	bufWrite_f (header->decay_corr_fctr, buf, &i);
+	bufWrite_i (header->processing_code, buf, &i);
+	bufWrite_i (header->gate_duration, buf, &i);
+	bufWrite_i (header->r_wave_offset, buf, &i);
+	bufWrite_i (header->num_accepted_beats, buf, &i);
+	bufWrite_f (header->filter_cutoff_frequency, buf, &i);
+	bufWrite_f (header->filter_resolution, buf, &i);
+	bufWrite_f (header->filter_ramp_slope, buf, &i);
+	bufWrite_s (header->filter_order, buf, &i);
+	bufWrite_f (header->filter_scatter_fraction, buf, &i);
+	bufWrite_f (header->filter_scatter_slope, buf, &i);
+	bufWrite (header->annotation, buf, &i, 40);
+	bufWrite_f (header->mt_1_1, buf, &i);
+	bufWrite_f (header->mt_1_2, buf, &i);
+	bufWrite_f (header->mt_1_3, buf, &i);
+	bufWrite_f (header->mt_2_1, buf, &i);
+	bufWrite_f (header->mt_2_2, buf, &i);
+	bufWrite_f (header->mt_2_3, buf, &i);
+	bufWrite_f (header->mt_3_1, buf, &i);
+	bufWrite_f (header->mt_3_2, buf, &i);
+	bufWrite_f (header->mt_3_3, buf, &i);
+	bufWrite_f (header->rfilter_cutoff, buf, &i);
+	bufWrite_f (header->rfilter_resolution, buf, &i);
+	bufWrite_s (header->rfilter_code, buf, &i);
+	bufWrite_s (header->rfilter_order, buf, &i);
+	bufWrite_f (header->zfilter_cutoff, buf, &i);
+	bufWrite_f (header->zfilter_resolution, buf, &i);
+	bufWrite_s (header->zfilter_code, buf, &i);
+	bufWrite_s (header->zfilter_order, buf, &i);
+	bufWrite_f (header->mt_1_4, buf, &i);
+	bufWrite_f (header->mt_2_4, buf, &i);
+	bufWrite_f (header->mt_3_4, buf, &i);
+	bufWrite_s (header->scatter_type, buf, &i);
+	bufWrite_s (header->recon_type, buf, &i);
+	bufWrite_s (header->recon_views, buf, &i);
+	return 1;
+}
+
+int             mat_write_image_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Image_subheader *header;
+{
+	char            buf[MatBLKSIZE];
+
+	if (file->mhptr->sw_version < V7)
+		map64_image_header (buf, header, file->mhptr);
+	else
+		map_image_header (buf, header);
+	return mat_wblk (file->fptr, blknum, buf, 1);
+}
+
+int             map_scan_header (buf, header)
+	char           *buf;
+	Scan_subheader *header;
+{
+	int             i = 0, j = 0;
+
+	bufWrite_s (header->data_type, buf, &i);
+	bufWrite_s (header->num_dimensions, buf, &i);
+	bufWrite_s (header->num_r_elements, buf, &i);
+	bufWrite_s (header->num_angles, buf, &i);
+	bufWrite_s (header->corrections_applied, buf, &i);
+	bufWrite_s (header->num_z_elements, buf, &i);
+	bufWrite_s (header->ring_difference, buf, &i);
+	bufWrite_f (header->x_resolution, buf, &i);
+	bufWrite_f (header->y_resolution, buf, &i);
+	bufWrite_f (header->z_resolution, buf, &i);
+	bufWrite_f (header->w_resolution, buf, &i);
+	i += 6 * sizeof (short);		 /* space reserved for future gating info */
+	bufWrite_i (header->gate_duration, buf, &i);
+	bufWrite_i (header->r_wave_offset, buf, &i);
+	bufWrite_i (header->num_accepted_beats, buf, &i);
+	bufWrite_f (header->scale_factor, buf, &i);
+	bufWrite_s (header->scan_min, buf, &i);
+	bufWrite_s (header->scan_max, buf, &i);
+	bufWrite_i (header->prompts, buf, &i);
+	bufWrite_i (header->delayed, buf, &i);
+	bufWrite_i (header->multiples, buf, &i);
+	bufWrite_i (header->net_trues, buf, &i);
+	for (j = 0; j < 16; j++)
+		bufWrite_f (header->cor_singles[j], buf, &i);
+	for (j = 0; j < 16; j++)
+		bufWrite_f (header->uncor_singles[j], buf, &i);
+	bufWrite_f (header->tot_avg_cor, buf, &i);
+	bufWrite_f (header->tot_avg_uncor, buf, &i);
+	bufWrite_i (header->total_coin_rate, buf, &i);
+	bufWrite_i (header->frame_start_time, buf, &i);
+	bufWrite_i (header->frame_duration, buf, &i);
+	bufWrite_f (header->loss_correction_fctr, buf, &i);
+	for (j = 0; j < 8; j++)
+		bufWrite_s (header->phy_planes[j], buf, &i);
+
+}
+
+int             mat_write_scan_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Scan_subheader *header;
+{
+	char            buf[MatBLKSIZE];
+
+	if (file->mhptr->sw_version < V7)
+		map64_scan_header (buf, header, file->mhptr);
+	else
+		map_scan_header (buf, header);
+	return mat_wblk (file->fptr, blknum, buf, 1);
+}
+
+int             map_attn_header (buf, header)
+	char           *buf;
+	Attn_subheader *header;
+{
+	int             i = 0, j = 0;
+
+	bufWrite_s (header->data_type, buf, &i);
+	bufWrite_s (header->num_dimensions, buf, &i);
+	bufWrite_s (header->attenuation_type, buf, &i);
+	bufWrite_s (header->num_r_elements, buf, &i);
+	bufWrite_s (header->num_angles, buf, &i);
+	bufWrite_s (header->num_z_elements, buf, &i);
+	bufWrite_s (header->ring_difference, buf, &i);
+	bufWrite_f (header->x_resolution, buf, &i);
+	bufWrite_f (header->y_resolution, buf, &i);
+	bufWrite_f (header->z_resolution, buf, &i);
+	bufWrite_f (header->w_resolution, buf, &i);
+	bufWrite_f (header->scale_factor, buf, &i);
+	bufWrite_f (header->x_offset, buf, &i);
+	bufWrite_f (header->y_offset, buf, &i);
+	bufWrite_f (header->x_radius, buf, &i);
+	bufWrite_f (header->y_radius, buf, &i);
+	bufWrite_f (header->tilt_angle, buf, &i);
+	bufWrite_f (header->attenuation_coeff, buf, &i);
+	bufWrite_f (header->attenuation_min, buf, &i);
+	bufWrite_f (header->attenuation_max, buf, &i);
+	bufWrite_f (header->skull_thickness, buf, &i);
+	bufWrite_s (header->num_additional_atten_coeff, buf, &i);
+	for (j = 0; j < 8; j++)
+		bufWrite_f (header->additional_atten_coeff[j], buf, &i);
+	bufWrite_f (header->edge_finding_threshold, buf, &i);
+	bufWrite_s (header->storage_order, buf, &i);
+	bufWrite_s (header->span, buf, &i);
+	for (j = 0; j < 64; j++)
+		bufWrite_s (header->z_elements[j], buf, &i);
+
+	return 1;
+}
+
+int             mat_write_attn_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Attn_subheader *header;
+{
+	char            buf[MatBLKSIZE];
+
+	if (file->mhptr->sw_version < V7)
+		map64_attn_header (buf, header, file->mhptr);
+	else
+		map_attn_header (buf, header);
+	return mat_wblk (file->fptr, blknum, buf, 1);
+}
+
+int             map_norm_header (buf, header)
+	char           *buf;
+	Norm_subheader *header;
+{
+	int             i = 0, j = 0;
+
+	bufWrite_s (header->data_type, buf, &i);
+	bufWrite_s (header->num_dimensions, buf, &i);
+	bufWrite_s (header->num_r_elements, buf, &i);
+	bufWrite_s (header->num_angles, buf, &i);
+	bufWrite_s (header->num_z_elements, buf, &i);
+	bufWrite_s (header->ring_difference, buf, &i);
+	bufWrite_f (header->scale_factor, buf, &i);
+	bufWrite_f (header->norm_min, buf, &i);
+	bufWrite_f (header->norm_max, buf, &i);
+	bufWrite_f (header->fov_source_width, buf, &i);
+	bufWrite_f (header->norm_quality_factor, buf, &i);
+	bufWrite_s (header->norm_quality_factor_code, buf, &i);
+	bufWrite_s (header->storage_order, buf, &i);
+	bufWrite_s (header->span, buf, &i);
+	for (j = 0; j < 64; j++)
+		bufWrite_s (header->z_elements[j], buf, &i);
+	return 1;
+}
+
+int             mat_write_norm_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Norm_subheader *header;
+{
+	char            buf[MatBLKSIZE];
+
+	if (file->mhptr->sw_version < V7)
+		map64_norm_header (buf, header, file->mhptr);
+	else
+		map_norm_header (buf, header);
+	return mat_wblk (file->fptr, blknum, buf, 1);
+}
+
+int             mat_write_Scan3D_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Scan3D_subheader *header;
+{
+	char            buf[2 * MatBLKSIZE];
+
+	if (file->mhptr->sw_version < V7)
+		crash ("Short3dSinogram : not supported by ecat version 6.x\n");
+	map_Scan3D_header (buf, header);
+	return mat_wblk (file->fptr, blknum, buf, 2);
+}
+
+int             unmap_attn_header (buf, header)
+	char           *buf;
+	Attn_subheader *header;
+{
+	int             i = 0, j = 0;
+
+	bufRead_s (&header->data_type, buf, &i);
+	bufRead_s (&header->num_dimensions, buf, &i);
+	bufRead_s (&header->attenuation_type, buf, &i);
+	bufRead_s (&header->num_r_elements, buf, &i);
+	bufRead_s (&header->num_angles, buf, &i);
+	bufRead_s (&header->num_z_elements, buf, &i);
+	bufRead_s (&header->ring_difference, buf, &i);
+	bufRead_f (&header->x_resolution, buf, &i);
+	bufRead_f (&header->y_resolution, buf, &i);
+	bufRead_f (&header->z_resolution, buf, &i);
+	bufRead_f (&header->w_resolution, buf, &i);
+	bufRead_f (&header->scale_factor, buf, &i);
+	bufRead_f (&header->x_offset, buf, &i);
+	bufRead_f (&header->y_offset, buf, &i);
+	bufRead_f (&header->x_radius, buf, &i);
+	bufRead_f (&header->y_radius, buf, &i);
+	bufRead_f (&header->tilt_angle, buf, &i);
+	bufRead_f (&header->attenuation_coeff, buf, &i);
+	bufRead_f (&header->attenuation_min, buf, &i);
+	bufRead_f (&header->attenuation_max, buf, &i);
+	bufRead_f (&header->skull_thickness, buf, &i);
+	bufRead_s (&header->num_additional_atten_coeff, buf, &i);
+	for (j = 0; j < 8; j++)
+		bufRead_f (&header->additional_atten_coeff[j], buf, &i);
+	bufRead_f (&header->edge_finding_threshold, buf, &i);
+	bufRead_s (&header->storage_order, buf, &i);
+	bufRead_s (&header->span, buf, &i);
+	for (j = 0; j < 64; j++)
+		bufRead_s (&header->z_elements[j], buf, &i);
+
+	return 0;
+}
+
+int             mat_read_attn_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Attn_subheader *header;
+{
+	char            buf[MatBLKSIZE];
+
+	if (file->acs)
+		rtsRblk (file->fname, blknum, buf);
+	else
+		mat_rblk (file->fptr, blknum, buf, 1);
+	if (file->mhptr->sw_version < V7)
+		return unmap64_attn_header (buf, header, file->mhptr);
+	return unmap_attn_header (buf, header);
+}
+
+int             unmap_norm_header (buf, header)
+	char           *buf;
+	Norm_subheader *header;
+{
+	int             i = 0, j = 0;
+
+	bufRead_s (&header->data_type, buf, &i);
+	bufRead_s (&header->num_dimensions, buf, &i);
+	bufRead_s (&header->num_r_elements, buf, &i);
+	bufRead_s (&header->num_angles, buf, &i);
+	bufRead_s (&header->num_z_elements, buf, &i);
+	bufRead_s (&header->ring_difference, buf, &i);
+	bufRead_f (&header->scale_factor, buf, &i);
+	bufRead_f (&header->norm_min, buf, &i);
+	bufRead_f (&header->norm_max, buf, &i);
+	bufRead_f (&header->fov_source_width, buf, &i);
+	bufRead_f (&header->norm_quality_factor, buf, &i);
+	bufRead_s (&header->norm_quality_factor_code, buf, &i);
+	bufRead_s (&header->storage_order, buf, &i);
+	bufRead_s (&header->span, buf, &i);
+	for (j = 0; j < 64; j++)
+		bufRead_s (&header->z_elements[j], buf, &i);
+
+	return 0;
+}
+int             unmap_norm3d_header (buf, header)
+	char           *buf;
+	Norm3D_subheader *header;
+{
+	int             i = 0, j = 0;
+
+	memset (header, 0, sizeof (Norm3D_subheader));
+	bufRead_s (&header->data_type, buf, &i);
+	bufRead_s (&header->num_r_elements, buf, &i);
+	bufRead_s (&header->num_transaxial_crystals, buf, &i);
+	bufRead_s (&header->num_crystal_rings, buf, &i);
+	bufRead_s (&header->crystals_per_ring, buf, &i);
+	bufRead_s (&header->num_geo_corr_planes, buf, &i);
+	bufRead_s (&header->uld, buf, &i);
+	bufRead_s (&header->lld, buf, &i);
+	bufRead_s (&header->scatter_energy, buf, &i);
+	bufRead_s (&header->norm_quality_factor_code, buf, &i);
+	bufRead_f (&header->norm_quality_factor, buf, &i);
+	for (j = 0; j < 32; j++)
+		bufRead_f (&header->ring_dtcor1[j], buf, &i);
+	for (j = 0; j < 32; j++)
+		bufRead_f (&header->ring_dtcor2[j], buf, &i);
+	for (j = 0; j < 8; j++)
+		bufRead_f (&header->crystal_dtcor[j], buf, &i);
+	bufRead_s (&header->span, buf, &i);
+	bufRead_s (&header->max_ring_diff, buf, &i);
+	return 0;
+}
+
+int             mat_read_norm_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Norm_subheader *header;
+{
+	char            buf[MatBLKSIZE];
+
+	if (file->acs)
+		rtsRblk (file->fname, blknum, buf);
+	else
+		mat_rblk (file->fptr, blknum, buf, 1);
+	if (file->mhptr->sw_version < V7)
+		return unmap64_norm_header (buf, header, file->mhptr);
+	return unmap_norm_header (buf, header);
+}
+
+int             mat_read_norm3d_subheader (file, blknum, header)
+	MatrixFile     *file;
+	int             blknum;
+	Norm3D_subheader *header;
+{
+	char            buf[MatBLKSIZE];
+
+	if (file->acs)
+		rtsRblk (file->fname, blknum, buf);
+	else
+		mat_rblk (file->fptr, blknum, buf, 1);
+	if (file->mhptr->sw_version == V7)
+		return unmap_norm3d_header (buf, header);
+	return 0;
+}
+
+matspec (str, fname, matnum)
+	char           *str, *fname;
+	int            *matnum;
+{
+	char           *cp;
+	int             mf = 0, mp = 0, mg = 0, ms = 0, mb = 0;
+
+	strcpy (fname, str);
+	cp = (char *) strchr (fname, ',');
+	*matnum = 0;
+	if (cp) {
+		*cp++ = '\0';
+		sscanf (cp, "%d,%d,%d,%d,%d", &mf, &mp, &mg, &ms, &mb);
+		*matnum = mat_numcod (mf, mp, mg, ms, mb);
+		return 1;
+	}
+	return 0;
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 1
+a4 1
+static char sccsid[]="@@(#)matrix.c	1.11 6/7/93 Copyright 1989 CTI, Inc.";
+d6 4
+a9 4
+static char* magicNumber = "MATRIX";
+static int ecat_default_version = 6;
+static char* dstypecode[NumDataSetTypes] =
+	{ "u","s","i","a","n","pm","v8","v","p8","p","i8","S","S8","N"};
+d11 2
+a12 2
+FILE *mat_open( fname, fmode)
+  char *fname, *fmode;
+d14 1
+a14 1
+	FILE *fopen(), *fptr;
+d16 1
+a16 1
+	fptr = fopen(fname, fmode);
+d21 2
+a22 2
+mat_close( fptr)
+  FILE *fptr;
+d24 1
+a24 1
+	return fclose( fptr);
+d27 4
+a30 4
+int mat_rblk( fptr, blkno, bufr, nblks)
+  FILE *fptr;
+  int blkno, nblks;
+  char *bufr;
+d32 1
+a32 1
+	int err;
+d34 6
+a39 4
+	err = fseek( fptr, (blkno-1)*MatBLKSIZE, 0);
+	if (err) return (err);
+	err = fread( bufr, 1, nblks*MatBLKSIZE, fptr);
+	if (err != nblks*MatBLKSIZE) return (-1);
+d43 4
+a46 4
+int mat_list (fptr, mlist, lmax)
+	FILE		*fptr;
+	struct MatDir	mlist [];
+	int		lmax;
+d48 4
+a51 4
+	int blk, num_entry, num_stored, i, err, mat_rblk();
+	int nfree, nxtblk, prvblk, nused, matnum, strtblk, endblk, matstat;
+	int dirbufr[MatBLKSIZE/4];
+	char bytebufr[MatBLKSIZE];
+d56 26
+a81 21
+	while(1) {
+	err=mat_rblk( fptr, blk, bytebufr,1);
+	swap_byte (bytebufr, dirbufr, MatBLKSIZE);
+	swaw( dirbufr, dirbufr, MatBLKSIZE/2);
+	nfree  = dirbufr[0];
+	nxtblk = dirbufr[1];
+	prvblk = dirbufr[2];
+	nused  = dirbufr[3];
+	for (i=4; i<MatBLKSIZE/4; i+=4)
+	{  matnum = dirbufr[i];
+	   strtblk = dirbufr[i+1];
+	   endblk  = dirbufr[i+2];
+	   matstat = dirbufr[i+3];
+	   if (matnum && num_stored < lmax)
+	   {  mlist[num_stored].matnum = matnum;
+	      mlist[num_stored].strtblk = strtblk;
+	      mlist[num_stored].endblk = endblk;
+	      mlist[num_stored].matstat = matstat;
+	      num_stored++;
+	   }
+	   if (matnum) num_entry++;
+a82 3
+	blk = nxtblk;
+	if (blk == MatFirstDirBlk) break;
+	}
+d88 2
+a89 2
+	char	from [], to [];
+	int	length;
+d91 2
+a92 2
+	char	temp;
+	int	i;
+d94 4
+a97 5
+	for (i = 0; i < length; i += 2)
+	{  
+		temp		= from [i + 1];
+		to [i + 1]	= from [i];
+		to [i]		= temp;
+d103 2
+a104 2
+  short int from[], to[];
+  int length;
+d106 2
+a107 2
+	short int temp;
+	int i;
+d109 4
+a112 4
+	for (i=0;i<length; i+=2)
+	{  temp = from[i+1];
+	   to[i+1]=from[i];
+	   to[i] = temp;
+d116 2
+a117 2
+int mat_numcod( frame, plane, gate, data, bed)
+  int frame, plane, gate, data, bed;
+d119 2
+a120 2
+	return ((frame)|((bed&0xF)<<12)|((plane&0xFF)<<16)|(((plane&0x300)>>8)<<9)|
+		   ((gate&0x3F)<<24)|((data&0x3)<<30)|((data&0x4)<<9));
+d123 3
+a125 3
+int mat_numdoc( matnum, matval)
+  int matnum;
+  struct Matval *matval;
+d127 5
+a131 5
+	matval->frame = matnum&0x1FF;
+	matval->plane = ((matnum>>16)&0xFF) + (((matnum>>9)&0x3)<<8);
+	matval->gate  = (matnum>>24)&0x3F;
+	matval->data  = ((matnum>>9)&0x4)|(matnum>>30)&0x3;
+	matval->bed   = (matnum>>12)&0xF;
+d135 4
+a138 4
+int mat_lookup(file, matnum, entry)
+  MatrixFile *file;
+  int matnum;
+  struct MatDir *entry;
+a139 4
+	
+	int blk, i, err;
+	int nfree, nxtblk, prvblk, nused, matnbr, strtblk, endblk, matstat;
+	int dirbufr[MatBLKSIZE/4];
+d141 4
+d146 1
+a146 1
+		return mat_lookup_64(file->fptr,matnum,entry);
+d148 3
+a150 3
+	while(1) {
+		read_matrix_data(file->fptr,blk,1,(char*)dirbufr,SunLong);
+		nfree  = dirbufr[0];
+d153 12
+a164 12
+		nused  = dirbufr[3];
+		for (i=4; i<MatBLKSIZE/4; i+=4)
+		{  matnbr  = dirbufr[i];
+	   		strtblk = dirbufr[i+1];
+	   		endblk  = dirbufr[i+2];
+	   		matstat = dirbufr[i+3];
+	   		if (matnum == matnbr) {
+		  		entry->matnum  = matnbr;
+		  		entry->strtblk = strtblk;
+		  		entry->endblk  = endblk;
+		  		entry->matstat = matstat;
+		  		return (1);
+d166 1
+a166 1
+ 		}
+d168 2
+a169 1
+		if (blk == MatFirstDirBlk) break;
+d174 3
+a176 3
+int unmap_main_header( bufr, header)
+  char *bufr;
+  Main_header *header;
+d178 9
+a186 8
+	int i = MagicNumLen;			/* skip magic number */
+	int j = 0;
+	bufRead(header->original_file_name, bufr, &i, NameLen);
+	header->original_file_name[NameLen-1] = '\0';
+	bufRead_s(&header->sw_version, bufr, &i);
+	bufRead_s(&header->system_type, bufr, &i);
+	bufRead_s(&header->file_type, bufr, &i);
+	bufRead(header->serial_number, bufr, &i, 10);
+d188 2
+a189 2
+	bufRead_i(&header->scan_start_time, bufr, &i);
+	bufRead(header->isotope_code, bufr, &i, 8);
+d191 19
+a209 19
+	bufRead_f(&header->isotope_halflife, bufr, &i);
+	bufRead(header->radiopharmaceutical, bufr, &i, NameLen);
+	header->radiopharmaceutical[NameLen-1] = '\0';
+	bufRead_f(&header->gantry_tilt, bufr, &i);
+	bufRead_f(&header->gantry_rotation, bufr, &i);
+	bufRead_f(&header->bed_elevation, bufr, &i);
+	bufRead_f(&header->intrinsic_tilt, bufr, &i);
+	bufRead_s(&header->wobble_speed, bufr, &i);
+	bufRead_s(&header->transm_source_type, bufr, &i);
+	bufRead_f(&header->distance_scanned, bufr, &i);
+	bufRead_f(&header->transaxial_fov, bufr, &i);
+	bufRead_s(&header->angular_compression, bufr, &i);
+	bufRead_s(&header->coin_samp_mode, bufr, &i);
+	bufRead_s(&header->axial_samp_mode, bufr, &i);
+	bufRead_f(&header->calibration_factor, bufr, &i);
+	bufRead_s(&header->calibration_units, bufr, &i);
+	bufRead_s(&header->calibration_units_label, bufr, &i);
+	bufRead_s(&header->compression_code, bufr, &i);
+	bufRead(header->study_name, bufr, &i, 12);
+d211 19
+a229 19
+	bufRead(header->patient_id, bufr, &i, IDLen);
+	header->patient_id[IDLen-1] = '\0';
+	bufRead(header->patient_name, bufr, &i, NameLen);
+	header->patient_name[NameLen-1] = '\0';
+	bufRead(header->patient_sex, bufr, &i, 1);
+	bufRead(header->patient_dexterity, bufr, &i, 1);
+	bufRead_f(&header->patient_age, bufr, &i);
+	bufRead_f(&header->patient_height, bufr, &i);
+	bufRead_f(&header->patient_weight, bufr, &i);
+	bufRead_i(&header->patient_birth_date, bufr, &i);
+	bufRead(header->physician_name, bufr, &i, NameLen);
+	header->physician_name[NameLen-1] = '\0';
+	bufRead(header->operator_name, bufr, &i, NameLen);
+	header->operator_name[NameLen-1] = '\0';
+	bufRead(header->study_description, bufr, &i, NameLen);
+	header->study_description[NameLen-1] = '\0';
+	bufRead_s(&header->acquisition_type, bufr, &i);
+	bufRead_s(&header->patient_orientation, bufr, &i);
+	bufRead(header->facility_name, bufr, &i, 20);
+d231 12
+a242 12
+	bufRead_s(&header->num_planes, bufr, &i);
+	bufRead_s(&header->num_frames, bufr, &i);
+	bufRead_s(&header->num_gates, bufr, &i);
+	bufRead_s(&header->num_bed_pos, bufr, &i);
+	bufRead_f(&header->init_bed_position, bufr, &i);
+	for(j = 0; j < 15; j++)
+		bufRead_f(&header->bed_offset[j], bufr, &i);
+	bufRead_f(&header->plane_separation, bufr, &i);
+	bufRead_s(&header->lwr_sctr_thres, bufr, &i);
+	bufRead_s(&header->lwr_true_thres, bufr, &i);
+	bufRead_s(&header->upr_true_thres, bufr, &i);
+	bufRead(header->user_process_code, bufr, &i, 10);
+d244 7
+a250 7
+	bufRead_s(&header->acquisition_mode, bufr, &i);
+	bufRead_f(&header->bin_size, bufr, &i);
+	bufRead_f(&header->branching_fraction, bufr, &i);
+	bufRead_i(&header->dose_start_time, bufr, &i);
+	bufRead_f(&header->dosage, bufr, &i);
+	bufRead_f(&header->well_counter_factor, bufr, &i);
+	bufRead(header->data_units, bufr, &i, 32);
+d252 1
+a252 1
+	bufRead_s(&header->septa_state, bufr, &i);
+d256 3
+a258 3
+int mat_read_main_header( fptr, header)
+  FILE *fptr;
+  Main_header *header;
+d260 3
+a262 2
+	int i = 0;
+	char bufr[MatBLKSIZE];
+d264 7
+a270 6
+	mat_rblk( fptr, 1, bufr, 1);
+	bufRead(header->magic_number, bufr, &i, MagicNumLen);
+	header->magic_number[MagicNumLen-1] = '\0';
+	if(strncmp(header->magic_number, magicNumber, strlen(magicNumber)))
+		return	unmap64_main_header(bufr, header);
+	else return unmap_main_header(bufr, header);
+d273 4
+a276 4
+int mat_read_matrix_data(file, blk, nblks, bufr)
+  MatrixFile *file;
+  int blk, nblks;
+  short *bufr;
+d278 4
+a281 3
+	if (file->mhptr->sw_version < V7) 
+		return read_matrix_data(file->fptr, blk,nblks, (char*)bufr, VAX_Ix2);
+	else return read_matrix_data(file->fptr, blk,nblks, (char*)bufr, SunShort);
+d284 3
+a286 3
+int unmap_scan_header(buf,header) 
+char *buf;
+Scan_subheader *header;
+d288 1
+a288 1
+	int i = 0 , j = 0;
+d290 34
+a323 34
+	bufRead_s(&header->data_type, buf, &i);
+	bufRead_s(&header->num_dimensions, buf, &i);
+	bufRead_s(&header->num_r_elements, buf, &i);
+	bufRead_s(&header->num_angles, buf, &i);
+	bufRead_s(&header->corrections_applied, buf, &i);
+	bufRead_s(&header->num_z_elements, buf, &i);
+	bufRead_s(&header->ring_difference, buf, &i);
+	bufRead_f(&header->x_resolution, buf, &i);
+	bufRead_f(&header->y_resolution, buf, &i);
+	bufRead_f(&header->z_resolution, buf, &i);
+	bufRead_f(&header->w_resolution, buf, &i);
+	i += 6 * sizeof(short);		/* space reserved for future gating info */
+	bufRead_i(&header->gate_duration, buf, &i);
+	bufRead_i(&header->r_wave_offset, buf, &i);
+	bufRead_i(&header->num_accepted_beats, buf, &i);
+	bufRead_f(&header->scale_factor, buf, &i);
+	bufRead_s(&header->scan_min, buf, &i);
+	bufRead_s(&header->scan_max, buf, &i);
+	bufRead_i(&header->prompts, buf, &i);
+	bufRead_i(&header->delayed, buf, &i);
+	bufRead_i(&header->multiples, buf, &i);
+	bufRead_i(&header->net_trues, buf, &i);
+	for(j = 0; j < 16; j++)
+		bufRead_f(&header->cor_singles[j], buf, &i);
+	for(j = 0; j < 16; j++)
+		bufRead_f(&header->uncor_singles[j], buf, &i);
+	bufRead_f(&header->tot_avg_cor, buf, &i);
+	bufRead_f(&header->tot_avg_uncor, buf, &i);
+	bufRead_i(&header->total_coin_rate, buf, &i);
+	bufRead_i(&header->frame_start_time, buf, &i);
+	bufRead_i(&header->frame_duration, buf, &i);
+	bufRead_f(&header->loss_correction_fctr, buf, &i);
+	for(j = 0; j < 8; j++)
+		bufRead_s(&header->phy_planes[j], buf, &i);
+d327 3
+a329 3
+int unmap_Scan3D_header(buf,header)
+char *buf;
+Scan3D_subheader *header;
+d331 38
+a368 37
+	int i = 0;
+	int j;
+	bufRead_s(&header->data_type, buf, &i);
+	bufRead_s(&header->num_dimensions, buf, &i);
+	bufRead_s(&header->num_r_elements, buf, &i);
+	bufRead_s(&header->num_angles, buf, &i);
+	bufRead_s(&header->corrections_applied, buf, &i);
+	for(j = 0; j < 64; j++)
+		bufRead_s(&header->num_z_elements[j], buf, &i);
+	bufRead_s(&header->ring_difference, buf, &i);
+	bufRead_s(&header->storage_order, buf, &i);
+	bufRead_s(&header->axial_compression, buf, &i);
+	bufRead_f(&header->x_resolution, buf, &i);
+	bufRead_f(&header->v_resolution, buf, &i);
+	bufRead_f(&header->z_resolution, buf, &i);
+	bufRead_f(&header->w_resolution, buf, &i);
+	i += 6 * sizeof(short);	 /* space reserved for future gating info */
+	bufRead_i(&header->gate_duration, buf, &i);
+	bufRead_i(&header->r_wave_offset, buf, &i);
+	bufRead_i(&header->num_accepted_beats, buf, &i);
+	bufRead_f(&header->scale_factor, buf, &i);
+	bufRead_s(&header->scan_min, buf, &i);
+	bufRead_s(&header->scan_max, buf, &i);
+	bufRead_i(&header->prompts, buf, &i);
+	bufRead_i(&header->delayed, buf, &i);
+	bufRead_i(&header->multiples, buf, &i);
+	bufRead_i(&header->net_trues, buf, &i);
+	bufRead_f(&header->tot_avg_cor, buf, &i);
+	bufRead_f(&header->tot_avg_uncor, buf, &i);
+	bufRead_i(&header->total_coin_rate, buf, &i);
+	bufRead_i(&header->frame_start_time, buf, &i);
+	bufRead_i(&header->frame_duration, buf, &i);
+	bufRead_f(&header->loss_correction_fctr, buf, &i);
+	i += 90 * sizeof(short);	/* CTI reserved space */
+	i += 50 * sizeof(short);	/* user reserved space */
+	for(j = 0; j < 128; j++)
+		bufRead_f(&header->uncor_singles[j], buf, &i);
+d372 3
+a374 3
+int map_Scan3D_header(buf,header)
+char *buf;
+Scan3D_subheader *header;
+d376 38
+a413 37
+	int i = 0;
+	int j;
+	bufWrite_s(header->data_type, buf, &i);
+	bufWrite_s(header->num_dimensions, buf, &i);
+	bufWrite_s(header->num_r_elements, buf, &i);
+	bufWrite_s(header->num_angles, buf, &i);
+	bufWrite_s(header->corrections_applied, buf, &i);
+	for(j = 0; j < 64; j++)
+		bufWrite_s(header->num_z_elements[j], buf, &i);
+	bufWrite_s(header->ring_difference, buf, &i);
+	bufWrite_s(header->storage_order, buf, &i);
+	bufWrite_s(header->axial_compression, buf, &i);
+	bufWrite_f(header->x_resolution, buf, &i);
+	bufWrite_f(header->v_resolution, buf, &i);
+	bufWrite_f(header->z_resolution, buf, &i);
+	bufWrite_f(header->w_resolution, buf, &i);
+	i += 6 * sizeof(short);	 /* space reserved for future gating info */
+	bufWrite_i(header->gate_duration, buf, &i);
+	bufWrite_i(header->r_wave_offset, buf, &i);
+	bufWrite_i(header->num_accepted_beats, buf, &i);
+	bufWrite_f(header->scale_factor, buf, &i);
+	bufWrite_s(header->scan_min, buf, &i);
+	bufWrite_s(header->scan_max, buf, &i);
+	bufWrite_i(header->prompts, buf, &i);
+	bufWrite_i(header->delayed, buf, &i);
+	bufWrite_i(header->multiples, buf, &i);
+	bufWrite_i(header->net_trues, buf, &i);
+	bufWrite_f(header->tot_avg_cor, buf, &i);
+	bufWrite_f(header->tot_avg_uncor, buf, &i);
+	bufWrite_i(header->total_coin_rate, buf, &i);
+	bufWrite_i(header->frame_start_time, buf, &i);
+	bufWrite_i(header->frame_duration, buf, &i);
+	bufWrite_f(header->loss_correction_fctr, buf, &i);
+	i += 90 * sizeof(short);	/* CTI reserved space */
+	i += 50 * sizeof(short);	/* user reserved space */
+	for(j = 0; j < 128; j++)
+		bufWrite_f(header->uncor_singles[j], buf, &i);
+d417 4
+a420 4
+int mat_read_Scan3D_subheader( file, blknum, header)
+  MatrixFile *file;
+  int blknum;
+  Scan3D_subheader *header;
+d422 2
+a423 1
+	char buf[2*MatBLKSIZE];
+d425 5
+a429 4
+		rtsRblk(file->fname, blknum, buf);
+		rtsRblk(file->fname, blknum+1, buf+MatBLKSIZE);
+	} else mat_rblk( file->fptr, blknum, buf, 2);
+	return unmap_Scan3D_header(buf,header);
+d432 4
+a435 4
+int mat_read_scan_subheader( file, blknum, header)
+  MatrixFile *file;
+  int blknum;
+  Scan_subheader *header;
+d437 6
+a442 3
+	char buf[MatBLKSIZE];
+	if (file->acs) rtsRblk(file->fname, blknum, buf);
+	else mat_rblk( file->fptr, blknum, buf, 1);
+d444 2
+a445 2
+		return unmap64_scan_header(buf,header, file->mhptr);
+	return unmap_scan_header(buf,header);
+d448 3
+a450 3
+int unmap_image_header(buf,header)
+char *buf;
+Image_subheader *header;
+d452 1
+a452 1
+	int i = 0;
+d454 59
+a512 59
+	bufRead_s(&header->data_type, buf, &i);
+	bufRead_s(&header->num_dimensions, buf, &i);
+	bufRead_s(&header->x_dimension, buf, &i);
+	bufRead_s(&header->y_dimension, buf, &i);
+	bufRead_s(&header->z_dimension, buf, &i);
+	bufRead_f(&header->z_offset, buf, &i);
+	bufRead_f(&header->x_offset, buf, &i);
+	bufRead_f(&header->y_offset, buf, &i);
+	bufRead_f(&header->recon_zoom, buf, &i);
+	bufRead_f(&header->scale_factor, buf, &i);
+	bufRead_s(&header->image_min, buf, &i);
+	bufRead_s(&header->image_max, buf, &i);
+	bufRead_f(&header->x_pixel_size, buf, &i);
+	bufRead_f(&header->y_pixel_size, buf, &i);
+	bufRead_f(&header->z_pixel_size, buf, &i);
+	bufRead_i(&header->frame_duration, buf, &i);
+	bufRead_i(&header->frame_start_time, buf, &i);
+	bufRead_s(&header->filter_code, buf, &i);
+	bufRead_f(&header->x_resolution, buf, &i);
+	bufRead_f(&header->y_resolution, buf, &i);
+	bufRead_f(&header->z_resolution, buf, &i);
+	bufRead_f(&header->num_r_elements, buf, &i);
+	bufRead_f(&header->num_angles, buf, &i);
+	bufRead_f(&header->z_rotation_angle, buf, &i);
+	bufRead_f(&header->decay_corr_fctr, buf, &i);
+	bufRead_i(&header->processing_code, buf, &i);
+	bufRead_i(&header->gate_duration, buf, &i);
+	bufRead_i(&header->r_wave_offset, buf, &i);
+	bufRead_i(&header->num_accepted_beats, buf, &i);
+	bufRead_f(&header->filter_cutoff_frequency, buf, &i);
+	bufRead_f(&header->filter_resolution, buf, &i);
+	bufRead_f(&header->filter_ramp_slope, buf, &i);
+	bufRead_s(&header->filter_order, buf, &i);
+	bufRead_f(&header->filter_scatter_fraction, buf, &i);
+	bufRead_f(&header->filter_scatter_slope, buf, &i);
+	bufRead(header->annotation, buf, &i, 40);
+	bufRead_f(&header->mt_1_1, buf, &i);
+	bufRead_f(&header->mt_1_2, buf, &i);
+	bufRead_f(&header->mt_1_3, buf, &i);
+	bufRead_f(&header->mt_2_1, buf, &i);
+	bufRead_f(&header->mt_2_2, buf, &i);
+	bufRead_f(&header->mt_2_3, buf, &i);
+	bufRead_f(&header->mt_3_1, buf, &i);
+	bufRead_f(&header->mt_3_2, buf, &i);
+	bufRead_f(&header->mt_3_3, buf, &i);
+	bufRead_f(&header->rfilter_cutoff, buf, &i);
+	bufRead_f(&header->rfilter_resolution, buf, &i);
+	bufRead_s(&header->rfilter_code, buf, &i);
+	bufRead_s(&header->rfilter_order, buf, &i);
+	bufRead_f(&header->zfilter_cutoff, buf, &i);
+	bufRead_f(&header->zfilter_resolution, buf, &i);
+	bufRead_s(&header->zfilter_code, buf, &i);
+	bufRead_s(&header->zfilter_order, buf, &i);
+	bufRead_f(&header->mt_1_4, buf, &i);
+	bufRead_f(&header->mt_2_4, buf, &i);
+	bufRead_f(&header->mt_3_4, buf, &i);
+	bufRead_s(&header->scatter_type, buf, &i);
+	bufRead_s(&header->recon_type, buf, &i);
+	bufRead_s(&header->recon_views, buf, &i);
+d516 4
+a519 4
+int mat_read_image_subheader( file, blknum, header)
+  MatrixFile *file;
+  int blknum;
+  Image_subheader *header;
+d521 10
+a530 6
+	char buf[MatBLKSIZE];
+	if (file->acs) rtsRblk( file->fname, blknum, buf);
+	else mat_rblk( file->fptr, blknum, buf, 1);
+	if (file->mhptr->sw_version < V7)
+		return unmap64_image_header(buf,header, file->mhptr);
+	return unmap_image_header(buf,header);
+d533 7
+a539 6
+Mat_dir mat_read_dir( file, selector)
+  MatrixFile* file;
+  char *selector;
+{	int i, n, blk, nxtblk, ndblks, bufr[128];
+	Mat_dir dir;
+	FILE* fptr =  file->fptr;
+d543 1
+a543 2
+	for (ndblks=0; nxtblk != MatFirstDirBlk; ndblks++)
+	{
+d545 5
+a549 4
+			read_matrix_data(fptr,blk,1,(char*)bufr,VAX_Ix4);
+		else read_matrix_data(fptr,blk,1,(char*)bufr,SunLong);
+	  nxtblk = bufr[1];
+	  blk = nxtblk;
+d551 1
+a551 1
+	dir = (Mat_dir) malloc( sizeof(struct matdir));
+d554 15
+a568 14
+	dir->entry = (struct MatDir *) malloc( 31*ndblks*sizeof( struct MatDir));
+	for (n=0, nxtblk=0, blk=MatFirstDirBlk; nxtblk != MatFirstDirBlk; blk = nxtblk)
+	{
+	  if (file->mhptr->sw_version < V7)
+		read_matrix_data(fptr,blk,1,(char*)bufr,VAX_Ix4);
+	  else read_matrix_data(fptr,blk,1,(char*)bufr,SunLong);
+	  nxtblk = bufr[1];
+	  for (i=4; i<MatBLKSIZE/4; n++)
+	  { dir->entry[n].matnum = bufr[i++];
+		dir->entry[n].strtblk = bufr[i++];
+		dir->entry[n].endblk = bufr[i++];
+		dir->entry[n].matstat = bufr[i++];
+		if (dir->entry[n].matnum != 0) dir->nmats++;
+	  }
+d574 4
+a577 4
+int mat_wblk( fptr, blkno, bufr, nblks)
+  FILE *fptr;
+  int blkno, nblks;
+  char *bufr;
+d579 12
+a590 10
+	  int err;
+	
+	  /* seek to position in file */
+	  err = fseek( fptr, (blkno-1)*MatBLKSIZE, 0);
+	  if (err) return (err);
+	
+	  /* write matrix data */
+	  err = fwrite( bufr, 1, nblks*MatBLKSIZE, fptr);
+	  if (err != nblks*MatBLKSIZE) return (-1);
+	  return (0);
+d593 3
+a595 3
+FILE *mat_create( fname, mhead)
+  char *fname;
+  Main_header *mhead;
+d597 2
+a598 2
+	FILE *fptr;
+	int i, bufr[MatBLKSIZE/sizeof(int)];
+d600 5
+a604 4
+	fptr = mat_open( fname, "w+");
+	if (!fptr) return fptr;
+	mat_write_main_header( fptr, mhead);
+	memset(bufr,0,MatBLKSIZE);
+d608 3
+a610 2
+		write_matrix_data(fptr,MatFirstDirBlk,1,(char*)bufr,VAX_Ix4);
+	else write_matrix_data(fptr,MatFirstDirBlk,1,(char*)bufr,SunLong);
+d614 3
+a616 3
+int mat_enter( file, matnum, nblks)
+  MatrixFile *file;
+  int matnum, nblks;
+d619 4
+a622 4
+	struct MatDir entry;
+	int dirblk, dirbufr[128], i, nxtblk, busy, oldsize;
+	FILE *fptr = file->fptr;
+	short sw_version = file->mhptr->sw_version;
+d625 2
+a626 2
+	fseek( fptr, 0, 0);
+/* nfs locks are very time consuming 
+d630 3
+a632 2
+		read_matrix_data( fptr,dirblk,1,(char*)dirbufr,VAX_Ix4);
+	else read_matrix_data( fptr,dirblk,1,(char*)dirbufr,SunLong);
+d635 28
+a662 11
+	nxtblk = dirblk+1;
+	for (i=4; i<128; i+=4)
+	{
+	  if (dirbufr[i] == 0) 
+	  { busy = 0;
+		break;
+	  }
+	  else if (dirbufr[i] == matnum)
+	  { oldsize = dirbufr[i+2]-dirbufr[i+1]+1;
+		if (oldsize < nblks)
+		{ dirbufr[i] = 0xFFFFFFFF;
+d664 16
+a679 3
+		  		write_matrix_data( fptr,dirblk,1,dirbufr,VAX_Ix4);
+		  	else write_matrix_data( fptr,dirblk,1,dirbufr,SunLong);
+		  nxtblk = dirbufr[i+2]+1;
+a680 9
+		else
+		{ nxtblk = dirbufr[i+1];
+		  dirbufr[0]++;
+		  dirbufr[3]--;
+		  busy = 0;
+		  break;
+		}
+	  }
+	  else nxtblk = dirbufr[i+2]+1;
+a681 19
+	if (!busy) break;
+	if (dirbufr[1] != MatFirstDirBlk)
+	{ dirblk = dirbufr[1];
+		if (sw_version < V7)
+	  		read_matrix_data( fptr,dirblk,1,(char*)dirbufr,VAX_Ix4);
+	  	else read_matrix_data( fptr,dirblk,1,(char*)dirbufr,SunLong);
+	} else
+	{ dirbufr[1] = nxtblk;
+		if (sw_version < V7)
+	  		write_matrix_data( fptr,dirblk,1,(char*)dirbufr,VAX_Ix4);
+	  	else write_matrix_data( fptr,dirblk,1,(char*)dirbufr,SunLong);
+	  dirbufr[0] = 31;
+	  dirbufr[1] = MatFirstDirBlk;
+	  dirbufr[2] = dirblk;
+	  dirbufr[3] = 0;
+	  dirblk = nxtblk;
+	  for (i=4; i<128; i++) dirbufr[i] = 0;
+	 }
+	}
+d683 3
+a685 3
+	dirbufr[i+1] = nxtblk;
+	dirbufr[i+2] = nxtblk + nblks;
+	dirbufr[i+3] = 1;
+d688 6
+a693 4
+	if (sw_version < V7) write_matrix_data( fptr,dirblk,1,dirbufr,VAX_Ix4);
+	else write_matrix_data( fptr,dirblk,1,dirbufr,SunLong);
+	fseek( fptr, 0, 0);
+/* nfs locks are very time consuming 
+d699 4
+a702 4
+int mat_write_data( fptr, blk, nbytes, data, dtype)
+  FILE *fptr;
+  int blk, nbytes, dtype;
+  char *data;
+d704 1
+a704 1
+	int nblks;
+d706 2
+a707 2
+	nblks = (511+nbytes)/512;
+	return write_matrix_data( fptr, blk, nblks, data, dtype);
+d710 4
+a713 4
+int mat_read_data( fptr, blk, nbytes, data, dtype)
+  FILE *fptr;
+  int blk, nbytes, dtype;
+  char *data;
+d715 1
+a715 1
+	int nblks;
+d717 2
+a718 2
+	nblks = (511+nbytes)/512;
+	return read_matrix_data( fptr, blk, nblks, data, dtype);
+d721 2
+a722 2
+int matrix_selector( matnum, ranges)
+  int matnum, ranges[2][5];
+d724 1
+a724 1
+	struct Matval m;
+d726 1
+a726 1
+	mat_numdoc( matnum, &m);
+d728 2
+a729 1
+	  if (m.frame < ranges[0][0] || m.frame > ranges[1][0]) return (0);
+d731 2
+a732 1
+	  if (m.plane < ranges[0][1] || m.plane > ranges[1][1]) return (0);
+d734 2
+a735 1
+	  if (m.gate  < ranges[0][2] || m.gate  > ranges[1][2]) return (0);
+d737 2
+a738 1
+	  if (m.data  < ranges[0][3] || m.data  > ranges[1][3]) return (0);
+d740 2
+a741 1
+	  if (m.bed   < ranges[0][4] || m.bed   > ranges[1][4]) return (0);
+d745 6
+a750 4
+decode_selector( s1, ranges)
+  char *s1; int ranges[2][5];
+{	char xword[16], *next_word();
+	int i;
+d752 12
+a763 13
+	fix_selector( s1, s1);
+	for (i=0;i<5;i++)	/* set all ranges to all (-1) */
+	{
+	  ranges[0][i]=ranges[1][i] = -1;
+	  s1 = next_word( s1, xword);
+	  if (xword[0] == '*') continue;
+	  else if (strchr(xword,':'))
+		sscanf(xword,"%d:%d",&ranges[0][i],&ranges[1][i]);
+	  else
+	  {
+		sscanf(xword,"%d",&ranges[0][i]);
+		ranges[1][i]=ranges[0][i];
+	  }
+d767 2
+a768 2
+str_find( s1, s2)
+  char *s1, *s2;
+d770 1
+a770 1
+	int i, j, k;
+d772 4
+a775 3
+	for (i=0;s1[i];i++) {
+	  for (j=i,k=0; s2[k]!='\0' && s1[j]==s2[k]; j++, k++) ;
+	  if (s2[k]=='\0') return (i);
+d779 2
+a780 2
+str_replace( s1, s2, s3, s4)
+  char *s1, *s2, *s3, *s4;
+d782 1
+a782 1
+	int nf=0, n;
+d785 10
+a794 10
+	while (1)
+	{ if ((n=str_find(s2, s3))==-1)
+	  { strcat(s1, s2);
+		return (nf);
+	  } else
+	  { strncat(s1, s2, n);
+		strcat(s1, s4);
+		s2+= n+strlen(s3);
+		nf++;
+	  }
+d798 2
+a799 2
+string_replace( s1, s2, s3, s4)
+  char *s1, *s2, *s3, *s4;
+d801 1
+a801 1
+	char temp[256];
+d803 4
+a806 4
+	strcpy(temp, s2);
+	while (str_replace(s1, temp, s3, s4) > 0)
+	  strcpy(temp, s1);
+}	
+d808 2
+a809 2
+fix_selector( s1, s2)
+  char *s1, *s2;
+d811 10
+a820 9
+	char temp[256];
+	string_replace(temp, s2, "," , " ");
+	string_replace(s1, temp, "..", ":");
+	string_replace(temp, s1, ".", ":");
+	string_replace(s1, temp, "-", ":");
+	string_replace(temp, s1, "**", "*");
+	string_replace(s1, temp, "  ", " ");
+	string_replace(temp, s1, " :", ":");
+	string_replace(s1, temp, ": ", ":");
+d823 2
+a824 2
+char* next_word(s, w)
+  char *s, *w;
+d826 5
+a830 3
+	while (*s && *s!=' ') *w++ = *s++;
+	*w='\0';
+	if (*s) s++;
+d834 3
+a836 3
+int map_main_header(bufr,header)
+char *bufr;
+Main_header *header;
+d839 8
+a846 7
+  int i = 0, j = 0;
+  char mn[20];
+  /* set magic number */
+  sprintf(mn,"%s%d%s\n", magicNumber,header->sw_version,
+	dstypecode[header->file_type]);
+  bufWrite(mn, bufr, &i, 14);
+	
+d848 60
+a907 60
+  bufWrite(header->original_file_name, bufr, &i, NameLen);
+  bufWrite_s(header->sw_version, bufr, &i);
+  bufWrite_s(header->system_type, bufr, &i);
+  bufWrite_s(header->file_type, bufr, &i);
+  bufWrite(header->serial_number, bufr, &i, 10);
+  bufWrite_i(header->scan_start_time, bufr, &i);
+  bufWrite(header->isotope_code, bufr, &i, 8);
+  bufWrite_f(header->isotope_halflife, bufr, &i);
+  bufWrite(header->radiopharmaceutical, bufr, &i, NameLen);
+  bufWrite_f(header->gantry_tilt, bufr, &i);
+  bufWrite_f(header->gantry_rotation, bufr, &i);
+  bufWrite_f(header->bed_elevation, bufr, &i);
+  bufWrite_f(header->intrinsic_tilt, bufr, &i);
+  bufWrite_s(header->wobble_speed, bufr, &i);
+  bufWrite_s(header->transm_source_type, bufr, &i);
+  bufWrite_f(header->distance_scanned, bufr, &i);
+  bufWrite_f(header->transaxial_fov, bufr, &i);
+  bufWrite_s(header->angular_compression, bufr, &i);
+  bufWrite_s(header->coin_samp_mode, bufr, &i);
+  bufWrite_s(header->axial_samp_mode, bufr, &i);
+  bufWrite_f(header->calibration_factor, bufr, &i);
+  bufWrite_s(header->calibration_units, bufr, &i);
+  bufWrite_s(header->calibration_units_label, bufr, &i);
+  bufWrite_s(header->compression_code, bufr, &i);
+  bufWrite(header->study_name, bufr, &i, 12);
+  bufWrite(header->patient_id, bufr, &i, IDLen);
+  bufWrite(header->patient_name, bufr, &i, NameLen);
+  bufWrite(header->patient_sex, bufr, &i, 1);
+  bufWrite(header->patient_dexterity, bufr, &i, 1);
+  bufWrite_f(header->patient_age, bufr, &i);
+  bufWrite_f(header->patient_height, bufr, &i);
+  bufWrite_f(header->patient_weight, bufr, &i);
+  bufWrite_i(header->patient_birth_date, bufr, &i);
+  bufWrite(header->physician_name, bufr, &i, NameLen);
+  bufWrite(header->operator_name, bufr, &i, NameLen);
+  bufWrite(header->study_description, bufr, &i, NameLen);
+  bufWrite_s(header->acquisition_type, bufr, &i);
+  bufWrite_s(header->patient_orientation, bufr, &i);
+  bufWrite(header->facility_name, bufr, &i, 20);
+  bufWrite_s(header->num_planes, bufr, &i);
+  bufWrite_s(header->num_frames, bufr, &i);
+  bufWrite_s(header->num_gates, bufr, &i);
+  bufWrite_s(header->num_bed_pos, bufr, &i);
+  bufWrite_f(header->init_bed_position, bufr, &i);
+  for(j = 0; j < 15; j++)
+  	bufWrite_f(header->bed_offset[j], bufr, &i);
+  bufWrite_f(header->plane_separation, bufr, &i);
+  bufWrite_s(header->lwr_sctr_thres, bufr, &i);
+  bufWrite_s(header->lwr_true_thres, bufr, &i);
+  bufWrite_s(header->upr_true_thres, bufr, &i);
+  bufWrite(header->user_process_code, bufr, &i, 10);
+  bufWrite_s(header->acquisition_mode, bufr, &i);
+  bufWrite_f(header->bin_size, bufr, &i);
+  bufWrite_f(header->branching_fraction, bufr, &i);
+  bufWrite_i(header->dose_start_time, bufr, &i);
+  bufWrite_f(header->dosage, bufr, &i);
+  bufWrite_f(header->well_counter_factor, bufr, &i);
+  bufWrite(header->data_units, bufr, &i, 32);
+  bufWrite_s(header->septa_state, bufr, &i);
+  return 1;
+d910 3
+a912 3
+int mat_write_main_header( fptr , header)
+  FILE *fptr;
+  Main_header *header;
+d914 7
+a920 4
+  char bufr[MatBLKSIZE];
+  if (header->sw_version < V7) map64_main_header(bufr,header);
+  else map_main_header(bufr,header);
+  return mat_wblk( fptr, 1, bufr, 1);   /* write main header at block 1 */
+d923 3
+a925 3
+int map_image_header(buf,header)
+char *buf;
+Image_subheader *header;
+d927 61
+a987 60
+	int i = 0;
+	bufWrite_s(header->data_type, buf, &i);
+	bufWrite_s(header->num_dimensions, buf, &i);
+	bufWrite_s(header->x_dimension, buf, &i);
+	bufWrite_s(header->y_dimension, buf, &i);
+	bufWrite_s(header->z_dimension, buf, &i);
+	bufWrite_f(header->z_offset, buf, &i);
+	bufWrite_f(header->x_offset, buf, &i);
+	bufWrite_f(header->y_offset, buf, &i);
+	bufWrite_f(header->recon_zoom, buf, &i);
+	bufWrite_f(header->scale_factor, buf, &i);
+	bufWrite_s(header->image_min, buf, &i);
+	bufWrite_s(header->image_max, buf, &i);
+	bufWrite_f(header->x_pixel_size, buf, &i);
+	bufWrite_f(header->y_pixel_size, buf, &i);
+	bufWrite_f(header->z_pixel_size, buf, &i);
+	bufWrite_i(header->frame_duration, buf, &i);
+	bufWrite_i(header->frame_start_time, buf, &i);
+	bufWrite_s(header->filter_code, buf, &i);
+	bufWrite_f(header->x_resolution, buf, &i);
+	bufWrite_f(header->y_resolution, buf, &i);
+	bufWrite_f(header->z_resolution, buf, &i);
+	bufWrite_f(header->num_r_elements, buf, &i);
+	bufWrite_f(header->num_angles, buf, &i);
+	bufWrite_f(header->z_rotation_angle, buf, &i);
+	bufWrite_f(header->decay_corr_fctr, buf, &i);
+	bufWrite_i(header->processing_code, buf, &i);
+	bufWrite_i(header->gate_duration, buf, &i);
+	bufWrite_i(header->r_wave_offset, buf, &i);
+	bufWrite_i(header->num_accepted_beats, buf, &i);
+	bufWrite_f(header->filter_cutoff_frequency, buf, &i);
+	bufWrite_f(header->filter_resolution, buf, &i);
+	bufWrite_f(header->filter_ramp_slope, buf, &i);
+	bufWrite_s(header->filter_order, buf, &i);
+	bufWrite_f(header->filter_scatter_fraction, buf, &i);
+	bufWrite_f(header->filter_scatter_slope, buf, &i);
+	bufWrite(header->annotation, buf, &i, 40);
+	bufWrite_f(header->mt_1_1, buf, &i);
+	bufWrite_f(header->mt_1_2, buf, &i);
+	bufWrite_f(header->mt_1_3, buf, &i);
+	bufWrite_f(header->mt_2_1, buf, &i);
+	bufWrite_f(header->mt_2_2, buf, &i);
+	bufWrite_f(header->mt_2_3, buf, &i);
+	bufWrite_f(header->mt_3_1, buf, &i);
+	bufWrite_f(header->mt_3_2, buf, &i);
+	bufWrite_f(header->mt_3_3, buf, &i);
+	bufWrite_f(header->rfilter_cutoff, buf, &i);
+	bufWrite_f(header->rfilter_resolution, buf, &i);
+	bufWrite_s(header->rfilter_code, buf, &i);
+	bufWrite_s(header->rfilter_order, buf, &i);
+	bufWrite_f(header->zfilter_cutoff, buf, &i);
+	bufWrite_f(header->zfilter_resolution, buf, &i);
+	bufWrite_s(header->zfilter_code, buf, &i);
+	bufWrite_s(header->zfilter_order, buf, &i);
+	bufWrite_f(header->mt_1_4, buf, &i);
+	bufWrite_f(header->mt_2_4, buf, &i);
+	bufWrite_f(header->mt_3_4, buf, &i);
+	bufWrite_s(header->scatter_type, buf, &i);
+	bufWrite_s(header->recon_type, buf, &i);
+	bufWrite_s(header->recon_views, buf, &i);
+d991 4
+a994 4
+int mat_write_image_subheader( file, blknum, header)
+  MatrixFile *file;
+  int blknum;
+  Image_subheader *header;
+d996 2
+a997 1
+	char buf[MatBLKSIZE];
+d999 4
+a1002 3
+		map64_image_header(buf,header,file->mhptr);
+	else map_image_header(buf,header);
+	return mat_wblk( file->fptr, blknum, buf, 1);
+d1005 3
+a1007 3
+int map_scan_header(buf,header)
+char *buf;
+Scan_subheader *header;
+d1009 1
+a1009 35
+	int i = 0, j= 0;
+	bufWrite_s(header->data_type, buf, &i);
+	bufWrite_s(header->num_dimensions, buf, &i);
+	bufWrite_s(header->num_r_elements, buf, &i);
+	bufWrite_s(header->num_angles, buf, &i);
+	bufWrite_s(header->corrections_applied, buf, &i);
+	bufWrite_s(header->num_z_elements, buf, &i);
+	bufWrite_s(header->ring_difference, buf, &i);
+	bufWrite_f(header->x_resolution, buf, &i);
+	bufWrite_f(header->y_resolution, buf, &i);
+	bufWrite_f(header->z_resolution, buf, &i);
+	bufWrite_f(header->w_resolution, buf, &i);
+	i += 6 * sizeof(short);		/* space reserved for future gating info */
+	bufWrite_i(header->gate_duration, buf, &i);
+	bufWrite_i(header->r_wave_offset, buf, &i);
+	bufWrite_i(header->num_accepted_beats, buf, &i);
+	bufWrite_f(header->scale_factor, buf, &i);
+	bufWrite_s(header->scan_min, buf, &i);
+	bufWrite_s(header->scan_max, buf, &i);
+	bufWrite_i(header->prompts, buf, &i);
+	bufWrite_i(header->delayed, buf, &i);
+	bufWrite_i(header->multiples, buf, &i);
+	bufWrite_i(header->net_trues, buf, &i);
+	for(j = 0; j < 16; j++)
+		bufWrite_f(header->cor_singles[j], buf, &i);
+	for(j = 0; j < 16; j++)
+		bufWrite_f(header->uncor_singles[j], buf, &i);
+	bufWrite_f(header->tot_avg_cor, buf, &i);
+	bufWrite_f(header->tot_avg_uncor, buf, &i);
+	bufWrite_i(header->total_coin_rate, buf, &i);
+	bufWrite_i(header->frame_start_time, buf, &i);
+	bufWrite_i(header->frame_duration, buf, &i);
+	bufWrite_f(header->loss_correction_fctr, buf, &i);
+	for(j = 0; j < 8; j++)
+		bufWrite_s(header->phy_planes[j], buf, &i);
+d1011 35
+d1048 4
+a1051 4
+int mat_write_scan_subheader( file, blknum, header)
+  MatrixFile *file;
+  int blknum; 
+  Scan_subheader *header;
+d1053 2
+a1054 1
+	char buf[MatBLKSIZE];
+d1056 4
+a1059 3
+		map64_scan_header(buf,header,file->mhptr);
+	else map_scan_header(buf,header);
+	return mat_wblk( file->fptr, blknum, buf, 1);
+d1062 3
+a1064 3
+int map_attn_header(buf,header)
+char *buf;
+Attn_subheader *header;
+d1066 1
+a1066 30
+	int i = 0, j = 0;
+	bufWrite_s(header->data_type, buf, &i);
+	bufWrite_s(header->num_dimensions, buf, &i);
+	bufWrite_s(header->attenuation_type, buf, &i);
+	bufWrite_s(header->num_r_elements, buf, &i);
+	bufWrite_s(header->num_angles, buf, &i);
+	bufWrite_s(header->num_z_elements, buf, &i);
+	bufWrite_s(header->ring_difference, buf, &i);
+	bufWrite_f(header->x_resolution, buf, &i);
+	bufWrite_f(header->y_resolution, buf, &i);
+	bufWrite_f(header->z_resolution, buf, &i);
+	bufWrite_f(header->w_resolution, buf, &i);
+	bufWrite_f(header->scale_factor, buf, &i);
+	bufWrite_f(header->x_offset, buf, &i);
+	bufWrite_f(header->y_offset, buf, &i);
+	bufWrite_f(header->x_radius, buf, &i);
+	bufWrite_f(header->y_radius, buf, &i);
+	bufWrite_f(header->tilt_angle, buf, &i);
+	bufWrite_f(header->attenuation_coeff, buf, &i);
+	bufWrite_f(header->attenuation_min, buf, &i);
+	bufWrite_f(header->attenuation_max, buf, &i);
+	bufWrite_f(header->skull_thickness, buf, &i);
+	bufWrite_s(header->num_additional_atten_coeff, buf, &i);
+	for(j = 0; j < 8; j++)
+		bufWrite_f(header->additional_atten_coeff[j], buf, &i);
+	bufWrite_f(header->edge_finding_threshold, buf, &i);
+	bufWrite_s(header->storage_order, buf, &i);
+	bufWrite_s(header->span, buf, &i);
+	for(j = 0; j < 64; j++)
+		bufWrite_s(header->z_elements[j], buf, &i);
+d1068 30
+d1101 4
+a1104 4
+int mat_write_attn_subheader( file, blknum, header)
+  MatrixFile *file;
+  int blknum;
+  Attn_subheader *header;
+d1106 2
+a1107 1
+	char buf[MatBLKSIZE];
+d1109 4
+a1112 3
+		map64_attn_header(buf,header,file->mhptr);
+	else map_attn_header(buf,header);
+	return mat_wblk( file->fptr, blknum, buf, 1);
+d1115 3
+a1117 3
+int map_norm_header(buf,header)
+char *buf;
+Norm_subheader *header;
+d1119 18
+a1136 17
+	int i = 0, j = 0;
+	bufWrite_s(header->data_type, buf, &i);
+	bufWrite_s(header->num_dimensions, buf, &i);
+	bufWrite_s(header->num_r_elements, buf, &i);
+	bufWrite_s(header->num_angles, buf, &i);
+	bufWrite_s(header->num_z_elements, buf, &i);
+	bufWrite_s(header->ring_difference, buf, &i);
+	bufWrite_f(header->scale_factor, buf, &i);
+	bufWrite_f(header->norm_min, buf, &i);
+	bufWrite_f(header->norm_max, buf, &i);
+	bufWrite_f(header->fov_source_width, buf, &i);
+	bufWrite_f(header->norm_quality_factor, buf, &i);
+	bufWrite_s(header->norm_quality_factor_code, buf, &i);
+	bufWrite_s(header->storage_order, buf, &i);
+	bufWrite_s(header->span, buf, &i);
+	for(j = 0; j < 64; j++)
+		bufWrite_s(header->z_elements[j], buf, &i);
+d1140 4
+a1143 4
+int mat_write_norm_subheader( file, blknum, header)
+  MatrixFile *file;
+  int blknum;
+  Norm_subheader *header;
+d1145 2
+a1146 1
+	char buf[MatBLKSIZE];
+d1148 4
+a1151 3
+		map64_norm_header(buf,header,file->mhptr);
+	else map_norm_header(buf,header);
+	return mat_wblk( file->fptr, blknum, buf, 1);
+d1154 4
+a1157 4
+int mat_write_Scan3D_subheader( file, blknum, header)
+  MatrixFile *file;
+  int blknum;
+  Scan3D_subheader *header;
+d1159 2
+a1160 1
+	char buf[2*MatBLKSIZE];
+d1162 3
+a1164 3
+		crash("Short3dSinogram : not supported by ecat version 6.x\n");
+	map_Scan3D_header(buf,header);
+	return mat_wblk( file->fptr, blknum, buf, 2);
+d1167 3
+a1169 3
+int unmap_attn_header(buf,header) 
+char *buf;
+Attn_subheader *header;
+d1171 1
+a1171 30
+	int i = 0, j = 0;
+	bufRead_s(&header->data_type, buf, &i);
+	bufRead_s(&header->num_dimensions, buf, &i);
+	bufRead_s(&header->attenuation_type, buf, &i);
+	bufRead_s(&header->num_r_elements, buf, &i);
+	bufRead_s(&header->num_angles, buf, &i);
+	bufRead_s(&header->num_z_elements, buf, &i);
+	bufRead_s(&header->ring_difference, buf, &i);
+	bufRead_f(&header->x_resolution, buf, &i);
+	bufRead_f(&header->y_resolution, buf, &i);
+	bufRead_f(&header->z_resolution, buf, &i);
+	bufRead_f(&header->w_resolution, buf, &i);
+	bufRead_f(&header->scale_factor, buf, &i);
+	bufRead_f(&header->x_offset, buf, &i);
+	bufRead_f(&header->y_offset, buf, &i);
+	bufRead_f(&header->x_radius, buf, &i);
+	bufRead_f(&header->y_radius, buf, &i);
+	bufRead_f(&header->tilt_angle, buf, &i);
+	bufRead_f(&header->attenuation_coeff, buf, &i);
+	bufRead_f(&header->attenuation_min, buf, &i);
+	bufRead_f(&header->attenuation_max, buf, &i);
+	bufRead_f(&header->skull_thickness, buf, &i);
+	bufRead_s(&header->num_additional_atten_coeff, buf, &i);
+	for(j = 0; j < 8; j++)
+		bufRead_f(&header->additional_atten_coeff[j], buf, &i);
+	bufRead_f(&header->edge_finding_threshold, buf, &i);
+	bufRead_s(&header->storage_order, buf, &i);
+	bufRead_s(&header->span, buf, &i);
+	for(j = 0; j < 64; j++)
+		bufRead_s(&header->z_elements[j], buf, &i);
+d1173 30
+d1206 4
+a1209 4
+int mat_read_attn_subheader( file, blknum, header)
+  MatrixFile* file;
+  int blknum; 
+  Attn_subheader *header;
+d1211 6
+a1216 3
+	char buf[MatBLKSIZE];
+	if (file->acs) rtsRblk(file->fname, blknum, buf);
+	else mat_rblk( file->fptr, blknum, buf, 1);
+d1218 2
+a1219 2
+		return unmap64_attn_header(buf,header, file->mhptr);
+	return unmap_attn_header(buf,header);
+d1222 3
+a1224 3
+int unmap_norm_header(buf,header)
+char *buf;
+Norm_subheader *header;
+d1226 19
+a1244 18
+	int i = 0, j = 0;
+	bufRead_s(&header->data_type, buf, &i);
+	bufRead_s(&header->num_dimensions, buf, &i);
+	bufRead_s(&header->num_r_elements, buf, &i);
+	bufRead_s(&header->num_angles, buf, &i);
+	bufRead_s(&header->num_z_elements, buf, &i);
+	bufRead_s(&header->ring_difference, buf, &i);
+	bufRead_f(&header->scale_factor, buf, &i);
+	bufRead_f(&header->norm_min, buf, &i);
+	bufRead_f(&header->norm_max, buf, &i);
+	bufRead_f(&header->fov_source_width, buf, &i);
+	bufRead_f(&header->norm_quality_factor, buf, &i);
+	bufRead_s(&header->norm_quality_factor_code, buf, &i);
+	bufRead_s(&header->storage_order, buf, &i);
+	bufRead_s(&header->span, buf, &i);
+	for(j = 0; j < 64; j++)
+		bufRead_s(&header->z_elements[j], buf, &i);
+	
+d1247 3
+a1249 3
+int unmap_norm3d_header(buf,header)
+char *buf;
+Norm3D_subheader *header;
+d1251 22
+a1272 21
+	int i = 0, j = 0;
+	memset(header,0,sizeof(Norm3D_subheader));
+	bufRead_s(&header->data_type, buf, &i);
+	bufRead_s(&header->num_r_elements, buf, &i);
+	bufRead_s(&header->num_transaxial_crystals, buf, &i);
+	bufRead_s(&header->num_crystal_rings, buf, &i);
+	bufRead_s(&header->crystals_per_ring, buf, &i);
+	bufRead_s(&header->num_geo_corr_planes, buf, &i);
+	bufRead_s(&header->uld, buf, &i);
+	bufRead_s(&header->lld, buf, &i);
+	bufRead_s(&header->scatter_energy, buf, &i);
+	bufRead_s(&header->norm_quality_factor_code, buf, &i);
+	bufRead_f(&header->norm_quality_factor, buf, &i);
+	for(j = 0; j < 32; j++)
+		bufRead_f(&header->ring_dtcor1[j], buf, &i);
+	for(j = 0; j < 32; j++)
+		bufRead_f(&header->ring_dtcor2[j], buf, &i);
+	for(j = 0; j < 8; j++)
+		bufRead_f(&header->crystal_dtcor[j], buf, &i);
+	bufRead_s(&header->span, buf, &i);
+	bufRead_s(&header->max_ring_diff, buf, &i);
+d1276 4
+a1279 4
+int mat_read_norm_subheader(file, blknum, header)
+  MatrixFile *file;
+  int blknum;
+  Norm_subheader *header;
+d1281 6
+a1286 3
+	char buf[MatBLKSIZE];
+	if (file->acs) rtsRblk(file->fname, blknum, buf);
+	else mat_rblk( file->fptr, blknum, buf, 1);
+d1288 2
+a1289 2
+		return unmap64_norm_header(buf,header, file->mhptr);
+	return unmap_norm_header(buf,header);
+d1292 4
+a1295 4
+int mat_read_norm3d_subheader(file, blknum, header)
+MatrixFile *file;
+int blknum;
+Norm3D_subheader *header;
+d1297 8
+a1304 4
+	char buf[MatBLKSIZE];
+	if (file->acs) rtsRblk(file->fname, blknum, buf);
+	else mat_rblk( file->fptr, blknum, buf, 1);
+	if (file->mhptr->sw_version == V7) return unmap_norm3d_header(buf,header);
+d1308 3
+a1310 3
+matspec( str, fname, matnum)
+  char *str, *fname;
+  int *matnum;
+d1312 2
+a1313 2
+	char *cp;
+	int mf=0,mp=0,mg=0,ms=0,mb=0;
+d1315 2
+a1316 2
+	strcpy( fname, str);
+	cp = (char*) strchr( fname, ',');
+d1318 5
+a1322 6
+	if (cp)
+	{
+	  *cp++ = '\0';
+	  sscanf( cp, "%d,%d,%d,%d,%d", &mf,&mp,&mg,&ms,&mb);
+	  *matnum = mat_numcod( mf,mp,mg,ms,mb);
+	  return 1;
+@

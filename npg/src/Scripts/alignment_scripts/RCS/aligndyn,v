@@ -1,0 +1,335 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	2003.12.17.15.08.25;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.09.03.13.10.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@#!/bin/csh
+# Program:	aligndyn
+# Author:	Tom Videen
+# Date:		Oct 1998
+# Usage:	Align all frames in a dynamic image.
+# 	Requires:
+# 		1) dynamic image has been separated into filtered, single-frame images in Analyze format
+# 		2) a reference image has been created (masked, filtered image defining brain)
+# 		3) a rescaling AIR file and its inverse have been created
+#	Creates:
+#		1) combined air files aligning each image to the first
+# 		2) a null AIR file has been created
+#		3) log file showing net movement between each scan and first (using pixels in reference image)
+#		4) log file showing final fit of cost function
+#	Removes temporary files:
+#		1) resampled images
+#		2) pair-wise air files
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv < 8) then
+	echo "Usage: aligndyn root ext ref frms cutoff thresh resample_air inverted_air [peakslices] [mask]"
+	echo " i.e., aligndyn m500n img m500ref.img 3to44 0.3 3 scale iscale 10to20 m500mask.img"
+	exit 1
+endif
+
+set ROOT  = $1
+set EXT   = .$2
+set BRAIN = $3
+set FIRST = `echo $4 | nawk '{FS="to";print $1}'`
+set LAST  = `echo $4 | nawk '{FS="to";print $2}'`
+set SECOND = `echo "$FIRST + 1; quit" | bc`
+set ANAM  = a${ROOT}
+set XNAM  = x${ROOT}
+set CUTOFF = $5
+set GF = `echo "$CUTOFF * 10; quit" | bc -l | cut -f1 -d.`
+set OEXT  = _g$GF$EXT
+set AEXT  = _g$GF
+set THRESH = $6
+set A_AIR = $7.air
+set B_AIR = $8.air
+if ($#argv == 9) then
+	set SLICES = $9
+else
+	set SLICES = 0
+endif
+if ($#argv == 10) then
+	set MASK = $10
+else
+	set MASK = 0
+endif
+set TMP = ${ROOT}temp.img
+set TLOG  = ${ROOT}.temp
+set ALOG  = ${ROOT}_th${THRESH}${AEXT}.log
+set CLOG  = ${ROOT}_th${THRESH}${AEXT}.fit
+echo `date` >! $ALOG
+echo `date` >! $CLOG
+
+unalias rm
+unalias cp
+
+# Check existence of AIR files
+# ----------------------------
+if (! -e $A_AIR) then
+	if (! -e ${NPG}/air/$A_AIR) then
+		echo "ERROR [aligndyn]: Missing resampling AIR file: $A_AIR"
+		exit 1
+	else
+		cp ${NPG}/air/$A_AIR $A_AIR
+	endif
+endif
+if (! -e $B_AIR) then
+	if (! -e ${NPG}/air/$B_AIR) then
+		echo "ERROR [aligndyn]: Missing inverted AIR file: $B_AIR"
+		exit 1
+	else
+		cp ${NPG}/air/$B_AIR $B_AIR
+	endif
+endif
+
+# Check existence of all single-frame files used for alignment
+# ------------------------------------------------------------
+set i = $FIRST
+while ($i <= $LAST)
+	set AIMG = $ANAM$i$AEXT
+	if (! -e $AIMG.img) then
+		echo "ERROR [aligndyn]: Missing image $AIMG.img"
+		echo "      Use singlefrm_gauss to create filtered, single-frame images for alignment."
+		exit 1
+	endif
+	@@ i++
+end
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set i = $FIRST
+set IMG  = $ROOT$i$OEXT
+set AIMG = $ANAM$i$AEXT
+set NULLAIR  = ${ROOT}_null.air
+set imax = `${NPG}/bin/imghdr $IMG | grep Max | cut -f3 -d ' '`
+set ithr = `echo "$imax/$THRESH;quit" | bc`
+echo "-- alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 $ithr -p1 16 -p2 0"
+${NPG}/bin/alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 $ithr -p1 16 -p2 0
+
+# Adjust pixel size in standard air files (if necessary)
+# ------------------------------------------------------
+set NVOX = `scanair $NULLAIR | grep voxel | tail -1 | cut -f3 -d' ' | cut -f1 -de`
+set SVOX = `scanair $A_AIR | grep voxel | head -1 | cut -f3 -d' ' | cut -f1 -de`
+set AVOX = `scanair $A_AIR | grep voxel | tail -1 | cut -f3 -d' ' | cut -f1 -de`
+set BVOX = `scanair $B_AIR | grep voxel | head -1 | cut -f3 -d' ' | cut -f1 -de`
+if ($NVOX != $AVOX) then
+	set DELTA = `echo "1000 * $NVOX / $AVOX" | bc`
+	if ($DELTA <= 1001 && $DELTA >= 999) then
+		newairpix $A_AIR:r $SVOX $NVOX 
+		newairpix $B_AIR:r $NVOX $SVOX
+	else
+		echo "ERROR [aligndyn]: Different pixel sizes in $FDI and $A_AIR"
+		echo "   $NVOX != $AVOX"
+		echo "   Use or create different air files for $A_AIR and $B_AIR"
+		exit 1
+	endif
+endif
+
+if ($MASK != 0) then
+	set XMASK = x${MASK}
+	setanamin $MASK -1
+	reslice $A_AIR $XMASK -a $MASK -n 1 -k -o
+	setanamin $XMASK 0
+endif
+
+# Align all adjacent pairs 
+# ------------------------
+set i = $FIRST
+while ($i < $LAST)
+	set j = `echo "$i + 1; quit" | bc`
+	set IMG  = $ROOT$i$OEXT
+	set JMG  = $ROOT$j$OEXT
+	set AIMG = $ANAM$i$AEXT
+	set AJMG = $ANAM$j$AEXT
+	set XIMG = $XNAM$i$AEXT
+	if (! -e $XIMG.img) then
+		setanamin $AIMG -1
+		reslice $A_AIR $XIMG -a $AIMG -n 1 -k -o
+	endif
+	set XJMG = $XNAM$j$AEXT
+	if (! -e $XJMG.img) then
+		setanamin $AJMG -1
+		reslice $A_AIR $XJMG -a $AJMG -n 1 -k -o
+	endif
+	set AIR  = ${ROOT}_${i}vs${j}.air
+	set NETAIR = ${ROOT}_${FIRST}vs${j}.air
+	if ($i == $FIRST) then
+		if ($SLICES != 0) then
+			echo -- saveslc $IMG $TMP $SLICES
+			${NPG}/bin/saveslc $IMG $TMP $SLICES
+			set imax = `${NPG}/bin/imghdr $TMP | grep Max | cut -f3 -d ' '`
+		else
+			set imax = `${NPG}/bin/imghdr $IMG | grep Max | cut -f3 -d ' '`
+		endif
+		set ithr = `echo "$imax/$THRESH;quit" | bc`
+	endif
+	if ($SLICES != 0) then
+		echo -- saveslc $JMG $TMP $SLICES
+		${NPG}/bin/saveslc $JMG $TMP $SLICES
+		set jmax = `${NPG}/bin/imghdr $TMP | grep Max | cut -f3 -d ' '`
+	else
+		set jmax = `${NPG}/bin/imghdr $JMG | grep Max | cut -f3 -d ' '`
+	endif
+	set jthr = `echo "$jmax/$THRESH;quit" | bc`
+	setanamin $XIMG 0 $imax
+	setanamin $XJMG 0 $jmax
+	if ($MASK != 0) then
+		set PRM = "-m 6 -t1 $ithr -p1 256 -t2 $jthr -p2 256 -e1 $XMASK -e2 $XMASK -v"
+	else
+		set PRM = "-m 6 -t1 $ithr -p1 256 -t2 $jthr -p2 256 -v"
+	endif
+	echo "-- alignlinear $XIMG $XJMG $AIR $PRM >! $TLOG"
+	${NPG}/bin/alignlinear $XIMG $XJMG $AIR $PRM >! $TLOG
+	tail -1 $TLOG >> $CLOG
+	rm $TLOG
+	if ($i > $FIRST) then
+		echo -- combine_air $NETAIR y $AIR1 $B_AIR $AIR $A_AIR
+		${NPG}/bin/combine_air $NETAIR y $AIR1 $B_AIR $AIR $A_AIR
+	else
+		echo -- combine_air $NETAIR y $B_AIR $AIR $A_AIR
+		${NPG}/bin/combine_air $NETAIR y $B_AIR $AIR $A_AIR
+	endif
+	if ($i > $SECOND) then
+		rm $AIR2
+	endif	
+	set AIR2 = $AIR
+	set AIR1 = $NETAIR
+	set ithr = $jthr
+	echo "-- airdif $NETAIR $NULLAIR $BRAIN >> $ALOG"
+	${NPG}/bin/airdif $NETAIR $NULLAIR $BRAIN | grep Mean >> $ALOG
+	rm $XIMG.img
+	rm $XIMG.hdr
+	@@ i++
+end
+rm $XJMG.img
+rm $XJMG.hdr
+rm $AIR2
+if (-e $TMP) rm $TMP
+echo "[aligndyn] Complete at `date`"
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 1
+a4 1
+# Date:		Oct-98
+d19 2
+a20 4
+set BINPATH = /usr/local/npg/bin
+set PUBPATH = /usr/bin
+set NPGPATH = /usr/local/npg/air
+ 
+d24 1
+a24 1
+	exit(1)
+d59 3
+d64 2
+a65 2
+if (!(-e $A_AIR)) then
+	if (!(-e ${NPGPATH}/$A_AIR)) then
+d67 1
+a67 1
+		exit(1)
+d69 1
+a69 1
+		${PUBPATH}/cp ${NPGPATH}/$A_AIR $A_AIR
+d72 2
+a73 2
+if (!(-e $B_AIR)) then
+	if (!(-e ${NPGPATH}/$B_AIR)) then
+d75 1
+a75 1
+		exit(1)
+d77 1
+a77 1
+		${PUBPATH}/cp ${NPGPATH}/$B_AIR $B_AIR
+d86 1
+a86 1
+	if (!(-e $AIMG.img)) then
+d89 1
+a89 1
+		exit(1)
+d100 1
+a100 1
+set imax = `${BINPATH}/imghdr $IMG | grep Max | cut -f3 -d ' '`
+d103 1
+a103 1
+${BINPATH}/alignlinear $AIMG $AIMG $NULLAIR -m 6 -t1 $ithr -p1 16 -p2 0
+d120 1
+a120 1
+		exit (1)
+d141 1
+a141 1
+	if (!(-e $XIMG.img)) then
+d146 1
+a146 1
+	if (!(-e $XJMG.img)) then
+d155 2
+a156 2
+			${BINPATH}/saveslc $IMG $TMP $SLICES
+			set imax = `${BINPATH}/imghdr $TMP | grep Max | cut -f3 -d ' '`
+d158 1
+a158 1
+			set imax = `${BINPATH}/imghdr $IMG | grep Max | cut -f3 -d ' '`
+d164 2
+a165 2
+		${BINPATH}/saveslc $JMG $TMP $SLICES
+		set jmax = `${BINPATH}/imghdr $TMP | grep Max | cut -f3 -d ' '`
+d167 1
+a167 1
+		set jmax = `${BINPATH}/imghdr $JMG | grep Max | cut -f3 -d ' '`
+d178 1
+a178 1
+	${BINPATH}/alignlinear $XIMG $XJMG $AIR $PRM >! $TLOG
+d180 1
+a180 1
+	${PUBPATH}/rm $TLOG
+d183 1
+a183 1
+		${BINPATH}/combine_air $NETAIR y $AIR1 $B_AIR $AIR $A_AIR
+d186 1
+a186 1
+		${BINPATH}/combine_air $NETAIR y $B_AIR $AIR $A_AIR
+d189 1
+a189 1
+		${PUBPATH}/rm $AIR2
+d195 3
+a197 3
+	${BINPATH}/airdif $NETAIR $NULLAIR $BRAIN | grep Mean >> $ALOG
+	${PUBPATH}/rm $XIMG.img
+	${PUBPATH}/rm $XIMG.hdr
+d200 4
+a203 4
+${PUBPATH}/rm $XJMG.img
+${PUBPATH}/rm $XJMG.hdr
+${PUBPATH}/rm $AIR2
+if (-e $TMP) ${PUBPATH}/rm $TMP
+@

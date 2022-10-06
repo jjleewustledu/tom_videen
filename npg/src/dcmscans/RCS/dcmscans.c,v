@@ -1,0 +1,422 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	2004.03.02.20.03.23;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2004.02.13.21.52.08;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2003.10.01.16.26.49;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.01.11.16.11.56;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.01.11.14.49.22;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2001.09.14.18.04.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@add acquisition date and series time
+@
+text
+@/* $Id: dcmscans.c,v 1.9 2004/02/13 21:52:08 tom Exp tom $ */
+/* $Log: dcmscans.c,v $
+ * Revision 1.9  2004/02/13  21:52:08  tom
+ * Feb 2004
+ *
+ * Revision 1.4  2003/10/01  16:26:49  tom
+ * CR at beginning instead of end
+ *
+ * Revision 1.3  2002/01/11  16:11:56  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2002/01/11  14:49:22  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2001/09/14  18:04:02  tom
+ * Initial revision
+ * */
+/*  ===============================================================================
+ *  Module:         dcmscans.c
+ *  Date:           Sept 2001
+ *  Author:         Tom Videen
+ *  Description:    Get basic info from DICOM MRI header.
+ *  ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmscans/RCS/dcmscans.c,v 1.9 2004/02/13 21:52:08 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <image.h>
+#include <imgutil.h>
+#include <nrutil.h>
+
+#define U_SHORT unsigned short
+#define MAXSTR 256
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	FILE           *fdcm;
+	char           *fname;			 /* image filename */
+	char           *last;			 /* last image filename */
+	char           *dcmhdr;			 /* dcm_dump_file output */
+	char           *ptr, *ptr2;
+	char           *ptr_end;
+	char            str[MAXSTR];
+	char            *acquisition_date;
+	char           *stime;
+	char           *series_time;
+	char            orientation[12];
+	char            subject_id[MAXSTR];
+	char            SequenceFileName[MAXSTR];
+	char            SequenceDescription[MAXSTR];
+
+	int             num;
+	int             vec1[3], vec2[3];	 /* Image Orientation */
+	float           t1, t2, t3, t4, t5, t6;	 /* input for sscanf */
+	short           ddim[3];		 /* input DICOM image dimensions */
+	float           dpix[3];		 /* input DICOM pixel sizes (mm) */
+	float           ftime;
+
+/* lint free */
+
+	vec1[0] = 0;
+	vec1[1] = 0;
+	vec1[2] = 0;
+	vec2[0] = 0;
+	vec2[1] = 0;
+	vec2[2] = 0;
+	ddim[0] = 0;
+	ddim[1] = 0;
+	ddim[2] = 0;
+	dpix[0] = 0;
+	dpix[1] = 0;
+	dpix[2] = 0;
+
+	if (argc != 5) {
+		printf ("Usage: dcmscans <fname> <num> <dicom_hdr> <last>\n");
+		return (ERROR);
+	}
+	fname = argv[1];
+	num = atoi (argv[2]);
+	dcmhdr = argv[3];
+	last = argv[4];
+
+	(void) strcpy (SequenceFileName, "\0");
+	(void) strcpy (SequenceDescription, "\0");
+
+	ptr_end = strchr (dcmhdr, '\n');
+	if (ptr_end != NULL)
+		*ptr_end = '\0';
+	if ((fdcm = fopen (dcmhdr, "r")) == 0) {
+		printf ("ERROR [dcmscans]: Unable to open %s\n", dcmhdr);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), fdcm) == NULL) {
+		printf ("ERROR [dcmscans]: reading %s\n", dcmhdr);
+		return (ERROR);
+	}
+	if (strncmp (str, "DICOM", 5) != 0) {
+		printf ("ERROR [dcmscans]: %s is not a DICOM file\n", dcmhdr);
+		return (ERROR);
+	}
+
+	series_time = (char *) calloc (12, sizeof (char));
+	if (series_time == NULL)
+		return (ERROR);
+	acquisition_date = (char *) calloc (12, sizeof (char));
+	if (acquisition_date == NULL) {
+		free (series_time);
+		return (ERROR);
+	}
+	while (fgets (str, sizeof (str), fdcm) != NULL) {
+		if (strlen (str) >= 55) {
+			ptr = strrchr (str, '/');
+			if (ptr != NULL) {
+				ptr += 1;
+				if (strncmp (str, "0008 0022", 9) == 0) {
+					strncpy (acquisition_date, ptr+4, 2);
+					strcat (acquisition_date, "/");
+					strncat (acquisition_date, ptr+6, 2);
+					strcat (acquisition_date, "/");
+					strncat (acquisition_date, ptr, 4);
+					continue;
+				}
+				if (strncmp (str, "0008 0031", 9) == 0) {
+					ftime = atof (ptr);
+					stime = (char *) calloc (7, sizeof (char));
+					if (stime == NULL) {
+						free (acquisition_date);
+						free (series_time);
+						return (ERROR);
+					}
+					sprintf (stime, "%0d", (int) ftime);
+					strncpy (series_time, stime, 2);
+					strcat (series_time, ":");
+					strncat (series_time, stime + 2, 2);
+					strcat (series_time, ":");
+					strncat (series_time, stime + 4, 2);
+					free (stime);
+					continue;
+				}
+				if (strncmp (str, "0010 0010", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					(void) strcpy (subject_id, ptr);
+					continue;
+				}
+				if (strncmp (str, "0018 0024", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					(void) strcpy (SequenceFileName, ptr);
+					continue;
+				}
+				if (strncmp (str, "0018 0050", 9) == 0) {
+					dpix[2] = atof (ptr);
+					continue;
+				}
+				if (strncmp (str, "0018 1030", 9) == 0) {
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					(void) strcpy (SequenceDescription, ptr);
+					continue;
+				}
+				if (strncmp (str, "0020 0037", 9) == 0) {
+					(void) sscanf (ptr, "%f\\%f\\%f\\%f\\%f\\%f", &t1, &t2, &t3, &t4, &t5, &t6);
+					vec1[0] = ROUND (t1);
+					vec1[1] = ROUND (t2);
+					vec1[2] = ROUND (t3);
+					vec2[0] = ROUND (t4);
+					vec2[1] = ROUND (t5);
+					vec2[2] = ROUND (t6);
+					continue;
+				}
+				if (strncmp (str, "0028 0010", 9) == 0) {
+					ddim[1] = atoi (ptr + 4);
+					continue;
+				}
+				if (strncmp (str, "0028 0011", 9) == 0) {
+					ddim[0] = atoi (ptr + 4);
+					continue;
+				}
+				if (strncmp (str, "0028 0030", 9) == 0) {
+					ptr2 = strrchr (ptr, '\\');
+					dpix[0] = atof (ptr2 + 1);
+					dpix[1] = atof (ptr2 + 1);
+					continue;
+				}
+			}
+		}
+	}
+	(void) fclose (fdcm);
+
+	if (abs (vec1[0]) == 1 && abs (vec2[1]) == 1)
+		(void) strcpy (orientation, "Transverse");
+	else if (abs (vec1[0]) == 1 && abs (vec2[2]) == 1)
+		(void) strcpy (orientation, "Coronal");
+	else if (abs (vec1[1]) == 1 && abs (vec2[2]) == 1)
+		(void) strcpy (orientation, "Sagittal");
+	else
+		(void) strcpy (orientation, "Unusual Orientation");
+
+	printf ("\n%s -	%s	%10s	%8s\n", fname, last, acquisition_date, series_time);
+	printf ("	%s  	%s\n", SequenceFileName, SequenceDescription);
+	printf ("	%s	%s	%dx%dx%d (%5.3f, %5.3f, %5.3f mm)\n",
+		subject_id, orientation, ddim[0], ddim[1], num, dpix[0], dpix[1], dpix[2]);
+	free (series_time);
+	free (acquisition_date);
+	return (OK);
+}
+@
+
+
+1.9
+log
+@Feb 2004
+@
+text
+@d1 1
+a1 1
+/* $Id: dcmscans.c,v 1.4 2003/10/01 16:26:49 tom Exp tom $ */
+d3 3
+d26 1
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmscans/RCS/dcmscans.c,v 1.4 2003/10/01 16:26:49 tom Exp tom $";
+d51 3
+a54 1
+	char            study_date[12];
+d64 1
+d68 12
+a79 12
+    vec1[0] = 0;
+    vec1[1] = 0;
+    vec1[2] = 0;
+    vec2[0] = 0;
+    vec2[1] = 0;
+    vec2[2] = 0;
+    ddim[0] = 0;
+    ddim[1] = 0;
+    ddim[2] = 0;
+    dpix[0] = 0;
+    dpix[1] = 0;
+    dpix[2] = 0;
+d108 9
+d123 5
+a127 4
+					ptr_end = strchr (ptr, '\n');
+					if (ptr_end != NULL)
+						*ptr_end = '\0';
+					(void) strcpy (study_date, ptr);
+d130 17
+d210 1
+a210 1
+	printf ("\n%s -	%s\n", fname, last);
+d212 4
+a215 2
+	printf ("	%s	%s %s	%dx%dx%d (%5.3f, %5.3f, %5.3f mm)\n",
+	   subject_id, study_date, orientation, ddim[0], ddim[1], num, dpix[0], dpix[1], dpix[2]);
+@
+
+
+1.4
+log
+@CR at beginning instead of end
+@
+text
+@d1 1
+a1 1
+/* $Id: dcmscans.c,v 1.3 2002/01/11 16:11:56 tom Exp tom $ */
+d3 3
+d22 3
+a35 2
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmscans/RCS/dcmscans.c,v 1.3 2002/01/11 16:11:56 tom Exp tom $";
+
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/* $Id: dcmscans.c,v 1.2 2002/01/11 14:49:22 tom Exp tom $ */
+d3 3
+d30 1
+a30 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmscans/RCS/dcmscans.c,v 1.2 2002/01/11 14:49:22 tom Exp tom $";
+d80 2
+a81 2
+	strcpy (SequenceFileName, "\0");
+	strcpy (SequenceDescription, "\0");
+d107 1
+a107 1
+					strcpy (study_date, ptr);
+d114 1
+a114 1
+					strcpy (subject_id, ptr);
+d121 1
+a121 1
+					strcpy (SequenceFileName, ptr);
+d132 1
+a132 1
+					strcpy (SequenceDescription, ptr);
+d165 1
+a165 1
+		strcpy (orientation, "Transverse");
+d167 1
+a167 1
+		strcpy (orientation, "Coronal");
+d169 1
+a169 1
+		strcpy (orientation, "Sagittal");
+d171 1
+a171 1
+		strcpy (orientation, "Unusual Orientation");
+d173 1
+a173 1
+	printf ("%s -	%s\n", fname, last);
+d175 1
+a175 1
+	printf ("	%s	%s %s	%dx%dx%d (%5.3f, %5.3f, %5.3f mm)\n\n",
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/* $Id: dcmscans.c,v 1.1 2001/09/14 18:04:02 tom Exp tom $ */
+d3 3
+d27 1
+a27 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmscans/RCS/dcmscans.c,v 1.1 2001/09/14 18:04:02 tom Exp tom $";
+d53 15
+d133 1
+a133 1
+					sscanf (ptr, "%f\\%f\\%f\\%f\\%f\\%f", &t1, &t2, &t3, &t4, &t5, &t6);
+d159 1
+a159 1
+	fclose (fdcm);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/* $Id$ */
+/* $Log$ */
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dcmscans/RCS/dcmscans.c,v 1.1 2001/09/13 13:35:05 tom Exp tom $";
+d55 1
+a55 1
+	num = atoi(argv[2]);
+d59 3
+d155 1
+a155 1
+	subject_id, study_date, orientation, ddim[0], ddim[1], num, dpix[0], dpix[1], dpix[2]);
+@

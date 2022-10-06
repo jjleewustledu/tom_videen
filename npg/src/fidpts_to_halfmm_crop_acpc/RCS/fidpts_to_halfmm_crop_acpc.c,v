@@ -1,0 +1,412 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	2007.01.15.18.19.59;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2007.01.11.14.08.49;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2007.01.10.20.37.48;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@/*	$Log: fidpts_to_halfmm_crop_acpc.c,v $
+ * Revision 1.2  2007/01/11  14:08:49  tom
+ * fix geometry
+ *
+ * Revision 1.1  2007/01/10  20:37:48  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:		fidpts_to_halfmm_crop_acpc.c
+ *	Date:		Jan 2007
+ *	Author:		Tom Videen
+ *	Intent:		Create image with fiducial lines on halfmm images
+ *				300x128x64 0.5x0.5x0.5 mm voxels
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop_acpc/RCS/fidpts_to_halfmm_crop_acpc.c,v 1.2 2007/01/11 14:08:49 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <image.h>
+#include <nrutil.h>
+#include <imgutil.h>
+#include <matrixlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			fidpts_to_halfmm_crop_acpc
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	void            plot_xz_vs_y ();
+	void            plot_yz_vs_x ();
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_pts;			 /* file for points */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* file for Analyze image */
+	char           *img1, *hdr1;	 /* output file */
+	char           *pts;			 /* input fiducial points file */
+	char            line[MAXLINE];
+	char            name[4];
+
+	float           fx, fy, fz;		 /* fiducial coords	 */
+	float           tan0, sin0, cos0; /* tilt around y-axis	*/
+	float           tan1;			 /* rotation around z-axis	 */
+	float           tan2;			 /* nod around x-axis	*/
+	float           f;
+
+	int             x, y, z;		 /* loop indices */
+	int             x0, y0, z0;		 /* AC */
+	int             x1, y1, z1;		 /* PC */
+	int             xl, yl, zl;		 /* left computed at AC		 */
+	int             xr, yr, zr;		 /* right computed at AC	 */
+	int             xpl, ypl, zpl;	 /* left computed at PC		 */
+	int             xpr, ypr, zpr;	 /* right computed at PC	 */
+	int             zd;
+	int             xc0, yc0, zc0;	 /* chiasm adjusted for left-right tilt	 */
+	int             xca, yca, zca;	 /* chiasm projected to y=ny */
+	int             xcp, ycp, zcp;	 /* chiasm projected to y=1 */
+
+	short        ***simg;			 /* image array */
+	short          *row;			 /* single row for output */
+
+	struct point {
+		char            name[4];
+		int             x;
+		int             y;
+		int             z;
+	};
+	struct point    pt[13];			 /* array of fiducial points	 */
+	int             npt, n;
+
+	int             val = 30000;
+
+	int             nx = 300;		 /* dimensions of halfmm_crop image */
+	int             ny = 128;
+	int             nz = 64;
+
+	int             nxc0 = 257;		 /* origin of halfmm image	*/
+	int             nyc0 = 257;
+	int             nzc0 = 200;
+
+	int             nx0 = 150;		 /* origin of halfmm_crop image	*/
+	int             ny0 = 35;
+	int             nz0 = 17;
+
+	if (argc != 4) {
+		fprintf (stdout, "Usage: fidpts_to_halfmm_crop_acpc pts img hdr\n");
+		return (ERROR);
+	}
+	pts = argv[1];
+	hdr1 = argv[2];
+	img1 = argv[3];
+
+	simg = s3tensor (1, nz, 1, ny, 1, nx);
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_acpc]: malloc simg\n");
+		return (ERROR);
+	}
+/*	=========================================================
+ *	Read fiducial points
+ *	Note that Analyze image array is reversed and interpolated (x2)
+ */
+	if ((fd_pts = fopen (pts, "r")) == 0) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_acpc]: opening %s\n", pts);
+		return (ERROR);
+	}
+	if (fgets (line, MAXLINE, fd_pts) == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_acpc]: Reading %s\n", pts);
+		return (ERROR);
+	}
+	if (fgets (line, MAXLINE, fd_pts) == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_acpc]: Reading %s\n", pts);
+		return (ERROR);
+	}
+
+/*	Analyze image array is reversed; therefore, fiducials are reversed when read */
+
+	npt = 0;
+	while (fgets (line, MAXLINE, fd_pts) != NULL) {
+		if (sscanf (line, "%3s %f %f %f", name, &fx, &fy, &fz) == 4) {
+			(void) strcpy (pt[npt].name, name);
+			pt[npt].x = (2 * fx);
+			pt[npt].y = (2 * fy);
+			pt[npt].z = (2 * fz);
+			(npt)++;
+		}
+	}
+	(void) fclose (fd_pts);
+	for (n = 0; n < npt; n++) {
+		printf ("%3s %3d %3d %3d\n", pt[n].name, pt[n].x, pt[n].y, pt[n].z);
+		pt[n].x = (nx + 1) - nx0 + (nxc0 - pt[n].x);
+		pt[n].y = (ny + 1) - ny0 + (nyc0 - pt[n].y);
+		pt[n].z = (nz + 1) - nz0 + (nzc0 - pt[n].z);
+	}
+
+/*	=========================================================
+ *	Plot 2 AP lines and 4 RL lines:
+ *		AC = x0, y0, z0
+ *		PC = x1, y1, z1
+ *	------------------------------------------------------- */
+
+	x0 = pt[0].x;
+	y0 = pt[0].y;
+	z0 = pt[0].z;
+	x1 = pt[1].x;
+	y1 = pt[1].y;
+	z1 = pt[1].z;
+
+/*	-------------------------------------------------------------
+ *	Tilt adjustment for left, right, and OX lines:
+ *		angle 0 is tilt on y-axis (positive is up on left)
+ *		angle 1 is rotation on z-axis (positive is CW; nose right)
+ *		angle 2 is nod on x-axis (positive is nose up)
+ *	Angles 0 and 1 should be small
+ *	------------------------------------------------------------- */
+
+	tan0 = (float) (pt[11].z - pt[12].z) / (float) (pt[11].x - pt[12].x);
+	sin0 = sin (atan (tan0));
+	cos0 = cos (atan (tan0));
+	if (y0 != y1) {
+		tan1 = (float) (x1 - x0) / (float) (y0 - y1);
+		tan2 = (float) (z0 - z1) / (float) (y0 - y1);
+	} else {
+		fprintf (stderr, "AC and PC must have different y-coordinates\n");
+		return (ERROR);
+	}
+
+/*	-------------------------------------------------------
+ *	Compute adjusted coordinates for ends of lines:
+ *	4 RL lines:
+ *		ACL:  [x0,y0,z0] to [xl,yl,zl]
+ *		ACR:  [x0,y0,z0] to [xr,yr,zr]
+ *		PCL:  [x1,y1,z1] to [xpl,ypl,zpl]
+ *		PCR:  [x0,y0,z0] to [xpr,ypr,zpr]
+ *
+ *	2 AP lines:
+ *		ACPC: [x0,y0,z0]  to [x1,y1,z1]
+ *		OX:   [xca,yca,zca] to [xcp,ycp,zcp]
+ *	------------------------------------------------------- */
+
+	xl = 1;
+	yl = y0 + ROUND((float)(xl - x0) * tan1);
+	zl = z0 + ROUND((float)(xl - x0) * sin0);
+
+	xr = nx;
+	yr = y0 + ROUND((float)(xr - x0) * tan1);
+	zr = z0 + ROUND((float)(xr - x0) * sin0);
+
+	xpl = 1;
+	ypl = y1 + ROUND((float)(xl - x0) * tan1);
+	zpl = z1 + ROUND((float)(xl - x0) * sin0);
+
+	xpr = nx;
+	ypr = y1 + ROUND((float)(xr - x0) * tan1);
+	zpr = z1 + ROUND((float)(xr - x0) * sin0);
+
+	zd = -30;		/* fixed 15 mm	*/
+	
+	xc0 = x0 - ROUND((float)zd * sin0);
+	yc0 = y0;
+	zc0 = z0 + ROUND((float)zd * cos0);
+
+	xca = xc0 + ROUND((float)(yc0 - ny) * tan1);
+	xcp = xc0 + ROUND((float)(yc0 - 1) * tan1);
+	yca = ny;
+	ycp = 1;
+	zca = zc0 + ROUND((float)(ny - yc0) * tan2);
+	zcp = zc0 + ROUND((float)(1 - yc0) * tan2);
+
+	f = 180/M_PI;
+	printf ("ang: %4.1f %4.1f %4.1f degrees (roll/yaw/pitch)\n",
+		atan(tan0)*f, atan(tan1)*f, atan(tan2)*f);
+
+/*	Plot 2 AP lines and 4 RL lines */
+
+	plot_xz_vs_y (simg, x0, y0, z0, x1, y1, z1, nx, ny, nz, val);
+	plot_xz_vs_y (simg, xca, yca, zca, xcp, ycp, zcp, nx, ny, nz, val);
+
+	plot_yz_vs_x (simg, x0, y0, z0, xl, yl, zl, nx, ny, nz, val);
+	plot_yz_vs_x (simg, x0, y0, z0, xr, yr, zr, nx, ny, nz, val);
+	plot_yz_vs_x (simg, x1, y1, z1, xpl, ypl, zpl, nx, ny, nz, val);
+	plot_yz_vs_x (simg, x1, y1, z1, xpr, ypr, zpr, nx, ny, nz, val);
+
+/*	=========================================================
+ *	Create and write Analyze hdr
+ */
+
+	(void) strncpy (hdr.hk.db_name, img1, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr);
+	hdr.hk.extents = 16384;
+	hdr.hk.regular = 'r';
+	hdr.dime.dim[0] = 4;
+	hdr.dime.dim[1] = nx;
+	hdr.dime.dim[2] = ny;
+	hdr.dime.dim[3] = nz;
+	hdr.dime.dim[4] = 1;
+	hdr.dime.unused8 = 0;
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 4;
+	hdr.dime.bitpix = 16;
+	hdr.dime.pixdim[1] = 0.5;
+	hdr.dime.pixdim[2] = 0.5;
+	hdr.dime.pixdim[3] = 0.5;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = (int) val;
+	hdr.dime.glmin = 0;
+	hdr.hist.orient = 0;
+	if ((fd_hdr = fopen (hdr1, "w")) == 0) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_acpc]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_acpc]: writing %s\n", hdr1);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+
+/*	=========================================================
+ *	Write Image
+ */
+
+	if ((fd_img = fopen (img1, "w")) == 0) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_acpc]: opening %s\n", img1);
+		return (ERROR);
+	}
+	row = (short *) calloc (nx, sizeof (short));
+	if (row == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_acpc]: calloc row\n");
+		return (ERROR);
+	}
+	for (z = 1; z <= nz; z++) {
+		for (y = 1; y <= ny; y++) {
+			for (x = 1; x <= nx; x++)
+				row[x - 1] = simg[z][y][x];
+			if (fwrite (row, sizeof (short), nx, fd_img) != nx) {
+				fprintf (stderr, "ERROR [mai_fiducials]: writing %s\n", img1);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+	free_s3tensor (simg, 1, nz, 1, ny, 1, nx);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@fix geometry
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop_acpc/RCS/fidpts_to_halfmm_crop_acpc.c,v 1.1 2007/01/10 20:37:48 tom Exp tom $";
+d27 1
+d192 2
+a193 2
+	yl = y0 + (xl - x0) * tan1;
+	zl = z0 + (xl - x0) * sin0;
+d196 2
+a197 2
+	yr = y0 + (xr - x0) * tan1;
+	zr = z0 + (xr - x0) * sin0;
+d200 2
+a201 2
+	ypl = y1 + (xl - x0) * tan1;
+	zpl = z1 + (xl - x0) * sin0;
+d204 2
+a205 2
+	ypr = y1 + (xr - x0) * tan1;
+	zpr = z1 + (xr - x0) * sin0;
+d209 1
+a209 1
+	xc0 = x0 - zd * sin0;
+d211 1
+a211 1
+	zc0 = z0 + zd * cos0;
+d213 2
+a214 2
+	xca = xc0 + (yc0 - ny) * tan1;
+	xcp = xc0 + (yc0 - 1) * tan1;
+d217 2
+a218 2
+	zca = zc0 + (ny - yc0) * tan2;
+	zcp = zc0 + (1 - yc0) * tan2;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop_acpc/RCS/fidpts_to_halfmm_crop_acpc.c,v 1.7 2007/01/09 20:59:01 tom Exp $";
+d49 1
+a49 1
+	float           tan0, sin0, cos0; /* tilt around y-axis	 */
+d51 1
+a51 1
+	float           tan2;			 /* nod around x-axis	 */
+d61 1
+a61 1
+	int             zdiff;
+d203 1
+a203 1
+	zdiff = -30;		/* fixed 15 mm	*/
+d205 3
+a207 3
+	xc0 = x0 + zdiff * sin0;
+	yc0 = y0 + zdiff * tan2;
+	zc0 = z0 + zdiff * cos0;
+@

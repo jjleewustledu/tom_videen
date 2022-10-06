@@ -1,0 +1,590 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	2002.11.26.22.54.41;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.07.21.15.26.17;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.03.15.20.49.32;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.03.03.22.48.29;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.02.25.20.10.53;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.02.21.22.29.14;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@/* @@(#)makeWobbleAttn.c	2.4  4/24/92 */
+/*
+ *	Module:		makeWobbleAttn.c
+ *	Date:		29-Jul-92
+ *	Author:		CTI source
+ *	Modified:	Tom Videen
+ *	Intent:		Make wobble attenuation sinogram from stationary attenuation sinogram.
+ *	Edit:		tabstop=2
+ *
+ *	External CTI Functions:
+ *		matspec				/nil/imageProcessingSubs.c
+ *		bcopy
+ * 		matrix_open			/nil/matrix_extra.c
+ *		matrix_close		/nil/matrix_extra.c
+ *		matrix_read			/nil/matrix_extra.c
+ *		matrix_write		/nil/matrix_extra.c
+ * 		free_matrix_data	/nil/matrix_extra.c
+ *		createMatrixFile	/nil/rts.c
+ *
+ *	External file required:
+ *		${HOME}/.defaults
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <matrix.h>
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makeWobbleAttn/RCS/makeWobbleAttn.c,v 1.5 1998/07/21 15:26:17 tom Exp tom $";
+
+#ifdef UNDEF
+#define		WOBRADIUS	0.62586		 /* 953B wobble radius in cm */
+#endif
+
+#define		WOBRADIUS	0.50
+
+#ifndef lint
+static char     sccsid[] = "@@(#)makeWobbleAttn.c	2.4 4/24/92  Copyright 1989-1992 CTI PET Systems, Inc.";
+
+#endif
+
+/******************************************/
+/*    	           main                   */
+/******************************************/
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	int             staMatnum, wobMatnum, i, j, matrix_write ();
+	float           wobbleOffset, *statViewToInterpolate, *wobViewInterpolated;
+	float          *lastEvenView, *thisOddView, *nextEvenView, statBinSize, wobBinSize, wobAngleInRadians;
+	MatrixFile     *staMatFile, *wobMatFile, *matrix_open (), *createMatrixFile ();
+	MatDirNode     *nextMatrix;
+	MatrixData     *staMatData, *wobMatData, *matrix_read ();
+	Attn_subheader  wobAttn;
+	struct Matval   matval;
+	char            staName[80], wobName[80];
+	void            usage (), simpleInterpolate ();
+
+/*	Check input parameters and files */
+
+	if (argc < 3)
+		usage (argv[0]);
+
+	matspec (argv[1], staName, &staMatnum);	 /* Assign filename = argv[1] and get matrix number */
+	matspec (argv[2], wobName, &wobMatnum);	 /* matrix number is 0 if ",f,p,g,s,b" not appended
+						  * to filename */
+	if ((staMatFile = matrix_open (staName, "r")) == NULL) {
+		fprintf (stderr, "%s:ERROR...could not open file %s for reading\n", argv[0], argv[1]);
+		return (1);
+	}
+	staMatFile->mhptr->wobble_speed = 30;
+
+	if ((wobMatFile = createMatrixFile (wobName, staMatFile->mhptr, 0)) == NULL) {
+		fprintf (stderr,
+			 "%s:ERROR...unable to create matrix file %s\n", argv[0], wobName);
+		matrix_close (staMatFile);
+		return (1);
+	}
+/* Process each matrix */
+
+	for (nextMatrix = staMatFile->dirlist->first; nextMatrix != NULL; nextMatrix = nextMatrix->next) {
+		if (staMatnum == 0 || nextMatrix->matnum == staMatnum) {
+			mat_numdoc (nextMatrix->matnum, &matval);
+			printf ("Processing %s %3d %3d %2d %d %2d\n", staName, matval.frame, matval.plane,
+				matval.gate, matval.bed, matval.data);
+			if ((staMatData = matrix_read (staMatFile, nextMatrix->matnum)) == NULL) {
+				fprintf (stderr,
+				   "%s:ERROR... couldn't read scan subheader for 0x%08x for %s\n",
+					 argv[0], nextMatrix->matnum, staName);
+				matrix_close (staMatFile);
+				return (1);
+			}
+			/* Set up the subheaders and binsizes */
+
+			bcopy (staMatData->shptr, &wobAttn, sizeof (Attn_subheader));
+			wobMatData = (MatrixData *) malloc (sizeof (MatrixData));
+			wobMatData->mat_type = staMatFile->mhptr->file_type;
+			wobAttn.dimension_1 *= 2;
+			wobAttn.dimension_2 *= 2;
+			wobAttn.sample_distance /= 2.;
+			wobMatData->shptr = (char *) &wobAttn;
+			wobMatData->matnum = (wobMatnum ? wobMatnum : nextMatrix->matnum);
+			wobMatData->nelements = staMatData->nelements * 2;
+			wobMatData->nviews = staMatData->nviews * 2;
+			wobMatData->data_type = staMatFile->mhptr->data_type;
+			wobMatData->nblks =
+				(wobMatData->nelements * wobMatData->nviews * sizeof (float) + 511) / 512;
+			wobMatData->data_ptr =
+				(char *) malloc (wobMatData->nelements * wobMatData->nviews * sizeof (float));
+			if (wobMatData->data_ptr == (char *) NULL) {
+				fprintf (stderr,
+				  "%s:ERROR... couldn't malloc space for wobble data\n", argv[0]);
+				free_matrix_data (staMatData);
+				free_matrix_data (wobMatData);
+				matrix_close (staMatFile);
+				matrix_close (wobMatFile);
+				return (1);
+			}
+			wobBinSize = wobAttn.sample_distance;
+			statBinSize = 2. * wobBinSize;
+
+			/* Interpolate the stationary matrix */
+
+			for (i = 0; i < staMatData->nviews; i++) {
+				statViewToInterpolate =
+					(float *) staMatData->data_ptr + (i * staMatData->nelements);
+				if (statViewToInterpolate == (float *) NULL) {
+					fprintf (stderr,
+						 "%s:ERROR... couldn't malloc space for stationary data pointer\n", argv[0]);
+					free_matrix_data (staMatData);
+					free_matrix_data (wobMatData);
+					matrix_close (staMatFile);
+					matrix_close (wobMatFile);
+					return (1);
+				}
+				wobViewInterpolated =	/* even LORS */
+					(float *) wobMatData->data_ptr + ((2 * i) * wobMatData->nelements);
+				if (wobViewInterpolated == (float *) NULL) {
+					fprintf (stderr,
+						 "%s:ERROR... couldn't malloc space for wobbled data pointer\n", argv[0]);
+					free_matrix_data (staMatData);
+					free_matrix_data (wobMatData);
+					matrix_close (staMatFile);
+					matrix_close (wobMatFile);
+					free ((char *) statViewToInterpolate);
+					return (1);
+				}
+/* Determine wobble offset, then interpolate */
+
+				wobAngleInRadians = (float) i *(M_PI / (float) staMatData->nviews);
+
+				wobbleOffset = WOBRADIUS * (float) sin (wobAngleInRadians);
+				simpleInterpolate (statViewToInterpolate, staMatData->nelements, wobbleOffset,
+						   wobViewInterpolated, wobBinSize, wobMatData->nelements, statBinSize);
+			}
+
+/* interpolate to get the odd LORS */
+
+			for (i = 0; i <= wobMatData->nviews - 3; i += 2) {
+				lastEvenView =
+					(float *) wobMatData->data_ptr + (i * wobMatData->nelements);
+				thisOddView =
+					(float *) wobMatData->data_ptr + ((i + 1) * wobMatData->nelements);
+				nextEvenView =
+					(float *) wobMatData->data_ptr + ((i + 2) * wobMatData->nelements);
+				for (j = 0; j < wobMatData->nelements; j++)
+					thisOddView[j] = (lastEvenView[j] + nextEvenView[j]) / 2.;
+			}
+
+/* Copy last EvenView to last OddView */
+
+			i = wobMatData->nviews - 2;
+			lastEvenView =
+				(float *) wobMatData->data_ptr + (i * wobMatData->nelements);
+			thisOddView =
+				(float *) wobMatData->data_ptr + ((i + 1) * wobMatData->nelements);
+			for (j = 0; j < wobMatData->nelements; j++)
+				thisOddView[j] = lastEvenView[j];
+
+/* Write the interpolated matrix */
+
+			if (matrix_write (wobMatFile, wobMatData->matnum, wobMatData) == ERROR) {
+				fprintf (stderr, "%s:ERROR... couldn't write matrix 0x%08x for %s\n",
+					 argv[0], wobMatData->matnum, wobName);
+				(void) fflush (stdout);
+				free_matrix_data (staMatData);
+				free_matrix_data (wobMatData);
+				matrix_close (staMatFile);
+				matrix_close (wobMatFile);
+				free ((char *) statViewToInterpolate);
+				free ((char *) wobViewInterpolated);
+				return (1);
+			}
+			free_matrix_data (staMatData);
+			free (wobMatData->data_ptr);
+			free (wobMatData);
+		}
+	}
+	matrix_close (staMatFile);
+	return (0);
+}
+
+/******************************************/
+/*     	          usage                   */
+/******************************************/
+
+void            usage (str)
+	char           *str;
+{
+	printf ("usage: %s stationary_attn_filespec  wobbled_attn_filespec\n", str);
+	return;
+}
+
+/******************************************/
+/*     	    simpleInterpolate             */
+/******************************************/
+
+void            simpleInterpolate (originalData, startingNumberOfPoints, interpolatedOffset,
+                interpolatedData, interpolatedBinSize, interpolatedNumberOfPoints, originalBinSize)
+	int             startingNumberOfPoints, interpolatedNumberOfPoints;
+
+	float           interpolatedOffset,	 /* cm */
+	                interpolatedBinSize,	 /* cm */
+	                originalBinSize,	 /* cm */
+	               *interpolatedData, *originalData;
+{
+	int             j, originalIndex,	/* index to originalData */
+	                originalCenter = startingNumberOfPoints / 2,	/* index to originalData */
+	                interpolatedCenter = interpolatedNumberOfPoints / 2;	/* index to
+										 * interpolatedData */
+
+	float           interpolatedPoint,	 /* cm */
+	                originalPoint;		 /* cm */
+
+	for (j = 0; j < interpolatedNumberOfPoints; j++) {
+		interpolatedPoint = (interpolatedBinSize * (float) (j - interpolatedCenter)) + interpolatedOffset;
+		originalIndex = (int) ((interpolatedPoint / originalBinSize) + originalCenter);
+		originalPoint = originalBinSize * (float) (originalIndex - originalCenter);
+
+		if (originalIndex >= 0 && (originalIndex < (startingNumberOfPoints - 2))) {
+			interpolatedData[j] = originalData[originalIndex] +
+				(((interpolatedPoint - originalPoint) / originalBinSize) *
+				 (originalData[originalIndex + 1] - originalData[originalIndex]));
+		} else
+			interpolatedData[j] = 1.0;
+	}
+	return;
+}
+@
+
+
+1.5
+log
+@build in Solaris
+@
+text
+@d11 1
+a11 1
+ *		matspec						/nil/imageProcessingSubs.c
+d13 4
+a16 4
+ * 		matrix_open				/nil/matrix_extra.c
+ *		matrix_close			/nil/matrix_extra.c
+ *		matrix_read				/nil/matrix_extra.c
+ *		matrix_write			/nil/matrix_extra.c
+d25 1
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/makeWobbleAttn/RCS/makeWobbleAttn.c,v 1.4 1994/03/15 20:49:32 tom Exp tom $";
+d51 1
+a51 1
+	float           wobbleOffset, *statViewToInterpolate, *wobViewInterpolated, *workingBuffer;
+d71 1
+a71 1
+		exit (1);
+d79 1
+a79 1
+		exit (1);
+d93 1
+a93 1
+				exit (1);
+d119 1
+a119 1
+				exit (1);
+d136 1
+a136 1
+					exit (1);
+d148 1
+a148 1
+					exit (1);
+d187 1
+a187 1
+				fflush (stdout);
+d194 1
+a194 1
+				exit (1);
+d202 1
+a202 1
+	exit (0);
+d213 1
+a213 1
+	exit (1);
+d229 1
+a229 1
+	int             interpolatedIndex, j, originalIndex,	/* index to originalData */
+@
+
+
+1.4
+log
+@entire wobbled array is now defined!
+@
+text
+@d3 6
+a8 6
+ *		Module:		makeWobbleAttn.c
+ *		Date:			29-Jul-92
+ *		Author:		CTI source
+ *		Modified: Tom Videen
+ *		Intent:		Make wobble attenuation sinogram from stationary attenuation sinogram.
+ *		Edit:			tabstop=2
+d10 9
+a18 9
+ *		External CTI Functions:
+ *			matspec						/nil/imageProcessingSubs.c
+ *			bcopy							
+ * 			matrix_open				/nil/matrix_extra.c
+ *			matrix_close			/nil/matrix_extra.c
+ *			matrix_read				/nil/matrix_extra.c
+ *			matrix_write			/nil/matrix_extra.c
+ * 			free_matrix_data	/nil/matrix_extra.c
+ *			createMatrixFile	/nil/rts.c
+d20 2
+a21 2
+ *		External file required:
+ *			${HOME}/.defaults
+d28 1
+a28 1
+static char rcsid [] = "$Header: /amd/home/petsun2/tom/src/makeWobbleAttn/RCS/makeWobbleAttn.c,v 1.3 1994/03/03 22:48:29 tom Exp tom $";
+d30 1
+d32 1
+d34 2
+d37 2
+a38 1
+static char sccsid[] = "@@(#)makeWobbleAttn.c	2.4 4/24/92  Copyright 1989-1992 CTI PET Systems, Inc.";
+d46 2
+a47 2
+int argc;
+char *argv[];
+d49 10
+a58 5
+	int		staMatnum,
+				wobMatnum,
+				i,
+				j,
+				matrix_write ();
+a59 31
+	float wobbleOffset,
+				*statViewToInterpolate,
+				*wobViewInterpolated,
+				*workingBuffer,
+				*lastEvenView,
+				*thisOddView,
+				*nextEvenView,
+				statBinSize,
+				wobBinSize,
+				wobAngleInRadians;
+
+	MatrixFile 	*staMatFile,
+							*wobMatFile,
+							*matrix_open (),
+							*createMatrixFile ();		/* Structure declared in matrix.h */
+
+	MatDirNode *nextMatrix;							/* Structure declared in matrix.h */
+
+	MatrixData 	*staMatData,
+							*wobMatData,
+							*matrix_read ();				/* Structure declared in matrix.h */
+
+	Attn_subheader wobAttn;							/* Structure declared in matrix.h */
+
+	struct Matval matval;								/* Structure declared in matrix.h */
+
+	char	staName[80],
+				wobName[80];
+
+	void usage (), simpleInterpolate ();
+
+d65 3
+a67 2
+	matspec (argv[1], staName, &staMatnum);	/* Assign filename = argv[1] and get matrix number */
+	matspec (argv[2], wobName, &wobMatnum);	/* matrix number is 0 if ",f,p,g,s,b" not appended to filename */
+d72 1
+a72 1
+  staMatFile->mhptr->wobble_speed = 30;
+d74 1
+a74 1
+  if ((wobMatFile = createMatrixFile (wobName, staMatFile->mhptr, 0)) == NULL) {
+d76 1
+a76 1
+	  "%s:ERROR...unable to create matrix file %s\n", argv[0], wobName);
+d79 1
+a79 2
+  }
+
+d82 1
+a82 1
+  for (nextMatrix = staMatFile->dirlist->first; nextMatrix != NULL; nextMatrix = nextMatrix->next) {
+d85 1
+a85 1
+			printf ("Processing %s %3d %3d %2d %d %2d\n", staName, matval.frame, matval.plane, 
+d89 2
+a90 2
+				"%s:ERROR... couldn't read scan subheader for 0x%08x for %s\n",
+				argv[0], nextMatrix->matnum, staName);
+a93 1
+
+d113 1
+a113 1
+				"%s:ERROR... couldn't malloc space for wobble data\n", argv[0]);
+a119 1
+
+d123 1
+a123 1
+			/*  Interpolate the stationary matrix */
+d130 1
+a130 1
+					"%s:ERROR... couldn't malloc space for stationary data pointer\n", argv[0]);
+d137 1
+a137 1
+				wobViewInterpolated =			/* even LORS */
+d141 1
+a141 1
+					"%s:ERROR... couldn't malloc space for wobbled data pointer\n", argv[0]);
+d149 1
+d151 1
+a151 1
+				/* Determine wobble offset, then interpolate */
+a152 1
+				wobAngleInRadians =  (float) i * (M_PI / (float) staMatData->nviews);
+d155 1
+a155 1
+					wobViewInterpolated, wobBinSize, wobMatData->nelements, statBinSize);
+d158 1
+a158 1
+			/* interpolate to get the odd LORS */
+d162 1
+a162 1
+				(float *) wobMatData->data_ptr + (i * wobMatData->nelements);
+d171 1
+a171 1
+			/* Copy last EvenView to last OddView */
+d174 4
+a177 4
+      lastEvenView =
+        (float *) wobMatData->data_ptr + (i * wobMatData->nelements);
+      thisOddView =
+        (float *) wobMatData->data_ptr + ((i + 1) * wobMatData->nelements);
+d179 1
+a179 1
+        thisOddView[j] = lastEvenView[j];
+d181 1
+a181 1
+			/* Write the interpolated matrix */
+d185 1
+a185 1
+				argv[0], wobMatData->matnum, wobName);
+d208 2
+a209 2
+void usage (str)
+char *str;
+d219 3
+a221 2
+void simpleInterpolate (originalData, startingNumberOfPoints, interpolatedOffset,
+		interpolatedData, interpolatedBinSize, interpolatedNumberOfPoints, originalBinSize)
+d223 4
+a226 8
+int 	startingNumberOfPoints,
+    	interpolatedNumberOfPoints;
+
+float interpolatedOffset,			/* cm */
+      interpolatedBinSize,		/* cm */
+      originalBinSize,				/* cm */
+     *interpolatedData,
+     *originalData;
+d228 4
+a231 5
+	int 	interpolatedIndex,
+				j,
+				originalIndex,																				/* index to originalData */
+				originalCenter = startingNumberOfPoints / 2,					/* index to originalData */
+				interpolatedCenter = interpolatedNumberOfPoints / 2;	/* index to interpolatedData */
+d233 2
+a234 2
+	float	interpolatedPoint,		/* cm */
+				originalPoint;				/* cm */
+d243 1
+a243 1
+				(((interpolatedPoint - originalPoint) / originalBinSize) * 
+d245 1
+a245 2
+		}
+		else
+@
+
+
+1.3
+log
+@changed Id to Header
+@
+text
+@d28 1
+a28 1
+static char rcsid [] = "$Header$";
+d136 2
+d194 10
+d219 2
+a220 1
+			free_matrix_data (wobMatData);
+d223 1
+@
+
+
+1.2
+log
+@original RCS version
+@
+text
+@d28 1
+a28 1
+static char rcsid [] = "$Id$";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d28 2
+@

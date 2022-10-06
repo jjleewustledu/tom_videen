@@ -1,0 +1,227 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.20.16.21.19;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.10.12.13.48.29;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.01.23.21.50.16;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: average.c,v $
+ * Revision 1.2  1999/10/12  13:48:29  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1997/01/23  21:50:16  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			average.c
+ *	Date:			Jan 1997
+ *	Author:			Tom Videen
+ *	Description:	Compute mean VOI values.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voiproc/RCS/average.c,v 1.2 1999/10/12 13:48:29 tom Exp tom $";
+#endif
+
+#include <math.h>
+#include <imgutil.h>
+#include <voiproc.h>
+
+#define	CRIT	0.1
+
+void     average (voidata, img, pdim, adim, mean, sd, nvoxels)
+	VOIDATA         voidata;	/* VOI data */
+	float        ***img;		/* image on which to compute VOIs */
+	int			   *pdim;		/* image dimension in pixels */
+	float	 	   *adim;		/* voxel dimension in mm */
+	float          *mean;		/* returned */
+	float          *sd;			/* returned */
+	int            *nvoxels;	/* returned */
+{
+	double          sumsqrs;
+	double          sum;
+	double          value;
+	float           dx, dy, dz;
+	float           dist1, dist2;
+	float           rx, ry, rz;
+	float           xc, yc, zc;
+	int             x, y, z;
+	int             xmin, xmax;
+	int             ymin, ymax;
+	int             zmin, zmax;
+
+/*
+ * Define a volume that contains the 3D voi.
+ */
+	xc = voidata.center.x;
+	yc = voidata.center.y;
+	zc = voidata.center.z;
+	dx = voidata.dimension.x / adim[0];
+	dy = voidata.dimension.y / adim[1];
+	dz = voidata.dimension.z / adim[2];
+	rx = dx / 2.0;
+	ry = dy / 2.0;
+	rz = dz / 2.0;
+
+/*
+ * Move the center if necessary to make dimensions unchanged.
+ */
+	x = (int) dx;
+	y = (int) dy;
+	z = (int) dz;
+
+	if (dx > 0 && xc - ((int) (xc)) == 0.0 && dx - x == 0.0 && x % 2 == 0) 
+		xc += 0.5;
+	if (dy > 0 && yc - ((int) (yc)) == 0.0 && dy - y == 0.0 && y % 2 == 0)
+		yc += 0.5;
+	if (dz > 0 && zc - ((int) (zc)) > 0.3 && dz - z == 0.0 && z % 2 == 0)
+		zc += 0.5;
+	if (dx >= 0.0 && dx < 1.0)
+		xc = ROUND (xc);
+	if (dy >= 0.0 && dy < 1.0)
+		yc = ROUND (yc);
+	if (dz >= 0.0 && dz < 1.0)
+		zc = ROUND (zc);
+
+	xmin = ROUND (xc - rx);
+	xmax = ROUND (xc + rx);
+	ymin = ROUND (yc - ry);
+	ymax = ROUND (yc + ry);
+	zmin = ROUND (zc - rz);
+	zmax = ROUND (zc + rz);
+
+	*mean = 0.0;
+	*sd = 0.0;
+	*nvoxels = 0;
+	sum = 0.0;
+	sumsqrs = 0.0;
+	if (xmin >= 1 && xmax <= pdim[0]
+			&& ymin >= 1 && ymax <= pdim[1]
+			&& zmin >= 1 && zmax <= pdim[2]) {
+		if (voidata.voi_shape == VOI_CUBE) {
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						if ((fabs (x - xc) <= rx) && (fabs (y - yc) <= ry) && (fabs (z - zc) <= rz)) {
+							value = (double) img[z][y][x];
+							sum += value;
+							sumsqrs += value * value;
+							(*nvoxels)++;
+						}
+					}
+				}
+			}
+		} else if (voidata.voi_shape == VOI_OLD_SPHERE) {
+			dist1 = rx * rx;
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						dist2 = (x - xc) * (x - xc) + (y - yc) * (y - yc) + (z - zc) * (z - zc);
+						if (dist2 <= dist1) {
+							value = (double) img[z][y][x];
+							sum += value;
+							sumsqrs += value * value;
+							(*nvoxels)++;
+						}
+					}
+				}
+			}
+		} else if (voidata.voi_shape == VOI_CYLINDER) {
+			dist1 = rx * rx;
+			for (z = zmin; z <= zmax; z++) {
+				for (y = ymin; y <= ymax; y++) {
+					for (x = xmin; x <= xmax; x++) {
+						dist2 = (x - xc) * (x - xc) + (y - yc) * (y - yc);
+						if (dist2 <= dist1 && (fabs (z - zc) <= rz)) {
+							value = (double) img[z][y][x];
+							sum += value;
+							sumsqrs += value * value;
+							(*nvoxels)++;
+						}
+					}
+				}
+			}
+		}
+		if (*nvoxels > 0)
+			*mean = sum / *nvoxels;
+		else
+			*mean = MEAN_UNDEFINED;
+	} else {
+		*mean = MEAN_UNDEFINED;
+	}
+
+	if (fabs (*mean - MEAN_UNDEFINED) < CRIT) 
+		*sd = MEAN_UNDEFINED;
+	else if (*nvoxels > 1) {
+		value = ((sumsqrs - *nvoxels * *mean * *mean) / (*nvoxels - 1.0));
+		if (value < 0.0)	
+			*sd = 0.0;
+		else
+			*sd = sqrt (value);
+	}
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jan-97
+d15 1
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voiproc/RCS/average.c,v 1.1 1997/01/23 21:50:16 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voistat/RCS/average.c,v 1.4 1996/10/03 20:43:40 tom Exp $";
+a15 1
+#include <stdio.h>
+a18 2
+#include <image.h>
+#include <libimage.h>
+d104 1
+a104 1
+		} else if (voidata.voi_shape == VOI_SPHERE) {
+@

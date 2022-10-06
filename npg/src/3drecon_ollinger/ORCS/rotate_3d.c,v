@@ -1,0 +1,270 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial checking in, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*---------------------------------------------------------------
+
+Subroutine: rotate_3d
+
+Purpose: Use trilinear interpolation to calculate samples of a plane that
+	 intersects a conical volume of finite extent at an arbitrary 
+	 angle and z axis position.
+
+Coordinate system: This routine assumes that the pixel represented
+	by volume[0][0][0] in "C" lies at the upper left corner 
+	in the rear of the volume. 
+
+By: John Ollinger
+
+Date: July 29, 1992
+
+----------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include "scatter.h"
+
+#define TRUE 1
+#define FALSE 0
+#define PAD 1 /* Amount to pad inscribed circle. */
+
+static char rcsid [] = "$Header$";
+
+/*****************************************************************/
+void rotate_3d(theta,psi,volume,rotpln,plnmin,plnmax,plane,fill,sc)
+/*****************************************************************/
+
+float	theta,		/* Rotation about z axis.		*/
+	psi,		/* Oblique angle of output plane.	*/
+	***volume, 	/* Images in lab coordinates.	*/
+	rotpln[];	/* Rotated image.			*/
+int	plnmin,		/* Minimum plane number.		*/
+	plnmax,		/* Maximum plane number.		*/
+	plane;		/* Transverse plane which intersects detector ring.*/
+float	fill;		/* Value non-interpolated values set to.*/
+struct scatter_tab *sc;
+
+{
+
+static int 
+	first=TRUE,imgdimm1=0,
+	planem1 = -1,
+	*imin,			/* Starting pixel of circle.	*/
+	*imax,			/* Ending pixel of circle.	*/
+	jmin,jmax,
+	jpsi,
+	*fillmin,
+	*fillmax;
+
+static float 
+	*tab,
+	center,
+	slc_pix_ratio,
+	pix_slc_ratio,
+	*locfill,
+	radius,
+	spsi,
+	cpsi;
+
+static double
+	psim1 = 1.e20;
+
+int	i,j,ki,joff,ix,iy,iz,radsq,ray;
+
+float	xcord,cdsq,z0=0.,
+	ctht,stht,spsi_scl,
+	cpsictht,spsictht,cpsistht,spsistht,tpsi,spsitpsi,
+	x,y,z,dx,dy,dz,dx1,dy1,dz1,zp,
+	x_cnst,y_cnst,z_cnst,xdy,xmax_ends;
+
+if(first == TRUE) {
+    /* Compute boundaries of plane region to be rotated..*/
+    first = FALSE;
+    if(NULL==(imin =(int *)malloc((unsigned)(IMGDIM*sizeof(int))))) {
+        printf("Could not malloc memory for imin, \"rotate\".\n");
+        exit();
+        }
+    if(NULL==(imax =(int *)malloc((unsigned)(IMGDIM*sizeof(int))))) {
+        printf("Could not malloc memory for imax, \"rotate\".\n");
+        exit();
+        }
+    if(NULL==(fillmin =(int *)malloc((unsigned)(IMGDIM*sizeof(int))))) {
+        printf("Could not malloc memory for fillmin, \"rotate\".\n");
+        exit();
+        }
+    if(NULL==(fillmax =(int *)malloc((unsigned)(IMGDIM*sizeof(int))))) {
+        printf("Could not malloc memory for fillmax, \"rotate\".\n");
+        exit();
+        }
+    if(NULL==(locfill =(float *)malloc((unsigned)(IMGDIM*sizeof(float))))) {
+        printf("Could not malloc memory for locfill, \"rotate\".\n");
+        exit();
+        }
+    if(NULL==(tab =(float *)malloc((unsigned)(2*IMGDIM*sizeof(float))))) {
+        printf("Could not malloc memory for tab, \"rotate\".\n");
+        exit();
+        }
+    tab += IMGDIM;
+    }
+
+/* Recompute sampled region if new value of psi. */
+if((psi != psim1) | (plane != planem1) | (sc->imgdim != imgdimm1)) {
+    /* Recompute region of image to be sampled. */
+    imgdimm1 = sc->imgdim;
+    planem1 = plane;
+    jpsi = (int)((psi - PSIC_MIN)*PSIC_RATE + .5);
+    cpsi = (float)cos((double)psi);
+    spsi = (float)sin((double)psi);
+    tpsi = spsi/cpsi;
+    slc_pix_ratio = SLCTHK/sc->pixsiz;
+    pix_slc_ratio = sc->pixsiz/SLCTHK;
+    radius = (float)(sc->imgdim-1)/2.; /* Reduce radius by 1 to allow for 
+				      eccentricity of rotated plane. */
+    center = radius;
+    radsq = radius*radius;
+    /* Find upper and lower bounds for i' in rotated plane. */
+    for(j=0,ray=0;j<sc->imgdim;j++,ray+=sc->ray_step) {
+	locfill[j] = fill;
+        cdsq = (float)j - radius;
+        cdsq = radsq - cdsq*cdsq;
+	/* Find boundaries of circular region of rotated image.  Check
+	   upper bounds for range of cylindrical volume. */
+        if(cdsq > 0) 
+            xcord = (float)sqrt((float)cdsq);
+        else
+            xcord = 0;
+        /* Find upper bounds on x as determined by ends of cylindrical volume.*/
+        if(psi > 0) {
+	    if(psi <= sc->psi_shldmax[plane][j])
+	        xmax_ends =  (plnmax - plane)*slc_pix_ratio/spsi 
+				- sc->xl10c[jpsi][ray]/sc->pixsiz;
+	    else { /*This ray intersects the end-shield, assume no penetration*/
+		xmax_ends = 0;
+	 	locfill[j] = 0.;
+		}
+	    }
+        else if(psi < 0) {
+	    if(psi >= sc->psi_shldmin[plane][j])
+	        xmax_ends = -(plane - plnmin)*slc_pix_ratio/spsi 
+				- sc->xl10c[jpsi][ray]/sc->pixsiz;
+	    else {/*This ray intersects the end-shield, assume no penetration.*/
+		xmax_ends = 0;
+	 	locfill[j] = 0.;
+		}
+	    }
+        else
+    	    xmax_ends = 2.*radius;
+        /* Inscribe region to be rotated by two pixels inside actual limits. */
+        if(radius + xcord > xmax_ends) {
+            imin[j]  = (int)(radius - xcord) + PAD; 
+            imax[j] = (int)(xmax_ends) - PAD;
+    	    }
+        else {
+            imin[j]  = (int)(radius - xcord) + PAD; 
+            imax[j] = (int)(radius + xcord) - PAD;
+    	    }
+	fillmin[j] = imax[j];
+	fillmax[j] = (int)(radius + xcord) - PAD;
+	/* Skip first and last two rows. */
+	imin[0] = 1; imin[1] = 1;
+	imax[0] = 1; imax[1] = 1;
+	fillmin[0] = 0;
+	fillmin[1] = 0;
+	fillmax[0] = -1;
+	fillmax[1] = -1;
+	imax[sc->imgdim-2] = 0;
+	imax[sc->imgdim-1] = 0;
+	fillmin[sc->imgdim-2] = 0;
+	fillmin[sc->imgdim-1] = 0;
+	fillmax[sc->imgdim-2] = -1;
+	fillmax[sc->imgdim-1] = -1;
+        }
+    jmin = sc->imgdim+1; jmax = -1;
+    for(j=0;j<sc->imgdim;j++) {
+ 	if(jmin > sc->imgdim && imax[j] > 0)
+	    jmin = j;
+	}
+    for(j=sc->imgdim-1;j>=0;j--) {
+ 	if(jmax < 0 && imax[j] > 0 )
+	    jmax = j;
+	}
+    /* Compute float table of integer to real indices. */
+    for(i=-IMGDIM;i<IMGDIM;i++)
+        tab[i] = (float)i;
+    psim1 = psi;
+    }
+
+ctht = (float)cos((double)theta);
+stht = (float)sin((double)theta);
+cpsictht = cpsi*ctht;
+spsictht = spsi*ctht;
+cpsistht = cpsi*stht;
+spsistht = spsi*stht;
+tpsi = spsi/cpsi;
+
+spsi_scl = spsi*pix_slc_ratio;
+x_cnst   =  radius*(1 - cpsictht - stht);
+y_cnst   =  radius*(1 + cpsistht - ctht);
+z_cnst   =  radius*( tpsi - spsi)*pix_slc_ratio + plane;
+for(j=0,ray=0,joff=0;j<sc->imgdim;j++,joff+=sc->imgdim,ray+=sc->ray_step) {
+    x =  (float)imin[j]*cpsictht + x_cnst;
+    y = -(float)imin[j]*cpsistht + y_cnst;
+    z =  ((float)imin[j]*pix_slc_ratio + sc->xl10c[jpsi][ray]/SLCTHK)*spsi
+							+ z_cnst;
+    for(i=imin[j];i<imax[j];i++) {
+	ix = (int)x;
+	iy = (int)y;
+	iz = (int)(z + IMGDIM) - IMGDIM; /* Ensure proper truncation. */
+	dx = x - tab[ix];
+	dy = y - tab[iy];
+	dz = z - tab[iz];
+	dx1 = 1. - dx;
+	dy1 = 1. - dy;
+	dz1 = 1. - dz;
+	ki = ix + iy*sc->imgdim;
+	rotpln[i+joff]  = 
+    	  dx1*dy1*dz1*(*(*volume+  iz))[ki]          
+	+ dz *dx1*dy1*(*(*volume+iz+1))[ki]
+	+ dx1*dy *dz1*(*(*volume+  iz))[ki+sc->imgdim]  
+	+ dx1*dy *dz *(*(*volume+iz+1))[ki+sc->imgdim]
+	+ dx *dy1*dz1*(*(*volume+  iz))[ki+1]        
+	+ dx *dy1*dz *(*(*volume+iz+1))[ki+1]
+	+ dx *dy *dz1*(*(*volume+  iz))[ki+sc->imgdim+1] 
+	+ dx *dy *dz *(*(*volume+iz+1))[ki+sc->imgdim];
+	x += cpsictht;
+        y -= cpsistht;
+	z += spsi_scl;
+	}
+    x_cnst += stht;
+    y_cnst += ctht;
+    /* Assume last pixel value continues outside of region imaged. */
+    for(i=fillmin[j];i<fillmax[j];i++)
+	rotpln[i+joff] = locfill[j];
+    if(imax[j]   < sc->imgdim) rotpln[imax[j]+joff]   = rotpln[imax[j]-1+joff];
+    if(imax[j]+1 < sc->imgdim) rotpln[imax[j]+1+joff] = rotpln[imax[j]+joff];
+    }
+
+}
+@

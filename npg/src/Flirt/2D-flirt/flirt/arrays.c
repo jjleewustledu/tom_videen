@@ -1,0 +1,140 @@
+#include "arrays.h"
+
+
+array2D createTreeStructure2D(size_t m1, size_t m2, double* data) {
+  size_t j1;
+  array2D A = (array2D) malloc( sizeof(array1D) * m1);
+  A[0] = data;
+  for (j1=1; j1<m1; ++j1) {
+    A[j1] = A[j1-1] + m2;
+  }
+
+  return A;
+}
+
+
+array3D createTreeStructure3D(size_t m1, size_t m2, size_t m3, double* data) {
+  size_t j1;
+  array3D A = (array3D) malloc( sizeof(array2D) * m1);
+  A[0] = createTreeStructure2D(m1*m2, m3, data);
+  for (j1=1; j1<m1; ++j1) {
+    A[j1] = A[j1-1] + m2;
+  }
+  return A;
+}
+
+array4D createTreeStructure4D(size_t m1, size_t m2, size_t m3, size_t m4, double* data) {
+  size_t j1;
+  array4D A = (array4D) malloc( sizeof(array3D) * m1);
+  A[0] = createTreeStructure3D(m1*m2,m3,m4,data);
+  for (j1=1; j1<m1; ++j1) {
+    A[j1] = A[j1-1] + m2;
+  }
+  return A;
+}
+
+void deleteTreeStructure2D(array2D A) {
+  if ( A != NULL) {
+    free(A);
+  }
+}
+
+void deleteTreeStructure3D(array3D A) {
+  deleteTreeStructure2D(A[0]);
+  if ( A != NULL) {
+    free(A);
+  }
+}
+
+void deleteTreeStructure4D(array4D A) {
+  deleteTreeStructure3D(A[0]);
+  if  ( A != NULL) {
+    free(A);
+  }
+ }
+
+
+
+array1D createArray1D(size_t m1) {
+#ifndef INIT_ARRAYS_WITH_ZERO
+  array1D A = (array1D) malloc( sizeof(array_t) * m1);
+#else
+  array1D A = (array1D) calloc(m1,sizeof(array_t));
+#endif
+  return A;
+}
+
+
+array2D createArray2D(size_t m1, size_t m2) {
+  size_t j1;
+  array2D A = (array2D) malloc( sizeof(array1D) * m1);
+  A[0]      = createArray1D(m1*m2);
+  for (j1=1; j1<m1; ++j1) {
+    A[j1] = A[j1-1] + m2;
+  }
+
+  return A;
+}
+
+
+array3D createArray3D(size_t m1, size_t m2, size_t m3) {
+  size_t j1;
+  array3D A = (array3D) malloc( sizeof(array2D) * m1);
+  A[0]      = createArray2D(m1*m2,m3);
+  for (j1=1; j1<m1; ++j1) {
+    A[j1] = A[j1-1] + m2;
+  }
+  return A;
+}
+
+array4D createArray4D(size_t m1, size_t m2, size_t m3, size_t m4) {
+  size_t j1;
+  array4D A = (array4D) malloc( sizeof(array3D) * m1);
+  A[0]      = createArray3D(m1*m2,m3,m4);
+  A[0] = createArray3D(m1*m2,m3,m4);
+  for (j1=1; j1<m1; ++j1) {
+    A[j1] = A[j1-1] + m2;
+  }
+  return A;
+}
+
+void deleteArray1D(array1D A) {
+  if ( A != NULL) {
+    free(A);
+  }
+}
+
+void deleteArray2D(array2D A) {
+  deleteArray1D(A[0]);
+  if ( A != NULL) {
+    free(A);
+  }
+}
+
+void deleteArray3D(array3D A) {
+  deleteArray2D(A[0]);
+  if ( A != NULL) {
+    free(A);
+  }
+}
+
+void deleteArray4D(array4D A) {
+  deleteArray3D(A[0]);
+  if  ( A != NULL) {
+    free(A);
+  }
+ }
+
+void printToFileArray2D(array2D A, int m1, int m2, FILE* file) {
+    int k1,k2;
+
+     for (k2 = m2-1; k2 > -1; k2--) {
+        for (k1 = 0; k1 < m1; k1++) {
+            fprintf(file,"%10.8f ",A[k1][k2]);
+        }
+        fprintf(file,"\n");
+    }
+}
+
+
+

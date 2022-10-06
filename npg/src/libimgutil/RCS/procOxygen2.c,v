@@ -1,0 +1,396 @@
+head	3.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+3.3
+date	2004.02.12.22.08.52;	author tom;	state Exp;
+branches;
+next	3.2;
+
+3.2
+date	2004.01.02.21.23.12;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.06.01.15.28.47;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2001.05.31.19.33.21;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.12.13.17.04.17;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.07.14.21.13.55;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+3.3
+log
+@Feb 2004
+@
+text
+@/* $Log: procOxygen2.c,v $
+ * Revision 3.2  2004/01/02  21:23:12  tom
+ * splint cleaning
+ *
+ * Revision 1.4  2001/06/01  15:28:47  tom
+ * use f,v for cbf,cbv
+ *
+ * Revision 1.3  2001/05/31  19:33:21  tom
+ * add steady-state model
+ *
+ * Revision 1.2  1999/12/13  17:04:17  tom
+ * tov revision
+ *
+ * Revision 1.1  1999/07/14  21:13:55  tom
+ * Initial revision
+ * */
+/*	========================================================================
+ *	Module:			procOxygen2.c
+ *	Date:			May 1998
+ *	Author:			Tom Videen
+ *	Description:	process pet counts for CBF, CBV, OEF, CMRO2 or counts
+ *					Do not read hdr if flag = 0
+ *	Input:
+ *		oxygencnts -   oxygen (oo) PET counts
+ *		flowcnts   -   flow (ho) PET counts
+ *		volcnts    -   vol (co) PET counts
+ *		process    -   type of processing
+ *		oxygenname -   oxygen image file name
+ *		flowname   -   flow image file name
+ *		volname    -   vol image file name
+ *		oohdr      -   pointer to HEADER_DATA structure
+ *		hohdr      -   pointer to HEADER_DATA structure
+ *		ochdr      -   pointer to HEADER_DATA structure
+ *		flag       -   flag to read hdrs
+ *	Returns:
+ *		processed counts or (float) ERROR.
+ *
+ *	Reference for Mintun bolus method and Equations in:
+ *		Videen et al (1987) JCBFM 7:513-516.
+ *	Reference for steady-state method and Equations in:
+ *		Peter Herscovitch notes, Feb 1984
+ *	========================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/procOxygen2.c,v 3.2 2004/01/02 21:23:12 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <imgutil.h>
+
+/*	-----------------------
+ *	Function procOxygen2
+ *	-----------------------
+ */
+float           procOxygen2 (oxygencnts, flowcnts, volcnts, process,
+		                  oxygenname, flowname, volname, oohdr, hohdr, ochdr, recfp, flag)
+	float           oxygencnts;		 /* oxygen (oo) PET input counts */
+	float           flowcnts;		 /* flow (ho) PET input counts */
+	float           volcnts;		 /* vol (co) PET input counts */
+	int             process;		 /* type of processing */
+	char           *oxygenname;		 /* oxygen image file name */
+	char           *flowname;		 /* flow image file name */
+	char           *volname;		 /* vol image file name */
+	HEADER_DATA    *oohdr;			 /* hdr structure */
+	HEADER_DATA    *hohdr;			 /* hdr structure */
+	HEADER_DATA    *ochdr;			 /* hdr structure */
+	FILE           *recfp;			 /* rec file pointer */
+	int             flag;
+{
+	float           slvratio = 0.85; /* ratio small vessel/large vessel hematocrit */
+	float           volfactr = 0.835;/* (postcap vol + 0.5*cap vol)/total blood vol */
+	float           brainden = 1.05; /* density of brain (g/ml) */
+	float           pc = 1.0;		 /* partition coef for water (ml blood/ml brain) */
+	float           kd;				 /* decay constant  */
+	float           watercont;		 /* O15 water content */
+	float           cbf, cbv;		 /* computed flow and volume */
+	float           f, v;			 /* flow in ml/ml/sec and volume in ml/ml */
+	float           c1, c2, c3;		 /* constants */
+	float           a1, a2, a3, a4, a5; /* temp values in computation */
+	float           e;				 /* oxygen extraction    */
+	float           cmro;			 /* oxygen metabolism    */
+	int             localproc;		 /* type of processing */
+
+/*	Check process	*/
+
+	if (process != PROC_OEF && process != PROC_CMRO2)
+		return ((float) ERROR);
+
+/*	Process flow	*/
+
+	localproc = PROC_CBF;
+	cbf = procPET2 (flowcnts, localproc, flowname, hohdr, recfp, flag);
+	if (cbf == (float) ERROR) {
+		fprintf (stderr, "Error processing %s\n", flowname);
+		return ((float) ERROR);
+	}
+
+/*	Process volume	*/
+
+	localproc = PROC_CBV;
+	cbv = procPET2 (volcnts, localproc, volname, ochdr, recfp, flag);
+	if (cbv == (float) ERROR) {
+		fprintf (stderr, "Error processing %s\n", volname);
+		return ((float) ERROR);
+	}
+
+/*  Read HDR file for oxygen image	*/
+
+	if (flag > 0) {
+		if (readhdr (oxygenname, oohdr, recfp) == ERROR)
+			return ((float) ERROR);
+	}
+
+/*	Mintun bolus oxygen method	*/
+
+	if (oohdr->ntype == 1) {
+		if (oxygencnts == 0.)
+			e = 0;
+		else {
+			c1 = slvratio * oohdr->o2cnts1 / 100.0;
+			c2 = volfactr * c1;
+			c3 = oohdr->pettcnv1 / brainden;
+			a1 = c3 * oxygencnts;
+			a2 = cbf * (oohdr->awater1 * cbf + oohdr->bwater1);
+			a3 = c1 * cbv;
+			a4 = cbf * (oohdr->aoxygen1 * cbf + oohdr->boxygen1);
+			a5 = c2 * cbv;
+			if (a4 == a5)
+				e = 0;
+			else
+				e = (a1 - a2 - a3) / (a4 - a5);
+		}
+		if (process == PROC_CMRO2) {
+			cmro = cbf * oohdr->oxycont1 * e;
+			return (cmro);
+		} else
+			return (e);
+
+	} else if (oohdr->ntype == 7) {
+		if (oxygencnts == 0.)
+			e = 0;
+		else {
+			f = brainden * cbf / (60 * 100);	/* (ml/100g/min) -> (ml/ml/sec) */
+			v = brainden * cbv / 100;			/* (ml/100g) -> (ml/ml) */
+			kd = oohdr->tau;					/* 1/sec */
+			c1 = f / (kd + f / pc);			/* unitless */
+			watercont = oohdr->oxycont1 * oohdr->aoxygen1;	/* ml/ml */
+
+			a1 = oxygencnts * oohdr->pettcnv1 / oohdr->scantime;
+			a2 = c1 * watercont;
+			a3 = v * slvratio * oohdr->oxycont1;
+			a4 = c1 * oohdr->oxycont1;
+			a5 = v * slvratio * volfactr * oohdr->oxycont1;
+			if (a4 == a5)
+				e = 0;
+			else
+				e = (a1 - a2 - a3) / (a4 - a5);
+		}
+		if (process == PROC_CMRO2) {
+			cmro = cbf * oohdr->oxycont1 * e;
+			return (cmro);
+		} else
+			return (e);
+
+	} else 
+		return ((float) ERROR);
+}
+@
+
+
+3.2
+log
+@splint cleaning
+@
+text
+@d2 3
+d46 1
+a46 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/procOxygen2.c,v 1.4 2001/06/01 15:28:47 tom Exp tom $";
+@
+
+
+1.4
+log
+@use f,v for cbf,cbv
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			May-98
+d41 1
+d43 1
+a43 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/procOxygen2.c,v 1.3 2001/05/31 19:33:21 tom Exp tom $";
+@
+
+
+1.3
+log
+@add steady-state model
+@
+text
+@d2 3
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/procOxygen2.c,v 1.2 1999/12/13 17:04:17 tom Exp tom $";
+d71 1
+d137 2
+a138 2
+			cbf = brainden * cbf / (60 * 100);	/* (ml/100g/min) -> (ml/ml/sec) */
+			cbv = brainden * cbv / 100;			/* (ml/100g) -> (ml/ml) */
+d140 1
+a140 1
+			c1 = cbf / (kd + cbf / pc);			/* unitless */
+d145 1
+a145 1
+			a3 = cbv * slvratio * oohdr->oxycont1;
+d147 1
+a147 1
+			a5 = cbv * slvratio * volfactr * oohdr->oxycont1;
+@
+
+
+1.2
+log
+@tov revision
+@
+text
+@d2 3
+d29 1
+a29 1
+ *	Reference and Equations in:
+d31 2
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/procOxygen2.c,v 1.1 1999/07/14 21:13:55 tom Exp tom $";
+d47 1
+a47 1
+			                    oxygenname, flowname, volname, oohdr, hohdr, ochdr, recfp, flag)
+d58 2
+a59 2
+	FILE           *recfp;	 		 /* rec file pointer */
+	int				flag;
+d61 2
+a62 2
+	float           slvratio = 0.85; /* ratio of cerebral small vessel/large vessel hematocrit */
+	float           volfactr = 0.835;/* (postcapillary vol + 0.5*capillary vol)/total blood vol */
+d64 3
+a66 5
+	float           c1;				 /* slvratio * integral of blood O2 counts/100.0 */
+	float           c2;				 /* volfactr * c1 */
+	float           c3;				 /* pettconv(n) / brainden */
+	float           a1 = 0.;
+	float           a2, a3, a4, a5;	 /* temporary components in computation */
+d68 4
+d74 1
+a74 3
+/*
+ *	Check process
+ */
+d79 1
+a79 3
+/*
+ *	Process flow
+ */
+a86 3
+/*
+ *	Process volume
+ */
+d88 2
+a95 3
+/*
+ *  Read HDR file for oxygen image
+ */
+d97 2
+a102 2
+	if (oohdr->ntype != 1)
+		return ((float) ERROR);
+d104 1
+a104 3
+/*
+ *	Constants for oxygen processing
+ */
+d106 7
+a112 9
+	c1 = slvratio * oohdr->o2cnts1 / 100.0;
+	c2 = volfactr * c1;
+	c3 = oohdr->pettcnv1 / brainden;
+
+/*
+ *	Oxygen Extraction
+ */
+	if (process == PROC_OEF) {
+		if (oxygencnts != 0.)
+d114 14
+a127 12
+		a2 = cbf * (oohdr->awater1 * cbf + oohdr->bwater1);
+		a3 = c1 * cbv;
+		a4 = cbf * (oohdr->aoxygen1 * cbf + oohdr->boxygen1);
+		a5 = c2 * cbv;
+		if (a4 == a5)
+			oxygencnts = 0;
+		else
+			oxygencnts = (a1 - a2 - a3) / (a4 - a5);
+	}
+/*
+ *	Rate of Oxygen Utilization (CMRO2)
+ */
+d129 28
+a156 13
+	if (process == PROC_CMRO2) {
+		if (oxygencnts != 0.)
+			a1 = c3 * oxygencnts;
+		a2 = cbf * (oohdr->awater1 * cbf + oohdr->bwater1);
+		a3 = c1 * cbv;
+		a4 = cbf * (oohdr->aoxygen1 * cbf + oohdr->boxygen1);
+		a5 = c2 * cbv;
+		if (a4 == a5)
+			oxygencnts = 0;
+		else
+			oxygencnts = cbf * oohdr->oxycont1 * (a1 - a2 - a3) / (a4 - a5);
+	}
+	return (oxygencnts);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d31 1
+a31 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimgutil/RCS/procOxygen2.c,v 1.1 1998/05/27 15:38:08 tom Exp $";
+a34 3
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+a35 1
+#include <image.h>
+d62 2
+a63 1
+	float           a1, a2, a3, a4, a5;	 /* temporary components in computation */
+@

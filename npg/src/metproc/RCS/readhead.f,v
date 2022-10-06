@@ -1,0 +1,341 @@
+head	2.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.1
+date	93.07.15.20.25.17;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	93.07.12.23.13.24;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.07.12.22.48.11;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	92.10.19.15.56.10;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.10.16.22.32.51;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.05.12.21.33.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial Unix version using libpetutil and libpe.
+@
+
+
+2.1
+log
+@Changed RCSHEADER to ID
+@
+text
+@c $Log: readhead.f,v $
+c Revision 2.0  1993/07/12  23:13:24  tom
+c Handles ECAT image format
+c
+c Revision 1.4  1993/07/12  22:48:11  tom
+c Revised to handle ECAT images
+c PIE factors are adjusted for the type of reconstruction and acquisition
+c
+c Revision 1.3  1992/10/19  15:56:10  tom
+c modified RCSHEADER length
+c
+c Revision 1.2  1992/10/16  22:32:51  tom
+c added RCSHEADER
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   READHEAD.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         14-May-87
+C  Written For:  METPROC
+C
+C  History:
+C     Modified 23-Mar-89 by TOV to get NORMMEAN from PETT VI scan
+C        file headers.
+C     Modified 25-Jan-91 by TOV to read EM processed PETT VI images
+C        (PETTNUM = 1).
+C     Modified 08-Oct-91 by TOV to correct reading of P8FILTER.
+C
+C			Modified for UNIX 23-Jan-92 TOV
+C				add RINDEX for SCANNAME
+C			Modified 12-May-92 by TOV to use GETIMG from libpetutil.
+C			Modified 19-May-93 by TOV to recognize ECAT images (PETTNUM = 10)
+C			Modified 07-Jul-93 by TOV to eliminate UPPERCASE
+C
+C  Intent:
+C     This routine gets selected parameters from an image file header.
+C     PETT VI, Super PETT I and Super PETT II files can be read.
+C
+C  Variables Passed:
+C     DISK = logical unit to be assigned to scan file;
+C     ERRFLAG = true if scan file is PETT VI or SUPER PETT
+C        false if not identified as one of these types;
+C
+C  Common Block Variables:
+C
+C  /SCANS/  - these variables are assigned in this subroutine:
+C     SCANNER = scanner name (PETT VI, SUPER PETT IIH, etc);
+C     SCANNAME = name of scan image file;
+C     SCANDATE = date of scan (MM/DD/YY);
+C     SLICES = number of slices in image file;
+C     SCANTIME = length of scan (seconds) read from file header;
+C     COMPOUND = compound used in scan;
+C     FILTER = reconstruction filter;
+C     RCONTYPE = reconstruction type;
+C     RESOLUTION: 0 = low; 1 = high resolution scan;
+C
+C  Local Variables:
+C     HEAD = array into which to read the file header;
+C     DUMMY = dummy array to call getimage;
+C     P8DATE = Date of scan in PETT 8 header;
+C     P7DATE = Date of scan in PETT 7 header;
+C     P6DATE = Date of scan in PETT 6 header;
+C     P8TIME = scan time from PETT 8 header;
+C     P7TIME = scan time from PETT 7 header;
+C     P6TIME = scan time from PETT 6 header;
+C     P8COMPND = compound from PETT 8 header;
+C     P7COMPND = compound from PETT 7 header;
+C     P6COMPND = compound from PETT 6 header;
+C     P8FILTER = filter from PETT 8 header;
+C     P7FILTER = filter from PETT 7 header;
+C     P8TYPE = data type from PETT 8 header;
+C     P7TYPE = data type from PETT 7 header;
+C     P6TYPE = data type from PETT 6 header;
+C     P7RESOL = resolution from PETT 7 header;
+C     P6RESOL = resolution from PETT 6 header;
+C     P8FRAME = frame length from PETT 8 header;
+C
+C  Use libpetutil:
+C     GETIMG
+C
+C  Use libpe:
+C     GTSTRING
+C
+C  Called by:  METPROC
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE READHEAD(DISK,ERRFLAG)
+C
+      INTEGER*4    DISK,SLICE,PETTNUM,P8TYPE,RINDEX,NUMSLICES
+      INTEGER*2    HEAD(128),DUMMY(128,128),P7TYPE,P6TYPE,
+     &             P8TIME,P7TIME,P6TIME,P6RESOL,P8FRAME,
+     &             P6NORMTIME,P6NORMAVE
+      CHARACTER*2  P7RESOL
+      CHARACTER*6  P8DATE,P7DATE,P6DATE
+      CHARACTER*10 P8COMPND,P7COMPND,P6COMPND
+      CHARACTER*12 P8FILTER,P7FILTER,P6FILTER
+      CHARACTER*80 Q,STR
+			CHARACTER*256 FNAME
+      LOGICAL*1    ERRFLAG,HDRONLY
+			CHARACTER*256 RCSHEADER
+C
+      INCLUDE 'metproc.inc'
+C
+      DATA SLICE,HDRONLY /1,.TRUE./
+C
+      EQUIVALENCE (HEAD(11), P8DATE),     ! Scan Date
+     2            (HEAD(11), P7DATE),
+     3            (HEAD(13), P6DATE)
+      EQUIVALENCE (HEAD(30), P8TIME),     ! Scan Time
+     2            (HEAD(14), P7TIME),
+     3            (HEAD(8),  P6TIME)
+      EQUIVALENCE (HEAD(39), P8COMPND),   ! Compound
+     2            (HEAD(26), P7COMPND),
+     3            (HEAD(25), P6COMPND)
+      EQUIVALENCE (HEAD(55), P8FILTER),   ! Filter
+     2            (HEAD(25), P7FILTER),
+     3            (HEAD(41), P6FILTER)
+      EQUIVALENCE (HEAD(9),  P8TYPE),     ! File Type
+     2            (HEAD(31), P7TYPE),
+     3            (HEAD(38), P6TYPE)
+      EQUIVALENCE (HEAD(18), P7RESOL),    ! Resolution
+     2            (HEAD(16), P6RESOL)
+      EQUIVALENCE (HEAD(32), P8FRAME)     ! Frame Length
+      EQUIVALENCE (HEAD(50), P6NORMAVE)   ! NORM average counts
+      EQUIVALENCE (HEAD(70), P6NORMTIME)  ! NORM scan length
+C
+			RCSHEADER = "$Id$"
+C
+C  Read the file header
+C		(local variables FNAME and NUMSLICES must be used)
+C
+			FNAME = IMGNAME
+      CALL GETIMG (DUMMY,HEAD,FNAME,SLICE,NUMSLICES,PETTNUM,DISK,USEROUT,HDRONLY,ERRFLAG)
+      IF (ERRFLAG) RETURN
+			SLICES = NUMSLICES
+C
+      IF (PETTNUM.EQ.10) THEN
+        SCANNER = 'ECAT 953B'
+        SCANDATE = P6DATE(1:2)//'/'//P6DATE(3:4)//'/'//P6DATE(5:6)
+        SCANTIME = INT(P6TIME)
+        COMPOUND = P6COMPND
+        FILTER   = P6FILTER
+        RCONTYPE = 3000
+        RESOLUTION = INT(P6RESOL)
+        FRAMELEN = 0.0
+      ELSE IF (PETTNUM.EQ.8) THEN
+        SCANNER = 'SUPER PETT IIH'
+        SCANDATE = P8DATE(1:2)//'/'//P8DATE(3:4)//'/'//P8DATE(5:6)
+        SCANTIME = INT(P8TIME)
+        COMPOUND = P8COMPND
+        FILTER   = P8FILTER
+        RCONTYPE = P8TYPE
+        RESOLUTION = 0
+        FRAMELEN = FLOAT(P8FRAME)
+      ELSE IF (PETTNUM.EQ.1) THEN
+        SCANNER = 'PETT VI'
+        SCANDATE = P8DATE(1:2)//'/'//P8DATE(3:4)//'/'//P8DATE(5:6)
+        SCANTIME = INT(P8TIME)
+        COMPOUND = P8COMPND
+        FILTER   = P8FILTER
+        RCONTYPE = P8TYPE
+        RESOLUTION = 0
+        FRAMELEN = FLOAT(P8FRAME)
+      ELSE IF (PETTNUM.EQ.7) THEN
+        SCANNER = 'SUPER PETT I'
+        SCANDATE = P7DATE(1:2)//'/'//P7DATE(3:4)//'/'//P7DATE(5:6)
+        SCANTIME = INT(P7TIME)
+        COMPOUND = P7COMPND
+        FILTER   = P7FILTER
+        RCONTYPE = INT(P7TYPE)
+        IF (P7RESOL.EQ.'HI') THEN
+          RESOLUTION = 1
+        ELSE
+          RESOLUTION = 0
+        END IF
+        FRAMELEN = 0.0
+      ELSE IF (PETTNUM.EQ.6) THEN
+        SCANNER = 'PETT VI'
+        SCANDATE = P6DATE(1:2)//'/'//P6DATE(3:4)//'/'//P6DATE(5:6)
+        SCANTIME = INT(P6TIME)
+        COMPOUND = P6COMPND
+        FILTER   = P6FILTER
+        IF (P6FILTER(1:3).NE.'FIL') THEN
+          Q = 'Filter used in PETT VI reconstruction (if unknown, '//
+     &      'enter RETURN)'
+          STR = ' '
+          CALL GTSTRING(Q,STR)
+          L = INANYR(STR,' ')
+          IF (L.EQ.0) THEN
+            FILTER = ' '
+          ELSE
+            FILTER = STR(1:12)
+          END IF
+        END IF
+        RCONTYPE = INT(P6TYPE)
+        RESOLUTION = INT(P6RESOL)
+        FRAMELEN = 0.0
+        IF (P6NORMAVE.NE.0 .AND. P6NORMTIME.NE.0) THEN
+          NORMMEAN = 60.*FLOAT(P6NORMAVE)/FLOAT(P6NORMTIME)
+        ELSE
+          NORMMEAN = 0.0
+        END IF
+      ELSE
+        ERRFLAG = .TRUE.
+        RETURN
+      END IF
+C
+			IF (RINDEX(FNAME,'.').GT.0) THEN
+				SCANNAME = FNAME(RINDEX(FNAME,'/')+1 : RINDEX(FNAME,'.'))
+			ELSE
+				SCANNAME = FNAME(RINDEX(FNAME,'/')+1 : LNBLNK(FNAME))
+			END IF
+C
+      RETURN
+      END
+@
+
+
+2.0
+log
+@Handles ECAT image format
+@
+text
+@d2 3
+d129 1
+a129 1
+			RCSHEADER = "$Header: /home/petsun2/tom/src/metproc/src/RCS/readhead.f,v 1.4 1993/07/12 22:48:11 tom Exp tom $"
+@
+
+
+1.4
+log
+@Revised to handle ECAT images
+PIE factors are adjusted for the type of reconstruction and acquisition
+@
+text
+@d2 4
+d126 1
+a126 1
+			RCSHEADER = "$Header: /export/home/petsun2/tom/src/metproc/src/RCS/readhead.f,v 1.3 1992/10/19 15:56:10 tom Exp tom $"
+@
+
+
+1.3
+log
+@modified RCSHEADER length
+@
+text
+@d2 3
+d26 2
+d122 1
+a122 1
+			RCSHEADER = "$Header$"
+d128 1
+a128 2
+      CALL GETIMG (DUMMY,HEAD,FNAME,SLICE,NUMSLICES,PETTNUM,DISK,
+     &   USEROUT,HDRONLY,ERRFLAG)
+d132 10
+a141 1
+      IF (PETTNUM.EQ.8) THEN
+a186 1
+            CALL UPPERCAS(STR,L)
+@
+
+
+1.2
+log
+@added RCSHEADER
+@
+text
+@d1 4
+a4 1
+c $Log$
+d90 1
+a90 1
+			CHARACTER*100 RCSHEADER
+d117 1
+a117 1
+			RCSHEADER = "$Header"
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+d87 1
+d113 2
+@

@@ -1,0 +1,345 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.16.54.26;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.10.12.13.22.40;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.05.07.15.38.27;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.05.06.17.52.35;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/* $Log: alignlst.c,v $
+ * Revision 1.3  1999/10/12  13:22:40  tom
+ * new libimgutil with updated arc path
+ *
+ * Revision 1.2  1999/05/07  15:38:27  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/05/06  17:52:35  tom
+ * Initial revision
+ * */
+/*  =========================================================================
+ *  File:        alignlst.c
+ *  Date:        May 1999
+ *  Author:      Tom Videen
+ *  Description: Align all images in an imagelist to a specified standard.
+ *  =========================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignlst/RCS/alignlst.c,v 1.3 1999/10/12 13:22:40 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <myvalues.h>
+#include <imgutil.h>
+
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+/* Imglist file */
+	IMAGE_LIST_DATA *list;			 /* data extracted from imglist - for reslice files */
+	IMAGE_LIST_DATA std_data;		 /* data for std image, AS IF extracted from imglist */
+	char           *listname;		 /* filename of imglist */
+	int             listsize;		 /* number of lines in imglist */
+
+/* Parameter file */
+	PARAMETER_DATA  prm;			 /* parameter values from parameter file */
+	char           *prmname;		 /* parameter file name */
+
+/* Reslice files */
+	char           *aimgpath;		 /* full path for image files */
+	char           *imgpath;		 /* full path for image files */
+	char           *imagenames[2];	 /* image filenames for 1 line of imagelist*/
+	char          **imgname;		 /* all image filenames in list */
+	char           *sxrname;		 /* sxr (skull x-ray) filename */
+	int             nfiles;			 /* number of scans in one line of imglist */
+
+/* Standard file */
+	char           *astdpath;		 /* full path for standard file */
+	char           *stdpath;		 /* full path for standard file */
+	char           *stdname[1];		 /* standard image filename */
+	char           *tmp_ptr;		 /* placeholder - corresponds to sxrname */
+	int             tmp_int;		 /* placeholder - corresponds to nfiles */
+
+/* Archive path */
+	char           *dtype;			 /* data type (for archive paths to files) */
+									 /* e.g., "961_sta_fb_ramp" */
+
+/* AIR file */
+	char            airfile[MAXPATH];	 /* name of AIR file */
+
+/* Text of command */
+	char            command[MAXPATH];	 /* complete command ("alignlinear ....") */
+
+/* Miscellaneous */
+	FILE           *fp;			 /* for AIR file */
+	char           *std;		 /* scan no. of standard image for alignment */
+	char           *uni;		 /* 1 = bidirectional; 0 = unidirectional alignment */
+	char           *fit;		 /* 1 = ratio; 2 = least squares */
+	int             t1, t2;		 /* threshold for standard and reslice images */
+    int             filtmode = IMGFILTER_MODE;    /* filter mode to use in constructing names */
+	int             i;
+
+	prmname = argv[1];			 /* parameter filename */
+	listname = argv[2];			 /* imglist filename */
+	std = argv[3];				 /* scan no. of standard image for alignment */
+	uni = argv[4];				 /* value for -p2 in alignlinear */
+	fit = argv[5];				 /* value for -x in alignlinear */
+
+/* Initialize pointers */
+
+	for (i = 0; i < 2; i++)
+		imagenames[i] = (char *) malloc (MAXPATH);
+	stdname[0] = (char *) malloc (MAXPATH);
+	dtype = (char *) malloc (MAXPATH);
+	tmp_ptr = (char *) malloc (MAXPATH);
+	sxrname = (char *) malloc (MAXPATH);
+	astdpath = (char *) malloc (MAXPATH);
+	aimgpath = (char *) malloc (MAXPATH);
+
+/*  Get parameters */
+
+	if (readprm (prmname, &prm) == ERROR) {
+		fprintf (stderr, "ERROR [alignlst]: reading parameters from %s\n", prmname);
+		return (ERROR);
+	}
+
+/*  Read imglist into IMAGE_LIST_DATA structure */
+
+	list = (IMAGE_LIST_DATA *) malloc (sizeof (IMAGE_LIST_DATA) * MAX_IMAGE_LIST_SIZE);
+	if (readimglist (listname, list, &listsize) == ERROR) {
+		fprintf (stderr, "ERROR [alignlst]: reading imagelist %s\n", listname);
+		return (ERROR);
+	}
+	if (nfiles > 1) {
+		fprintf (stderr, "ERROR [alignlst]: only single-image lists permitted!\n");
+		return (ERROR);
+	}
+	imgname = (char **) malloc (listsize);
+	for (i = 0; i < listsize; i++)
+		imgname[i] = (char *) malloc (MAXPATH);
+
+/*	Align each image in imglist to specified standard image */
+
+	for (i = 0; i < listsize; i++) {
+		if (buildnames (prm, list[i], filtmode, &nfiles, imagenames, sxrname) == ERROR) {
+			fprintf (stderr, "ERROR [alignlst]: building filenames from %s %s %f %s %f %s\n",
+				 list[i].subject_id, list[i].scanset1_id, list[i].mean1,
+				 list[i].scanset2_id, list[i].mean2, list[i].sxrid);
+		}
+		(void) strcpy (imgname[i], imagenames[0]);
+		if (i == 0) {
+			(void) strcpy (std_data.subject_id, list[i].subject_id);
+			(void) strcpy (std_data.scanset1_id, std);
+			if (buildnames (prm, std_data, filtmode, &tmp_int, stdname, tmp_ptr) == ERROR) {
+				fprintf (stderr, "ERROR [alignlst]: building filenames from %s %s %f %s %f %s\n",
+				 	std_data.subject_id, std_data.scanset1_id, std_data.mean1,
+				 	std_data.scanset2_id, std_data.mean2, std_data.sxrid);
+			}
+			(void) sprintf (dtype, "%s_%s_%s_%s", prm.scanner, prm.acquisition, prm.reconstruction, prm.recfilter);
+			fprintf (stdout, "Reference Image:\n");
+			stdpath = getpath (stdname[0], dtype, prm);
+			if (strcmp (stdpath, "") == 0) {
+				fprintf (stderr, "ERROR [alignlst]: Cannot find %s\n", stdname[0]);
+				return (ERROR);
+			}
+			(void) strcpy (astdpath, "a");
+			(void) strcat (astdpath, stdpath);
+		}
+		if (strcmp(list[i].scanset1_id, std_data.scanset1_id) == 0) {
+			std_data.mean1 = list[i].mean1;
+			t1 = 0.5 * std_data.mean1;
+			fprintf (stdout, "Threshold = %d\n", t1);
+		}
+	}
+
+/*	Align each image in imglist to specified standard image */
+
+	(void) sprintf (command, "img2analyze %s %s", stdpath, astdpath);
+	if (system (command) != 0) {
+		fprintf (stderr, "ERROR [alignlst]: Could not convert %s\n", stdpath);
+		return (ERROR);
+	}
+	(void) sprintf (command, "setanamin %s 0", astdpath);
+	if (system (command) != 0) {
+		fprintf (stderr, "ERROR [alignlst]: Could not set minimum in  %s\n", astdpath);
+		return (ERROR);
+	}
+
+	for (i = 0; i < listsize; i++) {
+		fprintf (stdout, "--------------------------------------------------------\n");
+		(void) sprintf (airfile, "%s%s%s%s.air", prm.species, list[i].subject_id, prm.tracer, list[i].scanset1_id);
+		fprintf (stdout, "Creating: %s\n", airfile);
+		imgpath = getpath (imgname[i], dtype, prm);
+		if (strcmp (imgpath, "") == 0) {
+			fprintf (stderr, "ERROR [alignlst]: Cannot find %s\n", imgname[i]);
+			return (ERROR);
+		}
+		(void) strcpy (aimgpath, "a");
+		(void) strcat (aimgpath, imgpath);
+
+		if ((fp = fopen (airfile, "r")) != NULL)
+			fprintf (stderr, "WARNING: %s exists and will NOT be replaced\n", airfile);
+		else {
+			t2 = 0.5 * list[i].mean1;
+			fprintf (stdout, "Threshold = %d\n", t2);
+			(void) sprintf (command, "img2analyze %s %s", imgpath, aimgpath);
+			if (system (command) != 0) {
+				fprintf (stderr, "ERROR [alignlst]: Could not convert %s\n", imgpath);
+				return (ERROR);
+			}
+			(void) sprintf (command, "setanamin %s 0", aimgpath);
+			if (system (command) != 0) {
+				fprintf (stderr, "ERROR [alignlst]: Could not set minimum in  %s\n", aimgpath);
+				return (ERROR);
+			}
+			(void) sprintf (command, "alignlinear %s %s %s -m 6 -t1 %d -t2 %d -p1 1 -p2 %s -x %s", astdpath, aimgpath, airfile, t1, t2, uni, fit);
+			fprintf (stdout, "%s\n", command);
+			if (system (command) != 0) {
+				fprintf (stderr, "ERROR [alignlst]: Could not align %s\n", imgpath);
+				return (ERROR);
+			}
+		}
+	}
+
+	free (list);
+	free (dtype);
+	for (i = 0; i < 2; i++)
+		free (imagenames[i]);
+	for (i = 0; i < listsize; i++)
+		free (imgname[i]);
+	free (imgname);
+	free (aimgpath);
+	free (sxrname);
+	free (stdname);
+	free (astdpath);
+	free (tmp_ptr);
+	return (OK);
+}
+@
+
+
+1.3
+log
+@new libimgutil with updated arc path
+@
+text
+@d2 3
+d13 1
+a13 1
+ *  Date:        May-99
+d18 1
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignlst/RCS/alignlst.c,v 1.2 1999/05/07 15:38:27 tom Exp tom $";
+d126 1
+a126 1
+		strcpy (imgname[i], imagenames[0]);
+d128 2
+a129 2
+			strcpy (std_data.subject_id, list[i].subject_id);
+			strcpy (std_data.scanset1_id, std);
+d135 1
+a135 1
+			sprintf (dtype, "%s_%s_%s_%s", prm.scanner, prm.acquisition, prm.reconstruction, prm.recfilter);
+d142 2
+a143 2
+			strcpy (astdpath, "a");
+			strcat (astdpath, stdpath);
+d154 1
+a154 1
+	sprintf (command, "img2analyze %s %s", stdpath, astdpath);
+d159 1
+a159 1
+	sprintf (command, "setanamin %s 0", astdpath);
+d167 1
+a167 1
+		sprintf (airfile, "%s%s%s%s.air", prm.species, list[i].subject_id, prm.tracer, list[i].scanset1_id);
+d174 2
+a175 2
+		strcpy (aimgpath, "a");
+		strcat (aimgpath, imgpath);
+d182 1
+a182 1
+			sprintf (command, "img2analyze %s %s", imgpath, aimgpath);
+d187 1
+a187 1
+			sprintf (command, "setanamin %s 0", aimgpath);
+d192 1
+a192 1
+			sprintf (command, "alignlinear %s %s %s -m 6 -t1 %d -t2 %d -p1 1 -p2 %s -x %s", astdpath, aimgpath, airfile, t1, t2, uni, fit);
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignlst/RCS/alignlst.c,v 1.1 1999/05/06 17:52:35 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/alignlst/RCS/alignlst.c,v 1.3 1998/09/30 16:36:00 tom Exp $";
+d68 1
+a68 1
+	float           t1, t2;		 /* threshold for standard and reslice images */
+d104 1
+a104 1
+		fprintf (stderr, "ERROR [alignlst]: aligns single-image lists only!\n");
+d141 1
+a141 1
+			fprintf (stdout, "Threshold = %.2f\n", t1);
+d174 1
+a174 1
+			fprintf (stdout, "Threshold = %.2f\n", t2);
+d185 1
+a185 1
+			sprintf (command, "alignlinear %s %s %s -m 6 -t1 %f -t2 %f -p1 1 -p2 %s -x %s", astdpath, aimgpath, airfile, t1, t2, uni, fit);
+@

@@ -1,0 +1,565 @@
+head	3.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+3.0
+date	2004.02.20.14.58.19;	author tom;	state Exp;
+branches;
+next	2.9;
+
+2.9
+date	2000.09.06.19.45.38;	author tom;	state Exp;
+branches;
+next	2.8;
+
+2.8
+date	99.12.15.21.45.24;	author tom;	state Exp;
+branches;
+next	2.7;
+
+2.7
+date	96.10.16.17.14.54;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	96.09.03.19.59.54;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	96.05.24.18.16.02;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.05.14.21.35.15;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.05.08.18.24.39;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.05.08.18.23.30;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.03.01.21.02.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+3.0
+log
+@Feb 2004
+@
+text
+@/*  $Id: sumimgplanes.c,v 2.9 2000/09/06 19:45:38 tom Exp tom $
+    $Log: sumimgplanes.c,v $
+ * Revision 2.9  2000/09/06  19:45:38  tom
+ * strcpy filename
+ *
+ * Revision 2.8  1999/12/15  21:45:24  tom
+ * lint cleaning.
+ *
+ * Revision 2.7  1996/10/16  17:14:54  tom
+ * sync with Version
+ * new libimage
+ *
+ * Revision 2.3  1996/09/03  19:59:54  tom
+ * new libimage
+ *
+ * Revision 2.2  1996/05/24  18:16:02  tom
+ * new libimage, libnrimg
+ *
+ * Revision 2.1  1996/05/14  21:35:15  tom
+ * new libimage.a with revised fill_sh6
+ *
+ * Revision 2.0  1996/05/08  18:24:39  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1996/05/08  18:23:30  tom
+ * *** empty log message ***
+ *
+ */
+/* =============================================================================
+ *  Module:         sumimgplanes.c
+ *  Date:           Apr-96
+ *  Author:         Tom Videen
+ *  Description:    Sum multiple planes of 1 frame image (ECAT, PETT VI, Interfile).
+ * =============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumimgplanes/RCS/sumimgplanes.c,v 2.9 2000/09/06 19:45:38 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <imgutil.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	FILE           *recfp;			 /* rec file pointer */
+	float        ***sum;			 /* tensor in which to accumulate total */
+	float        ***img;			 /* input tensor */
+	char           *infile;			 /* file to read */
+	char           *recfile;		 /* rec filename */
+	char           *outfile;		 /* file to write */
+	char            runstamp[40];	 /* version, date and userid info */
+	int             fformat;		 /* file format */
+	int             firstplane, lastplane;
+	int             nx, ny, nz;		 /* array dimensions */
+	int             i, j, k;
+
+/*
+ * Get command line arguments.
+ */
+	if (argc != 13) {
+		printf ("Usage: sumimgplanes infile outfile recfile firstplane lastplane\n");
+		return (ERROR);
+	}
+	infile = argv[1];
+	outfile = argv[2];
+	recfile = argv[3];
+	firstplane = atoi (argv[4]);
+	lastplane = atoi (argv[5]);
+	if (lastplane - firstplane < 0) {
+		printf ("Last frame (%d) must be >= first frame (%d)\n", lastplane,
+			firstplane);
+		return (ERROR);
+	}
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[6], argv[7], argv[8],
+		 argv[9], argv[11], argv[12]);
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*	Open rec file */
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [sumimgplanes]: Cannot open %s\n", recfile);
+		return (ERROR);
+	}
+/*
+ *	Get main header and subheader.
+ *	Store RCS version in file->mh->sw_revision.
+ */
+
+	file = make_imgfile (infile);
+	(void) strcpy (file->mode, "r");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [sumimgplanes]: Cannot open %s\n", infile);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [sumimgplanes]: Cannot get MainHeader from %s\n", infile);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [sumimgplanes]: cannot find %s frame %d\n", infile, indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [sumimgplanes]: Cannot read file subheader in %s\n", infile);
+		return (ERROR);
+	}
+	nx = file->sh->dim1;
+	ny = file->sh->dim2;
+	nz = file->sh->dim3;
+	if ((sum = f3tensor (1, 1, 1, ny, 1, nx)) == NULL) {
+		fprintf (stderr, "ERROR [sumimgplanes]: Cannot malloc memory for sum%s\n", infile);
+		return (ERROR);
+	}
+	printf ("Reading %s frame %d\n", infile, indx.frm);
+	if ((img = readtensor (file, &indx)) == NULL) {
+		fprintf (stderr, "ERROR [sumimgplanes]: reading image data from %s\n", infile);
+		return (ERROR);
+	}
+	recout (recfp, infile);
+	(void) save_rcs (file, rcsid, runstamp);
+
+/*
+ *	Loop over all planes:
+ */
+	for (j = 1; j <= ny; j++) {
+		for (k = 1; k <= nx; k++) {
+			sum[1][j][k] = img[firstplane][j][k];
+		}
+	}
+	for (i = firstplane + 1; i <= lastplane; i++) {
+		for (j = 1; j <= ny; j++) {
+			for (k = 1; k <= nx; k++) {
+				sum[1][j][k] += img[i][j][k];
+			}
+		}
+	}
+	free_f3tensor (img, 1, nz, 1, ny, 1, nx);
+/*
+ *	Write image (frame and nplanes set to 1)
+ */
+
+	close_imgfile (file);
+	(void) strcpy (file->name, outfile);
+	(void) strcpy (file->mode, "w");
+	indx.frm = 1;
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [sumimgplanes]: Cannot open %s\n", outfile);
+		return (ERROR);
+	}
+	printf ("Writing summed image %s\n", outfile);
+	file->mh->nplane = 1;
+	file->mh->nframe = 1;
+	file->sh->dim3 = 1;
+    fformat = file->mh->file_format;
+    if (fformat == MATRIX_REV7)
+		file->m7->sh->z_dimension = 1;
+    else if (fformat == MATRIX_REV6)
+		file->m6->mh->num_planes = 1;
+    else if (fformat == PETT6)
+		file->p6->number_of_slices = 1;
+	if (put_mh (file) == ERROR)
+		return (ERROR);
+	if (writetensor (file, &indx, sum) == ERROR)
+		return (ERROR);
+	free_f3tensor (sum, 1, 1, 1, ny, 1, nx);
+	free_imgfile (file);
+	(void) fclose (recfp);
+	return (OK);
+}
+@
+
+
+2.9
+log
+@strcpy filename
+@
+text
+@d1 1
+a1 1
+/*  $Id: sumimgplanes.c,v 2.8 1999/12/15 21:45:24 tom Exp tom $
+d3 3
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumimgplanes/RCS/sumimgplanes.c,v 2.8 1999/12/15 21:45:24 tom Exp tom $";
+d82 1
+a82 1
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[6], argv[7], argv[8],
+d104 1
+a104 1
+	strcpy (file->mode, "r");
+d134 1
+a134 1
+	save_rcs (file, rcsid, runstamp);
+d157 2
+a158 2
+	strcpy (file->name, outfile);
+	strcpy (file->mode, "w");
+d181 1
+a181 1
+	fclose (recfp);
+@
+
+
+2.8
+log
+@lint cleaning.
+@
+text
+@d1 1
+a1 1
+/*  $Id: sumimgplanes.c,v 2.7 1996/10/16 17:14:54 tom Exp tom $
+d3 3
+d33 1
+a33 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumimgplanes/RCS/sumimgplanes.c,v 2.7 1996/10/16 17:14:54 tom Exp tom $";
+d154 1
+a154 1
+	file->name = outfile;
+@
+
+
+2.7
+log
+@sync with Version
+new libimage
+@
+text
+@d1 1
+a1 1
+/*  $Id: sumimgplanes.c,v 2.3 1996/09/03 19:59:54 tom Exp tom $
+d3 4
+d30 1
+a30 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumimgplanes/RCS/sumimgplanes.c,v 2.3 1996/09/03 19:59:54 tom Exp tom $";
+a34 1
+#include <math.h>
+d36 1
+a38 1
+#include <nr.h>
+d119 1
+a119 1
+		fprintf (stderr, "ERROR [sumimgplanes]: Cannot malloc memory for sum%s\n");
+@
+
+
+2.3
+log
+@new libimage
+@
+text
+@d1 1
+a1 1
+/*  $Id: sumimgplanes.c,v 2.2 1996/05/24 18:16:02 tom Exp tom $
+d3 3
+d26 1
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumimgplanes/RCS/sumimgplanes.c,v 2.2 1996/05/24 18:16:02 tom Exp tom $";
+@
+
+
+2.2
+log
+@new libimage, libnrimg
+@
+text
+@d1 1
+a1 1
+/*  $Id: sumimgplanes.c,v 2.1 1996/05/14 21:35:15 tom Exp tom $
+d3 3
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/sumimgplanes/RCS/sumimgplanes.c,v 2.1 1996/05/14 21:35:15 tom Exp tom $";
+@
+
+
+2.1
+log
+@new libimage.a with revised fill_sh6
+@
+text
+@d1 1
+a1 1
+/*  $Id: sumimgplanes.c,v 2.0 1996/05/08 18:24:39 tom Exp tom $
+d3 3
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/sumimgplanes/RCS/sumimgplanes.c,v 2.0 1996/05/08 18:24:39 tom Exp tom $";
+@
+
+
+2.0
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: sumimgplanes.c,v 1.2 1996/05/08 18:23:30 tom Exp tom $
+d3 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/sumimgplanes/RCS/sumimgplanes.c,v 1.2 1996/05/08 18:23:30 tom Exp tom $";
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 5
+a5 2
+/*  $Id$
+    $Log$
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/sumimg/RCS/sumimg.c,v 1.7 1996/02/22 15:37:41 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 3
+/*$Id$*/
+/*$Log$*/
+/*  ===============================================================================
+d6 1
+a6 1
+ *  Date:           01-Mar-95
+d8 2
+a9 2
+ *  Description:    Sum multiple planes of 1 frame image.
+ *  ===============================================================================
+d11 1
+d13 1
+d16 6
+a21 4
+#include <time.h>
+#include <petutil/petutil.h>
+#include <petutil/imglist.h>
+#include <petutil/matrix.h>
+a22 2
+static char     rcsid[] = "$Header$";
+
+d25 1
+a25 1
+	char          **argv;
+d27 13
+a39 5
+	Image_subheader **subheader;
+	Main_header    *main_header;
+	MatrixFile     *fptr;
+	struct Matval   matval;
+	FILE           *recfp;
+a40 25
+	char           *outfile;
+	char           *infile;
+	char            version[MAXLINE];
+	char            date[MAXLINE];
+	char            recfile[MAXPATH];
+	time_t          now;
+	short           nx, ny;
+	short           num_slices;
+	int             firstplane;
+	int             lastplane;
+	int             scanner;
+	int             num, i, j, p;
+	int             slicedim;
+	int             dimension;
+	float          *image;
+	float          *image2;
+	float           pixel_size;
+	float           plane_separation;
+
+	matval.frame = 1;
+	matval.plane = 1;
+	matval.gate = 1;
+	matval.data = 0;
+	matval.bed = 0;
+
+d44 3
+a46 3
+	if (argc != 5) {
+		printf ("Usage: sumimgplanes infile outfile firstplane lastplane\n");
+		exit (1);
+d50 3
+a52 2
+	firstplane = atoi (argv[3]);
+	lastplane = atoi (argv[4]);
+d56 1
+a56 1
+		exit (1);
+d58 2
+a59 2
+	now = time (NULL);
+	strftime (date, MAXLINE, "%a %c", localtime (&now));
+d61 13
+d75 2
+a76 1
+ * Read and sum the frames
+d79 5
+a83 4
+	if (getimagedim (infile, matval, &scanner, &nx, &ny, &num_slices,
+			 &pixel_size, &pixel_size, &plane_separation) != 0) {
+		fprintf (stderr, "Error reading %s\n", infile);
+		exit (1);
+d85 3
+a87 11
+	main_header = (Main_header *) calloc (1, sizeof (Main_header));
+	subheader = (Image_subheader **) malloc (num_slices * sizeof (caddr_t));
+	slicedim = nx * ny;
+	dimension = nx * ny * num_slices;
+	image = (float *) malloc (dimension * sizeof (float));
+	image2 = (float *) malloc (slicedim * sizeof (float));
+
+	if (getrealimg (infile, scanner, matval, nx, ny, num_slices, image,
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s frame %d\n", infile, matval.frame);
+		exit (1);
+d89 3
+a91 6
+	for (j = 0; j < slicedim; j++)
+		image2[j] = 0;
+	for (i = firstplane + 1; i <= lastplane; i++) {
+		p = (i-1)*slicedim;
+		for (j = 0; j < slicedim; j++)
+			image2[j] += image[p+j];
+d93 18
+a110 1
+	free (image);
+d113 1
+a113 1
+ * Write output
+d115 4
+a118 8
+	if (GetVersion (rcsid, version) == FAIL)
+		strcpy (version, rcsid + 5);
+	strncpy (main_header->physician_name, version, sizeof (main_header->physician_name) - 1);
+	strncpy (main_header->operator_name, date, sizeof (main_header->operator_name) - 1);
+	matval.plane = 1;
+	if (writerealimg (outfile, matval, nx, ny, 1, image2,
+			  main_header, subheader) != 0) {
+		fprintf (stderr, "Error writing %s\n", outfile);
+d120 8
+a127 6
+	for (i = 0; i < num_slices; i++)
+		free (subheader[i]);
+	free (subheader);
+	free (main_header);
+	free (image2);
+
+d129 1
+a129 1
+ * Create the rec file and copy all input rec files
+a130 2
+	strcpy (recfile, outfile);
+	strcat (recfile, REC_EXT);
+d132 7
+a138 4
+	recfp = fopen (recfile, "w");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "Error in opening rec file %s\n", recfile);
+		exit (1);
+d140 17
+a156 11
+	fprintf (recfp, "rec %s %s\n", outfile, date);
+	for (i = 0; i < argc; i++)
+		fprintf (recfp, "%s ", argv[i]);
+	fprintf (recfp, "\n");
+	fprintf (recfp, "   %s\n\n", rcsid);
+
+	strcpy (recfile, infile);
+	strcat (recfile, REC_EXT);
+	copyrec (recfp, recfile);
+
+	fprintf (recfp, "endrec\n");
+d158 1
+a158 1
+
+@

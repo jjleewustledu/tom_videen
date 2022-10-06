@@ -1,0 +1,403 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   P2ADDLST.FTN
+C     Author:       Tom O. Videen
+C     Date:         11-Mar-87
+C     Intent:
+C     .  This routine plots a point on the Ramtek Display Monitor
+C     .  plus any extra points necessary if the new point is
+C     .  not adjacent to the last point entered in the list.
+C     .  Intermediate points are added to create an 8-connected line.
+C     .  All new points are added to the list BOUNDARY.
+C     
+C     It uses the subroutine P2ADDPNT which:
+C     .  1) Adds the point to the list BOUNDARY.
+C     .  2) Updates the minimum and maximum values for X and Y
+C     .    in the list BOUNDARY.
+C     .  3) Plots each point with the same number of screen pixels
+C     .    (MAG*ZFACTOR x MAG*ZFACTOR*SLCLINES) as image data points.
+C     
+C     The following conditions are assumed when this routine is called:
+C     .  1)  there is at least one point in the list, BOUNDARY;
+C     .  2)  the new point is in the image space;
+C     .      (i.e., that X and Y are in the range 1-128)
+C     
+C     Common Blocks from SPIDERAM.INC:
+C     .  **REGION   - region analysis parameters     (write)
+C     
+C     Variables:
+C     .  N = number of the region being defined;
+C     .  XNEW,YNEW = location of the new point to be added;
+C     .       (coordinates are in image space)
+C     .  XLAST,YLAST = location of the last plotted point;
+C     .  X,Y = location of the next point to plot;
+C     .       (if XNEW,YNEW is not adjacent to XLAST,YLAST
+C     .        X,Y will not be the same as XNEW,YNEW)
+C     .  PLANES = planes in which to set a bit;
+C     .  ERRFLAG = set true when user attempts to include more than
+C     .     500 points in the boundary of the region;
+C     .  XDIFF = difference between XLAST and XNEW;
+C     .  YDIFF = difference between YLAST and YNEW;
+C     .  XINC = amount to increment X to get next point (+1 or -1);
+C     .  YINC = amount to increment Y to get next point (+1 or -1);
+C     .  XSTEP = amount to increment X if it is not an integral amount;
+C     .  YSTEP = amount to increment Y if it is not an integral amount;
+C     .  M = slope of line connecting XLAST,YLAST and XNEW,YNEW;
+C     .  S = factor used to get next point by multiplying S*M;
+C     
+C     Uses subroutine:
+C     .  P2ADDPNT
+C     
+C     Called by:  P2TRACK
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: p2addlst.f,v 1.4 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE P2ADDLST(XNEW,YNEW,PLANES,N,ERRFLAG)
+
+      INTEGER*4  XNEW,YNEW,PLANES,N,XLAST,YLAST,XDIFF,YDIFF,
+     &     X,Y,XINC,YINC
+      REAL       M,XSTEP,YSTEP
+      LOGICAL*1  ERRFLAG
+
+      INCLUDE 'spideram.inc'
+
+      ERRFLAG = .FALSE.
+      XLAST = BOUNDARY(1,TOP)
+      YLAST = BOUNDARY(2,TOP)
+      X = XLAST
+      Y = YLAST
+      XDIFF = XNEW-XLAST
+      YDIFF = YNEW-YLAST
+
+C     If the new point is the same as the last point, then exit.
+
+      IF ((XDIFF.EQ.0).AND.(YDIFF.EQ.0)) GO TO 9000
+
+      IF (XDIFF.LT.0) THEN
+         XINC = -1
+      ELSE
+         XINC = 1
+      END IF
+
+      IF (YDIFF.LT.0) THEN
+         YINC = -1
+      ELSE
+         YINC = 1
+      END IF
+
+C     Case for XLAST = XNEW
+
+      IF (XDIFF.EQ.0) THEN
+ 100     Y = Y+YINC
+         CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+         IF (ERRFLAG) GO TO 9000
+         IF (Y.NE.YNEW) GO TO 100
+         GO TO 9000
+      END IF
+
+C     Case for YLAST = YNEW
+
+      IF (YDIFF.EQ.0) THEN
+ 200     X = X+XINC
+         CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+         IF (ERRFLAG) GO TO 9000
+         IF (X.NE.XNEW) GO TO 200
+         GO TO 9000
+      END IF
+
+C     Cases for new X and Y values depend on the slope
+
+      M = FLOAT(YDIFF)/FLOAT(XDIFF)
+
+C     Case for absolute value of slope = 1
+
+      IF ((ABS(M).LE.1.001).AND.(ABS(M).GE.0.999)) THEN
+ 300     X = X+XINC
+         Y = Y+YINC
+         CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+         IF (ERRFLAG) GO TO 9000
+         IF (X.NE.XNEW) GO TO 300
+
+C     Case for absolute value of slope < 1
+C     (X changes more rapidly than Y)
+
+      ELSE IF (ABS(M).LT.1.0) THEN
+         YSTEP = FLOAT(XINC) * M
+         S = 0.0
+ 400     S = S+1.0
+         X = X+XINC
+         Y = NINT(FLOAT(YLAST) + S*YSTEP)
+         CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+         IF (ERRFLAG) GO TO 9000
+         IF (X.NE.XNEW) GO TO 400
+
+C     Case for absolute value of slope > 1
+C     (Y changes more rapidly than X)
+
+      ELSE
+         XSTEP = FLOAT(YINC)/M
+         S = 0.0
+ 500     S = S+1.0
+         Y = Y+YINC
+         X = NINT(FLOAT(XLAST) + S*XSTEP)
+         CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+         IF (ERRFLAG) GO TO 9000
+         IF (Y.NE.YNEW) GO TO 500
+      END IF
+
+ 9000 RETURN
+      END
+@
+
+
+1.4
+log
+@format changes plus fixes for g77
+@
+text
+@d54 1
+a54 1
+C     rcsheader = "$Id: p2addlst.f,v 1.3 1993/10/04 21:55:32 tom Exp tom $"
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d2 51
+a52 54
+C
+C  Subroutine:   P2ADDLST.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         11-Mar-87
+C  Written For:  SPIDERAM Super PET Image Display Program
+C
+C  Intent:
+C     This routine plots a point on the Ramtek Display Monitor
+C     plus any extra points necessary if the new point is
+C     not adjacent to the last point entered in the list.
+C     Intermediate points are added to create an 8-connected line.
+C     All new points are added to the list BOUNDARY.
+C
+C  It uses the subroutine P2ADDPNT which:
+C     1) Adds the point to the list BOUNDARY.
+C     2) Updates the minimum and maximum values for X and Y
+C       in the list BOUNDARY.
+C     3) Plots each point with the same number of screen pixels
+C       (MAG*ZFACTOR x MAG*ZFACTOR*SLCLINES) as image data points.
+C
+C  The following conditions are assumed when this routine is called:
+C     1)  there is at least one point in the list, BOUNDARY;
+C     2)  the new point is in the image space;
+C         (i.e., that X and Y are in the range 1-128)
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **REGION   - region analysis parameters     (write)
+C
+C   Variables:
+C     N = number of the region being defined;
+C     XNEW,YNEW = location of the new point to be added;
+C          (coordinates are in image space)
+C     XLAST,YLAST = location of the last plotted point;
+C     X,Y = location of the next point to plot;
+C          (if XNEW,YNEW is not adjacent to XLAST,YLAST
+C           X,Y will not be the same as XNEW,YNEW)
+C     PLANES = planes in which to set a bit;
+C     ERRFLAG = set true when user attempts to include more than
+C        500 points in the boundary of the region;
+C     XDIFF = difference between XLAST and XNEW;
+C     YDIFF = difference between YLAST and YNEW;
+C     XINC = amount to increment X to get next point (+1 or -1);
+C     YINC = amount to increment Y to get next point (+1 or -1);
+C     XSTEP = amount to increment X if it is not an integral amount;
+C     YSTEP = amount to increment Y if it is not an integral amount;
+C     M = slope of line connecting XLAST,YLAST and XNEW,YNEW;
+C     S = factor used to get next point by multiplying S*M;
+C
+C  Uses subroutine:
+C     P2ADDPNT
+C
+C  Called by:  P2TRACK
+C
+d54 2
+a55 1
+C
+d57 1
+a57 1
+C
+d59 1
+a59 1
+     &           X,Y,XINC,YINC
+d62 1
+a62 2
+      character*256 rcsheader
+C
+d64 1
+a64 2
+      rcsheader = "$Id$"
+C
+d72 3
+a74 3
+C
+C  If the new point is the same as the last point, then exit.
+C
+d76 1
+a76 1
+C
+d78 1
+a78 1
+        XINC = -1
+d80 1
+a80 1
+        XINC = 1
+d82 1
+a82 1
+C
+d84 1
+a84 1
+        YINC = -1
+d86 1
+a86 1
+        YINC = 1
+d88 3
+a90 3
+C
+C  Case for XLAST = XNEW
+C
+d92 5
+a96 5
+100     Y = Y+YINC
+        CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+        IF (ERRFLAG) GO TO 9000
+        IF (Y.NE.YNEW) GO TO 100
+        GO TO 9000
+d98 3
+a100 3
+C
+C  Case for YLAST = YNEW
+C
+d102 5
+a106 5
+200     X = X+XINC
+        CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+        IF (ERRFLAG) GO TO 9000
+        IF (X.NE.XNEW) GO TO 200
+        GO TO 9000
+d108 3
+a110 3
+C
+C  Cases for new X and Y values depend on the slope
+C
+d112 1
+a112 1
+C
+d114 1
+a114 1
+C
+d116 6
+a121 6
+300     X = X+XINC
+        Y = Y+YINC
+        CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+        IF (ERRFLAG) GO TO 9000
+        IF (X.NE.XNEW) GO TO 300
+C
+d123 2
+a124 2
+C        (X changes more rapidly than Y)
+C
+d126 9
+a134 9
+        YSTEP = FLOAT(XINC) * M
+        S = 0.0
+400     S = S+1.0
+        X = X+XINC
+        Y = NINT(FLOAT(YLAST) + S*YSTEP)
+        CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+        IF (ERRFLAG) GO TO 9000
+        IF (X.NE.XNEW) GO TO 400
+C
+d136 2
+a137 2
+C        (Y changes more rapidly than X)
+C
+d139 8
+a146 8
+        XSTEP = FLOAT(YINC)/M
+        S = 0.0
+500     S = S+1.0
+        Y = Y+YINC
+        X = NINT(FLOAT(XLAST) + S*XSTEP)
+        CALL P2ADDPNT(X,Y,PLANES,N,ERRFLAG)
+        IF (ERRFLAG) GO TO 9000
+        IF (Y.NE.YNEW) GO TO 500
+d148 2
+a149 2
+C
+9000  RETURN
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d64 1
+d67 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

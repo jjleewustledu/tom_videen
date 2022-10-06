@@ -1,0 +1,364 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.16.38.03;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2002.11.27.14.26.18;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.11.26.20.06.11;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.04.30.14.04.13;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.10.05.17.06.16;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.09.26.22.11.58;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.09.26.22.05.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*  $Id: airsxr.c,v 1.6 2002/11/27 14:26:18 tom Exp tom $
+    $Log: airsxr.c,v $
+ * Revision 1.6  2002/11/27  14:26:18  tom
+ * *** empty log message ***
+ *
+ * Revision 1.5  2002/11/26  20:06:11  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  1996/04/30  14:04:13  tom
+ * new libimgutil.a
+ *
+ * Revision 1.3  1995/10/05  17:06:16  tom
+ * corrected calculation of sxr_z
+ *
+ * Revision 1.2  1995/09/26  22:11:58  tom
+ * format change
+ *
+ * Revision 1.1  1995/09/26  22:05:56  tom
+ * Initial revision
+ *
+ */
+/* ===============================================================================
+ *  Module:         airsxr.c
+ *  Date:           26-Sep-95
+ *  Author:         Tom Videen
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airsxr/RCS/airsxr.c,v 1.6 2002/11/27 14:26:18 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <imgutil.h>			 /* SXR_DATA */
+#include <AIR1.h>
+
+#define RADTODEG 180./M_PI
+
+int             read_air ();
+void			adjust_markers ();
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	char           *airfile;
+	struct air      air;			 /* AIR file structure */
+	float         **mat;
+	float          *pt0, *pt1, *pt2;
+	float           fscale[3];		 /* fixed (MR) image mm/pixel */
+	float           rscale[3];		 /* reslice (PET) image mm/pixel */
+	float			dy, dz;
+	char           *sxrfile;
+	float           y, z;
+	SXR_DATA       *sxr;			 /* xray & PET measurements */
+	float			sxr_y, sxr_z, sxr_ang;
+	float			air_y, air_z, air_ang;
+	float			delta_y, delta_z, delta_ang;
+
+/* Read arguments, write version to stdout */
+
+	if (argc != 6) {
+		(void) fprintf (stderr, "Usage: airsxr pet.sxr pettomri.air X Y Z\n");
+		return (1);
+	}
+	mat = matrix (1, 4, 1, 4);
+	pt0 = vector (1, 4);
+	pt1 = vector (1, 4);
+	pt2 = vector (1, 4);
+	sxrfile = argv[1];
+	airfile = argv[2];
+	pt0[1] = atof (argv[3]) - 1.;
+	pt0[2] = atof (argv[4]) - 1.;
+	pt0[3] = atof (argv[5]) - 1.;
+	pt0[4] = 1.0;
+
+/*	Read AIR matrix into mat (transform pixels-to-pixels)*/
+
+	if (read_air (airfile, &air, mat) != 0) {
+		(void) fprintf (stderr, "ERROR: cannot read %s\n", airfile);
+		return (1);
+	}
+	fscale[0] = air.s.x_size;
+	fscale[1] = air.s.y_size;
+	fscale[2] = air.s.z_size;
+	rscale[0] = air.r.x_size;
+	rscale[1] = air.r.y_size;
+	rscale[2] = air.r.z_size;
+
+    matrix_mult (mat, pt0, pt1, 4, 4, 1);
+	pt0[2] = pt0[2] + 50.0;
+	matrix_mult (mat, pt0, pt2, 4, 4, 1);
+
+	dy = (pt2[2]-pt1[2]) * rscale[1];
+	dz = (pt2[3]-pt1[3]) * rscale[2];
+	air_y =  pt1[2] + 1.0;
+	air_z =  pt1[3] + 1.0;
+	air_ang = RADTODEG * atan(dz/dy);
+
+/*	Free memory */
+
+	free_matrix (mat, 1, 4, 1, 4);
+	free_vector (pt0, 1, 4);
+	free_vector (pt1, 1, 4);
+	free_vector (pt2, 1, 4);
+
+/* Process SXR */
+
+	sxr = getsxr (sxrfile);
+	adjust_markers (sxr);			 /* Correct sxr.dz to specific geometry */
+
+/*
+ *	dap in cm	(negative means origin is anterior (smaller y) in the PET)
+ *	dz in cm	(negative means origin is lower (larger z) in the PET)
+ *	pixel_size in cm
+ *	slice_separation in cm
+ *	note that reference_offset is already accounted for in dz
+ */
+
+	y = sxr->apcenter + (sxr->dap / sxr->pixel_size);
+	z = (float) sxr->reference_slice - (sxr->dz / sxr->slice_separation);
+
+/*
+ *	Both Y and Z coordinates must be flipped:
+ *	Y is indexed from the posterior brain in Analyze and anterior brain in XRAY
+ *	Z is indexed from the inferior brain in Analyze and superior brain in XRAY
+ */
+
+	sxr_y =  129. - y;
+	sxr_z =  (float)(sxr->number_slices + 1) - z;
+	sxr_ang = sxr->degx;
+
+	delta_y = (sxr_y - air_y) * sxr->pixel_size * 10.0;
+	delta_z = (sxr_z - air_z) * sxr->slice_separation * 10.0;
+	delta_ang = sxr_ang - air_ang;
+
+	printf ("        SXR pixel   AIR pixel     Difference\n");
+	printf ("Y   = %10.3f  %10.3f  %10.3f mm\n",sxr_y, air_y, delta_y);
+	printf ("Z   = %10.3f  %10.3f  %10.3f mm\n",sxr_z, air_z, delta_z);
+	printf ("Ang = %10.3f  %10.3f  %10.3f deg\n",sxr_ang, air_ang, delta_ang);
+	return 0;
+}
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: airsxr.c,v 1.5 2002/11/26 20:06:11 tom Exp tom $
+d3 3
+d28 3
+a40 2
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airsxr/RCS/airsxr.c,v 1.5 2002/11/26 20:06:11 tom Exp tom $";
+
+d42 1
+a47 1
+	char            Usage[] = "Usage: airsxr pet.sxr pettomri.air X Y Z\n";
+d57 1
+a57 1
+	SXR_DATA      	sxr;			 /* xray & PET measurements */
+d65 2
+a66 2
+		(void) fprintf (stderr, Usage);
+		exit (1);
+d83 1
+a83 1
+		exit (1);
+d111 1
+a111 1
+	getsxr (sxrfile, &sxr);
+d122 2
+a123 2
+	y = sxr.apcenter + (sxr.dap / sxr.pixel_size);
+	z = (float) sxr.reference_slice - (sxr.dz / sxr.slice_separation);
+d132 2
+a133 2
+	sxr_z =  (float)(sxr.number_slices + 1) - z;
+	sxr_ang = sxr.degx;
+d135 2
+a136 2
+	delta_y = (sxr_y - air_y) * sxr.pixel_size * 10.0;
+	delta_z = (sxr_z - air_z) * sxr.slice_separation * 10.0;
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: airsxr.c,v 1.4 1996/04/30 14:04:13 tom Exp tom $
+d3 3
+d35 1
+a35 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airsxr/RCS/airsxr.c,v 1.4 1996/04/30 14:04:13 tom Exp tom $";
+a36 1
+char            Usage[] = "Usage: airsxr pet.sxr pettomri.air X Y Z\n";
+d43 1
+@
+
+
+1.4
+log
+@new libimgutil.a
+@
+text
+@d1 1
+a1 1
+/*  $Id: airsxr.c,v 1.3 1995/10/05 17:06:16 tom Exp tom $
+d3 3
+a23 1
+#include <string.h>
+a24 1
+#include <nr.h>
+a26 1
+#include <ANALYZE.h>
+d28 1
+a28 1
+#include <AIR.h>
+d32 1
+a32 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/airsxr/RCS/airsxr.c,v 1.3 1995/10/05 17:06:16 tom Exp tom $";
+d136 1
+a136 1
+	exit (0);
+@
+
+
+1.3
+log
+@corrected calculation of sxr_z
+@
+text
+@d1 1
+a1 1
+/*  $Id: airsxr.c,v 1.2 1995/09/26 22:11:58 tom Exp tom $
+d3 3
+d23 6
+a28 6
+#include <nrecipes/kr/nr.h>
+#include <nrecipes/kr/nrutil.h>
+#include <petutil/matrixlib.h>
+#include <petutil/ANALYZE.h>
+#include <petutil/petutil.h>			 /* SXR_OUTPUT */
+#include "AIR.h"
+d32 1
+a32 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/airsxr/RCS/airsxr.c,v 1.2 1995/09/26 22:11:58 tom Exp tom $";
+d50 1
+a50 1
+	SXR_OUTPUT      sxr;			 /* xray & PET measurements */
+d78 6
+a83 6
+	fscale[0] = air.std.x_size;
+	fscale[1] = air.std.y_size;
+	fscale[2] = air.std.z_size;
+	rscale[0] = air.res.x_size;
+	rscale[1] = air.res.y_size;
+	rscale[2] = air.res.z_size;
+@
+
+
+1.2
+log
+@format change
+@
+text
+@d1 1
+a1 1
+/*  $Id: airsxr.c,v 1.1 1995/09/26 22:05:56 tom Exp tom $
+d3 3
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airsxr/RCS/airsxr.c,v 1.1 1995/09/26 22:05:56 tom Exp tom $";
+d105 2
+a106 2
+ *	dap in cm	(negative means origin is anterior (smaller) in the PET)
+ *	dz in cm	(negative means origin is lower (greater) in the PET)
+d109 1
+a109 1
+ *	reference_offset in mm  (negative means ref slice is lower (greater) in the PET)
+d113 1
+a113 2
+	z = sxr.reference_slice - (sxr.reference_offset / (10. * sxr.slice_separation))
+		- (sxr.dz / sxr.slice_separation);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*  $Id$
+    $Log$
+d26 1
+a26 1
+static char     rcsid[] = "$Header$";
+d127 1
+a127 1
+	printf ("      SXR pixel      AIR pixel       Difference\n");
+@

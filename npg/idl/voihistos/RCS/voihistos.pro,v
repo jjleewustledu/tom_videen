@@ -1,0 +1,729 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.8
+date	99.02.25.22.46.41;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.02.24.17.16.47;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.02.23.23.09.40;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.02.11.21.08.05;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.02.10.15.49.46;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.02.09.22.55.22;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.02.09.15.55.39;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.02.02.14.58.14;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@accept VOI files with only clot and brain
+@
+text
+@; $Id: voihistos.pro,v 1.7 1999/02/24 17:16:47 tom Exp tom $
+;+
+; NAME:
+;   VOIHISTOS
+;
+; PURPOSE:
+;   Plot histograms of vois in an image.
+;
+; CATEGORY:
+;   PET processing.
+;
+; CALLING SEQUENCE:
+;   voihistos voi image
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, Feb 1999
+;-
+
+PRO VOIHISTOS
+   @@IMAGE_UTILS.h
+   
+   on_error, 2
+   loadct,5
+   msg = ''
+
+   vname = getenv('VOI_NAME')
+   fname = getenv('IMG_NAME')
+   pid = GETENV('PID')
+
+   range=[-10.,90.]
+   binsize = 1.0
+   lbnd = range[0]
+   ubnd = range[1] - (range[1]-range[0])/1000.
+   x0 = lbnd
+   y0 = 0.
+   nbins = fix ((ubnd-lbnd)/1 + 0.5)
+   hist = lonarr(5,nbins)
+   nrmhist = lonarr(5,nbins)
+   mean = fltarr(5)
+   npix = lonarr(5)
+   vid = ['csf','clot','white','gray','brain']
+   ich = 1	; 0 = no clot or no brain; 1 = clot and brain (1,4)
+   csf = 1	; 0 = no csf or no white;  1 = csf and white (0,2)
+   
+   voi = ptr_new({VOI})
+   (*voi).id = 'VOI'
+   IF (VOI_READ(voi, vname, msg) NE 0) THEN BEGIN 
+      print,msg
+      return
+   ENDIF 
+
+   img = {VIMAGE}
+   img.fname = fname
+   img.ff = 1
+   img.lf = 1
+   img.fp = 1
+   img.lp = 100
+   IF (getframe(img, msg) NE 0) THEN BEGIN
+      print,msg
+      RETURN
+   ENDIF
+   
+   image = (*img.data)[*,*,*,*]
+   image =  reform(image,/overwrite)
+   
+   pos = rstrpos(vname,'/')
+   title = strmid(vname,pos+1)
+   pos = rstrpos(img.fname,'/')
+   title = title+' on '+strmid(img.fname,pos+1)
+   xtitle = 'Pixel Intensity'
+   ytitle = 'Relative Number of Pixels'             
+   xrange=[range[0],range[1]]
+   yrange=[0, 1000]
+   
+   ps = 0
+top:
+   IF (NOT ps) THEN BEGIN 
+      red =   [0,255,255, 40,  0,255]
+      green = [0,  0,255,  0,200,255]
+      blue =  [0,  0,  0,240,255,255]
+      tvlct,red,green,blue
+      outline = 1
+      text = 5
+      cindx = [2,2,3,4,4]
+   ENDIF ELSE BEGIN
+      loadct, 0, ncolors=16
+      outline = 15
+      text = 1
+      cindx = [3,3,9,12,12]
+      sxsize = 9
+      sysize = 6
+      chsize = 1
+      cthk = 2
+      Set_Plot,'PS'
+      fname = '/tmp/voihistos'+pid+'.ps'
+      Device, _Extra=setup, File=fname, xsize=sxsize, ysize=sysize,$
+         /Inches, /Color, Bits_Per_Pixel=8, /Landscape, Xoffset=1.25, Yoffset=10.0
+   ENDELSE 
+
+   
+   ;; First Plot
+   ;; ----------
+   
+   plot, hist[0,*], /nodata, title=title, xtitle=xtitle, ytitle=ytitle, $
+      xrange=xrange, yrange=yrange, xstyle=1, ystyle=1, ytickformat='(I6)',$
+      xticklen=1, xthick=2, xticks=10, xminor=5, charsize=1.4, charthick=2, color=white
+   
+   minbin = range[0]
+   first_white = minbin
+   first_gray = minbin
+   last_gray = minbin
+
+   FOR v=0,3 DO BEGIN 
+      id = vid[v]
+      roi = VOI_LOCATE(voi, id)
+      IF ptr_valid(roi) THEN BEGIN 
+         IF ((*roi).num GT 0) THEN BEGIN
+            pixels = VOI_COORDS(voi, id, img.dim, msg)
+            IF ((size(pixels))[1] GT 1) THEN BEGIN
+               pixels = pixels[sort(pixels)]
+               pixels = pixels[uniq(pixels)]
+               npix[v] = n_elements(pixels)
+               imm = image[pixels]
+               imm = imm[where(imm GT -50)]
+               print,format='("VOI ",A6,"  Mean =",F6.1,"  Range =",I4," to",I4,"  N=",I6)', $
+                  id, (moment(imm))[0], min(imm), max(imm), npix[v]
+            ENDIF ELSE BEGIN
+               print,msg
+               CASE v OF
+                 0: csf = 0
+                 1: ich = 0
+                 2: csf = 0
+                 4: ich = 0
+                 ELSE:
+               ENDCASE
+            ENDELSE
+         ENDIF ELSE BEGIN
+            print,format='("VOI ",A6,"  not found")', id
+            CASE v OF
+              0: csf = 0
+              1: ich = 0
+              2: csf = 0
+              4: ich = 0
+              ELSE:
+            ENDCASE
+         ENDELSE 
+      ENDIF ELSE BEGIN
+         print,format='("VOI ",A6,"  not found")', id
+         CASE v OF
+           0: csf = 0
+           1: ich = 0
+           2: csf = 0
+           4: ich = 0
+           ELSE:
+         ENDCASE
+      ENDELSE 
+      
+      IF (csf) THEN BEGIN
+         hist[v,*] = histogram(imm, MIN=lbnd, MAX=ubnd, BINSIZE=binsize)
+         hmax = max(hist[v,*])
+         nrmhist[v,*] = hist[v,*]*1000./hmax
+         mean[v] = (moment(imm))[0]
+
+         x0 = lbnd
+         sum = 0L
+         thresh1 = npix[v]/100
+         thresh2 = npix[v]-thresh1
+         
+         FOR i=0,nbins-1 DO BEGIN
+            x1 = x0 + binsize
+            y1 = nrmhist[v,i]
+            sum = sum+hist[v,i]
+            x = [x0,x0,x1,x1]
+            y = [y0,y1,y1,y0]
+            polyfill,x,y,color=cindx[v]
+            plots,x,y,color=outline
+            x0 = x1
+            IF ((v EQ 2) AND (first_white EQ minbin) AND (sum GE thresh1)) THEN first_white = x1-binsize
+            IF ((v EQ 3) AND (first_gray EQ minbin) AND (sum GE thresh1)) THEN first_gray = x1
+            IF ((v EQ 3) AND (first_gray GT minbin) AND (sum LT thresh2)) THEN BEGIN
+               last_gray = x1
+               first_gray = minbin
+            ENDIF
+         ENDFOR 
+      ENDIF 
+   ENDFOR 
+   
+   IF (NOT ps) THEN BEGIN 
+      print,format='("Brain Min  1% Threshold =",F5.1)',first_white
+      print,format='("Brain Max 99% Threshold =",F5.1)',last_gray
+   ENDIF ELSE BEGIN 
+      val = "Brain Min = "+strtrim(string(fix(first_white)),2)
+      xyouts,0.2,0,val,charsize=chsize, charthick=cthk,/normal,color=text
+      val = "Brain Max = "+strtrim(string(fix(last_gray)),2)
+      xyouts,0.7,0,val,charsize=chsize, charthick=cthk,/normal,color=text
+      FOR v=0,3 DO BEGIN 
+         IF (csf) THEN BEGIN
+            val = strtrim(string(format='(F5.1)',mean[v]),2)
+            xyouts,mean[v]-2,300,val,charsize=1.2, charthick=3,color=outline
+			print,v, mean[v]
+         ENDIF 
+      ENDFOR 
+   ENDELSE
+  
+   v = 0
+   x0 = lbnd
+   seg1 = minbin
+   seg2 = minbin
+   FOR i=0,nbins-1 DO BEGIN
+      x1 = x0 + binsize
+      y1 = nrmhist[v,i]
+      x0 = x1
+      IF (v EQ 0 AND y1 GE 50) THEN v = 2
+      IF (v EQ 2 AND nrmhist[2,i] GE nrmhist[0,i]) THEN BEGIN
+         seg1 = x1
+         v = 3
+      ENDIF
+      IF (v EQ 3 AND nrmhist[1,i] GE nrmhist[3,i]) THEN BEGIN
+         seg2 = x1
+         v = 1
+      ENDIF
+   ENDFOR 
+   IF (NOT ps) THEN BEGIN 	
+      print,format='("Brain/CSF Boundary =",F5.1)',seg1  
+   ENDIF ELSE BEGIN 
+      val = "Brain/CSF = "+strtrim(string(fix(seg1)),2)
+      xyouts,0.4,0,val,charsize=chsize, charthick=cthk,/normal,color=text
+   ENDELSE
+
+   IF (ps) THEN BEGIN
+      device, /close
+      cmd = 'cat '+fname+' | lpr'
+      spawn, cmd
+      cmd = '/usr/bin/rm '+fname
+      spawn, cmd
+      Device, _Extra=setup, File=fname, xsize=sxsize, ysize=sysize,$
+         /Inches, /Color, Bits_Per_Pixel=8, /Landscape, Xoffset=1.25, Yoffset=10.0
+   ENDIF ELSE IF (csf) THEN BEGIN 
+      ch =  ''
+      read,prompt='Continue? ',ch
+   ENDIF
+   
+   IF (NOT ich) THEN BEGIN 
+      IF (ps) THEN exit $
+      ELSE BEGIN 
+         ch = ' '
+         read,prompt='Return to Quit or "p" to Print: ',ch
+         IF (ch EQ 'p' OR ch EQ 'P') THEN BEGIN
+            ps = 1
+            GOTO, top
+         ENDIF ELSE exit
+      ENDELSE 
+   ENDIF 
+
+   
+   ;; Second Plot
+   ;; -----------
+   
+   plot, hist[0,*], /nodata, title=title, xtitle=xtitle, ytitle=ytitle, $
+      xrange=xrange, yrange=yrange, xstyle=1, ystyle=1, ytickformat='(I6)',$
+      xticklen=1, xthick=2, xticks=10, xminor=5, charsize=1.4, charthick=2, color=white
+   
+   minbin = range[0]
+
+   FOR v=1,4,3 DO BEGIN 
+      id = vid[v]
+      roi = VOI_LOCATE(voi, id)
+      IF ptr_valid(roi) THEN BEGIN 
+         IF ((*roi).num GT 0) THEN BEGIN
+            pixels = VOI_COORDS(voi, id, img.dim, msg)
+            IF ((size(pixels))[2] GT 1) THEN BEGIN
+               pixels = pixels[sort(pixels)]
+               pixels = pixels[uniq(pixels)]
+               imm = image[pixels]
+               imm = imm[where(imm GT -50)]
+               print,format='("VOI ",A6,"  Mean =",F6.1,"  Range =",I4," to",I4)', $
+                  id, (moment(imm))[0], min(imm), max(imm)
+            ENDIF ELSE BEGIN
+               print,msg
+               RETURN
+            ENDELSE
+         ENDIF ELSE BEGIN
+            print,format='("VOI ",A6,"  not found")', id
+            RETURN
+         ENDELSE 
+      ENDIF ELSE BEGIN
+         print,format='("VOI ",A6,"  not found")', id
+         RETURN
+      ENDELSE 
+      
+      hist[v,*] = histogram(imm, MIN=lbnd, MAX=ubnd, BINSIZE=binsize)
+      hmax = max(hist[v,*])
+      nrmhist[v,*] = hist[v,*]*1000./hmax
+      
+      x0 = lbnd
+      FOR i=0,nbins-1 DO BEGIN
+         x1 = x0 + binsize
+         y1 = nrmhist[v,i]
+         x = [x0,x0,x1,x1]
+         y = [y0,y1,y1,y0]
+         polyfill,x,y,color=cindx[v]
+         plots,x,y,color=outline
+         x0 = x1
+      ENDFOR 
+   ENDFOR 
+   
+   x0 = lbnd
+   seg2 = minbin
+   search = 0
+   FOR i=0,nbins-1 DO BEGIN
+      x1 = x0 + binsize
+      IF (nrmhist[4,i] GE 900) THEN search = 1
+      IF (search AND (nrmhist[1,i] GE nrmhist[4,i])) THEN BEGIN
+         seg2 = x1
+         GOTO, COMPLETE
+      ENDIF
+      x0 = x1
+   ENDFOR 
+   
+   complete:
+   IF (NOT ps) THEN BEGIN 	
+      print,format='("Brain/Clot Boundary =",F5.1)',seg2
+   ENDIF ELSE BEGIN 
+      val = "Brain/Clot = "+strtrim(string(fix(seg2)),2)
+      xyouts,0.6,0,val,charsize=chsize, charthick=cthk,/normal,color=text
+   ENDELSE
+
+   IF (ps) THEN BEGIN
+      device, /close
+      cmd = 'cat '+fname+' | lpr'
+      spawn, cmd
+      cmd = '/usr/bin/rm '+fname
+      spawn, cmd
+      exit
+   ENDIF ELSE BEGIN 
+      ch = ' '
+      read,prompt='Return to Quit or "p" to Print: ',ch
+      IF (ch EQ 'p' OR ch EQ 'P') THEN BEGIN
+         ps = 1
+         GOTO, top
+      ENDIF 
+   ENDELSE 
+
+END 
+
+@
+
+
+1.7
+log
+@rebuilt with fixed voi__define
+@
+text
+@d1 1
+a1 1
+; $Id: voihistos.pro,v 1.6 1999/02/23 23:09:40 tom Exp tom $
+d42 2
+a43 1
+   ich = 1
+d129 7
+a135 2
+               ich = 0
+               RETURN
+d139 7
+a145 1
+            ich = 0
+d149 7
+a155 1
+         ich = 0
+d158 1
+a158 1
+      IF (ich OR (v NE 1)) THEN BEGIN
+d197 1
+a197 1
+         IF (ich OR (v NE 1)) THEN BEGIN 
+d238 1
+a238 1
+   ENDIF ELSE BEGIN 
+d241 1
+a241 1
+   ENDELSE
+@
+
+
+1.6
+log
+@additional output; exclude low values from mean
+@
+text
+@d1 1
+a1 1
+; $Id: voihistos.pro,v 1.5 1999/02/11 21:08:05 tom Exp tom $
+d121 1
+a121 1
+               npix[v] = (size(pixels))[1]
+d123 3
+a125 4
+               ix = where(imm GT -50)
+               imm = imm[ix]
+               print,format='("VOI ",A6,"  Mean =",F6.1,"  Range =",I4," to",I4)', $
+                  id, (moment(imm))[0], min(imm), max(imm)
+d257 1
+a257 2
+               ix = where(imm GT -50)
+               imm = imm[ix]
+@
+
+
+1.5
+log
+@process only 3 VOIs for normals
+@
+text
+@d1 1
+a1 1
+; $Id: voihistos.pro,v 1.4 1999/02/10 15:49:46 tom Exp tom $
+a113 1
+      print,'... ',id
+d122 5
+d133 1
+a133 1
+            print,id,' not found in '+vname
+d137 1
+a137 1
+         print,'VOI ',id,' was not found in '+vname
+a141 1
+         imm = image[pixels]
+d146 1
+a146 1
+      
+d182 2
+a183 1
+            xyouts,mean[v]-2,400,val,charsize=1.2, charthick=3,color=outline
+a249 1
+      print,'... ',id
+d257 5
+d267 1
+a267 1
+            print,id,' not found in '+vname
+d271 1
+a271 1
+         print,'VOI ',id,' was not found in '+vname
+a274 1
+      imm = image[pixels]
+@
+
+
+1.4
+log
+@add mean to printout
+threshold changed to 1 and 99%
+@
+text
+@d1 1
+a1 1
+; $Id: voihistos.pro,v 1.3 1999/02/09 22:55:22 tom Exp tom $
+d42 1
+d125 1
+d130 1
+a130 1
+            RETURN
+d134 1
+a134 1
+         RETURN
+d137 6
+a142 5
+      imm = image[pixels]
+      hist[v,*] = histogram(imm, MIN=lbnd, MAX=ubnd, BINSIZE=binsize)
+      hmax = max(hist[v,*])
+      nrmhist[v,*] = hist[v,*]*1000./hmax
+      mean[v] = (moment(imm))[0]
+d144 22
+a165 21
+      x0 = lbnd
+      sum = 0L
+      thresh1 = npix[v]/100
+      thresh2 = npix[v]-thresh1
+
+      FOR i=0,nbins-1 DO BEGIN
+         x1 = x0 + binsize
+         y1 = nrmhist[v,i]
+         sum = sum+hist[v,i]
+         x = [x0,x0,x1,x1]
+         y = [y0,y1,y1,y0]
+         polyfill,x,y,color=cindx[v]
+         plots,x,y,color=outline
+         x0 = x1
+         IF ((v EQ 2) AND (first_white EQ minbin) AND (sum GE thresh1)) THEN first_white = x1-binsize
+         IF ((v EQ 3) AND (first_gray EQ minbin) AND (sum GE thresh1)) THEN first_gray = x1
+         IF ((v EQ 3) AND (first_gray GT minbin) AND (sum LT thresh2)) THEN BEGIN
+            last_gray = x1
+            first_gray = minbin
+         ENDIF
+      ENDFOR 
+d177 4
+a180 2
+         val = strtrim(string(format='(F5.1)',mean[v]),2)
+         xyouts,mean[v]-2,400,val,charsize=1.2, charthick=3,color=outline
+d221 14
+a234 1
+      
+@
+
+
+1.3
+log
+@add print option
+@
+text
+@d1 1
+a1 1
+; $Id: voihistos.pro,v 1.2 1999/02/09 15:55:39 tom Exp tom $
+a31 1
+   thresh = 50
+d38 3
+d118 1
+a118 1
+            IF ((size(pixels))[2] GT 1) THEN BEGIN
+d121 1
+d138 2
+a139 1
+      hist[v,*] = hist[v,*]*1000./hmax
+d142 4
+d148 2
+a149 1
+         y1 = hist[v,i]
+d155 3
+a157 3
+         IF ((v EQ 2) AND (first_white EQ minbin) AND (y1 GE thresh)) THEN first_white = x1-binsize
+         IF ((v EQ 3) AND (first_gray EQ minbin) AND (y1 GE thresh)) THEN first_gray = x1
+         IF ((v EQ 3) AND (first_gray GT minbin) AND (y1 LT thresh)) THEN BEGIN
+d165 2
+a166 2
+      print,format='("Brain Min (",I1,"%) Threshold =",F5.1)',thresh/10,first_white
+      print,format='("Brain Max (",I1,"%) Threshold =",F5.1)',thresh/10,last_gray
+d172 4
+d184 1
+a184 1
+      y1 = hist[v,i]
+d186 2
+a187 2
+      IF (v EQ 0 AND y1 GE thresh) THEN v = 2
+      IF (v EQ 2 AND hist[2,i] GE hist[0,i]) THEN BEGIN
+d191 1
+a191 1
+      IF (v EQ 3 AND hist[1,i] GE hist[3,i]) THEN BEGIN
+d215 1
+a215 2
+   
+   
+d251 1
+a251 1
+      hist[v,*] = hist[v,*]*1000./hmax
+d256 1
+a256 1
+         y1 = hist[v,i]
+d270 2
+a271 2
+      IF (hist[4,i] GE 900) THEN search = 1
+      IF (search AND (hist[1,i] GE hist[4,i])) THEN BEGIN
+a285 2
+
+   
+@
+
+
+1.2
+log
+@process 5 VOIs
+@
+text
+@d1 1
+a1 1
+; $Id: voihistos.pro,v 1.1 1999/02/02 14:58:14 tom Exp tom $
+d28 1
+d32 1
+a69 4
+   red =   [0,255,255,255, 40,  0,  0,255]
+   green = [0,  0,255,255,  0,200,200,255]
+   blue =  [0,  0,  0,  0,240,255,255,255]
+   tvlct,red,green,blue
+d71 26
+d102 1
+a102 1
+      xticklen=1, xthick=2, xticks=10, xminor=5, charsize=1.4, charthick=2, color=7
+d143 2
+a144 2
+         polyfill,x,y,color=v+2
+         plots,x,y,color=1
+d146 3
+a148 3
+         IF ((v EQ 2) AND (first_white EQ minbin) AND (y1 GE 10)) THEN first_white = x1-binsize
+         IF ((v EQ 3) AND (first_gray EQ minbin) AND (y1 GE 10)) THEN first_gray = x1
+         IF ((v EQ 3) AND (first_gray GT minbin) AND (y1 LT 10)) THEN BEGIN
+d154 11
+a164 3
+   print,format='("Brain Min (1%) Threshold =",F5.1)',first_white
+   print,format='("Brain Max (1%) Threshold =",F5.1)',last_gray
+
+d173 1
+a173 1
+      IF (v EQ 0 AND y1 GE 10) THEN v = 2
+d183 19
+a201 3
+   print,format='("Brain/CSF Boundary =",F5.1)',seg1
+   ch =  ''
+   read,prompt='Continue? ',ch
+d203 1
+d209 1
+a209 1
+      xticklen=1, xthick=2, xticks=10, xminor=5, charsize=1.4, charthick=2, color=7
+d247 2
+a248 2
+         polyfill,x,y,color=v+2
+         plots,x,y,color=1
+d266 26
+a291 3
+   COMPLETE:
+   print,format='("Brain/Clot Boundary =",F5.1)',seg2
+   read,prompt='Exit? ',ch
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+; $Id$
+d33 2
+d36 2
+a37 2
+   hist = lonarr(4,nbins)
+   vid = ['csf','clot','white','gray']
+d68 3
+a70 4
+   red =   [0,255,255,255, 40,  0,255]
+   green = [0,  0,255,255,  0,200,255]
+   blue =  [0,  0,  0,  0,240,255,255]
+
+d72 4
+d78 1
+a78 1
+      xticklen=1, xthick=2, xticks=10, xminor=5, charsize=1.4, charthick=2, color=6
+d87 1
+a87 1
+      print,'plotting ',id
+d109 1
+a109 3
+      hist[v,*] = histogram(imm, MIN=lbnd, MAX=ubnd, BINSIZE=binsize, OMAX=ymax)
+      x0 = range[0]
+      y0 = 0.
+d112 2
+a113 1
+
+d130 2
+a131 2
+   print,format='("Lower Threshold (1%) for Brain =",F5.1)',first_white
+   print,format='("Upper Threshold (1%) for Brain =",F5.1)',last_gray
+d134 1
+a134 1
+   x0 = range[0]
+d151 12
+a162 2
+   print,format='("Lower Brain Boundary =",F5.1)',seg1
+   print,format='("Upper Brain Boundary =",F5.1)',seg2
+d164 55
+a218 1
+   ch =  ''
+@

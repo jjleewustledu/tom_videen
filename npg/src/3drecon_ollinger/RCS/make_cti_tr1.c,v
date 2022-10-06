@@ -1,0 +1,185 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*--------------------------------------------------------------------
+
+Program: make_cti_tr1
+
+Purpose: Make log atn file.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <fcntl.h>
+#include <matrix.h>
+
+#define MAXNAME 120
+#define TRUE 1
+#define FALSE 0
+
+float	*rdimg6();
+void	*getsbhdr6();
+int	wrimg6();
+Main_header *getmhdr6();
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/make_cti_tr1.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+Scan_subheader	*shtran,*shblnk;
+Attn_subheader  *shatn;
+Main_header     *mh;
+
+FILE	*fp;
+
+int	i,j,k,stat,length,arg,lcforce,*pln,npln=1,ipln,
+	outdim,ioff,joff,write_enable=FALSE,data_type,
+	plane=1,frame=1,gate=1,data=0,bed=0,
+	jc,ic,xdim,ydim,ijc;
+
+float	*blank,*tran,*atn,scale,zoom,samp,xic,yjc,dx,dy,sum1,sum2,radius,scl,
+	*tr1l,*tmp1,*tmp2;
+
+char	ans[MAXNAME],*blankfil,*tranfil,atnfil[MAXNAME],tr1lfil[MAXNAME],*ptr;
+
+if(argc < 3) {
+        fprintf(stderr,"Usage: make_cti_tr1 blank transmission [-f]\n");
+        exit(-1);
+        }
+
+blankfil  = argv[1];
+tranfil = argv[2];
+strcpy(atnfil,tranfil);
+ptr = strstr(atnfil,".");
+*ptr = NULL;
+strcpy(tr1lfil,atnfil);
+strcat(atnfil,"_tr1.atn");
+strcat(tr1lfil,"_tr1l.scn");
+
+if((mh=getmhdr6(tranfil)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",tranfil);
+    exit(ERROR);
+    }
+data_type = mh->data_type;
+if((shtran=(Scan_subheader *)getsbhdr6(tranfil,plane,frame,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",tranfil);
+    exit(ERROR);
+    }
+
+lcforce = FALSE;
+for(i=1;i<argc;i++) {
+    if(!strcmp(argv[i],"-f"))
+	lcforce = TRUE;
+    }
+
+xdim = shtran->dimension_1;
+ydim = shtran->dimension_2;
+length = xdim*ydim;
+atn = (float *)malloc(length*sizeof(float));
+tr1l = (float *)malloc(length*sizeof(float));
+tmp1 = (float *)malloc(xdim*sizeof(float));
+tmp2 = (float *)malloc(xdim*sizeof(float));
+
+shatn = (Attn_subheader *)malloc(sizeof(Attn_subheader));
+shatn->data_type = IEEE_R4;
+shatn->dimension_1 = xdim;
+shatn->dimension_2 = ydim;
+shatn->scale_factor = 1.;
+shatn->attenuation_coeff = 0.;
+shatn->sample_distance = shtran->sample_distance;
+shatn->attenuation_type = 1;
+
+for(plane=1;plane<=mh->num_planes;plane++) {
+    if((tran=rdimg6(tranfil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",tranfil,plane);
+        exit(ERROR);
+        }
+    if((shtran=(Scan_subheader *)getsbhdr6(tranfil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read main header., %s\n",tranfil);
+        exit(ERROR);
+        }
+    if((blank=rdimg6(blankfil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",tranfil,plane);
+        exit(ERROR);
+        }
+    if((shblnk=(Scan_subheader *)getsbhdr6(blankfil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read main header., %s\n",tranfil);
+        exit(ERROR);
+        }
+    if(strstr(blankfil,"unit")) {
+	scl = 1.;
+	}
+    else
+	scl = (float)shblnk->frame_duration/(float)shtran->frame_duration;
+
+    for(j=0,ioff=0;j<ydim;j++,ioff+=xdim) {
+        for(i=0;i<xdim;i++) {
+	    tmp1[i] = tran[i+ioff];
+            tmp2[i] = blank[i+ioff];
+            }
+        for(i=1;i<xdim-1;i++) {
+            tran[i+ioff]=.5*(tmp1[i-1]+tmp1[i+1])+.5*tmp1[i];
+            blank[i+ioff]=.5*(tmp2[i-1]+tmp2[i+1])+.5*tmp2[i];
+            }
+        }
+
+    for(i=0;i<length;i++) {
+	if(blank[i] > 0 && tran[i] > 0)  {
+	    tr1l[i] = -log((double)(scl*tran[i]/blank[i]))/
+						shtran->sample_distance;
+	    atn[i] = 1./(scl*tran[i]/blank[i]);
+	    }
+	else {
+	    atn[i] = 1.;
+	    tr1l[i] = 1.;
+	    }
+	}
+
+    mh->data_type = IEEE_R4;
+    if((stat=wrimg6(atnfil,atn,mh,shatn,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",atnfil,plane);
+        exit(ERROR);
+        }
+    mh->data_type = data_type;
+    if((stat=wrimg6(tr1lfil,tr1l,mh,shtran,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",tr1lfil,plane);
+        exit(ERROR);
+        }
+    }
+
+}
+@

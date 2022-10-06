@@ -1,0 +1,605 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	2004.02.20.15.23.20;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2002.11.27.18.07.02;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.10.16.17.16.40;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.09.26.22.37.45;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.09.26.20.32.09;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.10.04.18.54.14;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.10.04.15.54.32;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.10.04.14.48.25;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial Checking in, working version.
+@
+
+
+1.8
+log
+@Feb 2004
+@
+text
+@/* $Log: sxrscale.c,v $
+ * Revision 1.7  2002/11/27  18:07:02  tom
+ * *** empty log message ***
+ *
+ * Revision 1.6  1996/10/16  17:16:40  tom
+ * new libimage
+ *
+ * Revision 1.5  1996/09/26  22:37:45  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  1996/09/26  20:32:09  tom
+ * Solaris
+ *
+ * Revision 1.3  1994/10/04  18:54:14  ty7777
+ * Use indent to format the source code.
+ *
+ * Revision 1.2  1994/10/04  15:54:32  ty7777
+ * Modified the documentation.
+ *
+ * Revision 1.1  1994/10/04  14:48:25  ty7777
+ * Initial revision
+ **/
+/* ===============================================================================
+ *	Main:		sxrscale.c
+ *	Date:		Oct 1994
+ *	Author:		Tom Yang
+ *	Description:
+ *		Add or replace the x-scale factor for a sxr file.
+ *	Command line parameters:
+ *		sxrfile
+ *		xscale
+ *	Input/Output
+ *		sxr file       (xray (1))
+ *	Algorithm:
+ *		1) Read the command line parameters.
+ *		2) Read in the data structure SXR_DATA.
+ *		3) Get program name and petfile.
+ *		4) Change the xscale.
+ *		5) Save data in sxrfile.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sxrscale/RCS/sxrscale.c,v 1.7 2002/11/27 18:07:02 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <myvalues.h>
+#include <imgutil.h>		/* SXR_DATA */
+
+#define SARPLOCS	"SARPLOCS"
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char          **argv;
+{
+	BOOLEAN         save_rlslicedim;
+	FILE           *sxrfp;
+	SXR_DATA       *sxrdata;
+	char            line[MAXLINE];
+	char            petfile[MAXLINE];
+	char            program[MAXLINE];
+	char            sbuffer[7][MAXLINE];
+	char           *sxrfile;
+	char           *root;
+	int             num;
+	float           fbuffer[4];
+	float           xscale;
+
+/*
+ * Get the command line arguments.
+ */
+	sxrfile = argv[1];
+	xscale = atof (argv[2]);
+	root = argv[3];
+
+/*
+ * Read SXR_DATA
+ */
+	sxrdata = getsxr (sxrfile);
+	if (sxrdata == NULL) {
+		fprintf (stderr, "Error: in reading sxr file %s\n", sxrfile);
+		return (ERROR);
+	}
+
+/*
+ * Get the program name, PET image file name, and determine if the sxr file has anterior
+ * and posterior brain dimension information.
+ */
+	if (sxrdata->type < XRAY_TYPE_RADIOLOGY)
+		(void) strcpy (program, SARPLOCS);
+	else if (sxrdata->type == XRAY_TYPE_RADIOLOGY)
+		(void) strcpy (program, PROGRAM_XRAY30);
+	else if (sxrdata->type == XRAY_TYPE_NEUROLOGY)
+		(void) strcpy (program, PROGRAM_XRAY31);
+	else if (sxrdata->type == XRAY_TYPE_XRAY32)
+		(void) strcpy (program, PROGRAM_XRAY32);
+
+	sxrfp = fopen (sxrfile, "r");
+	if (sxrfp == NULL) {
+		fprintf (stderr, "Error opening sxr file %s\n", sxrfile);
+		return (ERROR);
+	}
+	(void) fgets (line, MAXLINE, sxrfp);		 /* 1st line */
+	(void) fgets (line, MAXLINE, sxrfp);		 /* 2nd line */
+	num = sscanf (line, "%s %s %s %s %s %s %s",
+			      sbuffer[0], sbuffer[1], sbuffer[2], sbuffer[3],
+			      sbuffer[4], sbuffer[5], sbuffer[6]);
+	(void) memset (petfile, 0, MAXLINE * sizeof (char));
+	if (num == 7)
+		(void) strncpy (petfile, sbuffer[6], strlen (sbuffer[6]) - 1);
+	else {
+		fprintf (stderr, "Make sure your sxr file %s has a petfile\n", sxrfile);
+		return ERROR;
+	}
+
+	(void) fgets (line, MAXLINE, sxrfp);		 /* 3rd line */
+	(void) fgets (line, MAXLINE, sxrfp);		 /* 4th line */
+	(void) fgets (line, MAXLINE, sxrfp);		 /* 5th line */
+	(void) fgets (line, MAXLINE, sxrfp);		 /* 6th line */
+	num = sscanf (line, "%f %f %f %f",
+			      fbuffer, fbuffer + 1, fbuffer + 2, fbuffer + 3);
+	if (num == 4)
+		save_rlslicedim = TRUE;
+	else
+		save_rlslicedim = FALSE;
+	(void) fclose (sxrfp);
+
+	sxrdata->xscale = xscale;
+
+	if (savesxr (sxrfile, petfile, root, program, save_rlslicedim, sxrdata) == ERROR) {
+		fprintf (stderr, "Error: saving sxr file %s\n", sxrfile);
+		return (ERROR);
+	}
+	return (OK);
+}
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d23 21
+a43 9
+/*_____________________________________________________________________________________
+	Main:		sxrscale.c
+	Date:		03-Oct-94
+	Author:		Tom Yang
+	Description:
+		Add or replace the x-scale factor for a sxr file.
+	Command line parameters:
+		sxrfile
+		xscale
+a44 15
+	Input Files:
+		sxr file       (xray (1))
+	Output Files:
+		sxr file       (xray (1))
+
+	Algorithm:
+		1) Read the command line parameters.
+		2) Read in the data structure SXR_DATA.
+		3) Get program name and petfile.
+		4) Change the xscale.
+		5) Save data in sxrfile.
+	History:
+		Created by Tom Yang on Oct. 3, 1994.
+_____________________________________________________________________________________*/
+
+a52 2
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sxrscale/RCS/sxrscale.c,v 1.6 1996/10/16 17:16:40 tom Exp tom $";
+
+d54 1
+@
+
+
+1.6
+log
+@new libimage
+@
+text
+@d2 3
+d47 1
+a47 1
+#include <math.h>
+d53 1
+a53 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sxrscale/RCS/sxrscale.c,v 1.5 1996/09/26 22:37:45 tom Exp tom $";
+d85 1
+a85 1
+		exit (ERROR);
+d93 1
+a93 1
+		strcpy (program, SARPLOCS);
+d95 1
+a95 1
+		strcpy (program, PROGRAM_XRAY30);
+d97 1
+a97 1
+		strcpy (program, PROGRAM_XRAY31);
+d99 1
+a99 1
+		strcpy (program, PROGRAM_XRAY32);
+d104 1
+a104 1
+		exit (ERROR);
+d106 2
+a107 2
+	fgets (line, MAXLINE, sxrfp);		 /* 1st line */
+	fgets (line, MAXLINE, sxrfp);		 /* 2nd line */
+d111 1
+a111 1
+	memset (petfile, 0, MAXLINE * sizeof (char));
+d113 1
+a113 1
+		strncpy (petfile, sbuffer[6], strlen (sbuffer[6]) - 1);
+d119 4
+a122 4
+	fgets (line, MAXLINE, sxrfp);		 /* 3rd line */
+	fgets (line, MAXLINE, sxrfp);		 /* 4th line */
+	fgets (line, MAXLINE, sxrfp);		 /* 5th line */
+	fgets (line, MAXLINE, sxrfp);		 /* 6th line */
+d129 1
+a129 1
+	fclose (sxrfp);
+d135 1
+a135 1
+		exit (ERROR);
+d137 1
+a137 1
+	exit (OK);
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d50 1
+a50 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sxrscale/RCS/sxrscale.c,v 1.4 1996/09/26 20:32:09 tom Exp tom $";
+@
+
+
+1.4
+log
+@Solaris
+@
+text
+@d2 3
+d47 1
+a47 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sxrscale/RCS/sxrscale.c,v 1.3 1994/10/04 18:54:14 ty7777 Exp tom $";
+d61 2
+a62 2
+	char           *sxr_root;
+	int             num_scanned;
+d71 1
+a71 1
+	sxr_root = argv[3];
+d102 1
+a102 1
+	num_scanned = sscanf (line, "%s %s %s %s %s %s %s",
+d106 1
+a106 1
+	if (num_scanned == 7)
+d117 1
+a117 1
+	num_scanned = sscanf (line, "%f %f %f %f",
+d119 1
+a119 1
+	if (num_scanned == 4)
+a122 1
+
+a124 3
+/*
+ * Change the xscale.
+ */
+d127 1
+a127 4
+/*
+ * Save the sxr parameters.
+ */
+	if (savesxr (sxrfile, petfile, sxr_root, program, save_rlslicedim, &sxrdata) == ERROR) {
+@
+
+
+1.3
+log
+@Use indent to format the source code.
+@
+text
+@a0 1
+/* $Id: sxrscale.c,v 1.2 1994/10/04 15:54:32 ty7777 Exp ty7777 $*/
+d2 3
+a12 1
+
+a13 1
+
+a14 1
+
+a16 1
+
+a22 1
+
+d28 1
+a28 3
+
+		2) Read in the data structure SXR_OUTPUT.
+
+a29 1
+
+a30 1
+
+a31 1
+
+d36 5
+a40 1
+#include <petutil/petutil.h>	/* SXR_OUTPUT */
+d44 1
+a44 1
+static char     rcsid[] = "$Header: /home/petsun4/ty7777/src/sxrscale/RCS/sxrscale.c,v 1.2 1994/10/04 15:54:32 ty7777 Exp ty7777 $";
+d52 1
+a52 1
+	SXR_OUTPUT      sxr_output;
+d63 3
+a65 3
+	/*
+	 * Get the command line arguments.
+	 */
+d70 7
+a76 6
+	/*
+	 * Get the parameters contained in structure SXR_OUTPUT.
+	 */
+	if (getsxr (sxrfile, &sxr_output) == FAIL) {
+		fprintf (stderr, "Error: in reading sxr file %s.\n", sxrfile);
+		exit (FAIL);
+d79 5
+a83 5
+	/*
+	 * Get the program name, PET image file name, and determine if the sxr file has anterior
+	 * and posterior brain dimension information.
+	 */
+	if (sxr_output.type < XRAY_TYPE_RADIOLOGY)
+d85 1
+a85 1
+	else if (sxr_output.type == XRAY_TYPE_RADIOLOGY)
+d87 1
+a87 1
+	else if (sxr_output.type == XRAY_TYPE_NEUROLOGY)
+d89 1
+a89 1
+	else if (sxr_output.type == XRAY_TYPE_XRAY32)
+d94 2
+a95 2
+		fprintf (stderr, "Error in opening sxr file %s\n", sxrfile);
+		exit (FAIL);
+d97 2
+a98 2
+	fgets (line, MAXLINE, sxrfp);	/* 1st line */
+	fgets (line, MAXLINE, sxrfp);	/* 2nd line */
+d106 2
+a107 2
+		fprintf (stderr, "Make sure your sxr file %s has a petfile.\n", sxrfile);
+		return FAIL;
+d110 4
+a113 4
+	fgets (line, MAXLINE, sxrfp);	/* 3rd line */
+	fgets (line, MAXLINE, sxrfp);	/* 4th line */
+	fgets (line, MAXLINE, sxrfp);	/* 5th line */
+	fgets (line, MAXLINE, sxrfp);	/* 6th line */
+d123 4
+a126 4
+	/*
+	 * Change the xscale.
+	 */
+	sxr_output.xscale = xscale;
+d128 6
+a133 7
+	/*
+	 * Save the sxr parameters.
+	 */
+	if (savesxr (sxrfile, petfile, sxr_root, program,
+		     save_rlslicedim, sxr_output) == FAIL) {
+		fprintf (stderr, "Error: in saving sxr file %s.\n", sxrfile);
+		exit (FAIL);
+d135 1
+a135 1
+	exit (SUCCEED);
+@
+
+
+1.2
+log
+@Modified the documentation.
+@
+text
+@d1 1
+a1 1
+/* $Id: sxrscale.c,v 1.1 1994/10/04 14:48:25 ty7777 Exp ty7777 $*/
+d3 3
+d16 1
+a16 1
+	Description:	
+d44 1
+a44 1
+#include <petutil/petutil.h>    /* SXR_OUTPUT */
+d48 1
+a48 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/sxrscale/RCS/sxrscale.c,v 1.1 1994/10/04 14:48:25 ty7777 Exp ty7777 $";
+d51 2
+a52 2
+	int	argc;
+	char	**argv;
+d54 12
+a65 12
+	BOOLEAN		save_rlslicedim;
+	FILE		*sxrfp;
+	SXR_OUTPUT	sxr_output;
+	char		line [MAXLINE];
+	char		petfile [MAXLINE];
+	char		program [MAXLINE];
+	char		sbuffer [7][MAXLINE];
+	char		*sxrfile;
+	char		*sxr_root;
+	int		num_scanned;
+	float		fbuffer [4];
+	float		xscale;
+d70 3
+a72 3
+	sxrfile		= argv [1];
+	xscale		= atof (argv [2]);
+	sxr_root	= argv [3];
+d77 1
+a77 2
+	if (getsxr (sxrfile, &sxr_output) == FAIL)
+	{
+d83 2
+a84 2
+	 * Get the program name, PET image file name, and determine if the sxr 
+	 * file has anterior and posterior brain dimension information.
+d87 1
+a87 1
+		strcpy (program, SARPLOCS); 
+d89 1
+a89 1
+		strcpy (program, PROGRAM_XRAY30); 
+d91 1
+a91 1
+		strcpy (program, PROGRAM_XRAY31); 
+d93 1
+a93 1
+		strcpy (program, PROGRAM_XRAY32); 
+d95 2
+a96 3
+	sxrfp	= fopen (sxrfile, "r");
+	if (sxrfp == NULL)
+	{
+d100 5
+a104 6
+
+	fgets (line, MAXLINE, sxrfp);		/* 1st line */
+	fgets (line, MAXLINE, sxrfp);		/* 2nd line */
+	num_scanned	= sscanf (line, "%s %s %s %s %s %s %s", 
+			sbuffer [0], sbuffer [1], sbuffer [2], sbuffer [3],
+			sbuffer [4], sbuffer [5], sbuffer [6]);
+d107 2
+a108 3
+		strncpy (petfile, sbuffer [6], strlen (sbuffer [6]) - 1); 
+	else
+	{
+d113 6
+a118 6
+	fgets (line, MAXLINE, sxrfp);		/* 3rd line */
+	fgets (line, MAXLINE, sxrfp);		/* 4th line */
+	fgets (line, MAXLINE, sxrfp);		/* 5th line */
+	fgets (line, MAXLINE, sxrfp);		/* 6th line */
+	num_scanned	= sscanf (line, "%f %f %f %f", 
+			fbuffer, fbuffer + 1, fbuffer + 2, fbuffer + 3); 
+d120 1
+a120 1
+		save_rlslicedim	= TRUE;
+d122 1
+a122 1
+		save_rlslicedim	= FALSE;
+d129 1
+a129 1
+	sxr_output.xscale	= xscale;
+d134 2
+a135 3
+	if (savesxr (sxrfile, petfile, sxr_root, program, 
+	save_rlslicedim, sxr_output) == FAIL)
+	{
+a138 1
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 7
+a7 23
+/* $Id$*/
+/* $Log$*/
+/*	===============================================================================
+ *	Module:			sxrscale.c
+ *	Date:			03-Oct-94
+ *	Author:			Tom Yang
+ *	Description:	
+ *		Add or replace the x-scale factor for a sxr file.
+ *
+ *	Command line parameters:
+ *		sxrfile
+ *		xscale
+ *		 
+ *	Input Files:
+ *		sxr file       (xray (1))
+ *		 
+ *	Output Files:
+ *		sxr file       (xray (1))
+ *
+ *	History:
+ *		Created by Tom Yang on Oct. 3, 1994.
+ *	===============================================================================
+ */
+d9 32
+d45 1
+a45 1
+static char rcsid [] = "$Header$";
+d72 1
+a72 1
+	 * Get the sxr parameters.
+d81 2
+a82 2
+	 * Get the program name, PET image file name, and determine if the old sxr 
+	 * file has right and left slice dimension information.
+@

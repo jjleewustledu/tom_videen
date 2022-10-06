@@ -1,0 +1,1456 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.16.10.12;	author tom;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	99.12.14.17.40.41;	author tom;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	96.04.30.13.20.16;	author tom;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	96.01.12.21.44.09;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	96.01.12.21.43.17;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	96.01.12.21.32.21;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.01.04.22.11.27;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.09.27.21.38.55;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.09.24.22.48.58;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.07.26.18.13.56;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.07.26.15.14.22;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.07.26.15.12.57;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.07.25.21.09.09;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.07.25.20.06.40;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.07.25.19.11.23;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.07.25.14.52.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*  $Id: airerr.c,v 1.15 1999/12/14 17:40:41 tom Exp tom $
+    $Log: airerr.c,v $
+ * Revision 1.15  1999/12/14  17:40:41  tom
+ * lint cleaning
+ *
+ * Revision 1.14  1996/04/30  13:20:16  tom
+ * new libmatrix.a
+ *
+ * Revision 1.13  1996/01/12  21:44:09  tom
+ * ./
+ *
+ * Revision 1.12  1996/01/12  21:43:17  tom
+ * changed print message
+ *
+ * Revision 1.11  1996/01/12  21:32:21  tom
+ * add linear solution (gaussj)
+ *
+ * Revision 1.10  1996/01/04  22:11:27  tom
+ * permits 6 or 12 parameter fit
+ * computes mean x-, y-, and z-distances
+ *
+ * Revision 1.9  1995/09/27  21:38:55  tom
+ * fixed computation of within brain error
+ *
+ * Revision 1.8  1995/09/24  22:48:58  tom
+ * fixed but in least squares matrix
+ *
+ * Revision 1.7  1995/07/26  18:13:56  tom
+ * lint
+ *
+ * Revision 1.6  1995/07/26  15:14:22  tom
+ * *** empty log message ***
+ *
+ * Revision 1.5  1995/07/26  15:12:57  tom
+ * newdist
+ *
+ * Revision 1.4  1995/07/25  21:09:09  tom
+ * free ivectors
+ *
+ * Revision 1.3  1995/07/25  20:06:40  tom
+ * added version to output
+ *
+ * Revision 1.2  1995/07/25  19:11:23  tom
+ * fixed AIR matrix
+ *
+ * Revision 1.1  1995/07/25  14:52:12  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *  Module:         airerr.c
+ *  Date:           28-Jul-95
+ *  Author:         Tom Videen
+ *  Description:
+ *      Find matrix which aligns 2 images using a set of fiducial points.
+ *		and compare to an AIR file alignment over a brain volume.
+ *	Inputs:
+ *		[1] air file from aligning pet (reslice) to mri (standard) images (output from alignpettomri16)
+ *		[2] fid file from fixed image (MRI) (output from alignfids)
+ *		[3] fid file from image to reslice or realign (PET) (output from alignfids)
+ *		[4] brain8.hdr file (currently unread)
+ *		[5] brain8.img file (8-bit segmented image of brain voxels)
+ * ===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.15 1999/12/14 17:40:41 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <nr.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include "AIR.h"
+
+#define NVAL 1					 /* number of values in input file per line */
+#define NDIM 3					 /* number of dimensions */
+#define MSIZE (NDIM + 1)		 /* matrix dimensions */
+#define FTOL 1.0e-8
+#define RADTODEG 180./M_PI
+
+/* Function to update distance and indices to a point */
+#define newdist(new,old,indx,i,j,k)	{old=new; indx[1]=k; indx[2]=j; indx[3]=i;}
+
+float           matrix_dist ();
+float           matdist ();
+float           matdist12 ();
+void            matcreate ();
+float			ptdist ();
+int             read_air ();
+float         **fixed;
+float         **reslice;
+float          *fscale;				 /* fixed (MR) image mm/pixel */
+float          *rscale;				 /* reslice (PET) image mm/pixel */
+int             nfid = 5;			 /* number of fiducial points */
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	float         **fixed2;
+	FILE           *fptr;
+	char           *fidfile1, *fidfile2;
+	char           *airfile, *brainhdr, *brainimg;
+	char           *ptr;
+	char            version[5];
+	struct air      air1;			 /* AIR file structure */
+	float           dist, sumdist;
+	float           maxdist, mindist;
+	float          *dif; 
+	float           xsum, ysum, zsum;
+	float         **mat, **mat1, **mat2;
+	float          *pt0, *pt1, *pt2;
+	float		  **fixt, **tmp1, **tmp2, **tmp3;
+	float           dummy;
+	int				NPRM;	
+	int             nx, ny, nz;		 /* dimensions of brainimg */
+	int             val, i, j, k, n;
+	int             sumpts;
+	int             sumx, sumy, sumz;
+	int            *maxid, *minid;		 /* points in brain with max & min dist */
+	int            *sup, *inf, *lft, *rgt, *ant, *post;	/* points in brain */
+	float           supdist, infdist, lftdist, rgtdist, antdist, postdist;
+	char         ***img;			 /* brainimg is 8-bit */
+	float         **x, *p, fret;
+	int             iter;
+	float           dx, dy, dz;
+
+/* Read arguments, write version to stdout */
+
+	if (argc != 7) {
+		(void) fprintf (stderr, "Usage: airerr mrpet.air mri.fid pet.fid brain8.hdr brain8.img nprms\n");
+		return (1);
+	}
+	airfile = argv[1];
+	fidfile1 = argv[2];
+	fidfile2 = argv[3];
+	brainhdr = argv[4];
+	brainimg = argv[5];
+	NPRM = atoi(argv[6]); 				 /* number of parameters (6 or 12) */
+	if ((NPRM != 1) && (NPRM != 6) && (NPRM != 12)) {
+		(void) fprintf (stderr, "Only 6- or 12-parameter fits are permitted\n");
+		return (1);
+	}
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	(void) strcpy (version, "    ");
+	if (ptr != NULL)
+		(void) strncpy (version, ptr, 4);
+	(void) fprintf (stdout, "Version %s\n", version);
+	(void) fprintf (stdout, "airerr %s %s %s %s %s\n\n", airfile, fidfile1, fidfile2, brainhdr, brainimg);
+
+	mat = matrix (1, MSIZE, 1, MSIZE);
+	mat1 = matrix (1, MSIZE, 1, MSIZE);
+	mat2 = matrix (1, MSIZE, 1, MSIZE);
+
+/*	Read AIR matrix into mat1 (transform pixels-to-pixels)*/
+
+	if (read_air (airfile, &air1, mat1) != 0) {
+		(void) fprintf (stderr, "ERROR: cannot read %s\n", airfile);
+		return (1);
+	}
+/* Initialize mat2 from mat1 */
+
+	for (i = 1; i <= MSIZE; i++)
+		for (j = 1; j <= MSIZE; j++)
+			mat2[i][j] = mat1[i][j];
+	mat2[1][2] = 0.0;
+	mat2[1][3] = 0.0;
+	mat2[2][1] = 0.0;
+	mat2[2][3] = 0.0;
+	mat2[3][1] = 0.0;
+	mat2[3][2] = 0.0;
+
+/*	Initialize scalers */
+
+	fscale = vector (1, NDIM);
+	rscale = vector (1, NDIM);
+	fscale[1] = air1.std.x_size;
+	fscale[2] = air1.std.y_size;
+	fscale[3] = air1.std.z_size;
+	rscale[1] = air1.res.x_size;
+	rscale[2] = air1.res.y_size;
+	rscale[3] = air1.res.z_size;
+
+	(void) fprintf (stdout, "PET pixel size:  %f  %f  %f\n", rscale[1], rscale[2], rscale[3]);
+	(void) fprintf (stdout, "MRI pixel size:  %f  %f  %f\n\n", fscale[1], fscale[2], fscale[3]);
+
+	(void) fprintf (stdout,"AIR transformation matrix:\n");
+	matrix_print (mat1, MSIZE, MSIZE);
+
+/*
+ *	Read the fiducial points;
+ *	The file contains NVAL sets of values: pixel and mm
+ *	The pixel coordinates are read (mm coordinates are ignored).
+ *	matrix_dist converts to mm using rscale.
+ *	matcreate converts to pixels using fscale and rscale.
+ */
+
+	fixed = matrix (1, nfid, 1, MSIZE);
+	reslice = matrix (1, nfid, 1, MSIZE);
+
+	fptr = fopen (fidfile1, "r");
+	if (fptr == (FILE *) NULL) {
+		(void) fprintf (stderr, "ERROR: cannot open %s\n", fidfile1);
+		return (1);
+	}
+	for (i = 1; i <= nfid; i++) {
+		for (j = 1; j <= NVAL; j++) {
+			for (k = 1; k <= NDIM; k++)
+				(void) fscanf (fptr, "%f", &fixed[i][k]);
+			/* ignore the mm values of the coordinates */
+			for (k = 1; k <= NDIM; k++)
+				(void) fscanf (fptr, "%f", &dummy);
+			fixed[i][MSIZE] = 1.0;
+		}
+	}
+	(void) fclose (fptr);
+ 
+/*	Since gaussj will destroy the contents of fixed, it is duplicated */
+
+	fixed2 = matrix (1, nfid, 1, MSIZE);
+	for (i = 1; i <= nfid; i++)
+		for (j = 1; j <= MSIZE; j++)
+			fixed2[i][j] = fixed[i][j];			
+
+	fptr = fopen (fidfile2, "r");
+	if (fptr == (FILE *) NULL) {
+		(void) fprintf (stderr, "ERROR: cannot open %s\n", fidfile2);
+		return (1);
+	}
+	for (i = 1; i <= nfid; i++) {
+		for (j = 1; j <= NVAL; j++) {
+			for (k = 1; k <= NDIM; k++)
+				(void) fscanf (fptr, "%f", &reslice[i][k]);
+			/* ignore the mm values of the coordinates */
+			for (k = 1; k <= NDIM; k++)
+				(void) fscanf (fptr, "%f", &dummy);
+			reslice[i][MSIZE] = 1.0;
+		}
+	}
+	(void) fclose (fptr);
+	matrix_print (mat1, MSIZE, MSIZE);
+	dist = matrix_dist (mat1);
+	(void) fprintf (stdout,"Mean discrepancy of AIR aligned points = %8.3f mm\n\n", dist);
+
+/*	Initialize and run Powell fitting routine */
+
+	x = matrix (1, NPRM, 1, NPRM);
+	p = vector (1, NPRM);
+	for (i = 1; i <= NPRM; i++) {
+		for (j = 1; j <= NPRM; j++) {
+			if (i == j)
+				x[i][j] = 1.0;
+			else
+				x[i][j] = 0.0;
+		}
+	}
+
+	if (NPRM == 6) {
+		for (i = 1; i <= NPRM; i++)
+			p[i] = 0;
+		p[1] = mat1[1][4];
+		p[2] = mat1[2][4];
+		p[3] = mat1[3][4];
+		powell (p, x, NPRM, FTOL, &iter, &fret, matdist);
+		matcreate (mat2, p);		/* Generate the matrix from the fit */
+
+	} else if (NPRM == 12) {
+		for (i = 1, k = 1; i <= MSIZE-1; i++)
+			for (j = 1; j <= MSIZE; j++, k++)
+				p[k] = mat1[i][j];
+		powell (p, x, NPRM, FTOL, &iter, &fret, matdist12);
+		for (i = 1, k = 1; i <= MSIZE-1; i++)		/* Generate the matrix from the fit */
+			for (j = 1; j <= MSIZE; j++, k++)
+				mat2[i][j] = p[k];
+
+/*
+ *	Least squares solution to mat2 # fixed = reslice
+ *	is mat2 = inverse(fixt # fixed) # (fixt # reslice)
+ *	where fixt = transpose(fixed)
+ */
+		
+	} else {
+		tmp1 = matrix (1, MSIZE, 1, MSIZE);
+		tmp2 = matrix (1, MSIZE, 1, MSIZE);
+		tmp3 = matrix (1, MSIZE, 1, MSIZE);
+		(void) fprintf (stdout, "\n\n");
+		fixt = matrix_trans (fixed, nfid, MSIZE);
+		matrix_mult (fixt, fixed, tmp1, MSIZE, nfid, MSIZE);
+		matrix_mult (fixt, reslice, tmp2, MSIZE, nfid, MSIZE);
+		gaussj (tmp1, MSIZE, fixed2, nfid);
+		matrix_mult (tmp1, tmp2, tmp3, MSIZE, MSIZE, MSIZE);
+		mat2 = matrix_trans (tmp3, MSIZE, MSIZE);
+		free_matrix (tmp1, 1, MSIZE, 1, MSIZE);
+		free_matrix (tmp2, 1, MSIZE, 1, MSIZE);
+		free_matrix (tmp3, 1, MSIZE, 1, MSIZE);
+		free_matrix (fixt, 1, nfid, 1, MSIZE);
+	}
+		
+	dist = matrix_dist (mat2);
+	if (NPRM == 1) {
+		(void) printf ("Transformation matrix from fitting fiducials: %d\n", NPRM);
+		matrix_print (mat2, MSIZE, MSIZE);
+		(void) printf ("Mean discrepancy of Least Squares aligned points = %8.3f mm\n\n", dist);
+	} else {
+		(void) printf ("Transformation matrix from fitting fiducials with %d parameters:\n", NPRM);
+		matrix_print (mat2, MSIZE, MSIZE);
+		(void) printf ("Mean discrepancy of %d-Parameter Least Squares aligned points = %8.3f mm\n\n",
+			NPRM, dist);
+	}
+
+/*	Compute the difference between the 2 matrices */
+
+	matrix_sub (mat1, mat2, mat, MSIZE, MSIZE);
+	mat[4][4] = 1;
+	(void) printf ("Difference between AIR and Least Square matrices:\n");
+	matrix_print (mat, MSIZE, MSIZE);
+
+/*	Read the coordinates of all points-in-the-brain */
+
+	nx = air1.std.x_dim;
+	ny = air1.std.y_dim;
+	nz = air1.std.z_dim;
+	(void) printf ("Brain image dimensions: x=%d, y=%d, z=%d\n", nx, ny, nz);
+	img = c3tensor (1, nz, 1, ny, 1, nx);
+	fptr = fopen (brainimg, "r");
+	if (fptr == (FILE *) NULL) {
+		(void) fprintf (stderr, "ERROR: cannot open %s\n", brainimg);
+		return (1);
+	}
+	val = nx * sizeof (char);
+	for (i = 1; i <= nz; i++) {
+		for (j = 1; j <= ny; j++) {
+			n = fread (&img[i][j][1], 1, val, fptr);
+			if (n != val) {
+				(void) fprintf (stderr, "ERROR: reading slice %d, row %d of %s\n", i, j, brainimg);
+				return (1);
+			}
+		}
+	}
+	(void) fclose (fptr);
+
+/*
+ *	Compute mean distance between points-in-the-brain after
+ *	misaligned by transformation with the difference matrix.
+ *	Determine points of mininim and maximum distances and
+ *	points at ant, post, sup, inf, left, and right extremes of brain image.
+ */
+
+	maxid = ivector (1, NDIM);
+	minid = ivector (1, NDIM);
+	sup = ivector (1, NDIM);
+	inf = ivector (1, NDIM);
+	lft = ivector (1, NDIM);
+	rgt = ivector (1, NDIM);
+	ant = ivector (1, NDIM);
+	post = ivector (1, NDIM);
+	pt0 = vector (1, MSIZE);
+	pt1 = vector (1, MSIZE);
+	pt2 = vector (1, MSIZE);
+	dif = vector (1, 3);
+	for (i = 1; i < MSIZE; i++)
+		pt0[i] = 0.0;
+	pt0[4] = 1.0;
+	pt1[4] = 1.0;
+
+	/* Analyze standard format has origin at inferior, posterior, right */
+
+	inf[3] = 1000;
+	post[2] = 1000;
+	rgt[1] = 1000;
+	sup[3] = 0;
+	ant[2] = 0;
+	lft[1] = 0;
+	sumpts = 0;
+	sumx = 0;
+	sumy = 0;
+	sumz = 0;
+	sumdist = 0.0;
+	maxdist = 0.0;
+	mindist = 1000.0;
+	supdist = 0.0;
+	infdist = 0.0;
+	lftdist = 0.0;
+	rgtdist = 0.0;
+	antdist = 0.0;
+	postdist = 0.0;
+	xsum = 0.0;
+	ysum = 0.0;
+	zsum = 0.0;
+
+	for (i = 1; i <= nz; i++) {
+		for (j = 1; j <= ny; j++) {
+			for (k = 1; k <= nx; k++) {
+				if ((int)img[i][j][k] != 0) {
+					sumpts++;
+					sumx += k;
+					sumy += j;
+					sumz += i;
+					pt0[1] = (float) k;
+					pt0[2] = (float) j;
+					pt0[3] = (float) i;
+					vector_mult (mat1, pt0, pt1, MSIZE, MSIZE, 1);
+					vector_mult (mat2, pt0, pt2, MSIZE, MSIZE, 1);
+					dist = ptdist (pt1, pt2, dif);
+					sumdist += dist;
+					xsum += dif[1];
+					ysum += dif[2];
+					zsum += dif[3];
+					if (dist > maxdist)
+						newdist (dist, maxdist, maxid, i, j, k);
+					if (dist < mindist)
+						newdist (dist, mindist, minid, i, j, k);
+					if (k < rgt[1])
+						newdist (dist, rgtdist, rgt, i, j, k);
+					if (k > lft[1])
+						newdist (dist, lftdist, lft, i, j, k);
+					if (j < post[2])
+						newdist (dist, postdist, post, i, j, k);
+					if (j > ant[2])
+						newdist (dist, antdist, ant, i, j, k);
+					if (i < inf[3])
+						newdist (dist, infdist, inf, i, j, k);
+					if (i > sup[3])
+						newdist (dist, supdist, sup, i, j, k);
+				}
+			}
+		}
+	}
+	(void) fprintf (stdout, "Total pixels in brain image = %d   ", sumpts);
+	(void) fprintf (stdout, "(%.2f cc)\n\n", .001 * sumpts * fscale[1] * fscale[2] * fscale[3]);
+	(void) fprintf (stdout, "Discrepancy of brain pixels with AIR ");
+	(void) fprintf (stdout, "compared with Least Squares Fit:\n");
+	(void) fprintf (stdout, "                                    X      Y      Z\n");
+	(void) fprintf (stdout, "                                   ---    ---    ---\n");
+	(void) fprintf (stdout, "Mean distance   = %9.3f mm  %6.3f,%6.3f,%6.3f mm\n",  sumdist / ((float) sumpts),
+		xsum / ((float) sumpts), ysum / ((float) sumpts), zsum / ((float) sumpts));
+	(void) fprintf (stdout, "Max distance    = %9.3f    at %4d,%6d,%6d\n", maxdist, maxid[1], maxid[2], maxid[3]);
+	(void) fprintf (stdout, "Min distance    = %9.3f    at %4d,%6d,%6d\n\n", mindist, minid[1], minid[2], minid[3]);
+	(void) fprintf (stdout, "Right brain     = %9.3f    at %4d,%6d,%6d\n", rgtdist, rgt[1], rgt[2], rgt[3]);
+	(void) fprintf (stdout, "Left brain      = %9.3f    at %4d,%6d,%6d\n", lftdist, lft[1], lft[2], lft[3]);
+	(void) fprintf (stdout, "Posterior brain = %9.3f    at %4d,%6d,%6d\n", postdist, post[1], post[2], post[3]);
+	(void) fprintf (stdout, "Anterior brain  = %9.3f    at %4d,%6d,%6d\n", antdist, ant[1], ant[2], ant[3]);
+	(void) fprintf (stdout, "Inferior brain  = %9.3f    at %4d,%6d,%6d\n", infdist, inf[1], inf[2], inf[3]);
+	(void) fprintf (stdout, "Superior brain  = %9.3f    at %4d,%6d,%6d\n\n", supdist, sup[1], sup[2], sup[3]);
+
+	(void) fprintf (stdout, "Coordinate 1,1,1 is right, posterior, inferior\n\n");
+
+/*
+ *	Calculate total error in each parameter.
+ *		pt1 is center-of-volume of brain
+ */
+
+	pt0[1] = (float) sumx / (float) sumpts;
+	pt0[2] = (float) sumy / (float) sumpts;
+	pt0[3] = (float) sumz / (float) sumpts;
+	pt0[4] = 1.0;
+	(void) fprintf (stdout, "Mismatch at center-of-brain-volume: ");
+	(void) fprintf (stdout, "(%5.1f,%5.1f,%5.1f)\n", pt0[1], pt0[2], pt0[3]);
+	vector_mult (mat1, pt0, pt1, MSIZE, MSIZE, 1);
+	vector_mult (mat2, pt0, pt2, MSIZE, MSIZE, 1);
+	dist = ptdist (pt1, pt2, dif);
+	printf ("Vector dist = %f\n", dist);
+	dx = (pt2[1] - pt1[1]) * rscale[1];
+	dy = (pt2[2] - pt1[2]) * rscale[2];
+	dz = (pt2[3] - pt1[3]) * rscale[3];
+	(void) fprintf (stdout, "X    = %6.3f mm\n", dx);
+	(void) fprintf (stdout, "Y    = %6.3f mm\n", dy);
+	(void) fprintf (stdout, "Z    = %6.3f mm\n", dz);
+
+/*	Free memory */
+
+	free_c3tensor (img, 1, nz, 1, ny, 1, nx);
+	free_matrix (fixed, 1, nfid, 1, MSIZE);
+	free_matrix (fixed2, 1, nfid, 1, MSIZE);
+	free_matrix (reslice, 1, nfid, 1, MSIZE);
+	free_matrix (mat, 1, MSIZE, 1, MSIZE);
+	free_matrix (mat1, 1, MSIZE, 1, MSIZE);
+	free_matrix (mat2, 1, MSIZE, 1, MSIZE);
+	free_matrix (x, 1, NPRM, 1, NPRM);
+	free_vector (p, 1, NPRM);
+	free_vector (pt0, 1, MSIZE);
+	free_vector (pt1, 1, MSIZE);
+	free_vector (pt2, 1, MSIZE);
+	free_vector (rscale, 1, NDIM);
+	free_vector (fscale, 1, NDIM);
+	free_ivector (maxid, 1, NDIM);
+	free_ivector (minid, 1, NDIM);
+	free_ivector (sup, 1, NDIM);
+	free_ivector (inf, 1, NDIM);
+	free_ivector (lft, 1, NDIM);
+	free_ivector (rgt, 1, NDIM);
+	free_ivector (ant, 1, NDIM);
+	free_ivector (post, 1, NDIM);
+	return (0);
+}
+@
+
+
+1.15
+log
+@lint cleaning
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.14 1996/04/30 13:20:16 tom Exp tom $
+d3 3
+d64 1
+a64 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.14 1996/04/30 13:20:16 tom Exp tom $";
+a98 1
+	char            Usage[] = "Usage: airerr mrpet.air mri.fid pet.fid brain8.hdr brain8.img nprms\n";
+d130 1
+a130 1
+		(void) fprintf (stderr, Usage);
+d146 2
+a147 1
+	(void) strncpy (version, ptr, 4);
+@
+
+
+1.14
+log
+@new libmatrix.a
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.13 1996/01/12 21:44:09 tom Exp tom $
+d3 3
+d61 1
+a61 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/airerr/RCS/airerr.c,v 1.13 1996/01/12 21:44:09 tom Exp tom $";
+a65 1
+#include <math.h>
+a68 1
+#include <ANALYZE.h>
+a79 1
+char            Usage[] = "Usage: airerr mrpet.air mri.fid pet.fid brain8.hdr brain8.img nprms\n";
+a86 1
+float         **fixed2;
+d96 2
+a123 1
+	float           dxang, dyang, dzang;
+d129 1
+a129 1
+		exit (1);
+d139 1
+a139 1
+		exit (1);
+d145 2
+a146 2
+	(void) printf ("Version %s\n", version);
+	(void) printf ("airerr %s %s %s %s %s\n\n", airfile, fidfile1, fidfile2, brainhdr, brainimg);
+d156 1
+a156 1
+		exit (1);
+d181 2
+a182 2
+	(void) printf ("PET pixel size:  %f  %f  %f\n", rscale[1], rscale[2], rscale[3]);
+	(void) printf ("MRI pixel size:  %f  %f  %f\n\n", fscale[1], fscale[2], fscale[3]);
+d184 1
+a184 1
+	(void) printf ("AIR transformation matrix:\n");
+d201 1
+a201 1
+		exit (1);
+d225 1
+a225 1
+		exit (1);
+d240 1
+a240 1
+	(void) printf ("Mean discrepancy of AIR aligned points = %8.3f mm\n\n", dist);
+d283 1
+a283 1
+		printf ("\n\n");
+d298 1
+a298 1
+		(void) printf ("Transformation matrix from fitting fiducials:\n", NPRM);
+d325 1
+a325 1
+		exit (1);
+d332 2
+a333 2
+				(void) fprintf (stderr, "ERROR: reading slice %i, row %j of %s\n", i, j, brainimg);
+				exit (1);
+a466 9
+#ifdef UNDEF
+	dxang = RADTODEG * atan (dy / dz);
+	dyang = RADTODEG * atan (dx / dz);
+	dzang = RADTODEG * atan (dx / dy);
+	(void) fprintf (stdout, "Xang = %6.3f deg\n", dxang);
+	(void) fprintf (stdout, "Yang = %6.3f deg\n", dyang);
+	(void) fprintf (stdout, "Zang = %6.3f deg\n\n", dzang);
+#endif
+
+d491 1
+a491 1
+	exit (0);
+@
+
+
+1.13
+log
+@./
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.12 1996/01/12 21:43:17 tom Exp tom $
+d3 3
+d58 1
+a58 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.12 1996/01/12 21:43:17 tom Exp tom $";
+d399 2
+a400 2
+					matrix_mult (mat1, pt0, pt1, MSIZE, MSIZE, 1);
+					matrix_mult (mat2, pt0, pt2, MSIZE, MSIZE, 1);
+d456 2
+a457 2
+	matrix_mult (mat1, pt0, pt1, MSIZE, MSIZE, 1);
+	matrix_mult (mat2, pt0, pt2, MSIZE, MSIZE, 1);
+@
+
+
+1.12
+log
+@changed print message
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.11 1996/01/12 21:32:21 tom Exp tom $
+d3 3
+d55 1
+a55 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.11 1996/01/12 21:32:21 tom Exp tom $";
+d294 1
+a294 1
+	if (NPRM == 1)
+d298 1
+a298 1
+	else
+d303 1
+@
+
+
+1.11
+log
+@add linear solution (gaussj)
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.10 1996/01/04 22:11:27 tom Exp tom $
+d3 3
+d52 1
+a52 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.10 1996/01/04 22:11:27 tom Exp tom $";
+a289 3
+	(void) printf ("Transformation matrix from fitting fiducials with %d parameters:\n", NPRM);
+	matrix_print (mat2, MSIZE, MSIZE);
+
+d292 2
+d296 2
+@
+
+
+1.10
+log
+@permits 6 or 12 parameter fit
+computes mean x-, y-, and z-distances
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.9 1995/09/27 21:38:55 tom Exp tom $
+d3 4
+d49 1
+a49 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.9 1995/09/27 21:38:55 tom Exp tom $";
+d78 1
+d100 1
+d128 1
+a128 1
+	if ((NPRM != 6) && (NPRM != 12)) {
+d205 2
+d208 5
+d229 1
+a229 1
+
+d253 3
+a255 1
+	} else {
+d260 1
+a260 8
+	}
+
+/*  Generate the matrix from the fit */
+
+	if (NPRM == 6)
+		matcreate (mat2, p);
+	else
+		for (i = 1, k = 1; i <= MSIZE-1; i++)
+d264 23
+d291 5
+a295 2
+	(void) printf ("Mean discrepancy of %d-Parameter Least Squares aligned points = %8.3f mm\n\n",
+		NPRM, dist);
+d469 1
+@
+
+
+1.9
+log
+@fixed computation of within brain error
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.8 1995/09/24 22:48:58 tom Exp tom $
+d3 3
+d45 2
+d51 4
+a54 4
+#include <nrecipes/kr/nr.h>
+#include <nrecipes/kr/nrutil.h>
+#include <petutil/matrixlib.h>
+#include <petutil/ANALYZE.h>
+d59 1
+a59 2
+#define MSIZE (NDIM + 1)			 /* matrix dimensions */
+#define NPRM 6					 /* number of parameters */
+d66 1
+a66 3
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.8 1995/09/24 22:48:58 tom Exp tom $";
+
+char            Usage[] = "Usage: airerr mrpet.air mri.fid pet.fid brain8.hdr brain8.img\n";
+d69 1
+d91 2
+d96 1
+d112 1
+a112 1
+	if (argc != 6) {
+d121 5
+a224 1
+		p[i] = 0;
+d233 13
+a245 3
+	p[1] = mat1[1][4];
+	p[2] = mat1[2][4];
+	p[3] = mat1[3][4];
+d247 1
+a247 1
+	powell (p, x, NPRM, FTOL, &iter, &fret, matdist);
+d249 6
+a254 1
+/*	Generate the matrix from the fit */
+d256 1
+a256 2
+	matcreate (mat2, p);
+	(void) printf ("Transformation matrix from fitting fiducials:\n");
+d260 2
+a261 1
+	(void) printf ("Mean discrepancy of Least Squares aligned points = %8.3f mm\n\n", dist);
+d312 1
+d339 3
+d356 1
+a356 1
+					dist = ptdist (pt1, pt2);
+d358 3
+d385 12
+a396 11
+	(void) fprintf (stdout, "                                  X    Y    Z\n");
+	(void) fprintf (stdout, "                                 ---  ---  ---\n");
+	(void) fprintf (stdout, "Mean distance   = %9.3f mm\n", sumdist / ((float) sumpts));
+	(void) fprintf (stdout, "Max distance    = %9.3f  at %4d,%4d,%4d\n", maxdist, maxid[1], maxid[2], maxid[3]);
+	(void) fprintf (stdout, "Min distance    = %9.3f  at %4d,%4d,%4d\n\n", mindist, minid[1], minid[2], minid[3]);
+	(void) fprintf (stdout, "Right brain     = %9.3f  at %4d,%4d,%4d\n", rgtdist, rgt[1], rgt[2], rgt[3]);
+	(void) fprintf (stdout, "Left brain      = %9.3f  at %4d,%4d,%4d\n", lftdist, lft[1], lft[2], lft[3]);
+	(void) fprintf (stdout, "Posterior brain = %9.3f  at %4d,%4d,%4d\n", postdist, post[1], post[2], post[3]);
+	(void) fprintf (stdout, "Anterior brain  = %9.3f  at %4d,%4d,%4d\n", antdist, ant[1], ant[2], ant[3]);
+	(void) fprintf (stdout, "Inferior brain  = %9.3f  at %4d,%4d,%4d\n", infdist, inf[1], inf[2], inf[3]);
+	(void) fprintf (stdout, "Superior brain  = %9.3f  at %4d,%4d,%4d\n\n", supdist, sup[1], sup[2], sup[3]);
+d413 1
+a413 1
+	dist = ptdist (pt1, pt2);
+@
+
+
+1.8
+log
+@fixed but in least squares matrix
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.7 1995/07/26 18:13:56 tom Exp tom $
+d3 3
+d45 1
+d57 1
+d60 1
+a60 1
+#define newdist(new,old,indx,i,j,k)	{old=new; indx[1]=i; indx[2]=j; indx[3]=k;}
+d62 1
+a62 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/airerr/RCS/airerr.c,v 1.7 1995/07/26 18:13:56 tom Exp tom $";
+d68 1
+d94 1
+d101 2
+a208 5
+#ifdef DEBUG
+	dist = matrix_dist (mat2);
+	(void) printf ("Mean distance between points with inital matrix = %8.3f mm\n\n", dist);
+#endif
+
+d257 1
+a257 1
+	val = ny * sizeof (char);
+d294 1
+a294 1
+	inf[1] = 1000;
+d296 2
+a297 2
+	rgt[3] = 1000;
+	sup[1] = 0;
+d299 5
+a303 2
+	lft[3] = 0;
+	sumpts = 0.0;
+d317 1
+a317 1
+				if (img[i][j][k] > 0) {
+d319 9
+a327 5
+					pt1[1] = (float) k;
+					pt1[2] = (float) j;
+					pt1[3] = (float) i;
+					matrix_mult (mat, pt1, pt2, MSIZE, MSIZE, 1);
+					dist = vector_dist (pt0, pt2);
+d333 1
+a333 1
+					if (k < rgt[3])
+d335 1
+a335 1
+					if (k > lft[3])
+d341 1
+a341 1
+					if (i < inf[1])
+d343 1
+a343 1
+					if (i > sup[1])
+d350 1
+a350 1
+	(void) fprintf (stdout, "(%.2f cc)\n\n", .001*sumpts*fscale[1]*fscale[2]*fscale[3]);
+d352 3
+a354 1
+	(void) fprintf (stdout, "compared with Least Squares Fit:\n\n");
+d358 2
+a359 2
+	(void) fprintf (stdout, "Inferior brain  = %9.3f  at %4d,%4d,%4d\n", infdist, inf[1], inf[2], inf[3]);
+	(void) fprintf (stdout, "Superior brain  = %9.3f  at %4d,%4d,%4d\n", supdist, sup[1], sup[2], sup[3]);
+d362 2
+a363 2
+	(void) fprintf (stdout, "Right brain     = %9.3f  at %4d,%4d,%4d\n", rgtdist, rgt[1], rgt[2], rgt[3]);
+	(void) fprintf (stdout, "Left brain      = %9.3f  at %4d,%4d,%4d\n\n", lftdist, lft[1], lft[2], lft[3]);
+d365 32
+a396 1
+	(void) fprintf (stdout, "Coordinates are z,y,x indexing from 1 with origin at inferior, posterior, right\n");
+@
+
+
+1.7
+log
+@lint
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.6 1995/07/26 15:14:22 tom Exp tom $
+d3 3
+d26 1
+a26 1
+ *  Date:           26-Jul-95
+d50 1
+a50 1
+#define MSIZE (NDIM+1)				 /* matrix dimensions */
+d52 1
+a52 1
+#define FTOL 1.0e-7
+d57 1
+a57 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/airerr/RCS/airerr.c,v 1.6 1995/07/26 15:14:22 tom Exp tom $";
+d62 1
+d85 1
+a85 1
+	int             nr, nc, nd;		 /* dimensions of brainimg */
+a112 2
+/*	Read AIR matrix */
+
+d116 3
+d123 1
+a123 1
+/*	Initialize scale */
+d125 12
+d145 1
+d153 1
+a153 1
+ *	Read and scale the fiducial points;
+d155 3
+a157 1
+ *	The pixel coordinates are read and then replace when the mm coordinates are read.
+d198 1
+a198 1
+	(void) printf ("Mean distance between aligned points after AIR = %8.3f mm\n\n", dist);
+d200 5
+d219 3
+a221 4
+#ifdef DEBUG
+	dist = matdist (p);
+	(void) printf ("Unaligned mean distance = %10.3f\n", dist);
+#endif
+a224 6
+#ifdef DEBUG
+	dist = matdist (p);
+	(void) printf ("Final fit mean distance = %10.3f\n", dist);
+	(void) printf ("Number of Iterations: %6d\n\n", iter);
+#endif
+
+d232 1
+a232 1
+	(void) printf ("Mean distance between Least Squares aligned points = %8.3f mm\n\n\n", dist);
+d238 1
+a238 1
+	(void) printf ("Difference between AIR and Fit matrices:\n");
+d243 5
+a247 5
+	nr = air1.std.x_dim;
+	nc = air1.std.y_dim;
+	nd = air1.std.z_dim;
+	(void) printf ("Brain image is %d x %d x %d\n", nr, nc, nd);
+	img = c3tensor (1, nr, 1, nc, 1, nd);
+d253 3
+a255 3
+	val = nd * sizeof (char);
+	for (i = 1; i <= nr; i++) {
+		for (j = 1; j <= nc; j++) {
+d258 1
+a258 1
+				(void) fprintf (stderr, "ERROR: reading %i,%j of %s\n", i, j, brainimg);
+d288 1
+a288 1
+	/* Analyze standard format has origin at right, posterior, inferior */
+d290 1
+a290 1
+	rgt[1] = 1000;
+d292 2
+a293 2
+	inf[3] = 1000;
+	lft[1] = 0;
+d295 1
+a295 1
+	sup[3] = 0;
+d307 3
+a309 3
+	for (i = 1; i <= nr; i++) {
+		for (j = 1; j <= nc; j++) {
+			for (k = 1; k <= nd; k++) {
+d312 1
+a312 1
+					pt1[1] = (float) i;
+d314 1
+a314 1
+					pt1[3] = (float) k;
+d322 1
+a322 1
+					if (i < rgt[1])
+d324 1
+a324 1
+					if (i > lft[1])
+d330 1
+a330 1
+					if (k < inf[3])
+d332 1
+a332 1
+					if (k > sup[3])
+d338 4
+a341 1
+	(void) fprintf (stdout, "Total pixels in brain image = %d\n\n", sumpts);
+d345 1
+d347 1
+a347 1
+	(void) fprintf (stdout, "Inferior brain  = %9.3f  at %4d,%4d,%4d\n", infdist, inf[1], inf[2], inf[3]);
+d349 2
+a350 3
+	(void) fprintf (stdout, "Posterior brain = %9.3f  at %4d,%4d,%4d\n", postdist, post[1], post[2], post[3]);
+	(void) fprintf (stdout, "Left brain      = %9.3f  at %4d,%4d,%4d\n", lftdist, lft[1], lft[2], lft[3]);
+	(void) fprintf (stdout, "Right brain     = %9.3f  at %4d,%4d,%4d\n\n", rgtdist, rgt[1], rgt[2], rgt[3]);
+d352 1
+a352 1
+	(void) fprintf (stdout, "Coordinates are x,y,z indexing from 1 with origin at right, posterior, inferior\n");
+d356 1
+a356 1
+	free_c3tensor (img, 1, nr, 1, nc, 1, nd);
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.5 1995/07/26 15:12:57 tom Exp tom $
+d3 3
+d54 1
+a54 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/airerr/RCS/airerr.c,v 1.5 1995/07/26 15:12:57 tom Exp tom $";
+a75 1
+	struct dsr      hdr;			 /* ANALYZE hdr structure */
+a80 1
+	double          tmp;
+d82 1
+a82 1
+	int             val, i, j, k, m, n;
+a90 2
+	static char     rcsid[] = "$Header: /export/home/npggw/tom/src/airerr/RCS/airerr.c,v 1.5 1995/07/26 15:12:57 tom Exp tom $";
+
+d94 1
+a94 1
+		fprintf (stderr, Usage);
+d104 4
+a107 4
+	strcpy (version, "    ");
+	strncpy (version, ptr, 4);
+	printf ("Version %s\n", version);
+	printf ("airerr %s %s %s %s %s\n\n", airfile, fidfile1, fidfile2, brainhdr, brainimg);
+d115 1
+a115 1
+		fprintf (stderr, "ERROR: cannot read %s\n", airfile);
+d128 2
+a129 2
+	printf ("PET pixel size:  %f  %f  %f\n", rscale[1], rscale[2], rscale[3]);
+	printf ("MRI pixel size:  %f  %f  %f\n\n", fscale[1], fscale[2], fscale[3]);
+d131 1
+a131 1
+	printf ("AIR transformation matrix:\n");
+d145 1
+a145 1
+		fprintf (stderr, "ERROR: cannot open %s\n", fidfile1);
+d151 1
+a151 1
+				fscanf (fptr, "%f", &fixed[i][k]);
+d154 1
+a154 1
+				fscanf (fptr, "%f", &dummy);
+d158 1
+a158 1
+	fclose (fptr);
+d162 1
+a162 1
+		fprintf (stderr, "ERROR: cannot open %s\n", fidfile2);
+d168 1
+a168 1
+				fscanf (fptr, "%f", &reslice[i][k]);
+d171 1
+a171 1
+				fscanf (fptr, "%f", &dummy);
+d175 1
+a175 1
+	fclose (fptr);
+d178 1
+a178 1
+	printf ("Mean distance between aligned points after AIR = %8.3f mm\n\n", dist);
+d196 1
+a196 1
+	printf ("Unaligned mean distance = %10.3f\n", dist);
+d203 2
+a204 2
+	printf ("Final fit mean distance = %10.3f\n", dist);
+	printf ("Number of Iterations: %6d\n\n", iter);
+d210 1
+a210 1
+	printf ("Transformation matrix from fitting fiducials:\n");
+d214 1
+a214 1
+	printf ("Mean distance between Least Squares aligned points = %8.3f mm\n\n\n", dist);
+d220 1
+a220 1
+	printf ("Difference between AIR and Fit matrices:\n");
+d228 1
+a228 1
+	printf ("Brain image is %d x %d x %d\n", nr, nc, nd);
+d232 1
+a232 1
+		fprintf (stderr, "ERROR: cannot open %s\n", brainimg);
+d240 1
+a240 1
+				fprintf (stderr, "ERROR: reading %i,%j of %s\n", i, j, brainimg);
+d245 1
+a245 1
+	fclose (fptr);
+d320 10
+a329 10
+	fprintf (stdout, "Total pixels in brain image = %d\n\n", sumpts);
+	fprintf (stdout, "Mean distance   = %9.3f mm\n", sumdist / ((float) sumpts));
+	fprintf (stdout, "Max distance    = %9.3f  at %4d,%4d,%4d\n", maxdist, maxid[1], maxid[2], maxid[3]);
+	fprintf (stdout, "Min distance    = %9.3f  at %4d,%4d,%4d\n\n", mindist, minid[1], minid[2], minid[3]);
+	fprintf (stdout, "Superior brain  = %9.3f  at %4d,%4d,%4d\n", supdist, sup[1], sup[2], sup[3]);
+	fprintf (stdout, "Inferior brain  = %9.3f  at %4d,%4d,%4d\n", infdist, inf[1], inf[2], inf[3]);
+	fprintf (stdout, "Anterior brain  = %9.3f  at %4d,%4d,%4d\n", antdist, ant[1], ant[2], ant[3]);
+	fprintf (stdout, "Posterior brain = %9.3f  at %4d,%4d,%4d\n", postdist, post[1], post[2], post[3]);
+	fprintf (stdout, "Left brain      = %9.3f  at %4d,%4d,%4d\n", lftdist, lft[1], lft[2], lft[3]);
+	fprintf (stdout, "Right brain     = %9.3f  at %4d,%4d,%4d\n\n", rgtdist, rgt[1], rgt[2], rgt[3]);
+d331 1
+a331 1
+	fprintf (stdout, "Coordinates are x,y,z indexing from 1 with origin at right, posterior, inferior\n");
+d356 1
+@
+
+
+1.5
+log
+@newdist
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.4 1995/07/25 21:09:09 tom Exp tom $
+d3 3
+d51 1
+a51 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/airerr/RCS/airerr.c,v 1.4 1995/07/25 21:09:09 tom Exp tom $";
+d90 1
+a90 1
+	static char     rcsid[] = "$Header: /export/home/npggw/tom/src/airerr/RCS/airerr.c,v 1.4 1995/07/25 21:09:09 tom Exp tom $";
+a335 1
+/*
+a336 2
+*/
+	freeit (img, 1, nr, 1, nc, 1, nd);
+@
+
+
+1.4
+log
+@free ivectors
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.3 1995/07/25 20:06:40 tom Exp $
+d3 3
+d17 1
+a17 1
+ *  Date:           25-Jul-95
+d41 1
+a41 1
+#define MSIZE 4					 /* matrix dimensions = NDIM + 1 */
+d45 2
+a46 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.3 1995/07/25 20:06:40 tom Exp $";
+d48 2
+d87 1
+a87 1
+	static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.3 1995/07/25 20:06:40 tom Exp $";
+d89 1
+a89 1
+/* Read arguments */
+d184 6
+a189 2
+		for (j = 1; j <= NPRM; j++)
+			x[i][j] = ((i == j) ? 1.0 : 0.0);
+d298 16
+a313 44
+					if (dist > maxdist) {
+						maxdist = dist;
+						maxid[1] = i;
+						maxid[2] = j;
+						maxid[3] = k;
+					} else if (dist < mindist) {
+						mindist = dist;
+						minid[1] = i;
+						minid[2] = j;
+						minid[3] = k;
+					}
+					if (i < rgt[1]) {
+						rgt[1] = i;
+						rgt[2] = j;
+						rgt[3] = k;
+						rgtdist = dist;
+					} else if (i > lft[1]) {
+						lft[1] = i;
+						lft[2] = j;
+						lft[3] = k;
+						lftdist = dist;
+					}
+					if (j < post[2]) {
+						post[1] = i;
+						post[2] = j;
+						post[3] = k;
+						postdist = dist;
+					} else if (j > ant[2]) {
+						ant[1] = i;
+						ant[2] = j;
+						ant[3] = k;
+						antdist = dist;
+					}
+					if (k < inf[3]) {
+						inf[1] = i;
+						inf[2] = j;
+						inf[3] = k;
+						infdist = dist;
+					} else if (k > sup[3]) {
+						sup[1] = i;
+						sup[2] = j;
+						sup[3] = k;
+						supdist = dist;
+					}
+d333 1
+d335 2
+@
+
+
+1.3
+log
+@added version to output
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.2 1995/07/25 19:11:23 tom Exp tom $
+d3 3
+d42 1
+a42 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.2 1995/07/25 19:11:23 tom Exp tom $";
+d81 1
+a81 1
+	static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.2 1995/07/25 19:11:23 tom Exp tom $";
+d366 6
+@
+
+
+1.2
+log
+@fixed AIR matrix
+@
+text
+@d1 1
+a1 1
+/*  $Id: airerr.c,v 1.1 1995/07/25 14:52:12 tom Exp tom $
+d3 3
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.1 1995/07/25 14:52:12 tom Exp tom $";
+d58 2
+d78 1
+a78 1
+	static char     rcsid[] = "$Header: /home/npggw/tom/src/airerr/RCS/airerr.c,v 1.1 1995/07/25 14:52:12 tom Exp tom $";
+d91 6
+a106 3
+	printf ("AIR transformation matrix:\n");
+	matrix_print (mat1, MSIZE, MSIZE);
+
+d118 1
+a118 1
+	printf ("MRI pixel size:  %f  %f  %f\n", fscale[1], fscale[2], fscale[3]);
+d120 3
+d179 1
+d182 1
+d186 1
+d190 1
+d335 2
+a336 2
+	fprintf (stdout, "Max distance at = %9.3f  at %4d,%4d,%4d\n", maxdist, maxid[1], maxid[2], maxid[3]);
+	fprintf (stdout, "Min distance at = %9.3f  at %4d,%4d,%4d\n\n", mindist, minid[1], minid[2], minid[3]);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*  $Id$
+    $Log$ */
+d15 2
+a16 2
+ *		[2] fid file from pet (output from alignfids)
+ *		[3] fid file from mri (output from alignfids)
+d36 1
+a36 1
+static char     rcsid[] = "$Header$";
+d38 1
+a38 1
+char            Usage[] = "Usage: airerr mrpet.air pet.fid mri.fid brain8.hdr brain8.img\n";
+d44 2
+a45 1
+float          *scale;
+d73 1
+a73 1
+	static char     rcsid[] = "$Header$";
+d99 13
+a119 1
+	scale = vector (1, NDIM);
+d156 1
+a156 1
+	printf ("Mean distance between aligned points after AIR = %8.3f\n\n", dist);
+a157 7
+/*	Initialize scale */
+
+	scale[1] = air1.std.x_size / air1.res.x_size;
+	scale[2] = air1.std.y_size / air1.res.y_size;
+	scale[3] = air1.std.z_size / air1.res.z_size;
+	printf ("Pixel Scaling:  %f  %f  %f\n", scale[1], scale[2], scale[3]);
+
+d184 1
+a184 1
+	printf ("Mean distance between Least Squares aligned points = %8.3f\n\n\n", dist);
+d239 9
+a247 6
+	rgt[1] = 0;
+	post[2] = 0;
+	inf[3] = 0;
+	lft[1] = 1000;
+	ant[2] = 1000;
+	sup[3] = 1000;
+d281 1
+a281 1
+					if (i > rgt[1]) {
+d286 1
+a286 1
+					} else if (i < lft[1]) {
+d292 1
+a292 1
+					if (j > post[2]) {
+d297 1
+a297 1
+					} else if (j < ant[2]) {
+d303 1
+a303 1
+					if (k > inf[3]) {
+d308 1
+a308 1
+					} else if (k < sup[3]) {
+d319 1
+a319 1
+	fprintf (stdout, "Mean distance   = %9.3f\n", sumdist / ((float) sumpts));
+d327 1
+a327 1
+	fprintf (stdout, "Right brain     = %9.3f  at %4d,%4d,%4d\n", rgtdist, rgt[1], rgt[2], rgt[3]);
+d329 2
+d344 2
+a345 1
+	free_vector (scale, 1, NDIM);
+@

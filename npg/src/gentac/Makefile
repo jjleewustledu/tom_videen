@@ -1,0 +1,51 @@
+PRGNAME = gentac
+# Author:	Tom Videen
+# Date:		Jan 2010
+# Expects:	set environmental variables in	source ~/.buildrc
+
+VER = 1.1
+LIBS    = -L${LIBPATH} -lnsl
+SCRIPTS	= ${PRGNAME}
+FSRCS	= ${PRGNAME}.f
+INCS	=
+
+OBJS	= ${FSRCS:.f=.o}
+BF77	= ${PURE} ${F77} ${FFLAGS}
+
+${PRGNAME}.bin: ${OBJS}
+	${BF77} -o $@ ${OBJS} ${LIBS}
+
+.f.o: 
+	${BF77} -c $<
+
+release:
+	mv ${PRGNAME}.bin ${BINPATH}
+	chmod 755 ${BINPATH}/${PRGNAME}.bin
+	chgrp videen ${BINPATH}/${PRGNAME}.bin
+
+script:
+	cp ${PRGNAME} ${BINPATH}
+	chmod 755 ${BINPATH}/${PRGNAME}
+	chgrp videen ${BINPATH}/${PRGNAME}
+
+version:
+	saversion ${BINPATH}/${PRGNAME}.bin Version ${VER}
+
+checkout:
+	co ${FSRCS} ${SCRIPTS} ${INCS}
+
+checkin:
+	ci ${FSRCS} ${SCRIPTS} ${INCS}
+
+lock:
+	co -l ${FSRCS} ${SCRIPTS} ${INCS}
+
+sync:
+	ci -f -r${VER} ${FSRCS} ${SCRIPTS} ${INCS}
+
+clean:
+	rm ${OBJS}
+
+cleanall:
+	rm -f ${FSRCS} ${SCRIPTS} Version ${INCS}
+

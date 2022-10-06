@@ -1,0 +1,243 @@
+;+
+; NAME:
+;	VIDI_MASK
+;
+; PURPOSE:
+;	Widget to interactively create an image mask
+;	and to compute whole-brain values using this mask.
+; CATEGORY:
+;	Image processing.
+; CALLING SEQUENCE:
+;	Result = VIDI_MASK(uv, inum)
+; RESTRICTIONS:
+;	This is a MODAL widget.  No other widget applications will be
+;	responsive while this widget is in use.
+;
+; MODIFICATION HISTORY:
+;	Tom Videen, April 2007.
+;-
+
+PRO VIDI_MASK, uv, inum
+   COMMON VIDI
+   COMMON IMAGE_UTILS
+   
+   imgnum = inum < 1
+   img = uv.img[imgnum]
+   cbf = uv.cbf[imgnum]
+   cbv = uv.cbv[imgnum]
+   loc = rstrpos(img.fname,'/')
+   imgname = strmid(img.fname,loc+1)
+   image = (*img.data)
+   draw = uv.wid.win[inum]
+   group = uv.wid.base
+   zoom = dsp[imgnum].zoom
+   scantime = img.len * 1000
+   imgsize = img.dim[0]*img.dim[1]*img.dim[2]
+   frame = img.f - img.ff
+   plane = img.p
+   fp = img.fp
+   lp = img.lp
+   IF (msktop EQ 0) THEN msktop = fp
+   IF (mskbot EQ 0) THEN mskbot = lp
+   top = msktop
+   bot = mskbot
+   uv.wid.topslc = top
+   uv.wid.botslc = bot
+   
+   base = WIDGET_BASE(title='Mask', group_leader=group, /COL)   
+
+   base1 = WIDGET_BASE(base, /ROW)
+   select1 = ['1\Magnify','0\ 1 ','0\ 2 ','0\ 3 ','0\ 4 ']
+   magnify = CW_PDMENU(base1, select1)
+   up = WIDGET_BUTTON(base1, value='<- Up  ')
+   down = WIDGET_BUTTON(base1, value=' Down ->')
+   create = WIDGET_BUTTON(base1, value='Create Mask')
+   mask = WIDGET_BUTTON(base1, value='Apply Mask')
+   stat = WIDGET_BUTTON(base1, value='Statistics')
+   exit = WIDGET_BUTTON(base1, value='Exit')
+
+   base2 = WIDGET_BASE(base,/ROW)
+   threshold = CW_FIELD(base2, title='Threshold %', value=mskthresh, xsize=3, /INTEGER, /RETURN_EVENTS)
+   topslc = CW_FIELD(base2, title='Slice Range: Top', value=top, xsize=3, /INTEGER, /RETURN_EVENTS)
+   botslc = CW_FIELD(base2, title='Bottom', value=bot, xsize=3, /INTEGER, /RETURN_EVENTS)
+   preview = cw_bgroup(base2, ['Preview Mask'], /NONEXCLUSIVE)
+
+   base3 = WIDGET_BASE(base, /COL)
+   slider = WIDGET_SLIDER(base3, value=plane, xsize=600, min=fp, max=lp, title='Slice')
+
+   msg = WIDGET_TEXT(base, YSIZE=3)
+
+   WIDGET_CONTROL, draw, GET_VALUE=win
+   WSET, win
+   WINDOW, /PIXMAP, /FREE, xs = !d.x_size, ys=!d.y_size ; Save window
+   backing = !d.window
+   DEVICE, copy = [0,0, !d.x_size, !d.y_size, 0, 0, win]
+
+   s = {MASK_STATE, $           ; Structure containing state
+        base: base, $           ; Main base widget
+        win:  win, $            ; draw widget window #
+        msg : msg, $            ; Message window
+        button: 0, $            ; button state
+        zoom : zoom $           ; zoom factor
+       }
+
+   WIDGET_CONTROL, base, /REALIZE, xoffset=0, yoffset=0
+   WSHOW, win
+
+   set = 0
+   refresh = 1
+   mask_type = 1
+   connect_type = 1
+   fill = 0
+   uv.wid.editval = fill
+   seed[0,0] = 0
+   seed[1,0] = 0
+   vmin = -32767
+
+   WHILE 1 DO BEGIN             ; Event Loop   
+      top = uv.wid.topslc
+      bot = uv.wid.botslc
+      plane = img.p
+      seed[2,0] = plane
+      IF (refresh GT 0) THEN VIDI_DISPLAY, uv
+      imax = max((*img.data)[*,*,top-1:bot-1,frame])
+      slcmax = VOI_PROCESS (0, imax, img.mtype, img.mcal, $
+                            0, uv.cbf[imgnum].mcal, 0, uv.cbv[imgnum].mcal, scantime)
+      vmax = float(slcmax) * float(mskthresh) / 100.
+      IF (set) THEN VIDI_OUTLINE, s, imgnum, uv, vmin, vmax, indx, 0
+      str1 = strcompress(string(slcmax),/remove_all)
+      wset, dsp[imgnum].id
+      xyouts,s.zoom*3,s.zoom*3,str1,charsize=s.zoom,charthick=1,/device,color=label
+      IF (refresh EQ 2) THEN WIDGET_CONTROL, msg, set_value=str2
+      IF (refresh EQ 3) THEN WIDGET_CONTROL, msg, set_value=str3
+      refresh = 1
+
+      ev = WIDGET_EVENT([base, draw])
+
+      CASE ev.id OF
+         draw:   	refresh = 0
+         threshold:   mskthresh = ev.value
+
+         topslc:   BEGIN
+            top = ev.value
+            top = top > fp
+            top = top < lp
+            bot = bot > top
+            uv.wid.topslc = top
+            uv.wid.botslc = bot
+            WIDGET_CONTROL, topslc, set_value=top
+            WIDGET_CONTROL, botslc, set_value=bot
+         ENDCASE
+
+         botslc:   BEGIN
+            bot = ev.value
+            bot = bot > fp
+            bot = bot < lp
+            top = top < bot
+            uv.wid.topslc = top
+            uv.wid.botslc = bot
+            WIDGET_CONTROL, topslc, set_value=top
+            WIDGET_CONTROL, botslc, set_value=bot
+         ENDCASE
+
+         create: BEGIN
+            FOR slice = top, bot DO BEGIN
+               seed[2,0] = slice
+               uv.img[imgnum].p = slice
+               VIDI_OUTLINE, s, imgnum, uv, vmin, vmax, indx, 1
+               WIDGET_CONTROL, slider, set_value=slice
+            ENDFOR
+            IF (top-1 GT fp-1) THEN (*img.data)[*,*,fp-1:top-2,frame] = fill
+            IF (lp-1 GT bot-1) THEN (*img.data)[*,*,bot:lp-1,frame] = fill
+            maskimg = (*img.data)
+            img.p = bot
+            uv.img[imgnum].p = img.p
+            msktop = top
+            mskbot = bot
+            pixels = where (maskimg GT 0, count)
+            str2 = 'Pixels within Mask = '+string(count)
+            WIDGET_CONTROL, msg, set_value=str2
+            WIDGET_CONTROL, slider, set_value=img.p
+            refresh = 2
+         ENDCASE
+
+         mask: BEGIN
+            image = (*img.data)
+            pixels = where (maskimg LE 0, count)
+            IF (count GT 0) THEN BEGIN
+               image(pixels) = 0
+               str2 = 'Pixels masked = '+string(count)
+               WIDGET_CONTROL, msg, set_value=str2
+               (*img.data) = image
+               refresh = 2
+            ENDIF
+         ENDCASE
+
+         stat: BEGIN
+            pixels = where (maskimg GT 0, count)
+            IF (count GT 0) THEN BEGIN
+               log = ''
+               str3 = VIDI_PROCESS(pixels, img, cbf, cbv, log)
+               widget_control, msg, set_value=str3
+               IF (strlen(log) GT 0 AND loglun NE 0) THEN BEGIN
+                  s1 = strtrim(string(msktop),2)
+                  s2 = strtrim(string(mskbot),2)
+                  s3 = strtrim(string(mskthresh),2)
+                  printf, loglun, imgname,s1,s2,s3,log, format='(A,"  slices ",A,"-",A,"  thresh ",A,"%  ",A)'
+               ENDIF
+               refresh = 3
+            ENDIF
+         ENDCASE
+
+         magnify: BEGIN
+            dsp[0].zoom = ev.value
+            dsp[1].zoom = ev.value
+            dsp[2].zoom = ev.value
+            s.zoom = ev.value
+         ENDCASE
+
+         up: BEGIN
+            IF (img.p GT fp) THEN BEGIN
+               img.p = img.p-1
+               uv.img[0].p = img.p
+               uv.img[1].p = img.p
+               WIDGET_CONTROL, slider, set_value=img.p
+            ENDIF
+         ENDCASE
+
+         down: BEGIN
+            IF (img.p LT lp) THEN BEGIN
+               img.p = img.p+1
+               uv.img[0].p = img.p
+               uv.img[1].p = img.p
+               WIDGET_CONTROL, slider, set_value=img.p
+            ENDIF
+         ENDCASE
+
+         slider: BEGIN
+            WIDGET_CONTROL, slider, get_value=slice
+            img.p = slice
+            uv.img[0].p = img.p
+            uv.img[1].p = img.p
+            WIDGET_CONTROL, slider, set_value=img.p
+         ENDCASE
+
+         exit: BEGIN
+            uv.img[0].p = img.p
+            uv.img[1].p = img.p
+            uv.wid.topslc = top
+            uv.wid.botslc = bot
+            (*img.data) = image
+            widget_control, ev.top, set_uvalue=uv
+            WIDGET_CONTROL, base, /DESTROY
+            RETURN
+         ENDCASE 
+
+         preview: BEGIN
+            IF (set EQ 0) THEN set = 1 $
+            ELSE set = 0
+         ENDCASE 
+
+      ENDCASE 
+   ENDWHILE			; End Event Loop
+END   

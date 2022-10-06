@@ -1,0 +1,436 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	93.05.04.16.34.32;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.04.20.16.41.46;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@ram2xwd First Release.
+@
+
+
+1.2
+log
+@ram2xwd.c checking in.
+@
+text
+@/*_________________________________________________________________
+  Description:	This program converts an RAMTEK image file to a window
+		dump file. The RAMTEK image files can be get from Medusa
+		or Rasputin by fgeti ot mgeti. They can also be obtained
+		from tape. The RAMTEK images can be crunched or uncrunched.
+
+  History:	Created by Tom Yang on 04/19/93. 
+_________________________________________________________________*/
+
+
+#include <X11/Xlib.h>
+#include <X11/XWDFile.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <values.h>
+#include <petutil/petutil.h>
+
+#define	NUM_PET_COLORS	20
+#define	RAM_COMPRESSED	1212
+#define	RAM_WIDTH	640
+#define	RAM_HEIGHT	512
+#define	WINDOW_WIDTH	1600
+#define	WINDOW_HEIGHT	1200
+#define	DISPLAY_WIDTH	1152
+#define	DISPLAY_HEIGHT	900
+#define	MAXIMUM_CELL	255
+
+static void uncrunch ();
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	Colormap	cmap;
+	Display		*display;
+	FILE		*fp;
+	FILE		*out;
+	XColor		*colors;
+	XColor		*color_table;
+	XColor		temp;
+	XWDFileHeader	header;
+	char		*colortable_name;
+	char		*ram_cheader;
+	char		*imagebuf;
+	char		*modified_imagebuf;
+	char		*ramfile;
+	char		*win_name;
+	char		*xwdfile;
+	float		xscale;
+	float		yscale;
+	int		bitmap_bit_order	= MSBFirst;
+	int		bitmap_pad		= 32;
+	int		bitmap_unit		= 32;
+	int		bits_per_pixel		= 8;
+	int		blue;
+	int		blue_mask		= 0;
+	int		bytes_per_line;
+	int		bits_per_rgb		= 8;
+	int		byte_order		= MSBFirst;
+	int		cells;
+	int		colormap_entries	= 256;
+	int		depth			= 8;
+	int		dim;
+	int		format			= ZPixmap;
+	int		green;
+	int		green_mask		= 0;
+	int		header_size;
+	int		height;
+	int		i;
+	int		j;
+	int		nbytes;
+	int		ncolors			= 256;
+	int		red;
+	int		red_mask		= 0;
+	int		result;
+	int		rows;
+	int		rows_old;
+	int		screen;
+	int		visual_class		= 3;
+	int		width;
+	int		win_name_size;
+	int		window_bdrwidth		= 0;
+	int		window_x		= 13;
+	int		window_y		= 68;
+	int		xoffset			= 0;
+	int		xx;		/* compressed .ram image ID */
+	short 		*databuf;
+	short 		*image_data;
+	short		maximum;
+	short		minimum;
+	unsigned int	buffer_size;
+	unsigned int	rwidth;
+	unsigned int	rheight;
+
+	ramfile		= argv [1];
+	xwdfile		= argv [2];
+	xscale		= atof (argv [3]);
+	yscale		= atof (argv [4]);
+	colortable_name	= argv [5];
+
+	if (xscale <= 0.0 || yscale <= 0.0)
+	{
+		fprintf (stderr, "Zooming factors should be greater than 0.\n");
+		fprintf (stderr, "Your zooming factors are %d %d.\n", xscale, yscale);
+		exit (-1);
+	}
+
+     	if ((display = XOpenDisplay (0)) == 0) 
+	{
+        	printf ("Cannot create a window on %s\n", getenv ("DISPLAY"));
+        	exit (1);
+        }
+
+  	screen	= DefaultScreen (display);
+ 	cells	= DisplayCells (display, screen);
+	cmap	= XDefaultColormap (display, screen);
+
+	colormap_entries	= cells;
+	ncolors			= cells;
+
+	fp = fopen (colortable_name, "r");
+
+	if (fp == NULL) 
+	{
+		fprintf (stderr, "open: can not find color table: %s\n", colortable_name);
+		exit (-1);
+	}
+
+	if (!(color_table = (XColor *) malloc (sizeof (XColor) * NUM_PET_COLORS)))
+	{
+		fprintf (stderr, "Out of memory!");
+		exit (-1);
+	}
+
+	for (i = 0; i < NUM_PET_COLORS; i++) 
+	{
+		fscanf (fp, "%x %x %x", &red, &green, &blue);
+
+		color_table [i].red	= red;
+		color_table [i].green	= green;
+		color_table [i].blue	= blue;
+
+    		if (XAllocColor (display, cmap, color_table + i) == 0)
+    		{
+			fprintf (stderr, "Cann't allocate color %x%x%x\n", red, green, blue);
+        		exit (-1);
+    		} 
+	}		
+	fclose (fp);
+
+	if (!(colors = (XColor *) malloc (sizeof (XColor) * ncolors)))
+	{
+		fprintf (stderr, "Out of memory!");
+		exit (-1);
+	}
+
+	for (i = 0; i < ncolors; i++)
+	{
+		temp.pixel = i;
+		XQueryColor (display, cmap, &temp);
+		colors [i].pixel	= temp.pixel;
+		colors [i].red		= temp.red;
+		colors [i].green	= temp.green;
+		colors [i].blue		= temp.blue;
+		colors [i].flags	= temp.flags;
+		colors [i].pad		= temp.pad;
+	}
+
+	XCloseDisplay (display);
+
+	fp	= fopen (ramfile, "rb");
+	if (fp == (FILE *) NULL) 
+	{
+		fprintf (stderr, "Can't open %s\n", ramfile);
+		exit (-1);
+	}
+
+	ram_cheader	= (char *) malloc (sizeof (char) * 256);
+	dim		= RAM_WIDTH * RAM_HEIGHT;
+	databuf		= (short *) malloc (sizeof (short) * dim);
+
+	if ((result = fread (ram_cheader, 256, 1, fp)) != 1)
+	{
+		fprintf (stderr, "%d fread error\n", result);
+		free (ram_cheader);
+		free (databuf);
+		exit (-1);
+	}
+	sscanf (ram_cheader, "%d, %d", &xx, &nbytes); 
+	free (ram_cheader);
+
+	if (xx != RAM_COMPRESSED)
+	{
+		fseek (fp, 0, SEEK_SET);
+		if (result = fread (databuf, sizeof (short) * dim, 1, fp) != 1)
+		{
+			fprintf (stderr, "%d fread error\n", result);
+			free (ram_cheader);
+			free (databuf);
+			exit (-1);
+		}
+	}
+	else
+	{
+		if (result = fread (databuf + dim - nbytes / 2, nbytes, 1, fp) != 1)
+		{
+			fprintf (stderr, "%d fread error\n", result);
+			free (ram_cheader);
+			free (databuf);
+			exit (-1);
+		}
+
+		uncrunch (nbytes / 2, databuf, dim);
+	}
+
+	maximum = -MAXSHORT;
+	minimum = MAXSHORT;	
+
+	for (i = 0; i < dim; i++) 
+	{
+		if (databuf [i] < 512)
+		{
+			maximum	= pkg_max (maximum, databuf [i]);
+			minimum = pkg_min (minimum, databuf [i]);
+		}
+	}
+
+	for (i = 0; i < dim; i++) 
+	{
+		if (databuf [i] >= 512)
+		{
+			databuf [i]	= maximum;
+		}
+	}
+
+	width		= RAM_WIDTH * xscale;	
+	height		= RAM_HEIGHT * yscale;	
+	if (width > DISPLAY_WIDTH)
+	{
+		fprintf (stderr, "Window width %d is greater than max window width %d.\n", 
+				width, DISPLAY_WIDTH);
+		fprintf (stderr, "Please specify a smaller xzoom factor\n");
+		free (ram_cheader);
+		free (databuf);
+		exit (-1);
+	}
+	else if (height > DISPLAY_HEIGHT)
+	{
+		fprintf (stderr, "Window height %d is greater than max window height %d\n", 
+			height, DISPLAY_HEIGHT);
+		fprintf (stderr, "Please specify a smaller yzoom factor\n");
+		free (ram_cheader);
+		free (databuf);
+		exit (-1);
+	}
+
+	dim		= width * height;
+	imagebuf	= (char *) malloc (sizeof (char) * dim);
+	image_data	= (short *) malloc (sizeof (short) * dim);
+
+	zoom (databuf, RAM_WIDTH, RAM_HEIGHT, xscale, yscale, width, height, image_data);
+	free (databuf);
+
+	quant16to8 (image_data, width, height, minimum, maximum, imagebuf, NUM_PET_COLORS, color_table);
+
+	free (image_data);
+
+	if ((out = fopen (xwdfile, "w")) == NULL)
+	{
+		fprintf (stderr, "Canmot open file %s\n", xwdfile);
+		free (imagebuf);
+		exit (-1);
+	}
+
+	win_name	= xwdfile;
+
+	/*
+	 * sizeof (char) is included for the null string terminator.
+	 */
+	win_name_size	= strlen (win_name) + sizeof (char);
+
+	header_size	= sizeof (header) + win_name_size;
+
+	bytes_per_line	= width;
+	if (width % 4 != 0)
+		bytes_per_line	+= 4 - width % 4;
+
+	buffer_size	= bytes_per_line * height;
+	if (bytes_per_line != width)
+	{
+		modified_imagebuf	= (char *) malloc (sizeof (char) * bytes_per_line);
+		for (j = 0; j < height; j++) 
+		{
+			rows		= j * bytes_per_line;
+			rows_old	= j * width;
+			for (i = 0; i < width; i++) 
+			{
+				modified_imagebuf [rows + i]	= imagebuf [rows_old + i]; 
+			}
+		}
+		free (imagebuf);
+	}
+	else
+		modified_imagebuf	= imagebuf;
+
+	header.header_size	= (CARD32) header_size;
+	header.file_version	= (CARD32) XWD_FILE_VERSION;
+	header.pixmap_format	= (CARD32) format;
+	header.pixmap_depth	= (CARD32) depth;
+	header.pixmap_width	= (CARD32) width;
+	header.pixmap_height	= (CARD32) height;
+	header.xoffset		= (CARD32) xoffset;
+	header.byte_order	= (CARD32) byte_order;
+	header.bitmap_unit	= (CARD32) bitmap_unit;
+	header.bitmap_bit_order	= (CARD32) bitmap_bit_order;
+	header.bitmap_pad	= (CARD32) bitmap_pad;
+	header.bits_per_pixel	= (CARD32) bits_per_pixel;
+	header.bytes_per_line	= (CARD32) bytes_per_line;
+	header.visual_class	= (CARD32) visual_class;
+	header.red_mask		= (CARD32) red_mask;
+	header.green_mask	= (CARD32) green_mask;
+	header.blue_mask	= (CARD32) blue_mask;
+	header.bits_per_rgb	= (CARD32) bits_per_rgb;
+	header.colormap_entries	= (CARD32) colormap_entries;
+	header.ncolors		= ncolors;
+	header.window_width	= (CARD32) WINDOW_WIDTH;
+	header.window_height	= (CARD32) WINDOW_HEIGHT;
+	header.window_x		= window_x;
+	header.window_y		= window_y;
+	header.window_bdrwidth	= (CARD32) window_bdrwidth;
+
+	/*
+	 * Write out header information.
+	 */
+	(void) fwrite ((char *)&header, sizeof (header), 1, out);
+	(void) fwrite (win_name, win_name_size, 1, out);
+
+	/*
+	 * Write out the color maps, if any.
+	 */
+	(void) fwrite ((char *) colors, sizeof (XColor), ncolors, out);
+
+	(void) fwrite (modified_imagebuf, (int) buffer_size, 1, out);
+
+	free (modified_imagebuf);
+	fclose (out);
+	free (colors);
+	free (color_table);
+}
+
+static void uncrunch (nbytes, image, dim)
+	int	nbytes;
+	short	*image;
+	int	dim;
+{
+	int	i, j, nbuf;
+	short	form;
+
+	nbuf	= 0;
+	i	= dim - nbytes;
+
+	while (i < dim)
+	{
+		form	= image [i] & 0x3fff;
+		if (image [i] & 0x8000) 
+		{
+			for (j = 0; j < image [i + 1]; j++)
+			{
+				image [nbuf]	= form;
+				nbuf++;
+			}
+			i++;
+		}
+		else
+		{
+			image [nbuf]	= form;
+			nbuf++;
+		}
+		i++;
+	}
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d15 1
+d26 1
+d89 2
+d216 4
+a219 1
+	for (j = 0; j < RAM_HEIGHT; j++) 
+d221 1
+a221 2
+		rows	= j * RAM_WIDTH;
+		for (i = 0; i < RAM_WIDTH; i++) 
+d223 2
+a224 2
+			if (databuf [rows + i] >= 512)
+				databuf [rows + i]	= 255;
+d228 8
+d264 1
+a264 1
+	quant16to8 (image_data, width, height, imagebuf, NUM_PET_COLORS, color_table);
+@

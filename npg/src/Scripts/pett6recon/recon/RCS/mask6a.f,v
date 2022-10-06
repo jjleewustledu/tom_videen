@@ -1,0 +1,180 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.13.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      MASK6A.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         11-May-88
+C  Written For:  PETT VI Reconstruction Program
+C
+C  Intent:
+C     Mask a PETT VI image setting to zero all pixels outside of the
+C     overlapping profiles.  This zeros all pixels outside a circle
+C     whose radius is 1/2 the image array dimension.
+C
+C     Input image file must be of data type 1000, 1010 or 1020 and is
+C     assumed to be a PETT VI image with 7 slices in a 100x100 array.
+C
+C  Logical Units:
+C     1 = Unmasked image file (INFILE)
+C     2 = Masked image file (OUTFILE)
+C     5 = User output (USEROUT)
+C
+C  Uses Subroutines:
+C     SYSIO
+C
+C  Instructions for Linking:
+C     LINK7 MASK6A
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM MASK6A
+C
+      INTEGER*4  IOREAD    ! SYSIO read sequential binary wait
+      INTEGER*4  IOWRITE   ! SYSIO write sequential binary wait
+      INTEGER*4  INFILE    ! log. unit for input unmasked image
+      INTEGER*4  OUTFILE   ! log. unit for output masked image
+      INTEGER*4  USEROUT   ! log. unit for user output
+      INTEGER*4  HDRBYTES  ! number of bytes in header
+      INTEGER*4  IMGBYTES  ! number of bytes per slice of image
+      INTEGER*4  PB(6)     ! parameter block used in SYSIO
+      INTEGER*4  DIM       ! x- and y- dimensions in reconstructed array
+      INTEGER*4  SLICE     ! slice number
+      INTEGER*4  NSLICES   ! number of slices
+      INTEGER*4  I,J       ! local integers
+C
+      INTEGER*2  IMAGE(100,100) ! image array
+      INTEGER*2  HEADER(128)    ! file header record
+      INTEGER*2  JUNK(112)      ! junk to pad file, due to different formats
+C
+      REAL*4     MID       ! midpoint of array
+      REAL*4     A,B       ! used to compute distance of a pixel from midpoint
+      REAL*4     LIMIT     ! square of radius of image array
+C         (the limit for pixels to include in the masked image)
+C
+      CHARACTER*1  BELL    ! used to ring terminal bell
+      CHARACTER*20 IMAGNAME,TEMPNAME  ! file names input as command line args
+C
+C  Constants
+C
+      DATA  INFILE,OUTFILE,USEROUT /1,2,6/
+      DATA  IOREAD,IOWRITE /88,56/
+      DATA  IOWRITER /60/
+      DATA  DIM  /100/
+
+      WRITE(USEROUT,*) '***  MASK6A  Sep-97  {mask image outside profiles}'
+      CALL GETARG (1, IMAGNAME)
+      CALL GETARG (2, TEMPNAME)
+C
+C  Initialize other parameters
+C
+      BELL = CHAR(7)
+      HDRBYTES = 256
+      IMGBYTES = DIM*DIM*2
+      NSLICES = 0
+      MID = FLOAT(DIM+1)/2.0
+      LIMIT = (MID-1.0)**2
+
+C Added the following when porting to HP KMG 5-21-91      
+      DO 15 I=1,112
+         JUNK(I) = 0
+ 15   CONTINUE
+C
+C  Check data type of input image file
+C
+C  Added the following open statements when porting to HP 4-29-91 KMG
+C
+      OPEN(INFILE,FILE=IMAGNAME)
+      OPEN(OUTFILE,FILE=TEMPNAME)
+      
+      CALL SYSIO(PB,IOREAD,INFILE,HEADER,HDRBYTES,0)
+      IF (HEADER(38).NE.1000 .AND. HEADER(38).NE.1010 .AND.
+     2    HEADER(38).NE.1020) THEN
+        WRITE(USEROUT,*) '*****************************************'
+        WRITE(USEROUT,*) '* Input file is of wrong type.'
+        WRITE(USEROUT,*) '* It must be a PETT VI image file'
+        WRITE(USEROUT,*) '* (Data Type 1000, 1010, or 1020)'
+        WRITE(USEROUT,*) '* $CLEAR and CANCEL this task.'
+        WRITE(USEROUT,*) '*****************************************'
+        WRITE(USEROUT,*) BELL
+        PAUSE
+        STOP
+      END IF
+C
+C  Up to 7 slices supported (ALlocation statement in CSS must be altered)
+C
+      NSLICES = HEADER(32)
+      IF (NSLICES.EQ.0) THEN
+        NSLICES=7
+      ELSE IF (NSLICES.GT.7) THEN
+        WRITE(USEROUT,*) '*****************************************'
+        WRITE(USEROUT,*) '* This program currently supports'
+        WRITE(USEROUT,*) '* no more than 7 slice images.'
+        WRITE(USEROUT,*) '* $CLEAR and CANCEL this task.'
+        WRITE(USEROUT,*) '*****************************************'
+        WRITE(USEROUT,*) BELL
+        PAUSE
+        STOP
+      END IF
+C
+C  Mask all slices
+C
+      REWIND INFILE
+C
+      DO 300 SLICE=1,NSLICES
+C
+C  Copy header
+C
+        CALL SYSIO(PB,IOREAD,INFILE,HEADER,HDRBYTES,0)
+        CALL SYSIO(PB,IOWRITE,OUTFILE,HEADER,HDRBYTES,0)
+C
+C  Read 1 slice of image
+C
+        CALL SYSIO(PB,IOREAD,INFILE,IMAGE,IMGBYTES,0)
+C
+C  Zero all pixels outside of limit
+C
+        DO 200 J=1,DIM
+          A = (MID-FLOATJ(J))**2
+          DO 100 I=1,DIM
+            B = (MID-FLOATJ(I))**2
+            IF (A+B .GT. LIMIT) IMAGE(I,J) = 0
+100       CONTINUE
+200     CONTINUE
+C
+C  Write results to image file
+C
+        CALL SYSIO(PB,IOWRITE,OUTFILE,IMAGE,IMGBYTES,0)
+        CALL SYSIO(PB,IOWRITE,OUTFILE,JUNK,224,0)
+C
+300   CONTINUE
+C
+      CLOSE(INFILE)
+      CLOSE(OUTFILE)
+      STOP
+      END
+
+
+
+@

@@ -1,0 +1,170 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2006.01.31.19.37.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/*	===============================================================================
+ *	Module:		mai_mask.c
+ *	Date:		Jan 2006
+ *	Author:		Tom Videen
+ *	Intent:		Create image mask in MaiAtlas space (1120 x 39 x 936 voxels)
+ *				Left side covers midline (x = 483); Right does not;
+ *				Side is that on which pixel values set to 1000; opposite side will be 0;
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/mai_mask/RCS/mai_mask.c,v 1.1 2006/01/25 19:28:21 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+#define DEBUG 0
+
+/*	----------------------------
+ *	Function:			mai_mask
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* file for Analyze image */
+	char           *img1, *hdr1;	 /* output file */
+	short        ***simg;
+	short          *row;
+	int             side;			 /* 1 = left, 2 = right	 */
+	int             x, y, z, x0;
+	int             nx = 1120;
+	int             ny = 39;
+	int             nz = 936;
+	int             val = 1000;
+
+	if (argc != 4) {
+		fprintf (stdout, "Usage: mai_mask out.img out.hdr hemisphere\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	side = atoi (argv[3]);
+
+	simg = s3tensor (1, nz, 1, ny, 1, nx);
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [mai_mask]: malloc simg\n");
+		return (ERROR);
+	}
+
+	x0 = (nx + 1) - 483;
+
+	if (side == 1) {
+		for (z = 1; z <= nz; z++)
+			for (y = 1; y <= ny; y++)
+				for (x = x0; x <= nx; x++)
+					simg[z][y][x] = val;
+	} else {
+		for (z = 1; z <= nz; z++)
+			for (y = 1; y <= ny; y++)
+				for (x = 1; x < x0; x++)
+					simg[z][y][x] = val;
+	}
+
+/*	=========================================================
+ *	Create and write Analyze hdr
+ */
+
+	(void) strncpy (hdr.hk.db_name, img1, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr);
+	hdr.hk.extents = 16384;
+	hdr.hk.regular = 'r';
+	hdr.dime.dim[0] = 4;
+	hdr.dime.dim[1] = nx;
+	hdr.dime.dim[2] = ny;
+	hdr.dime.dim[3] = nz;
+	hdr.dime.dim[4] = 1;
+	hdr.dime.unused8 = 0;
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 4;
+	hdr.dime.bitpix = 16;
+	hdr.dime.pixdim[1] = 0.14545;
+	hdr.dime.pixdim[2] = 1.336;
+	hdr.dime.pixdim[3] = 0.14545;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = (int) val;
+	hdr.dime.glmin = 0;
+	hdr.hist.orient = 0;
+	if ((fd_hdr = fopen (hdr1, "w")) == 0) {
+		fprintf (stderr, "ERROR [mai_mask]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [mai_mask]: writing %s\n", hdr1);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+
+/*	=========================================================
+ *	Write Image
+ */
+
+	if ((fd_img = fopen (img1, "w")) == 0) {
+		fprintf (stderr, "ERROR [mai_mask]: opening %s\n", img1);
+		return (ERROR);
+	}
+	row = (short *) calloc (nx, sizeof (short));
+	if (row == NULL) {
+		fprintf (stderr, "ERROR [mai_mask]: calloc row\n");
+		return (ERROR);
+	}
+	for (z = 1; z <= nz; z++) {
+		for (y = 1; y <= ny; y++) {
+			for (x = 1; x <= nx; x++)
+				row[x - 1] = simg[z][y][x];
+			if (fwrite (row, sizeof (short), nx, fd_img) != nx) {
+				fprintf (stderr, "ERROR [mai_fiducials]: writing %s\n", img1);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+	free_s3tensor (simg, 1, nz, 1, ny, 1, nx);
+	free (row);
+	return (OK);
+}
+@

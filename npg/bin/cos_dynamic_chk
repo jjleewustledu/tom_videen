@@ -1,0 +1,118 @@
+#!/bin/csh
+#   Name:   cos_dynamic_chk
+#   Author: Tom Videen
+#   Date:   Jul 2004
+#   Created for: COSS PET Processing
+#   Intent: View time-activity curve and for dynamic water
+#   	Activity plotted as mean counts/pixel/sec.
+#		Example filename: cs02-044-ho1.v
+
+if ($#argv != 7) then
+	echo "Usage:  cos_dynamic_chk prefix subject tracer scan X Y Z"
+	echo " e.g.,  cos_dynamic_chk cs02- 044 -ho 1 64 64 32"
+	exit 1
+endif
+
+set PREFIX = $1
+set SUBJ   = $2
+set TRACER = $3
+set SCAN   = $4
+set X = $5
+set Y = $6
+set Z = $7
+
+set DIAMETER = 80
+
+set FNAME = $PREFIX$SUBJ$TRACER$SCAN
+set IN    = $FNAME.v
+set LST   = $FNAME.lst
+set PRM   = $FNAME.prm
+set REG   = $FNAME.reg
+set RGT   = $FNAME.rgt
+set PLT   = $FNAME.plt
+set START = $FNAME.start
+set DURA  = $FNAME.duration
+set CNTS  = $FNAME.cnts
+set TMP   = cos_dynamic_chk$$.tmp
+
+if (! -e $IN) then
+	echo "ERROR: file not found: $IN"
+	exit 1
+endif
+
+# Compare choice of Z to image size
+
+set PLANE_SEP = `imghdr $IN | grep Plane_separation | cut -f2 -d= | cut -f1 -dc`
+set NPLANES = `imghdr $IN | grep slices | cut -f1 -ds`
+set RADIUS = `echo $DIAMETER / 20 / $PLANE_SEP | bc`
+set MAX_Z = `echo $NPLANES - $RADIUS - 1 | bc`
+set MIN_Z = `echo $RADIUS + 2 | bc`
+if ($Z < $MIN_Z) then
+    echo ">>> ================================================================================" 
+	echo ">>> WARNING: Z-coordinate may be too low and place the VOI partly outside the image"
+	echo ">>>          Z should be between $MIN_Z and $MAX_Z"
+    echo ">>> ================================================================================" 
+else if ($Z > $MAX_Z) then
+    echo ">>> ================================================================================" 
+	echo ">>> WARNING: Z-coordinate may be too high and place the VOI partly outside the image"
+	echo ">>>          Z should be between $MIN_Z and $MAX_Z"
+    echo ">>> ================================================================================" 
+endif
+
+imgfrms $IN | cut -c1-3 >! $TMP
+set FIRST = `head -5 $TMP | tail -1`
+set LAST  = `tail -1 $TMP`
+set NFRMS = `echo $LAST - $FIRST + 1 | bc`
+set MISSING = `echo $FIRST - 1 | bc`
+echo "$IN    Frames $FIRST to $LAST"
+
+# Create lst, prm, and reg files:
+
+echo "$SUBJ $SCAN" >! $LST
+
+echo "species:    $PREFIX"	>! $PRM
+echo "tracer:     $TRACER"	>> $PRM
+echo "extension:  v"		>> $PRM
+echo "imgfilter:  none"		>> $PRM
+echo "voi:        new_sphere $DIAMETER" >> $PRM
+
+echo "30  voifile"                  >! $REG
+echo "center of brain for $STUDY"   >> $REG
+echo "1"                            >> $REG
+echo "center_of_brain   $X  $Y  $Z" >> $REG
+
+echo 0 >! $TMP
+voistat $PRM $LST $RGT $REG < $TMP
+
+set SIZE = `wc -l $RGT | cut -f1 -dc`
+set NN = `echo $SIZE - 2 | bc`
+tail -$NN $RGT | head -$NFRMS | cut -c2-12 >! $START
+tail -$NN $RGT | head -$NFRMS | cut -c14-24 >! $DURA
+tail -$NN $RGT | head -$NFRMS | cut -c25-40 >! $CNTS
+set TIME = `cat $START`
+set DURATION = `cat $DURA`
+set COUNTS = `cat $CNTS`
+
+if (-e $PLT) /usr/bin/rm $PLT
+touch $PLT
+set i = 1
+while ($i <= $NFRMS)
+	set MEAN = `echo $COUNTS[$i] / $DURATION[$i] | bc -l`
+	echo $MEAN | cut -c1-12 >> $PLT
+	@ i++
+end
+
+set STRING = "$DIAMETER-mm sphere at $X,$Y,$Z"
+~/Buff/cos_plot $PLT $FIRST $LAST $FNAME.v $STRING
+
+unalias rm
+rm $TMP
+
+exit
+rm $LST
+rm $PRM
+rm $RGT
+rm $START
+rm $DURA
+rm $CNTS
+

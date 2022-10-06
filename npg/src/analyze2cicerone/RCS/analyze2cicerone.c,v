@@ -1,0 +1,237 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	2006.11.27.15.00.39;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2006.11.20.20.51.13;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@output is signed integers
+@
+text
+@/*	$Log: analyze2cicerone.c,v $
+ * Revision 1.1  2006/11/20  20:51:13  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			analyze2cicerone.c
+ *	Date:			Nov 2006
+ *	Author:			Tom Videen
+ *	Description:	Reorient image from Analyze to Cicerone standard
+ *	===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/analyze2cicerone/RCS/analyze2cicerone.c,v 1.1 2006/11/20 20:51:13 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			analyze2cicerone
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;
+	FILE           *fd_hdr;
+	FILE           *fd_img;
+	char           *in_hdr;
+	char           *in_img;
+	char           *out_hdr;
+	char           *out_img;
+
+	int             global_max;
+	int             i, j, k;
+	long            ndim1, ndim2, ndim3;
+	float           temp2, temp3;
+	short        ***nimg;
+	short 		   *row;
+
+/*	Get command line arguments and initialize filenames	*/
+
+	if (argc != 5) {
+		fprintf (stderr, "Usage: analyze2cicerone in_img in_hdr out_img out_hdr\n");
+		return (ERROR);
+	}
+	in_hdr = argv[1];
+	in_img = argv[2];
+	out_hdr = argv[3];
+	out_img = argv[4];
+
+/* Read Analyze hdr file	*/
+
+	if ((fd_hdr = fopen (in_hdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: opening %s\n", in_hdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: reading %s\n", in_hdr);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: reading %s\n", in_hdr);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: reading %s\n", in_hdr);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: reading %s\n", in_hdr);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	ndim1 = hdr.dime.dim[1];
+	ndim2 = hdr.dime.dim[2];
+	ndim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+/*	Read image	*/
+
+	if ((fd_img = fopen (in_img, "r")) == 0) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: opening %s\n", in_img);
+		return (ERROR);
+	}
+	nimg = s3tensor (1, ndim3, 1, ndim2, 1, ndim1);
+	if (nimg == NULL) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: malloc nimg\n");
+		return (ERROR);
+	}
+	fprintf (stdout, "Reading %s\n", in_img);
+	fprintf (stdout, "Dimensions: %d %d %d\n", (int) ndim1, (int) ndim2, (int) ndim3);
+
+	global_max = 0;
+	for (i = 1; i <= ndim3; i++) {
+		for (j = 1; j <= ndim2; j++) {
+			if ((fread (&nimg[i][j][1], sizeof (short), ndim1, fd_hdr)) != ndim1) {
+				fprintf (stderr, "ERROR [analyze2cicerone]: reading %s\n", in_img);
+				return (ERROR);
+			}
+			for (k = 1; k <= ndim1; k++) {
+				if (nimg[i][j][k] > global_max)
+					global_max = nimg[i][j][k];
+				if (nimg[i][j][k] < 0)
+					nimg[i][j][k] = 0;
+			}
+		}
+	}
+	(void) fclose (fd_img);
+	fprintf (stdout, "Max = %d\n", global_max);
+
+	if ((fd_img = fopen (out_img, "w")) == 0) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: opening %s\n", out_img);
+		return (ERROR);
+	}
+
+/*	Write image	*/
+
+	row = (short *) calloc (ndim1, sizeof (short));
+	if (row == NULL) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: malloc row\n");
+		return (ERROR);
+	}
+	fprintf (stdout, "Writing %s\n", out_img);
+	for (j = 1; j <= ndim2; j++) {
+		for (i = ndim3; i >= 1; i--) {
+			for (k = 0; k < ndim1; k++) 
+				row[k] = nimg[i][j][k];
+			if ((fwrite (row, sizeof (short), ndim1, fd_img)) != ndim1) {
+				fprintf (stderr, "ERROR [analyze2cicerone]: writing %s\n", out_img);
+				return (ERROR);
+			}
+		}
+	}
+
+/* Write Analyze hdr */
+
+	if ((fd_hdr = fopen (out_hdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: opening %s\n", out_hdr);
+		return (ERROR);
+	}
+	hdr.dime.dim[1] = ndim1;
+	hdr.dime.dim[2] = ndim3;
+	hdr.dime.dim[3] = ndim2;
+	temp2 = hdr.dime.pixdim[2];
+	temp3 = hdr.dime.pixdim[3];
+	hdr.dime.pixdim[2] = temp3;
+	hdr.dime.pixdim[3] = temp2;
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = 0;
+
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [analyze2cicerone]: writing %s\n", out_hdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	(void) fclose (fd_img);
+	fprintf (stdout, "Successful conversion to %s\n", out_img);
+	free_s3tensor (nimg, 1, ndim3, 1, ndim2, 1, ndim1);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d9 1
+a9 1
+ *	Description:	Convert and reorient signed Analyze to unsigned Cicerone format
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anaflip/RCS/anaflip.c,v 2.0 2004/02/13 17:25:01 tom Exp $";
+a16 1
+#include <values.h>
+a42 1
+	float           fact, tmp;
+d44 1
+a44 1
+	unsigned short *row;
+d111 2
+d124 1
+a124 1
+/*	Reformat, reorder and write image	*/
+d126 1
+a126 3
+	fact = 2 * ((float) (MAXSHORT) / (float) global_max);
+	fprintf (stdout, "Max = %d %f\n", global_max, fact);
+	row = (unsigned short *) calloc (ndim1, sizeof (unsigned short));
+d134 3
+a136 5
+			for (k = 0; k < ndim1; k++) {
+				tmp = nimg[i][j][k];
+				row[k] = (unsigned short) (tmp * fact - (float) (MAXSHORT));
+			}
+			if ((fwrite (row, sizeof (unsigned short), ndim1, fd_img)) != ndim1) {
+@

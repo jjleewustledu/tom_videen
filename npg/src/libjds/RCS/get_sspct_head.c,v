@@ -1,0 +1,1364 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	2004.02.12.22.10.59;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.12.14.15.40.00;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.12.13.17.19.45;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.12.16.16.06.27;	author jane;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.12.12.21.09.24;	author jane;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.06.10.09.09.39;	author jane;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial revision
+@
+
+
+1.6
+log
+@Feb 2004
+@
+text
+@/*$Id: get_sspct_head.c,v 1.5 1999/12/14 15:40:00 tom Exp tom $*/
+/*$Log: get_sspct_head.c,v $
+ * Revision 1.5  1999/12/14  15:40:00  tom
+ * lint clean
+ *
+ * Revision 1.4  1999/12/13  17:19:45  tom
+ * tov revision
+ *
+ * Revision 1.3  1996/12/16  16:06:27  jane
+ * syntax error corrected: if (reorient = TRUE) --> if (reorient == TRUE)
+ *
+ * Revision 1.2  1996/12/12  21:09:24  jane
+ * Modifications related to correcting for gantry tilt in ct2analyze:
+ *     1. argument "reorient" added
+ *     2. error corrected: TABLE_INC --> EXP_TIME ("TI" in orig. header)
+ *     3. zpix set to table_incr rather than slicewidth
+ *        unless table_incr not available
+ *     4. zpix corrected for gantry tilt if reorient == TRUE
+ *
+ * Revision 1.1  1996/06/10  09:09:39  jane
+ * Initial revision
+ **/
+/*  ===========================================================================
+ *  File:        get_sspct_head.c
+ *  Date:        April-96
+ *  Author:      Jane Dunford-Shore
+ *  Description: Extract data values from Siemens Somatom Plus CT image file
+ *               header. Write values to Analyze data structure and to
+ *               Interfile header file.
+ *  Functions:   get_sspct_head()
+ *  Library:     libsspct contains these functions
+ *  ===========================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <math.h>
+
+#include <ANALYZE.h>
+#include <errhand.h>
+#include <stringfns.h>
+#include <sspct.h>
+
+#define MAXSTR 256				 /* maximum length for filenames */
+
+/* ------------------------
+ * Function: get_sspct_head
+ * Synopsis: int get_sspct_head(
+ *               FILE *fp,
+ *               SSPCT_INIT hdr_init,
+ *               SSPCT_HDR *sspct_hdr,
+ *               DSR *anal_hdr,
+ *               FILE *fp_ifh,
+ *               int reorient)
+ * Description: Get header information from Siemens Somatom Plus CT header.
+ *       By default, initialize SSPLUS header structure defined in sspct.h.
+ *       Also initialize Analyze header structure if pointer to structure
+ *       is passed as parameter, and Interfile format header if pointer to
+ *       file is passed as parameter.
+ * Parameters:
+ *       Note: Fourth and fifth parameters are optional.
+ *       FILE *fp: pointer to image file, or to any file in which first
+ *           4096 bytes is Siemens Somatom Plus CT header
+ *       SSPCT_INIT hdr_init: structure with initialization values that
+ *           this function needs -- values that cannot be extracted
+ *           directly from header
+ *       SSPCT_HDR *sspct_hdr: pointer to structure that will contain
+ *           header information (see sspcthd.h)
+ *       DSR *anal_hdr: pointer to Analyze header structure
+ *       FILE *fp_ifh: buffer to hold Interfile header text
+ *       int reorient: whether or not to reorient image (TRUE or FALSE)
+ * Returns: void
+ * Modifies: *sspct_hdr, *anal_hdr, *fp_if
+ * Suggestions: Use stdarg facility to implement variable argument number.
+ * ----------------------------------------------------------------------
+ */
+void   get_sspct_head (FILE * fp, SSPCT_INIT hdr_init, SSPCT_HDR * sspct_hdr,
+				       DSR * anal_hdr, FILE * fp_ifh, int reorient)
+{
+
+/* -----------------------*
+ *  Start of Declarations *
+ * -----------------------*/
+
+/* The following values represent the Siemens Somatom Plus file format
+ * valid for at least the time period of Nov-93 through the present (April-96),
+ * the time period covered by the images we have studied. This format may have
+ * been different before Nov-93 and/or may change in the future.
+ * Format is { key, offset, length, datatype }
+ */
+
+const FIELD     head_fields[] = {
+	{IMAGE, 1664, 8, CHAR_1},
+	{PT_NAME_BIRTH, 3168, 25, CHAR_1},
+	{SCAN_ID, 3193, 12, CHAR_1},
+	{SLICE_DATE, 708, 8, CHAR_1},
+	{SLICE_TIME, 716, 8, CHAR_1},
+	{STUDY_DATE, 852, 12, CHAR_1},
+	{STUDY_TIME, 864, 11, CHAR_1},
+	{SCAN_NO, 3149, 7, CHAR_1},
+	{EXP_TIME, 3220, 9, CHAR_1},
+	{KV, 3245, 8, CHAR_1},
+	{MAS, 3233, 8, CHAR_1},
+	{SLICE_WIDTH, 3257, 8, CHAR_1},
+	{GANTRY_TILT, 3268, 9, CHAR_1},
+	{ZOOM, 3281, 8, CHAR_1},
+	{CE_X, 3292, 9, CHAR_1},
+	{CE_Y, 3304, 9, CHAR_1},
+	{TABLE_POS, 3159, 9, CHAR_1},
+	{PT_ORIENT, 3325, 20, CHAR_1},
+	{PIXELSIZE, 1802, 4, FLOAT},
+	{SYSTEM, 3076, 21, CHAR_1},
+	{INSTITUTION, 3102, 25, CHAR_1},
+	{COMMENT1, 3345, 24, CHAR_1},
+	{COMMENT2, 3369, 25, CHAR_1},
+	{UNKNOWN1, 3729, 8, CHAR_1},
+	{LAST, 0, 0, 0}				 /* not an actual field -- for ending loop only */
+};
+
+	const int       COLUMNS = 512;		 /* columns in pixel matrix (pixels/row) */
+	const int       ROWS = 512;			 /* rows in pixel matrix */
+	const int       BITSPERPIX = 16;	 /* 16 bits are allocated per pixel */
+								 	 /* (only 12 of these bits are used) */
+
+	/* Values for image orientation field in Analyze header 
+	 *	const char      CORONAL = '\001';
+	 *	const char      SAGITTAL = '\002';
+	 */
+	const char      TRANSVERSE = '\000';
+
+	/* RCS data -- for Interfile header */
+	static char     rcs_revision[] = "$Revision: 1.5 $";	/* assigned revision number */
+	static char     rcs_date[] = "$Date: 1999/12/14 15:40:00 $";	/* date and time of checkin */
+	char           *ptr;		 /* for extracting revision no and date from above strings */
+	char            prog_vers[4];		 /* program revision number */
+	char            prog_date[11];		 /* program date */
+
+	/* Misc. variables for holding and converting header values */
+	char           *string;			 /* Most header values get placed here first */
+	char            tmpstr[MAXSTR];		 /* temporary string #1 */
+
+	int             i;			 /* counter */
+
+	/* Which header structures/files should be filled */
+	BOOL            analh = FALSE;		 /* TRUE if anal_hdr argument specified */
+	BOOL            ifh = FALSE;		 /* TRUE if fp_if argument specified */
+
+	/* Correcting zpix for gantry tilt */
+	int             gt_deg;			 /* gantry tilt in degrees */
+	double          gt_rad;			 /* gantry tilt in radians */
+
+/* ---------------------*
+ *  End of Declarations *
+ * ---------------------*/
+
+/*
+ * Check function arguments
+ */
+
+	/* Check for required arguments */
+	if (fp == NULL || sspct_hdr == NULL)
+		err_handler (CUSTOM, "Required parameter missing for get_sspct_head()");
+
+/* Check for optional arguments */
+
+	if (anal_hdr != NULL)
+		analh = TRUE;
+	if (fp_ifh != NULL) 
+		ifh = TRUE;
+	if (reorient != TRUE) 
+		reorient = FALSE;
+
+/*
+ *	Initialize data values for SSPCT_HDR structure
+ */
+
+	/*	Initialize data structure -- characters to nulls and numbers to 0 */
+	memset (sspct_hdr, 0, sizeof (*sspct_hdr));
+
+	/*	Initialize values that either are not contained in header */
+	/*	or have not been located in header */
+
+	/*	Image x, y, and z dimensions */
+	sspct_hdr->scan.xdim = COLUMNS;
+	sspct_hdr->scan.ydim = ROWS;
+	sspct_hdr->scan.zdim = hdr_init.num_slices;
+
+	/*	Pixel minimum and maximum values */
+	sspct_hdr->scan.global_min = hdr_init.global_min;
+	sspct_hdr->scan.global_max = hdr_init.global_max;
+
+	/*	Filename */
+	strcpy (sspct_hdr->slice.filename, hdr_init.infile);
+
+	/*	Image number -- corresponds to filename */
+	strncpy (tmpstr, hdr_init.infile, 5);
+	tmpstr[6] = '\0';
+	sprintf (sspct_hdr->slice.image_no, "%-3d", atoi (tmpstr));
+
+	/*	Output file prefix */
+	strcpy (sspct_hdr->scan.prefix, hdr_init.prefix);
+
+/*
+ * Initialize data values for Interfile header
+ */
+
+	ptr = strstr (rcs_revision, ": ");
+	ptr += 2;
+	strncpy (prog_vers, ptr, 3);
+	prog_vers[3] = '\0';
+
+	ptr = strstr (rcs_date, ": ");
+	ptr += 2;
+	strncpy (prog_date, ptr, 10);
+	prog_date[10] = '\0';
+
+	/* Replace slashes in date with colons */
+	ptr = strchr (prog_date, '/');
+	*ptr = ':';
+	ptr = strchr (prog_date, '/');
+	*ptr = ':';
+
+/*
+ * Extract field values from header
+ */
+
+	for (i = 0; head_fields[i].field_name != LAST; i++) {
+
+		switch (head_fields[i].data_type) {	/* Datatype of field determines method  */
+			/* for extracting/converting data.      */
+
+		case CHAR_1:
+
+			string = get_bin_str (fp, head_fields[i].offset, head_fields[i].length);
+
+			switch (head_fields[i].field_name) {
+
+			case IMAGE:
+				if (!strcmp (string, "Topogram")) {
+					sspct_hdr->slice.image_type = LOCALIZER;
+				} else {
+					sspct_hdr->slice.image_type = AXIAL;
+				}
+				break;
+
+			case PT_NAME_BIRTH:
+				strcpy (sspct_hdr->pt.pt_name_birth, string);
+				break;
+
+			case SCAN_ID:
+				strcpy (sspct_hdr->scan.scan_id, string);
+				break;
+
+			case STUDY_DATE:
+				strcpy (sspct_hdr->scan.date, string);
+				break;
+
+			case STUDY_TIME:
+				strcpy (sspct_hdr->scan.time, string);
+				break;
+
+			case SLICE_DATE:
+				/* Original format of date string = YYYYMMDD */
+				/* Place it in date/time structure (struct tm, defined */
+				/* in time.h) for easy conversion */
+
+				/* Get year as years since 1900 */
+				strncpy (tmpstr, string, 4);
+				tmpstr[4] = '\0';
+				sspct_hdr->slice.str_date.tm_year = atoi (tmpstr) - 1900;
+
+				/* Get month as months since January (0-11) */
+				string += 4;
+				strncpy (tmpstr, string, 2);
+				tmpstr[2] = '\0';
+				sspct_hdr->slice.str_date.tm_mon = atoi (tmpstr) - 1;
+
+				/* Get day of month */
+				string += 2;
+				strncpy (tmpstr, string, 2);
+				tmpstr[2] = '\0';
+				sspct_hdr->slice.str_date.tm_mday = atoi (tmpstr);
+
+				/* Format date string in Interfile format (YYYY:MM:DD) */
+				strftime (sspct_hdr->slice.date, 11, "%Y:%m:%d", &(sspct_hdr->slice.str_date));
+				break;
+
+			case SLICE_TIME:
+				/* Original format of time string = HHMMSS */
+				/* Place it in date/time structure (struct tm, defined */
+				/* in time.h) for easy conversion */
+
+				/* Get hours as hours since midnight (0-23) */
+				strncpy (tmpstr, string, 2);
+				tmpstr[2] = '\0';
+				sspct_hdr->slice.str_date.tm_hour = atoi (tmpstr);
+
+				/* Get minutes as minutes after the hour (0-59) */
+				string += 2;
+				strncpy (tmpstr, string, 2);
+				tmpstr[2] = '\0';
+				sspct_hdr->slice.str_date.tm_min = atoi (tmpstr);
+
+				/* Get seconds as seconds after the minute */
+				string += 2;
+				strncpy (tmpstr, string, 2);
+				tmpstr[2] = '\0';
+				sspct_hdr->slice.str_date.tm_sec = atoi (tmpstr);
+
+				/* Format time string in Interfile format (HH:MM:SS) */
+				strftime (sspct_hdr->slice.time, 9, "%H:%M:%S", &(sspct_hdr->slice.str_date));
+				break;
+
+			case SCAN_NO:
+				sprintf (tmpstr, "%d", atoi (string));	/* Remove whitespace */
+				strcpy (sspct_hdr->slice.scan_no, tmpstr);
+				break;
+
+			case EXP_TIME:
+				strcpy (sspct_hdr->scan.exp_time, string);
+				break;
+
+			case KV:
+				strcpy (sspct_hdr->scan.kV, string);
+				break;
+
+			case MAS:
+				strcpy (sspct_hdr->scan.mAs, string);
+				break;
+
+			case SLICE_WIDTH:	 /* Note: zpix defined here */
+				strcpy (sspct_hdr->scan.slice_width, string);
+
+				/*
+				 * If table increment was not calculated (==0), set zpix to slice
+				 * width; otherwise set zpix to calculated table increment (slice
+				 * separation).
+				 */
+				if (hdr_init.table_incr == 0) {
+					sspct_hdr->scan.zpix = atof (string);
+				} else {
+					sspct_hdr->scan.zpix = hdr_init.table_incr;
+				}
+				break;
+
+			case GANTRY_TILT:
+				strcpy (sspct_hdr->scan.gantry_tilt, string);
+				break;
+
+			case ZOOM:
+				strcpy (sspct_hdr->scan.zoom, string);
+				break;
+
+			case CE_X:
+				strcpy (sspct_hdr->scan.ce_x, string);
+				break;
+
+			case CE_Y:
+				strcpy (sspct_hdr->scan.ce_y, string);
+				break;
+
+			case TABLE_POS:
+				strcpy (sspct_hdr->slice.table_pos, string);
+				break;
+
+			case SYSTEM:
+				strcpy (sspct_hdr->scan.system, string);
+				break;
+
+			case INSTITUTION:
+				strcpy (sspct_hdr->scan.institution, string);
+				break;
+
+			case PT_ORIENT:
+
+				/*
+				 * Check image orientation string. This program assumes transverse
+				 * sections, with the first slice being at the bottom of the brain,
+				 * and with right brain on the left.
+				 */
+				strcpy (sspct_hdr->scan.pt_orient, string);
+				if (sspct_hdr->slice.image_type == AXIAL) {
+					if (strncmp (string, "RIGHT     ANTERIOR", 17)) {
+						sprintf (tmpstr, "Unsupported image orientation: %s", string);
+						err_handler (CUSTOM, tmpstr);
+					}
+				}
+				break;
+
+			case COMMENT1:
+				strcpy (sspct_hdr->scan.comment1, string);
+				break;
+
+			case COMMENT2:
+				strcpy (sspct_hdr->scan.comment2, string);
+				break;
+
+			case UNKNOWN1:
+				strcpy (sspct_hdr->slice.unknown, string);
+				break;
+
+			default:
+				break;
+			}			 /* end switch (head_fields[i].field_name) */
+			break;
+
+		case FLOAT:
+			string = get_bin_str (fp, head_fields[i].offset, head_fields[i].length);
+
+			switch (head_fields[i].field_name) {
+
+			case PIXELSIZE:
+				sspct_hdr->scan.ypix = dec2sun_float ((unsigned char *) string);
+				sspct_hdr->scan.xpix = sspct_hdr->scan.ypix;
+				break;
+
+			default:
+				break;
+			}
+			break;
+
+		default:
+			break;
+		}
+
+	}					 /* end for loop */
+
+/*
+ * Calculate true zpix if slices are being reoriented to correct for gantry tilt
+ */
+	if (reorient == TRUE) {
+		gt_deg = atoi (sspct_hdr->scan.gantry_tilt);	/* gantry tilt in degrees */
+		gt_rad = ((double) gt_deg / (double) 180.0) * M_PI;	/* gantry tilt in radians */
+		sspct_hdr->scan.zpix = fabs (sspct_hdr->scan.zpix * cos (gt_rad));
+	}
+/*
+ * If Analyze header structure passed as argument, fill it
+ */
+
+	if (analh) {
+
+		/* Initialize structure */
+		memset (anal_hdr, 0, sizeof (*anal_hdr));
+
+		/*
+		 * Assign values
+		 */
+		strncpy (anal_hdr->hk.db_name, hdr_init.prefix, 17);	/* 18-byte field */
+		anal_hdr->hk.sizeof_hdr = sizeof (struct dsr);	/* required by developers */
+		anal_hdr->hk.extents = 16384;	 /* min. header size -- recommended */
+		anal_hdr->hk.regular = 'r';	 /* required by developers */
+
+		/*
+		 * Image dimensions:
+		 * 
+		 * zdim = number of slices in a volume \     \    | ydim = pixel rows in a slice \   |
+		 * \  | \ | \| |__________ xdim = pixels in a row
+		 */
+
+		anal_hdr->dime.dim[0] = 4;	 /* Number of dimensions */
+		anal_hdr->dime.dim[1] = sspct_hdr->scan.xdim;	/* Number of pixels in a row */
+		anal_hdr->dime.dim[2] = sspct_hdr->scan.ydim;	/* Number of pixel rows in slice */
+		anal_hdr->dime.dim[3] = sspct_hdr->scan.zdim;	/* Number of slices in a volume */
+		anal_hdr->dime.dim[4] = 1;	 /* Time points; number of volumes */
+
+		anal_hdr->dime.datatype = 4;	 /* signed short (16 bits per voxel) */
+		anal_hdr->dime.bitpix = BITSPERPIX;
+		anal_hdr->dime.pixdim[1] = sspct_hdr->scan.xpix;
+		anal_hdr->dime.pixdim[2] = sspct_hdr->scan.ypix;
+		anal_hdr->dime.pixdim[3] = sspct_hdr->scan.zpix;
+
+		anal_hdr->dime.glmax = hdr_init.global_max;
+		anal_hdr->dime.glmin = hdr_init.global_min;
+
+		strncpy (anal_hdr->hist.descrip, hdr_init.prefix, 79);	/* 80-byte field */
+		strcpy (anal_hdr->hist.originator, "ct2analy");
+		anal_hdr->hist.orient = TRANSVERSE;
+	}
+/*
+ * Create Interfile Format header file
+ */
+
+	if (ifh) {
+
+		fprintf (fp_ifh, "INTERFILE :=\n");
+		fprintf (fp_ifh, "imaging modality := ct\n");
+		fprintf (fp_ifh, "originating system := %s\n", sspct_hdr->scan.system);
+		fprintf (fp_ifh, "version of keys := 3.3\n");
+
+		fprintf (fp_ifh, "conversion program := ct2analyze\n");
+		fprintf (fp_ifh, "program author := Jane Dunford-Shore\n");
+		fprintf (fp_ifh, "program version := %s\n", prog_vers);
+		fprintf (fp_ifh, "program date := %s\n", prog_date);
+
+		fprintf (fp_ifh, "original institution := %s\n", sspct_hdr->scan.institution);
+		fprintf (fp_ifh, "data offset in bytes := 0\n");	/* refers to data file
+									 * (*.img) */
+		fprintf (fp_ifh, "name of data file := %s.img\n", hdr_init.prefix);
+		fprintf (fp_ifh, "patient ID := %s\n", hdr_init.prefix);
+		fprintf (fp_ifh, "study ID := %s\n", "");
+
+		fprintf (fp_ifh, "GENERAL IMAGE DATA :=\n");
+		fprintf (fp_ifh, "type of data := Tomographic\n");
+		fprintf (fp_ifh, "total number of images := %d\n", hdr_init.num_slices);
+		fprintf (fp_ifh, "study date := %s\n", sspct_hdr->slice.date);
+		fprintf (fp_ifh, "study time := %s\n", sspct_hdr->slice.time);
+		fprintf (fp_ifh, "number format := signed integer\n");
+		fprintf (fp_ifh, "number of bytes per pixel := %d\n", BITSPERPIX / 8);
+		fprintf (fp_ifh, "number of dimensions := 3\n");
+		fprintf (fp_ifh, "matrix size [1] := %d\n", sspct_hdr->scan.xdim);
+		fprintf (fp_ifh, "matrix size [2] := %d\n", sspct_hdr->scan.ydim);
+		fprintf (fp_ifh, "matrix size [3] := %d\n", sspct_hdr->scan.zdim);
+		fprintf (fp_ifh, "scaling factor (mm/pixel) [1] := %f\n", sspct_hdr->scan.xpix);
+		fprintf (fp_ifh, "scaling factor (mm/pixel) [2] := %f\n", sspct_hdr->scan.ypix);
+		fprintf (fp_ifh, "scaling factor (mm/pixel) [3] := %f\n", sspct_hdr->scan.zpix);
+		fprintf (fp_ifh, "matrix initial element [1] := right\n");
+		fprintf (fp_ifh, "matrix initial element [2] := posterior\n");
+		fprintf (fp_ifh, "matrix initial element [3] := inferior\n");
+	}
+}
+@
+
+
+1.5
+log
+@lint clean
+@
+text
+@d1 1
+a1 1
+/*$Id: get_sspct_head.c,v 1.4 1999/12/13 17:19:45 tom Exp tom $*/
+d3 3
+d134 2
+a135 2
+	static char     rcs_revision[] = "$Revision: 1.4 $";	/* assigned revision number */
+	static char     rcs_date[] = "$Date: 1999/12/13 17:19:45 $";	/* date and time of checkin */
+@
+
+
+1.4
+log
+@tov revision
+@
+text
+@d1 1
+a1 1
+/*$Id: get_sspct_head.c,v 1.3 1996/12/16 16:06:27 jane Exp tom $*/
+d3 3
+d45 34
+a78 2
+const int       COLUMNS = 512;			 /* columns in pixel matrix (pixels/row) */
+const int       ROWS = 512;			 /* rows in pixel matrix */
+d80 3
+a82 2
+const unsigned int LEN_HEADER = 4096;		 /* bytes in header portion of file */
+const unsigned int LEN_DATA = 524288;		 /* bytes in data portion of file   */
+d84 1
+a84 13
+const int       MAXLEN_IFH = 2048;		 /* max. length of Interfile header (text) */
+								 /* - specific number not important (can be changed) */
+
+const int       BITSPERPIX = 16;		 /* 16 bits are allocated per pixel */
+								 /* (only 12 of these bits are used) */
+
+/* Values for image orientation field in Analyze header */
+const char      TRANSVERSE = '\000';
+const char      CORONAL = '\001';
+const char      SAGITTAL = '\002';
+
+/*
+ * The following values represent the Siemens Somatom Plus file format
+d119 4
+d124 5
+a128 31
+/* ------------------------
+ * Function: get_sspct_head
+ * Synopsis: int get_sspct_head(
+ *               FILE *fp,
+ *               SSPCT_INIT hdr_init,
+ *               SSPCT_HDR *sspct_hdr,
+ *               DSR *anal_hdr,
+ *               FILE *fp_ifh,
+ *               int reorient)
+ * Description: Get header information from Siemens Somatom Plus CT header.
+ *       By default, initialize SSPLUS header structure defined in sspct.h.
+ *       Also initialize Analyze header structure if pointer to structure
+ *       is passed as parameter, and Interfile format header if pointer to
+ *       file is passed as parameter.
+ * Parameters:
+ *       Note: Fourth and fifth parameters are optional.
+ *       FILE *fp: pointer to image file, or to any file in which first
+ *           4096 bytes is Siemens Somatom Plus CT header
+ *       SSPCT_INIT hdr_init: structure with initialization values that
+ *           this function needs -- values that cannot be extracted
+ *           directly from header
+ *       SSPCT_HDR *sspct_hdr: pointer to structure that will contain
+ *           header information (see sspcthd.h)
+ *       DSR *anal_hdr: pointer to Analyze header structure
+ *       FILE *fp_ifh: buffer to hold Interfile header text
+ *       int reorient: whether or not to reorient image (TRUE or FALSE)
+ * Returns: void
+ * Modifies: *sspct_hdr, *anal_hdr, *fp_if
+ * Suggestions: Use stdarg facility to implement variable argument number.
+ * ------------------------
+ */
+a129 14
+void            get_sspct_head (
+				                FILE * fp,
+				                SSPCT_INIT hdr_init,
+				                SSPCT_HDR * sspct_hdr,
+				                DSR * anal_hdr,
+				                FILE * fp_ifh,
+				                int reorient
+)
+{
+
+/* -----------------------*
+ *  Start of Declarations *
+ * -----------------------*/
+
+d131 3
+a133 4
+	static char     rcs_revision[] = "$Revision: 1.3 $";	/* assigned revision number */
+	static char     rcs_date[] = "$Date: 1996/12/16 16:06:27 $";	/* date and time of checkin */
+	char           *ptr = NULL;		 /* for extracting revision number and date from
+						  * above strings */
+@
+
+
+1.3
+log
+@syntax error corrected: if (reorient = TRUE) --> if (reorient == TRUE)
+@
+text
+@d1 1
+a1 1
+/*$Id: get_sspct_head.c,v 1.2 1996/12/12 21:09:24 jane Exp jane $*/
+d3 3
+d22 1
+a22 1
+ *               header. Write values to Analyze data structure and to 
+d35 4
+a38 4
+#include "ANALYZE.h"
+#include "errhand.h"  
+#include "stringfns.h"  
+#include "sspct.h"
+d40 1
+a40 1
+#define MAXSTR 256                /* maximum length for filenames */
+d42 2
+a43 2
+const int COLUMNS = 512;	  /* columns in pixel matrix (pixels/row) */
+const int ROWS    = 512;	  /* rows in pixel matrix */
+d45 2
+a46 2
+const unsigned int LEN_HEADER = 4096; /* bytes in header portion of file */
+const unsigned int LEN_DATA = 524288; /* bytes in data portion of file   */
+d48 2
+a49 2
+const int MAXLEN_IFH = 2048;      /* max. length of Interfile header (text) */
+                                  /* - specific number not important (can be changed) */
+d51 2
+a52 2
+const int BITSPERPIX = 16;  /* 16 bits are allocated per pixel */
+                            /* (only 12 of these bits are used) */
+d55 5
+a59 5
+const char TRANSVERSE = '\000';
+const char CORONAL    = '\001';
+const char SAGITTAL   = '\002';
+			
+/* 
+d61 2
+a62 2
+ * valid for at least the time period of Nov-93 through the present (April-96), 
+ * the time period covered by the images we have studied. This format may have 
+d67 26
+a92 26
+const FIELD head_fields[] = {
+    { IMAGE, 1664, 8, CHAR_1 },
+    { PT_NAME_BIRTH, 3168, 25, CHAR_1 }, 
+    { SCAN_ID, 3193, 12, CHAR_1 },
+    { SLICE_DATE, 708, 8, CHAR_1 },
+    { SLICE_TIME, 716, 8, CHAR_1 },
+    { STUDY_DATE, 852, 12, CHAR_1 },
+    { STUDY_TIME, 864, 11, CHAR_1 },
+    { SCAN_NO, 3149, 7, CHAR_1 },
+    { EXP_TIME, 3220, 9, CHAR_1 },
+    { KV, 3245, 8, CHAR_1 },
+    { MAS, 3233, 8, CHAR_1 },
+    { SLICE_WIDTH, 3257, 8, CHAR_1 },
+    { GANTRY_TILT, 3268, 9, CHAR_1 },
+    { ZOOM, 3281, 8, CHAR_1},
+    { CE_X, 3292, 9, CHAR_1},
+    { CE_Y, 3304, 9, CHAR_1},
+    { TABLE_POS, 3159, 9, CHAR_1 },
+    { PT_ORIENT, 3325, 20, CHAR_1 },
+    { PIXELSIZE, 1802, 4, FLOAT },
+    { SYSTEM, 3076, 21, CHAR_1},
+    { INSTITUTION, 3102, 25, CHAR_1},
+    { COMMENT1, 3345, 24, CHAR_1},
+    { COMMENT2, 3369, 25, CHAR_1},
+    { UNKNOWN1, 3729, 8, CHAR_1},
+    { LAST, 0, 0, 0 }   /* not an actual field -- for ending loop only */
+a93 1
+      
+d95 1
+d99 1
+a99 1
+ *               FILE *fp, 
+d101 2
+a102 2
+ *               SSPCT_HDR *sspct_hdr, 
+ *               DSR *anal_hdr, 
+d110 1
+a110 1
+ * Parameters: 
+d123 3
+a125 3
+ * Modifies: *sspct_hdr, *anal_hdr, *fp_if               
+ * Suggestions: Use stdarg facility to implement variable argument number.     
+ * ------------------------ 
+d128 8
+a135 8
+void get_sspct_head(
+    FILE        *fp, 
+    SSPCT_INIT  hdr_init,
+    SSPCT_HDR   *sspct_hdr, 
+    DSR         *anal_hdr, 
+    FILE        *fp_ifh,
+    int         reorient
+    ) 
+d138 3
+a140 3
+ /*-----------------------*
+  * Start of Declarations *
+  *-----------------------*/
+d142 7
+a148 6
+ /* RCS data -- for Interfile header */
+    static char rcs_revision[] = "$Revision: 1.2 $"; /* assigned revision number */
+    static char rcs_date[] = "$Date: 1996/12/12 21:09:24 $"; /* date and time of checkin */
+    char *ptr = NULL;   /* for extracting revision number and date from above strings */
+    char prog_vers[4];  /* program revision number */
+    char prog_date[11]; /* program date */
+d150 3
+a152 4
+ /* Misc. variables for holding and converting header values */
+    char   *string;		/* Most header values get placed here first */
+    char   tmpstr[MAXSTR];	/* temporary string #1 */
+    char   tmpstr2[MAXSTR];	/* temporary string #2 */
+d154 1
+a154 1
+    int    i;			/* counter */
+d156 3
+a158 3
+ /* Which header structures/files should be filled */
+    BOOL analh = FALSE;		/* TRUE if anal_hdr argument specified */
+    BOOL ifh   = FALSE;		/* TRUE if fp_if argument specified */
+d160 3
+a162 3
+ /* Correcting zpix for gantry tilt */
+    int    gt_deg;              /* gantry tilt in degrees */
+    double gt_rad;              /* gantry tilt in radians */
+d164 3
+a166 3
+ /*---------------------*
+  * End of Declarations *
+  *---------------------*/
+d172 3
+a174 9
+    /* Check for required arguments */
+    if (fp == NULL || sspct_hdr == NULL ) {
+        err_handler(CUSTOM, "Required parameter missing for get_sspct_head()");
+    }
+    
+    /* Check for optional arguments */
+    if (anal_hdr != NULL) {
+        analh = TRUE;
+    }
+d176 1
+a176 3
+    if (fp_ifh != NULL) {
+        ifh = TRUE;
+    }
+d178 7
+a184 4
+    if (reorient != TRUE) {
+        reorient = FALSE;
+    }
+        
+d186 1
+a186 1
+ * Initialize data values for SSPCT_HDR structure
+d189 2
+a190 2
+    /* Initialize data structure -- characters to nulls and numbers to 0 */
+    memset(sspct_hdr, 0, sizeof(*sspct_hdr));
+d192 2
+a193 2
+    /* Initialize values that either are not contained in header */
+    /* or have not been located in header */
+d195 4
+a198 4
+    /* Image x, y, and z dimensions */
+    sspct_hdr->scan.xdim = COLUMNS;
+    sspct_hdr->scan.ydim = ROWS;
+    sspct_hdr->scan.zdim = hdr_init.num_slices;
+d200 3
+a202 3
+    /* Pixel minimum and maximum values */
+    sspct_hdr->scan.global_min = hdr_init.global_min;
+    sspct_hdr->scan.global_max = hdr_init.global_max;
+d204 2
+a205 2
+    /* Filename */
+    strcpy(sspct_hdr->slice.filename, hdr_init.infile);
+d207 4
+a210 4
+    /* Image number -- corresponds to filename */
+    strncpy(tmpstr, hdr_init.infile, 5);
+    tmpstr[6] = '\0';
+    sprintf(sspct_hdr->slice.image_no, "%-3d", atoi(tmpstr));
+d212 2
+a213 2
+    /* Output file prefix */
+    strcpy(sspct_hdr->scan.prefix, hdr_init.prefix);
+d219 4
+a222 9
+    ptr = strstr(rcs_revision, ": ");
+    ptr+=2;
+    strncpy(prog_vers, ptr, 3); 
+    prog_vers[3] = '\0';    
+        
+    ptr = strstr(rcs_date, ": ");
+    ptr+=2;
+    strncpy(prog_date, ptr, 10);
+    prog_date[10] = '\0';
+d224 4
+a227 5
+    /* Replace slashes in date with colons */
+    ptr = strchr(prog_date, '/');
+    *ptr = ':';
+    ptr = strchr(prog_date, '/');
+    *ptr = ':';
+d229 6
+d239 1
+a239 1
+    for (i = 0; head_fields[i].field_name != LAST ;i++ ) {  
+d241 2
+a242 2
+        switch (head_fields[i].data_type) {   /* Datatype of field determines method  */
+					      /* for extracting/converting data.      */
+d244 1
+a244 1
+            case CHAR_1:
+d246 1
+a246 1
+                string = get_bin_str(fp, head_fields[i].offset, head_fields[i].length);
+d248 1
+a248 1
+                switch (head_fields[i].field_name) {
+d250 7
+a256 12
+	            case IMAGE:
+                        if (!strcmp(string, "Topogram")) {              
+                            sspct_hdr->slice.image_type = LOCALIZER;
+                        }  
+                        else {                                                 
+                            sspct_hdr->slice.image_type = AXIAL;
+                        }
+                        break;
+     
+	            case PT_NAME_BIRTH:
+                        strcpy(sspct_hdr->pt.pt_name_birth, string);
+                        break;
+d258 3
+a260 3
+                    case SCAN_ID:
+                        strcpy(sspct_hdr->scan.scan_id, string);
+                        break;
+d262 3
+a264 3
+                    case STUDY_DATE:
+                        strcpy(sspct_hdr->scan.date, string);
+                        break;
+d266 3
+a268 3
+                    case STUDY_TIME:
+                        strcpy(sspct_hdr->scan.time, string);
+                        break;
+d270 3
+a272 15
+                    case SLICE_DATE:
+	  	        /* Original format of date string = YYYYMMDD */
+		        /* Place it in date/time structure (struct tm, defined */
+	       	        /* in time.h) for easy conversion */
+ 
+                        /* Get year as years since 1900 */
+                        strncpy(tmpstr, string, 4);
+                        tmpstr[4] = '\0';
+                        sspct_hdr->slice.str_date.tm_year = atoi(tmpstr) - 1900;
+   
+                        /* Get month as months since January (0-11) */
+                        string+=4;
+                        strncpy(tmpstr, string, 2);
+                        tmpstr[2] = '\0';
+                        sspct_hdr->slice.str_date.tm_mon = atoi(tmpstr) - 1;
+d274 4
+a277 5
+                        /* Get day of month */
+                        string+=2;
+                        strncpy(tmpstr, string, 2);
+                        tmpstr[2] = '\0';
+                        sspct_hdr->slice.str_date.tm_mday = atoi(tmpstr);
+d279 4
+a282 3
+                        /* Format date string in Interfile format (YYYY:MM:DD) */
+                        strftime(sspct_hdr->slice.date, 11, "%Y:%m:%d", &(sspct_hdr->slice.str_date));
+                        break;
+d284 5
+a288 9
+                    case SLICE_TIME:
+                        /* Original format of time string = HHMMSS */
+	                /* Place it in date/time structure (struct tm, defined */
+         	        /* in time.h) for easy conversion */
+            
+                        /* Get hours as hours since midnight (0-23) */
+                        strncpy(tmpstr, string, 2);
+                        tmpstr[2] = '\0';
+                        sspct_hdr->slice.str_date.tm_hour = atoi(tmpstr);
+d290 5
+a294 5
+                        /* Get minutes as minutes after the hour (0-59) */
+                        string+=2;
+                        strncpy(tmpstr, string, 2);
+                        tmpstr[2] = '\0';
+                        sspct_hdr->slice.str_date.tm_min = atoi(tmpstr);
+d296 3
+a298 5
+                        /* Get seconds as seconds after the minute */
+                        string+=2;
+                        strncpy(tmpstr, string, 2);
+                        tmpstr[2] = '\0';
+                        sspct_hdr->slice.str_date.tm_sec = atoi(tmpstr);
+d300 4
+a303 3
+                        /* Format time string in Interfile format (HH:MM:SS) */
+                        strftime(sspct_hdr->slice.time, 9, "%H:%M:%S", &(sspct_hdr->slice.str_date));
+                        break;
+d305 4
+a308 4
+                    case SCAN_NO:
+                        sprintf(tmpstr, "%d", atoi(string)); /* Remove whitespace */  
+                        strcpy(sspct_hdr->slice.scan_no, tmpstr);
+                        break;
+d310 5
+a314 3
+                    case EXP_TIME:
+                        strcpy(sspct_hdr->scan.exp_time, string);
+                        break;
+d316 5
+a320 3
+                    case KV:
+                        strcpy(sspct_hdr->scan.kV, string);
+                        break;
+d322 3
+a324 6
+                    case MAS:
+                        strcpy(sspct_hdr->scan.mAs, string);
+                        break;
+   
+                    case SLICE_WIDTH: /* Note: zpix defined here */
+                        strcpy(sspct_hdr->scan.slice_width, string);
+d326 4
+a329 11
+			/* If table increment was not calculated (==0), set
+			 * zpix to slice width; otherwise set zpix to calculated
+			 * table increment (slice separation).
+                         */
+                        if (hdr_init.table_incr == 0) {
+                            sspct_hdr->scan.zpix = atof(string);
+                        }
+                        else {
+                            sspct_hdr->scan.zpix = hdr_init.table_incr;
+                        }
+                        break;
+d331 3
+a333 3
+                    case GANTRY_TILT:
+                        strcpy(sspct_hdr->scan.gantry_tilt, string);
+                        break;
+d335 3
+a337 3
+                    case ZOOM:
+                        strcpy(sspct_hdr->scan.zoom, string);
+                        break;
+d339 3
+a341 3
+                    case CE_X:
+                        strcpy(sspct_hdr->scan.ce_x, string);
+                        break;
+d343 2
+a344 7
+                    case CE_Y:
+                        strcpy(sspct_hdr->scan.ce_y, string);
+                        break;
+ 
+                    case TABLE_POS:
+                        strcpy(sspct_hdr->slice.table_pos, string);
+                        break;
+d346 11
+a356 22
+                    case SYSTEM:
+                        strcpy(sspct_hdr->scan.system, string);
+                        break;
+    
+                    case INSTITUTION:
+                        strcpy(sspct_hdr->scan.institution, string);
+                        break;
+  
+	            case PT_ORIENT:
+                       
+                    /* Check image orientation string. This program assumes transverse 
+                     * sections, with the first slice being at the bottom of the brain, 
+                     * and with right brain on the left.
+	             */
+                        strcpy(sspct_hdr->scan.pt_orient, string);
+		        if (sspct_hdr->slice.image_type == AXIAL) {
+                            if (strncmp(string, "RIGHT     ANTERIOR", 17)) {
+                                sprintf(tmpstr, "Unsupported image orientation: %s", string);
+                                err_handler(CUSTOM, tmpstr);
+                            }                           
+		        }
+                        break;
+d358 3
+a360 3
+                    case COMMENT1:
+                        strcpy(sspct_hdr->scan.comment1, string);
+                        break;
+d362 3
+a364 3
+                    case COMMENT2:
+                        strcpy(sspct_hdr->scan.comment2, string);
+                        break;
+d366 3
+a368 3
+	            case UNKNOWN1:
+                        strcpy(sspct_hdr->slice.unknown, string);
+                        break;
+d370 3
+a372 4
+                    default:
+                        break;
+                }    /* end switch (head_fields[i].field_name) */
+                break;
+d374 3
+a376 2
+            case FLOAT:   
+                string = get_bin_str(fp, head_fields[i].offset, head_fields[i].length);
+d378 3
+a380 1
+                switch (head_fields[i].field_name) {
+d382 3
+a384 4
+            	    case PIXELSIZE:
+                        sspct_hdr->scan.ypix = dec2sun_float((unsigned char *)string);
+                        sspct_hdr->scan.xpix =  sspct_hdr->scan.ypix;                        
+                        break;
+d386 1
+a386 4
+                    default:
+                        break;
+                }           
+                break; 
+d388 13
+a400 3
+	    default:
+                break;   
+            }
+d402 3
+a404 1
+    }    /* end for loop */  
+d406 34
+d443 5
+a447 6
+    if (reorient == TRUE) {
+        gt_deg = atoi(sspct_hdr->scan.gantry_tilt);        /* gantry tilt in degrees */
+        gt_rad = ((double)gt_deg / (double)180.0) * M_PI;  /* gantry tilt in radians */
+        sspct_hdr->scan.zpix = fabs(sspct_hdr->scan.zpix * cos(gt_rad));
+    }
+
+d452 1
+a452 4
+    if (analh) {
+    
+        /* Initialize structure */
+        memset(anal_hdr, 0, sizeof(*anal_hdr));
+d454 2
+a455 7
+     /* 
+      * Assign values 
+      */
+        strncpy(anal_hdr->hk.db_name, hdr_init.prefix, 17); /* 18-byte field */
+	anal_hdr->hk.sizeof_hdr = sizeof(struct dsr); /* required by developers */
+	anal_hdr->hk.extents = 16384; /* min. header size -- recommended */
+	anal_hdr->hk.regular = 'r'; /* required by developers */
+d457 7
+a463 12
+	/* 
+         * Image dimensions:
+         *
+         *   zdim = number of slices in a volume
+         *   \     
+         *    \    | ydim = pixel rows in a slice
+         *     \   |
+         *      \  |
+         *       \ |
+         *        \|
+         *         |__________ xdim = pixels in a row
+         */
+d465 6
+a470 5
+	anal_hdr->dime.dim[0] = 4; /* Number of dimensions */
+	anal_hdr->dime.dim[1] = sspct_hdr->scan.xdim; /* Number of pixels in a row */
+	anal_hdr->dime.dim[2] = sspct_hdr->scan.ydim; /* Number of pixel rows in slice */
+	anal_hdr->dime.dim[3] = sspct_hdr->scan.zdim; /* Number of slices in a volume */
+	anal_hdr->dime.dim[4] = 1; /* Time points; number of volumes */
+d472 5
+a476 8
+	anal_hdr->dime.datatype  = 4; /* signed short (16 bits per voxel) */
+	anal_hdr->dime.bitpix    = BITSPERPIX;
+	anal_hdr->dime.pixdim[1] = sspct_hdr->scan.xpix;
+	anal_hdr->dime.pixdim[2] = sspct_hdr->scan.ypix;
+	anal_hdr->dime.pixdim[3] = sspct_hdr->scan.zpix;
+        
+	anal_hdr->dime.glmax = hdr_init.global_max;
+	anal_hdr->dime.glmin = hdr_init.global_min;
+d478 5
+a482 4
+	strncpy(anal_hdr->hist.descrip, hdr_init.prefix, 79); /* 80-byte field */
+	strcpy(anal_hdr->hist.originator, "ct2analy");
+	anal_hdr->hist.orient = TRANSVERSE;
+    }
+d484 7
+d495 1
+a495 1
+    if (ifh) {
+d497 4
+a500 4
+	fprintf (fp_ifh, "INTERFILE :=\n");
+        fprintf (fp_ifh, "imaging modality := ct\n");
+        fprintf (fp_ifh, "originating system := %s\n", sspct_hdr->scan.system);
+	fprintf (fp_ifh, "version of keys := 3.3\n");
+d502 4
+a505 4
+	fprintf (fp_ifh, "conversion program := ct2analyze\n");
+        fprintf (fp_ifh, "program author := Jane Dunford-Shore\n");       
+        fprintf (fp_ifh, "program version := %s\n", prog_vers);
+        fprintf (fp_ifh, "program date := %s\n", prog_date);
+d507 6
+a512 5
+        fprintf (fp_ifh, "original institution := %s\n", sspct_hdr->scan.institution);
+        fprintf (fp_ifh, "data offset in bytes := 0\n"); /* refers to data file (*.img) */
+	fprintf (fp_ifh, "name of data file := %s.img\n", hdr_init.prefix);
+        fprintf (fp_ifh, "patient ID := %s\n", hdr_init.prefix);
+        fprintf (fp_ifh, "study ID := %s\n", "");
+d514 18
+a531 19
+        fprintf (fp_ifh, "GENERAL IMAGE DATA :=\n");
+        fprintf (fp_ifh, "type of data := Tomographic\n");
+        fprintf (fp_ifh, "total number of images := %d\n", hdr_init.num_slices);
+	fprintf (fp_ifh, "study date := %s\n", sspct_hdr->slice.date);
+        fprintf (fp_ifh, "study time := %s\n", sspct_hdr->slice.time);
+	fprintf (fp_ifh, "number format := signed integer\n");
+	fprintf (fp_ifh, "number of bytes per pixel := %d\n", BITSPERPIX/8);
+	fprintf (fp_ifh, "number of dimensions := 3\n");
+	fprintf (fp_ifh, "matrix size [1] := %d\n", sspct_hdr->scan.xdim);
+	fprintf (fp_ifh, "matrix size [2] := %d\n", sspct_hdr->scan.ydim);
+	fprintf (fp_ifh, "matrix size [3] := %d\n", sspct_hdr->scan.zdim);
+	fprintf (fp_ifh, "scaling factor (mm/pixel) [1] := %f\n", sspct_hdr->scan.xpix);
+	fprintf (fp_ifh, "scaling factor (mm/pixel) [2] := %f\n", sspct_hdr->scan.ypix);
+	fprintf (fp_ifh, "scaling factor (mm/pixel) [3] := %f\n", sspct_hdr->scan.zpix);
+	fprintf (fp_ifh, "matrix initial element [1] := right\n");
+	fprintf (fp_ifh, "matrix initial element [2] := posterior\n");
+	fprintf (fp_ifh, "matrix initial element [3] := inferior\n");
+    }
+
+@
+
+
+1.2
+log
+@Modifications related to correcting for gantry tilt in ct2analyze:
+    1. argument "reorient" added
+    2. error corrected: TABLE_INC --> EXP_TIME ("TI" in orig. header)
+    3. zpix set to table_incr rather than slicewidth
+       unless table_incr not available
+    4. zpix corrected for gantry tilt if reorient == TRUE
+@
+text
+@d1 1
+a1 1
+/*$Id: get_sspct_head.c,v 1.1 1996/06/10 09:09:39 jane Exp $*/
+d3 8
+d140 2
+a141 2
+    static char rcs_revision[] = "$Revision: 1.1 $"; /* assigned revision number */
+    static char rcs_date[] = "$Date: 1996/06/10 09:09:39 $"; /* date and time of checkin */
+d445 1
+a445 1
+    if (reorient = TRUE) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d10 4
+a13 2
+ *  Description: Function for extracting data values from Siemens Somatom Plus
+ *               CT image file header, and auxiliary function(s)
+d22 1
+d37 3
+d65 1
+a65 1
+    { TABLE_INC, 3220, 9, CHAR_1 },
+d92 2
+a93 1
+ *               FILE *fp_if)
+d109 2
+a110 1
+ *       FILE *fp_if: pointer to file for writing Interfile format header
+d122 3
+a124 1
+    FILE        *fp_if) 
+d127 7
+a133 3
+    /* RCS data -- for Interfile header */
+    static char rcs_revision[] = "$Revision$"; /* assigned revision number */
+    static char rcs_date[] = "$Date$"; /* date and time of checkin */
+d138 1
+a138 1
+    /* Misc. variables for holding and converting header values */
+d145 1
+a145 1
+    /* Which header structures/files should be filled */
+d149 8
+d171 1
+a171 1
+    if (fp_if != NULL) {
+d174 4
+d326 2
+a327 2
+                    case TABLE_INC:
+                        strcpy(sspct_hdr->scan.table_incr, string);
+d338 1
+a338 1
+                    case SLICE_WIDTH: /* Note: zpix (= slice width) defined here */
+a339 2
+                        sspct_hdr->scan.zpix = atof(string);
+                       break;
+d341 12
+d435 9
+d497 1
+a497 1
+    if (fp_if) {
+d499 4
+a502 4
+	fprintf (fp_if, "INTERFILE :=\n");
+        fprintf (fp_if, "imaging modality := ct\n");
+        fprintf (fp_if, "originating system := %s\n", sspct_hdr->scan.system);
+	fprintf (fp_if, "version of keys := 3.3\n");
+d504 4
+a507 4
+	fprintf (fp_if, "conversion program := ct2analyze\n");
+        fprintf (fp_if, "program author := Jane Dunford-Shore\n");       
+        fprintf (fp_if, "program version := %s\n", prog_vers);
+        fprintf (fp_if, "program date := %s\n", prog_date);
+d509 5
+a513 5
+        fprintf (fp_if, "original institution := %s\n", sspct_hdr->scan.institution);
+        fprintf (fp_if, "data offset in bytes := 0\n"); /* refers to data file (*.img) */
+	fprintf (fp_if, "name of data file := %s.img\n", hdr_init.prefix);
+        fprintf (fp_if, "patient ID := %s\n", hdr_init.prefix);
+        fprintf (fp_if, "study ID := %s\n", "");
+d515 17
+a531 18
+        fprintf (fp_if, "GENERAL IMAGE DATA :=\n");
+        fprintf (fp_if, "type of data := Tomographic\n");
+        fprintf (fp_if, "total number of images := %d\n", hdr_init.num_slices);
+	fprintf (fp_if, "study date := %s\n", sspct_hdr->slice.date);
+        fprintf (fp_if, "study time := %s\n", sspct_hdr->slice.time);
+	fprintf (fp_if, "number format := signed integer\n");
+	fprintf (fp_if, "number of bytes per pixel := %d\n", BITSPERPIX/8);
+	fprintf (fp_if, "number of dimensions := 3\n");
+	fprintf (fp_if, "matrix size [1] := %d\n", sspct_hdr->scan.xdim);
+	fprintf (fp_if, "matrix size [2] := %d\n", sspct_hdr->scan.ydim);
+	fprintf (fp_if, "matrix size [3] := %d\n", sspct_hdr->scan.zdim);
+	fprintf (fp_if, "scaling factor (mm/pixel) [1] := %f\n", sspct_hdr->scan.xpix);
+	fprintf (fp_if, "scaling factor (mm/pixel) [2] := %f\n", sspct_hdr->scan.ypix);
+	fprintf (fp_if, "scaling factor (mm/pixel) [3] := %f\n", sspct_hdr->scan.zpix);
+	fprintf (fp_if, "matrix initial element [1] := right\n");
+	fprintf (fp_if, "matrix initial element [2] := posterior\n");
+	fprintf (fp_if, "matrix initial element [3] := inferior\n");
+	
+@

@@ -1,0 +1,522 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	94.05.19.18.54.00;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	94.02.22.15.32.46;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.02.09.20.48.16;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.02.09.17.30.11;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.02.08.20.39.05;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.02.04.21.19.20;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.02.04.21.09.24;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@First checking in, working version.
+@
+
+
+1.7
+log
+@Use the right hand coordinate system.
+@
+text
+@/*$Id: atlas2pet.c,v 1.6 1994/02/22 15:32:46 ty7777 Exp ty7777 $*/
+/*$Log: atlas2pet.c,v $
+ * Revision 1.6  1994/02/22  15:32:46  ty7777
+ * Changed header.
+ *
+ * Revision 1.5  1994/02/09  20:48:16  ty7777
+ * Added PUBLIC for function declaration, compatible with locate.h.
+ *
+ * Revision 1.4  1994/02/09  17:30:11  ty7777
+ * Changed the atlaslist structure.
+ *
+ * Revision 1.3  1994/02/08  20:39:05  tom
+ * corrected atlas transform
+ *
+ * Revision 1.2  1994/02/04  21:19:20  ty7777
+ * The header file is locates in the public directory.
+ *
+ * Revision 1.1  1994/02/04  21:09:24  ty7777
+ * Initial revision
+ **/
+
+/*	========================================================================
+ *	Module:				atlas2pet.c
+ *	Date:					03-Feb-94
+ *	Author:				Tom Videen
+ *	Description:	Transform atlas coordinates (mm) into PET coordinates (pixels).
+ *								This version performs a 7-parameter transformation.
+ *
+ *	Notes:
+ *		1) This transform used the pixel size read from the sxr file.  This is
+ *			commonly 0.27 cm for PETT VI, which (although incorrect) is in agreement
+ *			with hd6mean.  (PETT VI pixels are 0.286 cm)
+ *		2) This transform uses a single scaling factor for x (S[0][0]) based on
+ *			the x-width in the acpc plane. This is NOT in agreement with hd6mean.
+ *
+ *	History:
+ *		08-Feb-94		Modification of atlas_transform.c.
+ *	========================================================================
+ */
+
+#include <stdio.h>
+#include <math.h>
+#include <petutil/imglist.h>	/* SXR_OUTPUT */
+#include <petutil/atlas.h>		/* BRAIN_ATLAS, MATRIX, DIM, MATDIM, POINT */
+#include "locate.h"
+
+static char rcsid []= "$Id: atlas2pet.c,v 1.6 1994/02/22 15:32:46 ty7777 Exp ty7777 $";
+
+#define UNDEFINED		-9999.
+#define CMPERMM			0.1				/* atl coordinates are in mm; BRAIN_ATLAS is in cm */
+
+/*	-----------------------
+ *	Function atlas2pet
+ *	-----------------------
+ */
+PUBLIC void atlas2pet (npts, petlist, atlaslist, sxr, atlas)
+
+	int						npts;					/* number of points to convert */
+	FLOAT_POINT3D	*petlist;		  /* pet points--input coordinates in pixels */
+	VOIDATA				*atlaslist;		/* atlas points--input coordinates in mm */
+	SXR_OUTPUT		sxr;					/* information from sxr file */
+	BRAIN_ATLAS		atlas;				/* brain atlas definition */
+
+{
+	extern	matrix_mult();			/* matrix times matrix multiplication */
+
+	MATRIX	t;  								/* translation matrix:  Atlas->PET */
+	MATRIX	rx, ry, rz; 				/* rotation matrices:  Atlas->PET */
+	MATRIX	s;   								/* scaling matrix:  Atlas->PET */
+	MATRIX	rxy, rxyz, sr, tr;	/* temporary matrices used in concatenations*/
+	MATRIX	tsr; 		 						/* combined conversion matrix Atlas->PET */
+	POINT		a;    							/* point in Atlas-space; a[MATDIM] */
+	POINT		p;    							/* point in PET-space; p[MATDIM] */
+
+	float		center[3];					/* atlas origin in PET space */
+	float		angle[3];						/* angles of rotation from Atlas->PET */
+	float		x_width;						/* pet width for atlas 0 */
+	float		y_width;						/* pet ap-dimension for atlas 0 */
+ 	float		f;         					/* weighting factor */
+	float		pz;         				/* PET z-location for point a(0,0,0) */
+	int			zmax;								/* number of slices in PET */
+	int			n, i, j;
+
+/*
+ *	Initializations
+ */
+
+	zmax = sxr.number_slices;
+	x_width = 0;
+	y_width = 0;
+
+	for (i = 0; i < MATDIM; ++i) {
+		for (j = 0; j < MATDIM; ++j) {
+			t[i][j]  = 0;
+			s[i][j]  = 0;
+			rx[i][j] = 0;
+			ry[i][j] = 0;
+			rz[i][j] = 0;
+		}
+		t[i][i]  = 1;
+		s[i][i]  = 1;
+		rx[i][i] = 1;
+		ry[i][i] = 1;
+		rz[i][i] = 1;
+	}
+
+/*
+ *	PETT VI had a variety of geometries which defined the position of the
+ *	markers in the sxr files.  The following function adjusts for these.
+ */
+
+	adjust_markers(sxr);
+
+/*
+ *	Get x,y,z origin (pixel indices for FORTRAN-arrays) and x-angle (radians) from sxr.
+ *	X-origin is the mean midpoint of the PET slices (details in sxr_xcenter.c):
+ *	Note that the atlas Y-origin is 1.8 cm anterior to the bisection of the ac-pc line:
+ *		(17.2 / 2) - 7.0 = 1.8 cm  (based on horizontal section +1 or -1 in Tal 1988)
+ */
+
+    sxr_xcenter (sxr, center);
+		center[1] = sxr.apcenter + (sxr.dap * sxr.magnification_factor / sxr.pixel_size);
+		if (strcmp(atlas.name, "Talairach 1988") == 0)
+			center[1] = center[1] - (1.8 / atlas.pixel_size);
+		center[2] = sxr.reference_slice - (sxr.dz * sxr.magnification_factor / sxr.slice_separation);
+		angle [0] = -PI * sxr.degx / 180;
+		angle [1] = 0;
+		angle [2] = 0;
+
+/*
+ *	Translation from image matrix origin to the Atlas origin within the PET image:
+ */
+
+	t[0][3] = center[0];
+	t[1][3] = center[1];
+	t[2][3] = center[2];
+
+/*
+ *	Rotation: rotate about matrix origin
+ */
+
+	rx[1][1] =  cos(angle[0]);
+	rx[1][2] =  sin(angle[0]);
+	rx[2][1] = -sin(angle[0]);
+	rx[2][2] =  cos(angle[0]);
+
+	ry[0][0] =  cos(angle[1]);
+	ry[0][2] = -sin(angle[1]);
+	ry[2][0] =  sin(angle[1]);
+	ry[2][2] =  cos(angle[1]);
+
+	rz[0][0] =  cos(angle[2]);
+	rz[0][1] =  sin(angle[2]);
+	rz[1][0] = -sin(angle[2]);
+	rz[1][1] =  cos(angle[2]);
+
+/*
+ *	Concatenate [Translate] * [Rotate]:
+ */
+
+	matrix_mult (ry, rx,   rxy, MATDIM, MATDIM, MATDIM);
+	matrix_mult (rz, rxy, rxyz, MATDIM, MATDIM, MATDIM);
+	matrix_mult (t,  rxyz,  tr, MATDIM, MATDIM, MATDIM);
+
+/*
+ *	Rotate Atlas -> PET and then Compute x_width and y_width from the 
+ *	appropriate slice in the PET image
+ *	(y_width is not used in this version)
+ */
+
+	a[0] = 0;
+	a[1] = 0;
+	a[2] = 0;
+	a[3] = 1;
+	matrix_mult (tr, a, p, MATDIM, 1, MATDIM);
+	pz = p[2];
+	if (pz <= 1) {
+		x_width = sxr.rlpetdim[0];
+		y_width = sxr.vertical_petdim[0];
+	} else if (pz >= (float) zmax) {
+		x_width = sxr.rlpetdim[zmax-1];
+		y_width = sxr.vertical_petdim[zmax-1];
+	} else {
+		for (i = 2; i <= zmax; ++i) {
+			if (pz <= (float) i) {
+				f = pz - (float) (i-1);
+				x_width = ((1-f) * sxr.rlpetdim[i-1]) + (f * sxr.rlpetdim[i]);
+				y_width = ((1-f) * sxr.vertical_petdim[i-1]) + (f * sxr.vertical_petdim[i]);
+				break;
+			}
+		}
+	}
+
+/*
+ *	Compute Scaling:  (PET pixels / Atlas mm) Atlas dim (mm) --> PET dim (pixels))
+ */
+
+	s[0][0] = (x_width * CMPERMM) / atlas.xdim[atlas.z0];
+	s[1][1] = (sxr.magnification_factor * sxr.apxray * CMPERMM)
+							/ (atlas.ydim[atlas.z0] * sxr.pixel_size);
+  s[2][2] = (sxr.magnification_factor * sxr.zxray * CMPERMM) 
+							/ (atlas.zdim * sxr.slice_separation);
+
+/*
+ *	Concatenate [Translate] * [Scale] * [Rotate]:
+ */
+
+	matrix_mult (s, rxyz, sr, MATDIM, MATDIM, MATDIM);
+	matrix_mult (t, sr,  tsr, MATDIM, MATDIM, MATDIM);
+
+/*
+ *	Find coordinates of atlas points, a, in PET space (tsr * a --> p)
+ *	If outside PET array, return -9999.
+ *	Note sign reversal on y and z of atlas point coordinates.
+ *	Note PET coordinates begin with 1 instead of 0 (in the arrays).
+ */
+
+	a[3] = 1;
+	for (n = 0; n < npts; ++n) {
+		a [0] = atlaslist [n].center.x;
+		a [1] = -atlaslist [n].center.y;
+		a [2] = -atlaslist [n].center.z;
+		matrix_mult (tsr, a, p, MATDIM, 1, MATDIM);
+		if (p [2] > zmax || p [2] < 1 || p [1] > DIM || p[1] < 1 || p[0] > DIM || p[0] < 1) {
+			petlist [n].x = UNDEFINED;
+			petlist [n].y = UNDEFINED;
+			petlist [n].z = UNDEFINED;
+		} else {
+			petlist [n].x = p[0];
+			petlist [n].y = p[1];
+			petlist [n].z = p[2];
+		}
+	}	
+}
+
+@
+
+
+1.6
+log
+@Changed header.
+@
+text
+@d1 1
+a1 1
+/*$Id: atlas2pet.c,v 1.5 1994/02/09 20:48:16 ty7777 Exp ty7777 $*/
+d3 3
+d47 1
+a47 1
+static char rcsid []= "$Id: atlas2pet.c,v 1.5 1994/02/09 20:48:16 ty7777 Exp ty7777 $";
+d214 1
+a214 1
+ *	Note sign reversal on all atlas point coordinates.
+d220 3
+a222 3
+		a[0] = -atlaslist [n].center.x;
+		a[1] = -atlaslist [n].center.y;
+		a[2] = -atlaslist [n].center.z;
+d224 1
+a224 1
+		if (p[2] > zmax || p[2] < 1 || p[1] > DIM || p[1] < 1 || p[0] > DIM || p[0] < 1) {
+@
+
+
+1.5
+log
+@Added PUBLIC for function declaration, compatible with locate.h.
+@
+text
+@d1 1
+a1 1
+/*$Id: atlas2pet.c,v 1.4 1994/02/09 17:30:11 ty7777 Exp ty7777 $*/
+d3 3
+d40 1
+a40 1
+#include <petutil/petutil.h>	/* SXR_OUTPUT */
+d44 1
+a44 1
+static char rcsid []= "$Id: atlas2pet.c,v 1.4 1994/02/09 17:30:11 ty7777 Exp ty7777 $";
+@
+
+
+1.4
+log
+@Changed the atlaslist structure.
+@
+text
+@d1 1
+a1 1
+/*$Id: atlas2pet.c,v 1.3 1994/02/08 20:39:05 tom Exp ty7777 $*/
+d3 3
+d41 1
+a41 1
+static char rcsid []= "$Id: atlas2pet.c,v 1.3 1994/02/08 20:39:05 tom Exp ty7777 $";
+d50 1
+a50 1
+void atlas2pet (npts, petlist, atlaslist, sxr, atlas)
+@
+
+
+1.3
+log
+@corrected atlas transform
+@
+text
+@d1 1
+a1 1
+/*$Id: atlas2pet.c,v 1.2 1994/02/04 21:19:20 ty7777 Exp tom $*/
+d3 3
+d36 1
+d38 1
+a38 1
+static char rcsid []= "$Id: atlas2pet.c,v 1.2 1994/02/04 21:19:20 ty7777 Exp tom $";
+d50 2
+a51 2
+	FLOAT_POINT3D	*petlist;			/* PET points--output coordinates in pixels */
+	FLOAT_POINT3D	*atlaslist;		/* atlas points--input coordinates in mm */
+d211 3
+a213 3
+		a[0] = -atlaslist [n].x;
+		a[1] = -atlaslist [n].y;
+		a[2] = -atlaslist [n].z;
+@
+
+
+1.2
+log
+@The header file is locates in the public directory.
+@
+text
+@d1 1
+a1 1
+/*$Id: atlas2pet.c,v 1.1 1994/02/04 21:09:24 ty7777 Exp ty7777 $*/
+d3 3
+d16 8
+d25 1
+a25 1
+ *		03-Feb-94		Modification of atlas_transform.c.
+d31 2
+a32 2
+#include <petutil/petutil.h>			/* SXR_OUTPUT */
+#include <petutil/atlas.h>								/* BRAIN_ATLAS, MATRIX, DIM, MATDIM, POINT */
+d34 1
+a34 1
+static char rcsid []= "$Id: atlas2pet.c,v 1.1 1994/02/04 21:09:24 ty7777 Exp ty7777 $";
+d36 2
+a37 2
+UNDEFINED = -9999.;
+CMPERMM = 10.;				/* atl coordinates are in mm; BRAIN_ATLAS is in cm */
+d46 2
+a47 2
+	FLOAT_POINT3D					*petlist;			/* PET points--output coordinates in pixels */
+	FLOAT_POINT3D					*atlaslist;			/* atlas points--input coordinates in mm */
+d54 1
+a54 1
+	MATRIX	tp;  								/* translation matrix:  Atlas->PET */
+d56 3
+a58 3
+	MATRIX	sp;   							/* scaling matrix:  Atlas->PET */
+	MATRIX	ma, mb, mc; 				/* temporary matrices used in concatenations*/
+	MATRIX	map; 		 						/* combined conversion matrix Atlas->PET */
+d67 2
+a68 2
+	float		pz;         				/* PET z-location for point a(x,ya,za) */
+	int			xmax, ymax, zmax;		/* maximum indices for PET */
+d75 1
+a75 3
+	xmax = DIM - 1;
+	ymax = DIM - 1;
+	zmax = sxr.number_slices - 1;
+d81 5
+a85 5
+			tp[i][j]	= 0;
+			sp[i][j]	= 0;
+			rx[i][j]	= 0;
+			ry[i][j]	= 0;
+			rz[i][j]	= 0;
+d87 5
+a91 5
+		tp[i][i]	= 1;
+		sp[i][i]	= 1;
+		rx[i][i] 	= 1;
+		ry[i][i] 	= 1;
+		rz[i][i] 	= 1;
+d95 10
+a104 2
+ *	Get y,z origin (pixel indices for C-arrays) and x-angle (radians) from sxr.
+ *	Note that the atlas origin is 1.8 cm anterior to the bisection of the ac-pc line:
+d108 5
+a112 4
+		center[0] = 0;
+		center[1] = (sxr.apcenter - 1) + (sxr.dap * sxr.magnification_factor / sxr.pixel_size);
+		center[1] = center[1] - (1.8 / atlas.pixel_size);
+		center[2] = (sxr.reference_slice - 1) - (sxr.dz / sxr.slice_separation);
+d121 3
+a123 3
+	tp[0][3] = center[0];
+	tp[1][3] = center[1];
+	tp[2][3] = center[2];
+d145 1
+a145 1
+ *	Concatenate Rotation matrices:
+d148 3
+a150 2
+	matrix_mult (ry, rx, ma,  MATDIM, MATDIM, MATDIM);
+	matrix_mult (rz, ma, mb,  MATDIM, MATDIM, MATDIM);
+d153 2
+a154 1
+ *	Rotate Atlas -> PET and then Compute x_width and y_width from the PET image
+d158 3
+a160 3
+	a[0] = (float) (atlas.x0);
+	a[1] = (float) (atlas.y0);
+	a[2] = (float) (atlas.z0);
+d162 1
+a162 1
+	matrix_mult (mb, a, p, MATDIM, 1, MATDIM);
+d164 1
+a164 1
+	if (pz <= 0) {
+d168 2
+a169 2
+		x_width = sxr.rlpetdim[zmax];
+		y_width = sxr.vertical_petdim[zmax];
+d171 1
+a171 1
+		for (i = 1; i <= zmax; ++i) {
+d182 1
+a182 1
+ *	Compute Scaling:  (Atlas dim --> PET dim)
+d185 5
+a189 3
+	sp[0][0] = x_width * sxr.pixel_size / atlas.xdim[atlas.z0];
+	sp[1][1] = sxr.magnification_factor * sxr.apxray / atlas.ydim[atlas.z0];
+  sp[2][2] = sxr.magnification_factor * sxr.zxray / atlas.zdim;
+d195 2
+a196 2
+	matrix_mult (sp, mb, mc,  MATDIM, MATDIM, MATDIM);
+	matrix_mult (tp, mc, map, MATDIM, MATDIM, MATDIM);
+d199 1
+a199 1
+ *	Find coordinates of atlas points A in PET space (XMAP*A --> P)
+d201 2
+d207 5
+a211 5
+		a [0] = atlaslist [n].x * CMPERMM;
+		a [1] = atlaslist [n].y * CMPERMM;
+		a [2] = atlaslist [n].z * CMPERMM;
+		matrix_mult (map, a, p, MATDIM, 1, MATDIM);
+		if (p[2] > zmax || p[2] < 0 || p[1] > ymax || p[1] < 0 || p[0] > xmax || p[0] < 0) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d21 1
+a21 1
+#include "atlas.h"								/* BRAIN_ATLAS, MATRIX, DIM, MATDIM, POINT */
+d23 1
+a23 1
+static char rcsid []= "$Id$";
+@

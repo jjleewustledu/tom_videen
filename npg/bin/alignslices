@@ -1,0 +1,122 @@
+#!/bin/csh
+# Program:	alignslices
+# Author:	Tom Videen
+# Date:		Oct 1999
+# Function:	Align slices in an Analyze image.
+# 	Separates 3D image into single-slice images;
+#	Uses alignlinear to align these in 2D;
+#	Copies slices as is above FIRST and below LAST slices;
+#	FIRST slice is reference for all slices FIRST to LAST;
+#	Align adjacent images and compute a combined_air file for the
+#	new slice using all air files from the reference slice;
+#	Air files are used to reslice single-slice images,
+#	and these are merged into a single 3D image.
+#	All single-slice images are removed but air files and a log remain.
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv < 4) then
+	echo "Usage:  alignslices in out thresh first [last]"
+	echo " e.g.,  alignslices p5000ct0 p5000ct 1000 9"
+	echo "   or,  alignslices p5000ct0 p5000ct 1000 9 39"
+	exit 1
+endif
+
+set IN  = $1
+set OUT = $2
+set THR = $3
+set FIRST = $4
+set SLICES = `scanheader $IN | grep z_dim | cut -f2 -d=`
+if ($#argv == 5) then
+	set LAST  = $5
+else
+	set LAST = $SLICES
+endif
+set NAM = ${OUT}_
+set LOGFILE = ${OUT}_align_slices.log
+
+unalias mv
+unalias rm
+
+if (! -e $IN.img) then
+	echo "ERROR [alignslices]: $IN.img does not exist"
+	exit 1
+endif
+if (! -e $IN.hdr) then
+	echo "ERROR [alignslices]: $IN.hdr does not exist"
+	exit 1
+endif
+if ($SLICES < $LAST) then
+	echo "ERROR [alignslices]: last slice is greater than $SLICES"
+	exit 1 
+endif
+echo $IN  $SLICES slices, ref = $FIRST >! $LOGFILE
+${NPG}/bin/separate_slices $IN $NAM
+
+# Create null air file by aligning first frame to itself
+# ------------------------------------------------------
+set PRM = "-m 23 -t1 $THR -t2 $THR -p1 1 -p2 1 -b1 10 10 0 -b2 10 10 0 -x 1"
+set REF = $NAM$FIRST
+${NPG}/bin/setanamin $REF 0
+alignlinear $REF $REF $REF.air $PRM
+cp $REF.hdr r$REF.hdr
+cp $REF.img r$REF.img
+
+# Copy files above FIRST
+# ---------------------------------------------------------
+set i = 1
+while ($i < $FIRST)
+	mv $NAM$i.hdr r$NAM$i.hdr
+	mv $NAM$i.img r$NAM$i.img
+	cp $REF.air $NAM$i.air
+	@ i++
+end
+
+# Align all adjacent pairs (and remove single-slice images)
+# ---------------------------------------------------------
+set i = $FIRST
+set TOTAIR = $REF.air
+while ($i < $LAST)
+	set k = `echo "$i + 1; quit" | bc`
+	set PREV = $NAM$i
+	set NEXT = $NAM$k
+	set NEWAIR = ${NEXT}vs${i}.air
+	${NPG}/bin/setanamin $PREV 0
+	${NPG}/bin/setanamin $NEXT 0
+	alignlinear $PREV $NEXT $NEWAIR $PRM
+	combine_air $NEXT.air y $TOTAIR $NEWAIR
+	${NPG}/bin/airdif $NEXT.air $REF.air | head -3 >> $LOGFILE
+	${NPG}/bin/airdif $NEXT.air $REF.air | head -3 
+	${NPG}/bin/imgreslice $NEXT $NEXT
+	rm $NEWAIR
+	rm $PREV.img
+	rm $PREV.hdr
+	set TOTAIR = $NEXT.air
+	@ i++
+end
+rm $NAM$LAST.img
+rm $NAM$LAST.hdr
+@ i++
+
+# Reslice any remaining files
+# ---------------------------------------------------------
+while ($i <= $SLICES)
+	set NEXT = $NAM$i
+	cp $TOTAIR $NEXT.air
+	${NPG}/bin/imgreslice $NEXT $NEXT
+	rm $NEXT.hdr
+	rm $NEXT.img
+	@ i++
+end
+
+# Merge realigned single-slice images, then remove them
+# -----------------------------------------------------
+${NPG}/bin/merge_slices r$NAM 1 $SLICES $OUT
+set i = 1
+while ($i <= $SLICES)
+	rm r${NAM}$i.img
+	rm r${NAM}$i.hdr
+	@ i++
+end
+echo "Created $OUT.img"
+

@@ -1,0 +1,454 @@
+head	2.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.3
+date	2008.12.26.18.45.51;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	2007.07.02.19.15.23;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	2004.04.05.21.28.13;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	2004.02.13.18.05.01;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2000.12.07.22.29.28;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.05.03.18.21.54;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.05.03.14.25.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.3
+log
+@permit dimensions=3
+@
+text
+@/*	$Log: anamult.c,v $
+ * Revision 2.2  2007/07/02  19:15:23  tom
+ * update global min and max
+ *
+ * Revision 2.1  2004/04/05  21:28:13  tom
+ * add scaling for floating pt images
+ *
+ * Revision 2.0  2004/02/13  18:05:01  tom
+ * Feb 2004
+ *
+ * Revision 1.3  2000/12/07  22:29:28  tom
+ * change factor to float
+ *
+ * Revision 1.2  2000/05/03  18:21:54  tom
+ * change order of prms
+ *
+ * Revision 1.1  2000/05/03  14:25:12  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			anamult.c
+ *	Date:			May 2000
+ *	Author:			Tom Videen
+ *	Description:	Multiply Analyze image
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anamult/RCS/anamult.c,v 2.2 2007/07/02 19:15:23 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			anamult
+ *	----------------------------
+ */
+int main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;		 /* input file */
+	char           *img2, *hdr2;		 /* output file */
+	float           fact;			 /* scaling factor */
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+	long            num, i;
+	int             global_max;		 /* global maximum */
+	int             global_min;		 /* global minimum */
+	int             itmp;
+	short          *simg;			 /* image */
+	float          *fimg;			 /* image */
+
+	if (argc != 6) {
+		fprintf (stderr, "Usage: anamult img1 hdr1 img2 hdr2 factor\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	fact = atof (argv[5]);
+
+/*	Get image */
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anamult]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anamult]: reading %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [anamult]: reading %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	global_max = hdr.dime.glmax;
+	global_min = hdr.dime.glmin;
+	(void) fclose (fd_hdr);
+	num = dim1 * dim2 * dim3;
+
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anamult]: opening %s\n", img1);
+		return (ERROR);
+	}
+/*	Short integers	*/
+
+	if (hdr.dime.datatype == 4 && hdr.dime.bitpix == 16) {
+		fprintf (stderr, "%d %d %ld\n", hdr.dime.datatype, hdr.dime.bitpix, num * sizeof (float));
+		simg = (short *) calloc (num, sizeof (short));
+		if (simg == NULL) {
+			fprintf (stderr, "ERROR [anamult]: calloc simg\n");
+			return (ERROR);
+		}
+		if ((fread (simg, sizeof (short), num, fd_img)) != num) {
+			fprintf (stderr, "ERROR [anamult]: reading %s\n", img1);
+			return (ERROR);
+		}
+		fprintf (stdout, "Read %s\n", img1);
+		(void) fclose (fd_img);
+
+		for (i = 0; i < num; i++) {
+			simg[i] *= fact;
+			if (simg[i] > global_max)
+				global_max = simg[i];
+			if (simg[i] < global_min)
+				global_min = simg[i];
+		}
+		if ((fd_img = fopen (img2, "w")) == 0) {
+			fprintf (stderr, "ERROR [anamult]: opening %s\n", img2);
+			return (ERROR);
+		}
+		if ((fwrite (simg, sizeof (short), num, fd_img)) != num) {
+			fprintf (stderr, "ERROR [anamult]: writing %s\n", img2);
+			return (ERROR);
+		}
+		free (simg);
+
+/*	Float	*/
+
+	} else if (hdr.dime.datatype == 16 && hdr.dime.bitpix == 32) {
+		fprintf (stderr, "%d %d %ld\n", hdr.dime.datatype, hdr.dime.bitpix, num * sizeof (float));
+		fimg = (float *) calloc (num, sizeof (float));
+		if (fimg == NULL) {
+			fprintf (stderr, "ERROR [anamult]: calloc fimg\n");
+			return (ERROR);
+		}
+		if ((fread (fimg, sizeof (float), num, fd_img)) != num) {
+			fprintf (stderr, "ERROR [anamult]: reading %s\n", img1);
+			return (ERROR);
+		}
+		fprintf (stdout, "Read %s\n", img1);
+		(void) fclose (fd_img);
+		for (i = 0; i < num; i++) {
+			fimg[i] *= fact;
+			itmp = fimg[i];
+			if (itmp > global_max)
+				global_max = itmp;
+			if (itmp < global_min)
+				global_min = itmp;
+		}
+		if ((fd_img = fopen (img2, "w")) == 0) {
+			fprintf (stderr, "ERROR [anamult]: opening %s\n", img2);
+			return (ERROR);
+		}
+		if ((fwrite (fimg, sizeof (float), num, fd_img)) != num) {
+			fprintf (stderr, "ERROR [anamult]: writing %s\n", img2);
+			return (ERROR);
+		}
+		free (fimg);
+
+	} else {
+		fprintf (stderr, "ERROR [anamult]: reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+
+
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anamult]: Unable to open %s\n", hdr2);
+		return (ERROR);
+	}
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anamult]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	return (OK);
+}
+@
+
+
+2.2
+log
+@update global min and max
+@
+text
+@d2 3
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anamult/RCS/anamult.c,v 2.1 2004/04/05 21:28:13 tom Exp tom $";
+d41 1
+a41 1
+main (argc, argv)
+d80 1
+a80 1
+	if (hdr.dime.dim[0] != 4) {
+@
+
+
+2.1
+log
+@add scaling for floating pt images
+@
+text
+@d2 3
+d26 1
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anamult/RCS/anamult.c,v 2.0 2004/02/13 18:05:01 tom Exp tom $";
+d46 4
+a49 4
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	float			fact;			 /* scaling factor */
+	long            dim1, dim2, dim3; /* dimensions of image */
+d51 5
+a55 2
+	short          *simg;	 		 /* image */
+	float          *fimg;	 		 /* image */
+d65 1
+a65 1
+	fact = atof(argv[5]);
+d85 2
+d88 1
+a88 1
+	num = dim1*dim2*dim3;
+a93 1
+
+d97 1
+a97 1
+		fprintf (stderr, "%d %d %ld\n", hdr.dime.datatype, hdr.dime.bitpix, num*sizeof (float));
+d103 1
+a103 1
+		if ((fread (simg, sizeof(short), num, fd_img)) != num) {
+d107 1
+a107 1
+		fprintf (stdout,"Read %s\n", img1);
+d109 2
+a110 1
+		for (i = 0; i < num; i++)
+d112 5
+d130 1
+a130 1
+		fprintf (stderr, "%d %d %ld\n", hdr.dime.datatype, hdr.dime.bitpix, num*sizeof (float));
+d136 1
+a136 1
+		if ((fread (fimg, sizeof(float), num, fd_img)) != num) {
+d140 1
+a140 1
+		fprintf (stdout,"Read %s\n", img1);
+d142 1
+a142 1
+		for (i = 0; i < num; i++)
+d144 6
+d173 3
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@d2 3
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anamult/RCS/anamult.c,v 1.3 2000/12/07 22:29:28 tom Exp tom $";
+d48 2
+a49 1
+	short          *imga;	 		 /* image */
+d64 1
+a64 1
+		fprintf (stderr, "ERROR [anamult]: Cannot open: %s\n", hdr1);
+d68 1
+a68 1
+		fprintf (stderr, "ERROR [anamult]: Reading: %s\n", hdr1);
+d72 1
+a72 1
+		fprintf (stderr, "ERROR [anamult]: Reading: %s\n", hdr1);
+a75 10
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [anamult]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anamult]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+a81 5
+	imga = (short*) calloc (num, sizeof (short));
+	if (imga == NULL) {
+		fprintf (stderr, "ERROR [anamult]: Cannot calloc imga\n");
+		return (ERROR);
+	}
+d83 1
+a83 1
+		fprintf (stderr, "ERROR [anamult]: Cannot open: %s\n", img1);
+a85 6
+	if ((fread (imga, sizeof(short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [anamult]: Reading: %s\n", img1);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	fprintf (stdout,"Read %s\n", img1);
+d87 1
+d89 24
+a112 1
+/*	Multiply and write image */
+d114 1
+a114 2
+	for (i = 0; i < num; i++)
+		imga[i] *= fact;
+d116 29
+a144 2
+	if ((fd_img = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anamult]: Unable to open %s\n", img2);
+a146 4
+	if ((fwrite (imga, sizeof (short), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [anamult]: Error writing to: %s\n", img2);
+		return (ERROR);
+	}
+d149 1
+a158 1
+	free (imga);
+@
+
+
+1.3
+log
+@change factor to float
+@
+text
+@d2 3
+d18 1
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anamult/RCS/anamult.c,v 1.2 2000/05/03 18:21:54 tom Exp tom $";
+@
+
+
+1.2
+log
+@change order of prms
+@
+text
+@d2 3
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anamult/RCS/anamult.c,v 1.1 2000/05/03 14:25:12 tom Exp tom $";
+d38 1
+a38 1
+	int				fact;			 /* scaling factor */
+d51 1
+a51 1
+	fact = atoi(argv[5]);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anamult/RCS/anamult.c,v 1.3 1999/12/16 18:00:47 tom Exp $";
+d35 2
+a36 2
+	int				fact;
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+d41 1
+a41 1
+		printf ("Usage: anamult img1 hdr1 factor img2 hdr2\n");
+d46 3
+a48 3
+	fact = atoi(argv[3]);
+	hdr2 = argv[4];
+	img2 = argv[5];
+d78 1
+a78 1
+	fclose (fd_hdr);
+d94 1
+a94 1
+	fclose (fd_img);
+d111 1
+a111 1
+	fclose (fd_img);
+d121 1
+a121 1
+	fclose (fd_hdr);
+@

@@ -1,0 +1,115 @@
+#!/bin/csh
+#	Name:	align_tr
+#	Author:	Tom Videen
+#	Date:	Dec 2007
+#	Use:	Align 2 transmission images
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv != 6) then
+	echo "Usage:  align_tr tr1 tr2 mask1 mask2 airfile resample_air"
+	echo " e.g.,  align_tr p7000tr1.v p7000tr2.v mask1.v mask2.v p7000tr2_to_tr1 scale_962"
+	exit 1
+endif
+
+unalias rm
+unalias cp
+
+set TR1   = $1
+set TR2   = $2
+set MASK1 = $3
+set MASK2 = $4
+set AIR   = $5
+set A_AIR = $6.air
+
+set ATR1   = a$TR1:r
+set ATR2   = a$TR2:r
+set AMASK1 = a$MASK1:r
+set AMASK2 = a$MASK2:r
+
+set XTR1   = x$ATR1
+set XTR2   = x$ATR2
+set XMASK1 = x$AMASK1
+set XMASK2 = x$AMASK2
+set B_AIR  = i$A_AIR
+set XAIR   = x$AIR.air
+set NULL   = null.air
+
+# Check existence of AIR files
+# ----------------------------
+if (! -e $A_AIR) then
+	if (! -e ${NPG}/air/$A_AIR) then
+		echo "ERROR [align_tr]: Missing resampling AIR file: $A_AIR"
+		exit 1
+	else
+		cp ${NPG}/air/$A_AIR $A_AIR
+	endif
+endif
+if (! -e $B_AIR) then
+	if (! -e ${NPG}/air/$B_AIR) then
+		echo "ERROR [align_tr]: Missing inverted AIR file: $B_AIR"
+		exit 1
+	else
+		cp ${NPG}/air/$B_AIR $B_AIR
+	endif
+endif
+ 
+# Check files
+# ------------------------------------------------------------
+set EFILES = "$TR1 $TR2 $MASK1 $MASK2"
+set STATUS = 0
+foreach i ($EFILES)
+    if (! -e $i) then
+        echo "ERROR [align_ha]: $i does not exist."
+        set STATUS = 1
+    endif
+end
+if ( $STATUS != 0) exit 1
+
+# Convert & Resample Images
+# -------------------------
+img2analyze $TR1 $ATR1
+img2analyze $TR2 $ATR2
+img2analyze $MASK1 $AMASK1
+img2analyze $MASK2 $AMASK2
+setanamin $ATR1 -1
+setanamin $ATR2 -1
+setanamin $AMASK1 -1
+setanamin $AMASK2 -1
+reslice $A_AIR $XTR1 -a $ATR1 -n 1 -k -o
+reslice $A_AIR $XTR2 -a $ATR2 -n 1 -k -o
+reslice $A_AIR $XMASK1 -a $AMASK1 -n 1 -k -o
+reslice $A_AIR $XMASK2 -a $AMASK2 -n 1 -k -o
+setanamin $XMASK1 0
+setanamin $XMASK2 0
+
+# Align
+# ------------------------
+set PRM = "-m 6 -t1 500 -p1 1 -p2 0 -e1 $AMASK1 -x 2"
+setanamin $ATR1 0
+alignlinear $ATR1 $ATR1 $NULL $PRM 
+
+set PRM = "-m 6 -t1 500 -p1 1 -t2 500 -p2 1 -e1 $XMASK1 -e2 $XMASK2 -x 2"
+setanamin $XTR1 0 
+setanamin $XTR2 0
+alignlinear $XTR1 $XTR2 $XAIR $PRM 
+combine_air $AIR.air y $B_AIR $XAIR $A_AIR
+
+setanamin $ATR2 -1
+reslice $AIR.air r$ATR2 -a $ATR2 -n 1 -k -o
+analyze2img r$ATR2 r$TR2
+echo " ----------------------------------------------------------------------"
+airdif1 $AIR.air $NULL $MASK1
+
+rm $NULL
+rm $XTR1.*
+rm $XTR2.*
+rm $XMASK1.*
+rm $XMASK2.*
+rm $ATR1.*
+rm $ATR2.*
+rm r$ATR2.*
+rm $AMASK1.*
+rm $AMASK2.*
+rm $A_AIR $B_AIR $XAIR
+

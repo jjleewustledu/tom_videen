@@ -1,0 +1,315 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial checking in, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*--------------------------------------------------------------------
+
+Program: make_geo_cyl
+
+Purpose: Make transmission scan for plane efficiency data.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string.h>
+#include <petutil/matrix.h>
+#include "cti_proto.h"
+#include "norm.h"
+#include "scatter_953b.h"
+
+#define TRUE 1
+#define FALSE 0
+#define NUMPAR 2
+#define DIFFMIN .0001
+#define DETS_PER_BLK 8
+#define FOV_CM 7
+
+static char rcsid [] = "$Header$";
+
+/******************************************/
+make_geocyl(sino,sh,atn,geocyl,ctr,ringdiff)
+/******************************************/
+
+float	*sino;
+Scan_subheader *sh;
+float	*atn;
+float	*geocyl;
+float	*ctr;
+int	ringdiff;
+
+{
+
+FILE	*fp;
+
+int	i,j,k,stat,lensin,arg,lcforce,*pln,npln=1,ipln,fov,
+	outdim,ioff,joff,write_enable=FALSE,
+	plane=1,frame=1,gate=1,data=0,bed=0,ndata,rsq,i1,i2,
+	numray,numang,iang,ray,rayoff,jang,detoff,
+	jc,ic,xdim,ydim,ijc;
+
+float	scale,raysiz,y,cpsi,diff,x,*flux,*den,sum;
+
+char	ans[MAXNAME],*plnfil,trfil[MAXNAME],*blfil,*dot;
+
+numray = sh->dimension_1;
+numang = sh->dimension_2;
+raysiz = sh->sample_distance;
+lensin = numray*numang;
+rsq = (CYL_RADIUS/raysiz)*(CYL_RADIUS/raysiz);
+flux = (float *)malloc(lensin*sizeof(float));
+den  = (float *)malloc(numray*DETS_PER_BLK*sizeof(float));
+
+fit_ctrs(ctr,sino,numray,numang);
+
+cpsi = cos((double)(SLCTHK*ringdiff/(2.*RSQ_DET)));
+for(iang=0,rayoff=0;iang<numang;iang++,rayoff+=numray) {
+    for(ray=0;ray<numray;ray++) {
+        x = ray - numray/2 - ctr[iang];
+        y = rsq - x*x;
+        if(y > 0) {
+	    y = (float)sqrt((double)y)/cpsi;
+	    if(atn == NULL)
+                flux[ray+rayoff] = y*(float)exp(-2.*raysiz*MU_H2O*y);
+	    else
+		flux[ray+rayoff] = y/atn[ray+rayoff];
+	    }
+        else
+            flux[ray+rayoff] = 0;
+        }
+    }
+
+for(i=0;i<lensin;i++) geocyl[i] = 0.;
+for(i=0;i<numray*DETS_PER_BLK;i++) den[i] = 0.;
+for(iang=0,rayoff=0;iang<numang;
+			iang+=DETS_PER_BLK,rayoff+=numray*DETS_PER_BLK) {
+    for(jang=0,detoff=0;jang<DETS_PER_BLK;jang++,detoff+=numray) {
+	for(ray=0;ray<numray;ray++) {
+	    geocyl[ray+detoff] += sino[ray+rayoff+detoff];
+	    den[ray+detoff]     += flux[ray+rayoff+detoff];
+	    }
+	}
+    }
+
+fov = FOV_CM/raysiz;
+for(iang=0,rayoff=0;iang<numang;
+			iang+=DETS_PER_BLK,rayoff+=numray*DETS_PER_BLK) {
+    for(jang=0,detoff=0;jang<DETS_PER_BLK;jang++,detoff+=numray) {
+	for(ray=0;ray<numray;ray++) {
+	    if(ray>numray/2-fov && ray<numray/2+fov) {
+		if(iang == 0)
+		    if(geocyl[ray+detoff]>1)
+	                geocyl[ray+detoff] = den[ray+detoff]/geocyl[ray+detoff];
+		    else
+			geocyl[ray+detoff] = 1.;
+		else
+	            geocyl[ray+rayoff+detoff] = geocyl[ray+detoff];
+		}
+	    else 
+		geocyl[ray+rayoff+detoff] = 0.;
+	    }
+	}
+    }
+
+/* Assume even symmetry and set both sides equal to average. */
+sum = 0.;
+for(iang=0,rayoff=0;iang<numang;iang++,rayoff+=numray) {
+    for(ray=1;ray<numray/2;ray++) {
+	geocyl[ray+rayoff] = .5*(geocyl[ray+rayoff]+geocyl[numray-ray+rayoff]);
+	geocyl[numray-ray+rayoff] = geocyl[ray+rayoff];
+	sum += 2.*geocyl[ray+rayoff];
+	}
+    }
+
+for(i=0;i<lensin;i++) 
+    geocyl[i] *= (float)lensin/sum;
+
+free(den);
+free(flux);
+
+}
+
+/**********************************/
+fit_ctrs(centers,sino,numray,numang)
+/**********************************/
+
+float	*centers,
+	*sino;
+int	numray;
+int	numang;
+
+{
+
+int     i,iter,
+	iang,rayoff,num,ray,
+        *ivector();
+
+static int first=TRUE,
+	init = TRUE,
+        *lista, /* Ordering of ma.                      */
+        ndata,  /* Number of input data points.         */
+        ma,     /* Number of parameters.                */
+        mfit;   /* Number of parameters to be fit.      */
+
+float   *vector(),lowerbndry,uprbndry,
+        **matrix();
+
+static float
+        *x,     /* Data points, independent variable.   */
+        *y,     /* Data points, dependent variable.     */
+        *sig,   /* Standard deviation of y.             */
+        *a,     /* Parameter array.                     */
+        *am1,   /* Parameter array at last iteration.   */
+        **covar,/* Output covariance.                   */
+        **alpha;/* Curvature function.                  */
+
+float   chisq,  /* Squared error.                       */
+        alamda, /* Interpolation between Gauss-Newton and Steepest descent. */
+        diff,chisqm1,theta,A,phi,xxx,sum,max,thresh,tmp[1000];
+
+void    funcs(); /* Function that computes function.    */
+
+if(first == TRUE) {
+    first = FALSE;
+    x = vector(1,numang);
+    y = vector(1,numang);
+
+    a = vector(1,NUMPAR);
+    am1 = vector(1,NUMPAR);
+    sig = vector(1,numang);
+    lista = ivector(1,numang);
+    covar = matrix(1,NUMPAR,1,NUMPAR);
+    alpha = matrix(1,NUMPAR,1,NUMPAR);
+    }
+
+tmp[0] = 0.;
+tmp[numray-1] = 0.;
+
+for(iang=0,rayoff=0;iang<numang;iang++,rayoff+=numray) {
+    lowerbndry = -1; uprbndry = -1; sum = 0.; num = 0;
+    max = -1.e20;
+    for(ray=1;ray<numray-1;ray++) 
+       tmp[ray] = (sino[ray+rayoff-1] + sino[ray+rayoff] 
+    					  + sino[ray+rayoff+1])/3.;
+    for(ray=0;ray<numray;ray++) {
+        if(tmp[ray] > max) max = tmp[ray];
+        }
+    thresh = .4*max;
+    for(ray=0;ray<numray;ray++) {
+        if(tmp[ray] > thresh) {
+    	    sum += tmp[ray];
+    	    ++num;
+    	    }
+        }
+    thresh = .5*sum/(float)num;
+    for(ray=1;ray<numray;ray++) {
+        if(lowerbndry < 0)  {
+            if((tmp[ray-1] < thresh)&&(tmp[ray] >= thresh))
+    	    lowerbndry = ray;
+    	    }
+        else {
+    	if((uprbndry < 0) && (tmp[ray-1] >= thresh)
+    			  && (tmp[ray  ] <  thresh))
+    	    uprbndry = ray - 1;
+    	    }
+        }
+    centers[iang] = (lowerbndry + uprbndry)/2.;
+    }
+
+if(init == TRUE) {
+    for(i=0,theta=0;i<numang;i++,theta+=PI/numang) {
+        y[i+1] = centers[i] - numray/2;
+        x[i+1] = theta;
+        }
+    ndata = numang;
+    ma = 2;
+    mfit = 2;
+    lista[1] = 1;
+    lista[2] = 2;
+    for(i=1;i<=numang;i++) {
+        sig[i] = 1;
+        }
+    }
+
+a[1] = 1; /* Magnitude. */
+a[2] = 0; /* Phase. */
+am1[1] = 0.;
+am1[2] = 1;
+alamda = -1.;
+chisqm1 = 1.e20;
+for(iter=0;iter<100;iter++) {
+    mrqmin(x,y,sig,ndata,a,ma,lista,mfit,covar,alpha,&chisq,*funcs,&alamda);
+   diff = 0.;
+    for(i=1;i<=NUMPAR;i++) {
+        diff += (a[i] - am1[i])*(a[i] - am1[i]);
+        am1[i] = a[i];
+        }
+    diff = (float)sqrt((double)diff);
+    if(((diff < DIFFMIN) | (chisq >= chisqm1)) && iter > 1)
+        break;
+    chisqm1 = chisq;
+/*    printf("    Iteration #%d, A: %f, phi: %f, chisq: %f\n",iter,a[1],a[2]*57.29,chisq);*/
+    }
+A = a[1];
+phi = a[2];
+for(i=0,theta=0;i<numang;i++,theta+=PI/numang) {
+    xxx = a[1]*sin(theta + a[2]);
+/*    printf("%f %f %f\n",theta,centers[i]-numray/2,xxx);*/
+    centers[i] = xxx;
+    }
+
+}
+
+/******************************/
+void funcs(theta,a,yfit,dyda,ma)
+/******************************/
+
+float   theta,
+        *a,
+        *yfit,
+        *dyda;
+int     ma;
+
+{
+
+float   tbar_tmp,t0_tmp,x,z;
+
+tbar_tmp = a[1];
+t0_tmp = a[2];
+
+*yfit = a[1]*sin(theta + a[2]);
+
+dyda[1] = sin(theta + a[2]);
+dyda[2] = a[1]*cos(theta + a[2]);
+*yfit = a[1]*dyda[1];
+
+
+}
+@

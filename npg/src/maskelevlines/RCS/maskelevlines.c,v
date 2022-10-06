@@ -1,0 +1,398 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	2006.10.23.18.32.23;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2004.02.16.20.46.05;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.11.27.20.06.05;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.11.27.15.35.55;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.02.24.21.55.16;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.02.16.16.23.51;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.02.01.19.52.32;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@remove duplication in write
+@
+text
+@/*	$Log: maskelevlines.c,v $
+ * Revision 1.6  2004/02/16  20:46:05  tom
+ * Feb 2004
+ *
+ * Revision 1.5  2002/11/27  20:06:05  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  2002/11/27  15:35:55  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  1999/02/24  21:55:16  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1999/02/16  16:23:51  tom
+ * options to mask wider lines and restrict to limited slices
+ *
+ * Revision 1.1  1999/02/01  19:52:32  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			maskelevlines.c
+ *	Date:			Jan 1999
+ *	Author:			Tom Videen
+ *	Description:	Set to val any pixel between 2 pixels less than old1 and old2.
+ *	History:
+ *		16-Feb-99 (TOV) option to remove 2-pixel thick lines and restrict to slices
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskelevlines/RCS/maskelevlines.c,v 1.6 2004/02/16 20:46:05 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			maskelevlines
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	void            mask_elevated_lines ();
+	FILE           *fp;			 	 /* file pointer */
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	char           *range;			 /* slice range to mask */
+	long            dim1, dim2, dim3; /* dimensions of image */
+	long            i, j, k;
+	long            pln1=0; 		 /* planes to mask */
+	long            pln2=0;
+	long            width;			 /* width of line to mask */
+	short           old1, old2;		 /* pixels less than these define a line */
+	short           val;			 /* set pixels to this value */
+	short        ***img;			 /* image */
+	short          *row;			 /* single row of input image */
+	long            npixels = 0;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 10) {
+		printf ("Usage: maskelevlines hdr1 img1 hdr2 img2 old1 old2 newval width slices\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	old1 = atoi (argv[5]);
+	old2 = atoi (argv[6]);
+	val = atoi (argv[7]);
+	width = atoi (argv[8]);
+	range = argv[9];
+
+/*
+ * Read Analyze hdr
+ */
+
+	if ((fp = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [maskelevlines]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [maskelevlines]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [maskelevlines]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [maskelevlines]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [maskelevlines]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fp);
+
+	if (strcmp (range, "all") == 0) {
+		pln1 = 1;
+		pln2 = dim3;
+	} else if (sscanf (range, "%ldto%ld", &pln1, &pln2) != 2) {
+		fprintf (stderr, "ERROR [maskelevlines]: Format error in %s\n", range);
+		return (ERROR);
+	}
+/*
+ *	Read img
+ */
+
+	if ((fp = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [maskelevlines]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [maskelevlines]: Cannot calloc img\n");
+		return (ERROR);
+	}
+	if (NULL == (row = (short *) calloc (dim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [maskelevlines]: Cannot malloc memory for row\n");
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			if ((fread (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [maskelevlines]: Reading: %s\n", img1);
+				return (ERROR);
+			}
+			for (k = 1; k <= dim1; k++)
+				img[i][j][dim1 - (k - 1)] = row[k - 1];
+		}
+	}
+	(void) fclose (fp);
+
+/*
+ *	Mask
+ */
+
+	mask_elevated_lines (img, old1, old2, val, dim1, dim2, pln1, pln2, width,
+			     &npixels);
+	printf ("Pixels Masked = %li\n", npixels);
+
+/*
+ * Write to output file
+ */
+
+	if ((fp = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [maskelevlines]: Unable to create ANALYZE header %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [maskelevlines]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+	if ((fp = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [maskelevlines]: Unable to create ANALYZE image %s\n", img2);
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			for (k = 1; k <= dim1; k++)
+				row[k - 1] = img[i][j][dim1 - (k - 1)];
+			if ((fwrite (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [maskelevlines]: Error writing to: %s\n", img2);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fp);
+
+	printf ("Converted: %s to %s\n", img1, img2);
+	free_s3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.6
+log
+@Feb 2004
+@
+text
+@d2 3
+d31 1
+a31 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskelevlines/RCS/maskelevlines.c,v 1.5 2002/11/27 20:06:05 tom Exp tom $";
+a185 5
+				return (ERROR);
+			}
+			/* write (fp, (char *) row, dim1 * 2); REPLACE WITH THE FOLLOWING */
+			if ((fwrite (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [maskelevlines]: Error writing to: %s\n", img2);
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d19 1
+a19 1
+ *	Date:			Jan-99
+d26 1
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskelevlines/RCS/maskelevlines.c,v 1.4 2002/11/27 15:35:55 tom Exp tom $";
+d114 1
+a114 1
+	fclose (fp);
+d149 1
+a149 1
+	fclose (fp);
+d171 1
+a171 1
+	fclose (fp);
+d192 1
+a192 1
+	fclose (fp);
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d24 1
+a24 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskelevlines/RCS/maskelevlines.c,v 1.3 1999/02/24 21:55:16 tom Exp tom $";
+d181 5
+a185 1
+			write (fp, (char *) row, dim1 * 2);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskelevlines/RCS/maskelevlines.c,v 1.2 1999/02/16 16:23:51 tom Exp tom $";
+d25 2
+a27 1
+#include <fcntl.h>
+a28 1
+#include <libimage.h>
+a30 1
+#include <matrixlib.h>
+d50 2
+a51 1
+	long            pln1, pln2;		 /* planes to mask */
+d112 1
+a112 1
+	} else if (sscanf (range, "%dto%d", &pln1, &pln2) != 2) {
+d150 1
+a150 1
+	printf ("Pixels Masked = %i\n", npixels);
+@
+
+
+1.2
+log
+@options to mask wider lines and restrict to limited slices
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskelevlines/RCS/maskelevlines.c,v 1.1 1999/02/01 19:52:32 tom Exp tom $";
+d42 3
+a44 3
+	FILE           *fp;			 /* file pointer */
+	char           *img1, *hdr1;		 /* input file */
+	char           *img2, *hdr2;		 /* output file */
+d46 1
+a46 1
+	long            dim1, dim2, dim3;	 /* dimensions of image */
+d61 1
+a61 1
+		printf ("Usage: maskelevlines img1 hdr1 img2 hdr2 old1 old2 newval width slices\n");
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d10 2
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maskelevlines/RCS/maskelevlines.c,v 1.1 1999/02/01 19:48:31 tom Exp tom $";
+d38 5
+a42 4
+	void			mask_elevated_lines ();
+	FILE           *fp;			 	 /* file pointer */
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+d45 4
+a48 2
+	short        	old1, old2;		 /* pixels less than these define a line */
+	short        	val;			 /* set pixels to this value */
+d57 2
+a58 2
+	if (argc != 8) {
+		printf ("Usage: maskelevlines img1 hdr1 img2 hdr2 old1 old2 newval\n");
+d67 3
+a69 1
+	val  = atoi (argv[7]);
+d103 7
+d142 3
+a144 2
+	mask_elevated_lines (img, old1, old2, val, dim1, dim2, dim3, &npixels);
+	printf ("Pixels Masked = %i\n",npixels);
+@

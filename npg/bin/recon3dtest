@@ -1,0 +1,76 @@
+#!/bin/csh
+#
+# Required files:
+#	Emis:		p2992nmb1.scn
+#	Trans:		p2992tr2.scn	(used to compute 3D scatter)
+#	LogTrans:	p2992tr2l.scn	(used to compute 3D attenuation)
+#	Blank:		040726bl1.scn
+#
+#	GeoFactors: wu_953b_PostJan96_geo.scn
+#
+#	Norm:		normal3d_80x80_040714.nrm
+#		or
+#	Eff3D:		plane_eff_3d_040714.scn
+#
+# Temp files:
+#	EFF2D is 2D projection of EFF3D 
+#	UNIT is sino set to 1 throughout
+#	ITRAN is inverse unit transmission
+#	ATTN2D created from LogTrans and used to create ATTN3D
+
+setenv TABLES /usr/local/lib/tables
+setenv NRMDIR /data/recon/norm
+
+if ($#argv != 4) then
+	echo "Usage: recon3d emis trans blank nrmdate"
+	echo " e.g.  recon3d m900fd1 m900tr1 040909bl1 040902"
+	exit 1
+endif
+
+set EMIS    = $1
+set TRAN    = $2
+set BLANK   = $3
+set ndate   = $4
+set LOGTR   = ${TRAN}l
+set NORM    = normal3d_80x80_{$ndate}
+set GEO     = $TABLES/wu_953b_PostJan96_geo.scn
+set UNIT    = unit_cti953b.scn
+set EFF3D   = plane_eff_3d_${ndate}.scn
+set ITRAN   = plane_eff_3d_${ndate}_2d_tr.scn
+set EFF2D   = plane_eff_3d_${ndate}_2d.scn
+set SCAT    = plane_eff_3d_${ndate}_scat.scat
+set SCATHDR = plane_eff_3d_${ndate}_scat.ifh
+set ATTN2D  = ${TRAN}_f3datn.img
+set ATTN3D  = ${TRAN}_rdmax5.scn
+
+set EFILES = "$EMIS.scn $TRAN.scn $LOGTR.scn $BLANK.scn $GEO"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR: $i does not exist"
+		set STATUS = 1
+	endif
+end
+if ($STATUS != 0) exit 1
+
+if (! -e $NORM.nrm) then
+	if (! -e $EFF3D) then
+		echo "ERROR: $EFF3D does not exist to create $NORM.nrm"
+		exit 1
+	endif
+	sino_2d_extract_cti953b $EFF3D
+	make_eff_tr_cti953b $EFF2D
+	set ARGS = "$EFF3D -blank $UNIT -geo $GEO -scat $SCAT -iter 4 -scatdim 2 -nf $NORM.nrm"
+	makenorm_cti953b $ARGS
+	ualias rm
+	rm $EFF2D $ITRAN $UNIT $SCAT $SCATHDR scatnorm_tmp.csh
+	rm scat_80x80_96_psi13_psiatt25_h0.20_mult.*
+endif
+
+# $ATTN3D will be used if previously created
+rec3dscat $cwd $EMIS $NORM $TRAN $BLANK -f 20 -fo 1 -scat -if 2 -num_frames 1 -p 1.956
+unalias rm
+rm scat_80x80_96_psi13_psiatt25_h0.20_mult.*
+rm ${EMIS}_scat.*
+rm $ATTN2D
+

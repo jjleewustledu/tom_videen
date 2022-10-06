@@ -1,0 +1,411 @@
+head	1.3;
+access;
+symbols;
+locks
+	tom:1.3; strict;
+comment	@c @;
+
+
+1.3
+date	93.04.26.17.24.31;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.11.02.16.02.53;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.10.28.17.35.30;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Original Unix release
+@
+
+
+1.3
+log
+@Revised for ECAT images (pie file type 7)
+@
+text
+@c $Log: fastproc.f,v $
+c Revision 1.2  1992/11/02  16:02:53  tom
+c Added RCS identifies
+c
+c Revision 1.1  1992/10/28  17:35:30  tom
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      FASTPROC.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         12-Jun-87
+C
+C  Intent:
+C     This program reads .DTA (blood curve) files, computes metabolic
+C     conversion constants, and writes these plus certain parameters
+C     from the scan image file (.IMG or .CMG) to a header file (.HDR)
+C     associated with the image.  The specific values written to the
+C     HDR file are documented in WRITEHDR.
+C     These values in the .HDR file are necessary for SPIDERAM to
+C     display metabolic images instead of merely PET numbers.
+C
+C  History:
+C			Revision of metproc.f 17-Feb-92:
+C					no prompts
+C					does not use an image file
+C					EFACTOR = 1.0 always
+C			Modified 16-Apr-92 TOV:
+C					DTA file name is now subject//scanid//.DTA
+C			Modified 02-Nov-92 TOV to include RCS header info:
+C					Copied some modules from new metproc.
+C			Modified 26-Apr-93 TOV:
+C					Pass complete filenames (HDRNAME, DTANAME, RCDNAME)
+C					Default IMGTYPE = 3000 (ECAT)
+C					Handle PIE file type 7
+C					(modified:  read_piefile.f, getfactr.f)
+C
+C  Uses Subroutines:
+C
+C  Main Subroutines:
+C     READDTA  - read blood curve (.DTA) file;
+C     GETFACTR - get pie slope and partition coefficient;
+C     INTERPIE - get pie slope from interpolation of PIE file values;
+C     READ_PIEFILE  - read  PIE file;
+C     O2UTIL   - oxygen utilization model;
+C     BLOODFLW - blood flow model;
+C     BLOODVOL - blood volume model;
+C     INTEGRAT - integrate a function;
+C     WRITEHDR - create .HDR file;
+C     WRITERCD - write record (.RCD) file;
+C
+C		SUN FORTRAN
+C			GETARG
+C			GETCWD
+C			LNBLNK
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM FASTPROC
+C
+      INTEGER*4		DTAFILE	! file descriptor (lu) of .DTA file
+      INTEGER*4		RCDFILE	! file descriptor (lu) of .RCD file
+      INTEGER*4		DISK		! file descriptor (lu) for image and HDR files
+C
+      INTEGER*4		NPIES		! number of PSLOPES/BNKPAIRS
+      INTEGER*4		I, N
+      INTEGER*4		IMGTYPE
+C
+      REAL*4       PSLOPES(10)	! pie slopes read from PIE file
+      REAL*4       BNKPAIRS(10)	! bank pairs read from PIE file
+      REAL*4       EFACTOR
+C     REAL*4       NORM1,NORM2
+C
+      LOGICAL*1    PEAKUSED	! true--> user enters peak of Bank Pairs and
+C																			program estimates the mean;
+C															false--> user enters mean Bank Pairs;
+      LOGICAL*1    IOPTION	! true--> Pie Slope is computed internally by
+C        reading a PIE file and interpolating peak bank pairs;
+      CHARACTER*1		BELL
+      CHARACTER*3		MON
+      CHARACTER*4		FILELABL	! 4 characters at the beginning of a DTA file
+C				which are used to check agreement with the current program version;
+C     CHARACTER*8		DATE1, DATE2
+      CHARACTER*9		VERSION
+C
+			CHARACTER*1024	HDRNAME	! name of .hdr file
+      CHARACTER*1024	DTANAME	! name of .dta file
+      CHARACTER*1024	RCDNAME	! name of .rcd file
+      CHARACTER*1024	PIENAME	! name of .pie file
+			CHARACTER*256   RCSHEADER
+C
+      INCLUDE 'metproc.inc'
+C
+			DATA DTAFILE, RCDFILE, DISK /1,2,3/
+			DATA USERIN, USEROUT /5,6/
+      DATA SCANTYPE(1) /'Oxygen              '/
+      DATA SCANTYPE(2) /'Blood Flow (H2O)    '/
+      DATA SCANTYPE(3) /'Blood Volume (CO)   '/
+      DATA SCANTYPE(4) /'Blood Flow (Butanol)'/
+      DATA SCANTYPE(5) /'Spiperone           '/
+      DATA SCANTYPE(6) /'Glucose             '/
+      DATA VERSION /'26-Apr-93'/
+C -------------------------------------------------------------------
+      DATA TAUO15    /0.005668/
+      DATA TAUO1502  /0.005592/
+      DATA TAUO1501  /0.005677/
+      DATA TAUO1500  /0.00568033/
+      DATA TAUC11    /0.0005668/
+      DATA TAUGA68   /0.0001691/
+      DATA TAUF18    /0.0010529/
+      DATA HOLAMBDA  /0.95/
+      DATA BULAMBDA  /0.81/
+      DATA BRAINDEN  /1.05/
+      DATA BLOODDEN  /1.06/
+      DATA SLVRATIO  /0.85/
+      DATA RBCFACTOR /0.766/
+C
+C  Source for decay constants: first listed halflife for each in
+C     Lederer & Shirley, Table of Isotopes, 1978 (7th edition), Wiley.
+C     (same no. of significant figures as halflives in this source)
+C  Except for O15 where the decay constant was measured using six 20 min
+C     decay curves by Mike Welch taken Jan. 1988.  Curves were fit by
+C     Tom Videen.
+C
+C  Source for HOLAMBDA,BRAINDEN,BLOODDEN,RBCFACTOR:
+C     Herscovitch & Raichle (1985) J. Cereb Blood Flow Metabol, 5:65
+C
+C  Source for SLVRATIO:
+C     Grubb, Raichle, Higgins & Eichling (1978) Annals of Neurology, 4:322
+C
+C -------------------------------------------------------------------
+C  Initialize constants
+C
+			RCSHEADER = "$Header: /home/petsun2/tom/src/fastproc/src/RCS/fastproc.f,v 1.2 1992/11/02 16:02:53 tom Exp tom $"
+      BELL = CHAR(7)
+      EFACTOR = 1.0
+      INITIALS  = 'FAST'
+      EXTENSION = ' '
+      IOPTION   = .TRUE.
+      PEAKUSED  = .TRUE.
+      IMGTYPE   = 3000
+      DO 10 I=1,6
+        COUNT(I) = 1
+10    CONTINUE
+C
+8100  FORMAT(A,A9,A1)
+      WRITE(USEROUT,8100)'*** FAST metabolic PROCessing of scan files  (',
+     2   VERSION,')'
+      WRITE(USEROUT,*)'-----------------------------------------------',
+     2   '------------'
+C
+			CALL GETARG(1,HDRNAME)
+			CALL GETARG(2,DTANAME)
+			CALL GETARG(3,RCDNAME)
+C
+C  Get piefile name
+C
+			OPEN(DISK,FILE='fastflow.dat',STATUS='OLD',ERR=11)
+			GO TO 12
+11		WRITE(USEROUT,*) 'fastflow.dat not found!'
+			STOP
+12		READ(DISK,*)
+			READ(DISK,*)
+			READ(DISK,*)
+			READ(DISK,*)
+			READ(DISK,8000) PIENAME
+			WRITE(USEROUT,8106) PIENAME( : LNBLNK(PIENAME))
+8000  FORMAT (A)
+8106	FORMAT('PIE File Name = ',A)
+C
+C  Open DTA and RCD files
+C			
+			OPEN(DTAFILE,FILE=DTANAME,STATUS='OLD',ERR=20)
+			GO TO 30
+20		WRITE(USEROUT,8110) DTANAME( : LNBLNK(DTANAME))
+			STOP
+30		WRITE(USEROUT,8115) DTANAME( : LNBLNK(DTANAME))
+C
+8110	FORMAT('ERROR: Blood Curve File = ',A,' does not exist!')
+8115	FORMAT('Blood Curve File = ',A)
+C
+			OPEN(RCDFILE,FILE=RCDNAME,ERR=40)
+			GO TO 50
+40		WRITE(USEROUT,8120) RCDNAME( : LNBLNK(RCDNAME))
+			STOP
+50		WRITE(USEROUT,8125) RCDNAME( : LNBLNK(RCDNAME))
+8120	FORMAT('ERROR:  Cannot open file ',A)
+8125	FORMAT('Log File Name = ',A)
+C
+      CALL READ_PIEFILE(NPIES,PSLOPES,BNKPAIRS,DISK,PIENAME,IMGTYPE,PIEMEAN,PIEDATE)
+C
+C  If PIEMEAN=1, no info was available in pie file for efficiency correction
+C
+      WRITE(USEROUT,*) 'PETT Efficiency Factor is set to 1.0'
+C
+8300  FORMAT(A4,A50)
+      READ(DTAFILE,8300) FILELABL,HEADER
+      IF (FILELABL.EQ.'@@01@@') THEN
+        FILETYPE = 4
+        OLDO15 = TAUO1501
+        READ(DTAFILE,*)
+        READ(DTAFILE,*)
+      ELSE IF (FILELABL.EQ.'@@02@@') THEN
+        FILETYPE = 5
+        OLDO15 = TAUO1502
+        READ(DTAFILE,*)
+        READ(DTAFILE,*)
+      ELSE IF (FILELABL.EQ.'@@ @@@@') THEN
+        FILETYPE = 3
+        OLDO15 = TAUO1500
+      ELSE IF (FILELABL.EQ.'@@@@@@@@') THEN
+        FILETYPE = 2
+        OLDO15 = TAUO1500
+      ELSE
+        MON = FILELABL(1:3)
+        IF (MON.EQ.'JAN' .OR. MON.EQ.'FEB' .OR. MON.EQ.'MAR') GO TO 100
+        IF (MON.EQ.'APR' .OR. MON.EQ.'MAY' .OR. MON.EQ.'JUN') GO TO 100
+        IF (MON.EQ.'JUL' .OR. MON.EQ.'AUG' .OR. MON.EQ.'SEP') GO TO 100
+        IF (MON.EQ.'OCT' .OR. MON.EQ.'NOV' .OR. MON.EQ.'DEC') GO TO 100
+        WRITE(USEROUT,*) '*** ERROR:  This is not a blood curve file',
+     2    BELL
+        STOP
+100     FILETYPE = 1
+        OLDO15 = TAUO1500
+        READ(DTAFILE,*)
+        READ(DTAFILE,*) N
+        DO 200 I=1,(N*2)+6
+          READ(DTAFILE,*)
+200     CONTINUE
+      END IF
+      READ(DTAFILE,*) NUMSCANS
+C
+C SINGLE SCAN
+C
+      CALL READDTA(DTAFILE)
+      IF (NTYPE.GT.6) THEN
+        WRITE(USEROUT,*) '*** This scan matches no known type ***'
+        WRITE(USEROUT,*) '*** and CANNOT BE PROCESSED       ***',BELL
+        STOP
+      END IF
+C
+C  Check that the entire scan can be mapped into TIME
+C
+      IF (SCANEND.GT.TIME(NUMPNTS)) THEN
+        WRITE(USEROUT,8400) SCANEND,TIME(NUMPNTS)
+        STOP
+      END IF
+8400  FORMAT('*** ERROR End of Scan,',F10.2,
+     2      ' is AFTER End of Curve,',F10.2)
+C
+C  Get pie slope and partition coefficient
+C
+      CALL GETFACTR(IOPTION,PEAKUSED,NPIES,PSLOPES,BNKPAIRS,EFACTOR)
+C
+C  Calculate the integral of the Blood Curve Activity
+C
+      CALL INTEGRAT(TIME,ACTIVITY,0.,SCANEND,TOTALCNTS)
+      CALL INTEGRAT(TIME,ACTIVITY,SCANST,SCANEND,SCANCNTS)
+      WRITE(USEROUT,*) 'Blood Counts:  (Non-Decay-Corrected)'
+      WRITE(USEROUT,8500) 'Injection     = ',TOTALCNTS
+      WRITE(USEROUT,8500) 'Start of Scan = ',SCANCNTS
+8500  FORMAT(' Integrated Blood Curve from ',A,F15.1)
+C
+C  Get Metabolic Conversion Constants appropriate to the file
+C
+      IF (NTYPE.EQ.1) THEN
+        CALL O2UTIL
+      ELSE IF (NTYPE.EQ.2 .OR. NTYPE.EQ.4) THEN
+        CALL BLOODFLW
+      ELSE IF (NTYPE.EQ.3) THEN
+        CALL BLOODVOL
+      END IF
+      COUNT(NTYPE) = COUNT(NTYPE)+1
+C
+C  Write information to .RCD file
+C
+      CALL WRITERCD(N,RCDFILE,EFACTOR,VERSION)
+C
+C  Create the HDR file
+C
+      CALL WRITEHDR(DISK,EFACTOR,HDRNAME)
+C
+      STOP
+      END
+@
+
+
+1.2
+log
+@Added RCS identifies
+@
+text
+@d2 3
+d33 5
+d67 1
+a67 1
+      INTEGER*4		I,L,N
+a81 1
+			CHARACTER*3		FSTATUS	! file status (OLD or NEW)
+d87 4
+a90 3
+			CHARACTER*1024	HDRNAME	! name of .HDR file
+      CHARACTER*1024	DTANAME	! name of .DTA file
+      CHARACTER*1024	RCDNAME	! name of .RCD file
+d103 1
+a103 1
+      DATA VERSION /'02-Nov-92'/
+d135 1
+a135 1
+			RCSHEADER = "$Header: /usr/local/src/fastproc/RCS/fastproc.f,v 1.1 1992/10/28 17:35:30 tom Exp tom $"
+d142 1
+a142 1
+      IMGTYPE   = 1020
+d153 3
+a155 7
+			CALL GETENV('PWD',PATH)
+			CALL GETARG(1,SUBJECT)
+      L = LNBLNK(SUBJECT)
+			CALL GETARG(2,SCANID)
+      L2 = LNBLNK(SCANID)
+			HDRNAME = PATH( : LNBLNK(PATH))//'/'//SUBJECT( : LNBLNK(SUBJECT))//
+     2  SCANID( : LNBLNK(SCANID))//'.HDR'
+d164 4
+a167 4
+			READ(DISK,*)	
+			READ(DISK,*)	
+			READ(DISK,*)	
+			READ(DISK,*) PIENAME
+d169 1
+d174 1
+a174 3
+			DTANAME = SUBJECT(1:L)//SCANID(1:L2)//'.DTA'
+			FSTATUS = 'OLD'
+			OPEN(DTAFILE,FILE=DTANAME,STATUS='OLD',ERR=15)
+d176 1
+a176 4
+15		DTANAME = SUBJECT(1:L)//'.DAT'
+			OPEN(DTAFILE,FILE=DTANAME,STATUS='OLD',ERR=25)
+			GO TO 30
+25		WRITE(USEROUT,8110) SUBJECT(1:L), SUBJECT(1:L)
+d180 1
+a180 1
+8110	FORMAT('Neither blood curve file ',A,'.DTA nor ',A,'.DAT exists!')
+d183 3
+a185 4
+			RCDNAME = SUBJECT(1:L)//'.RCD'
+			OPEN(RCDFILE,FILE=RCDNAME,ERR=35)
+			GO TO 40
+35		WRITE(USEROUT,8120) RCDNAME( : LNBLNK(RCDNAME))
+d187 2
+a188 2
+40		WRITE(USEROUT,8125) RCDNAME( : LNBLNK(RCDNAME))
+8120	FORMAT('Cannot open file ',A)
+d191 1
+a191 2
+      CALL READ_PIEFILE(NPIES,PSLOPES,BNKPAIRS,DISK,PIENAME,IMGTYPE,
+     &  PIEMEAN,PIEDATE)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+c $Log$
+d28 2
+d95 1
+a95 1
+      DATA VERSION /'16-Apr-92'/
+d127 1
+a127 1
+			RCSHEADER = "$Header$"
+@

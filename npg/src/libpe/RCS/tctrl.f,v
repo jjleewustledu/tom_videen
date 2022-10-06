@@ -1,0 +1,270 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	92.04.13.19.08.15;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Terminal functions for spideram.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@C********************************************************************
+C
+C     TCTRL.FTN              (subroutine)
+C
+C     Terminal Control routine.
+C
+C     Handles special cursor and screen control of user terminal.
+C
+C     Written by Gary R. Hoffman on 14 MAR 85
+C
+C     Logical units assigned by main routine
+C
+C     No subroutines called by this routine
+C
+C     Explanation of variables:  (All are INTEGER*4)
+C        LU is the logical unit of the terminal.
+C        TTYPE is the terminal type (see list). The type of terminal
+C           is usually listed in the INSTALLATION DEPENDENT VARIABLES
+C           file on the systems disc.
+C        FUNCTION is the number of the task this routine should
+C           perform.
+C        ROW and COL are the row and column that the cursor should be
+C           positioned at if the FUNCTION is to position the cursor.
+C        ROW and COL also serve as the number of rows/columns to
+C           move the cursor if FUNCTION is move cursor (positive
+C           will move the cursor up or right, negative will move
+C           the cursor down or left).
+C
+C     List of terminals serviced:
+C     terminal #    terminal type
+C     ----------    -------------
+C         1         Perkin-Elmer 550 VDU
+C         2         Televideo 910
+C         3         Televideo 914
+C         4         Televideo 925
+C         5         Perkin-Elmer 6100  (modified Lear Siegler ADM 11)
+C         6         Freedom 100
+C
+C     List of functions performed:
+C     function #    function
+C     ----------    --------
+C         1         Home cursor
+C         2         Clear screen and home cursor
+C         3         Position cursor to specific row/column
+C         4         Clear line cursor is on (may clear from cursor on)
+C         5         Move cursor by specified amount
+C
+C********************************************************************
+C $Log:	tctrl.f,v $
+c Revision 1.2  90/01/30  11:51:47  11:51:47  todd (M. Todd Gamble)
+c *** empty log message ***
+c 
+c Revision 1.1  89/11/21  12:51:57  12:51:57  todd (M. Todd Gamble)
+c Initial revision
+c 
+C********************************************************************
+
+      SUBROUTINE TCTRL (LU,TTYPE,FUNCTION,ROW,COL)
+
+      INTEGER*4 LU,TTYPE,FUNCTION,ROW,COL,
+     2          MAXTTYPE,MAXFUNC,PBLK(6),TRMWRT,NBYTES
+      INTEGER*2 LINE(128),IROW,ICOL
+      CHARACTER BYTE(80),CROW(2),CCOL(2)
+      EQUIVALENCE (LINE(1),BYTE(1)),(IROW,CROW(1)),(ICOL,CCOL(1))
+
+C
+C  SET CONSTANTS
+C
+      PBLK(6)  = 0                ; Prevent SVC 1 glitches
+      TRMWRT   = Z'00000029'      ; Image write to terminal
+      MAXTTYPE = 6                ; Highest terminal type number
+      MAXFUNC  = 5                ; Highest function number
+C
+C  INITIALIZE VARIABLES
+C
+      DO 500 I=1,128
+ 500  LINE(I)=Z'0000'
+C
+C  CHECK VALIDITY OF REQUEST
+C
+      IF (TTYPE.LT.1.OR.TTYPE.GT.MAXTTYPE.OR.
+     2    FUNCTION.LT.1.OR.FUNCTION.GT.MAXFUNC) GO TO 9000
+C
+C  JUMP TO SELECTED FUNCTION
+C
+      GO TO (1000,1100,1200,1300,1400) FUNCTION
+
+C--------------------------------------------------------------------
+C
+C  HOME CURSOR
+C
+C--------------------------------------------------------------------
+ 1000 CONTINUE
+      IF (TTYPE.EQ.1.OR.TTYPE.EQ.5) THEN
+         BYTE(1)=CHAR(27)         ; ESCAPE
+         BYTE(2)=CHAR(72)         ; H
+      ELSE
+         BYTE(1)=CHAR(30)         ; CTRL ^
+      ENDIF
+      Change this SYSIO, TODD
+      CALL SYSIO (PBLK,TRMWRT,LU,BYTE(1),2,0)
+      GO TO 9000
+
+C--------------------------------------------------------------------
+C
+C  CLEAR SCREEN (AND HOME CURSOR)
+C
+C--------------------------------------------------------------------
+ 1100 CONTINUE
+      BYTE(1)=CHAR(27)            ; ESCAPE
+      IF (TTYPE.EQ.1.OR.TTYPE.EQ.5) THEN
+         BYTE(2)=CHAR(75)         ; K          (CLEAR)
+      Change this SYSIO, TODD
+         CALL SYSIO (PBLK,TRMWRT,LU,BYTE(1),25,0)
+         GO TO 9000
+      ELSE
+         BYTE(2)=CHAR(42)         ; *
+         IF (TTYPE.EQ.3) BYTE(3)=CHAR(48) ; 0
+      Change this SYSIO, TODD
+         CALL SYSIO (PBLK,TRMWRT,LU,BYTE(1),3,0)
+         GO TO 9000
+      ENDIF
+
+C--------------------------------------------------------------------
+C
+C  POSITION CURSOR AT SPECIFIC ROW AND COLUMN
+C
+C--------------------------------------------------------------------
+ 1200 CONTINUE
+      IROW=ROW+31
+      ICOL=COL+31
+      BYTE(1)=CHAR(27)            ; ESCAPE
+      NBYTES=6
+      IF (TTYPE.EQ.1.OR.TTYPE.EQ.5) THEN
+         BYTE(2)=CHAR(88)         ; X     (row)
+         BYTE(3)=CROW(2)          ; row number
+         BYTE(4)=CHAR(27)         ; ESCAPE
+         BYTE(5)=CHAR(89)         ; Y     (column)
+         BYTE(6)=CCOL(2)          ; column number
+      ENDIF
+      IF (TTYPE.EQ.2.OR.TTYPE.EQ.3.OR.TTYPE.EQ.4) THEN
+         NBYTES=4
+         BYTE(2)=CHAR(61)         ; =
+         BYTE(3)=CROW(2)          ; row number
+         BYTE(4)=CCOL(2)          ; column number
+      ENDIF
+      IF (TTYPE.EQ.6) THEN
+         BYTE(2)=CHAR(91)         ; [
+         BYTE(3)=CROW(2)          ; row number
+         BYTE(4)=CHAR(27)         ; ESCAPE
+         BYTE(5)=CHAR(93)         ; ]
+         BYTE(6)=CCOL(2)          ; column number
+      ENDIF
+      Change this SYSIO, TODD
+      CALL SYSIO (PBLK,TRMWRT,LU,BYTE(1),NBYTES,0)
+      GO TO 9000
+
+C--------------------------------------------------------------------
+C
+C  CLEAR LINE CURSOR IS ON (MAY CLEAR ONLY FROM CURSOR TO END OF LINE)
+C
+C--------------------------------------------------------------------
+ 1300 CONTINUE
+      BYTE(1)=CHAR(27)            ; ESCAPE
+      IF (TTYPE.EQ.1.OR.TTYPE.EQ.5) THEN
+         BYTE(2)=CHAR(73)         ; I
+      ENDIF
+      IF (TTYPE.EQ.2.OR.TTYPE.EQ.3.OR.TTYPE.EQ.4) THEN
+         BYTE(2)=CHAR(84)         ; T
+      ENDIF
+      IF (TTYPE.EQ.6) THEN
+         BYTE(2)=CHAR(116)        ; t
+      ENDIF
+      Change this SYSIO, TODD
+      CALL SYSIO (PBLK,TRMWRT,LU,BYTE(1),2,0)
+      GO TO 9000
+
+C--------------------------------------------------------------------
+C
+C  MOVE CURSOR BY SPECIFIC INCREMENTS
+C
+C--------------------------------------------------------------------
+ 1400 CONTINUE
+      IF (ROW.GT.0) THEN          ; CURSOR DOWN
+         IF (TTYPE.EQ.1.OR.TTYPE.EQ.5) THEN
+            BYTE(1)=CHAR(27)      ; ESCAPE
+            BYTE(2)=CHAR(66)      ; B
+         ENDIF
+         IF (TTYPE.EQ.3.OR.TTYPE.EQ.4.OR.TTYPE.EQ.6) THEN
+            BYTE(1)=CHAR(22)      ; CTRL V
+         ENDIF
+         IF (TTYPE.EQ.2) THEN
+            BYTE(1)=CHAR(10)      ; CTRL J
+         ENDIF
+         DO 1405 I=1,ROW
+      Change this SYSIO, TODD
+            CALL SYSIO (PBLK,TRMWRT,LU,BYTE(1),2,0)
+ 1405    CONTINUE
+      ENDIF
+
+      IF (ROW.LT.0) THEN          ; CURSOR UP
+         IF (TTYPE.EQ.1.OR.TTYPE.EQ.5) THEN
+            BYTE(1)=CHAR(27)      ; ESCAPE
+            BYTE(2)=CHAR(65)      ; A
+         ELSE
+            BYTE(1)=CHAR(11)      ; CTRL K
+         ENDIF
+         DO 1410 I=1,(-ROW)
+      Change this SYSIO, TODD
+            CALL SYSIO (PBLK,TRMWRT,LU,BYTE(1),2,0)
+ 1410    CONTINUE
+      ENDIF
+
+      IF (COL.GT.0) THEN          ; CURSOR RIGHT
+         IF (TTYPE.EQ.1.OR.TTYPE.EQ.5) THEN
+            BYTE(1)=CHAR(27)      ; ESCAPE
+            BYTE(2)=CHAR(67)      ; C
+         ELSE
+            BYTE(1)=CHAR(12)      ; CTRL L
+         ENDIF
+         DO 1415 I=1,COL
+      Change this SYSIO, TODD
+            CALL SYSIO (PBLK,TRMWRT,LU,BYTE(1),2,0)
+ 1415    CONTINUE
+      ENDIF
+
+      IF (COL.LT.0) THEN          ; CURSOR LEFT
+         IF (TTYPE.EQ.1.OR.TTYPE.EQ.5) THEN
+            BYTE(1)=CHAR(27)      ; ESCAPE
+            BYTE(2)=CHAR(68)      ; D
+         ELSE
+            BYTE(1)=CHAR(8)       ; CTRL H
+         ENDIF
+         DO 1420 I=1,(-COL)
+      Change this SYSIO, TODD
+            CALL SYSIO (PBLK,TRMWRT,LU,BYTE(1),2,0)
+ 1420    CONTINUE
+      ENDIF
+
+      GO TO 9000
+C
+C  TERMINATE
+C
+ 9000 CONTINUE
+      RETURN
+      END
+@

@@ -1,0 +1,135 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2003.06.10.20.38.37;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@;+
+; NAME:
+;   PCIMAGES
+;
+; PURPOSE
+;   Create principal component images from a list of input images.
+;   The first n/2 principal components are saved in separate images.
+;
+; INPUTS: passed and Environmental variables
+;   LIST:     List of n image files
+;   OUTROOT:  Output rootname
+;
+; REVISION HISTORY:
+;   Jun 2003 Tom Videen
+;-
+
+PRO PCIMAGES
+@@IMAGE_UTILS.h
+
+   on_error,2
+   list = getenv('LIST')
+   outroot = getenv('OUTROOT')
+   mask = getenv('MASK')
+
+   img1 = {VIMAGE}
+   img1.ff = 1
+   img1.lf = 1
+   img1.fp = 1
+   img1.lp = 300
+   msg = ''
+   nimg = 0
+   
+   img1.fname = mask
+   print,'Reading '+img1.fname+'...'
+   IF (GETFRAME(img1, msg) NE 0) THEN BEGIN
+      message, msg
+      exit
+   ENDIF 
+   org = fltarr(3)
+   FOR k=0,2 DO org[k] = img1.org[k]
+   dim = lonarr(4)
+   FOR k=0,3 DO dim[k] = img1.dim[k]
+   vol = dim[0]*dim[1]*dim[2]
+   print,vol
+   img = reform(*img1.data, [1,vol])
+   msk = where(img GT 0)
+   print,size(msk)
+   
+   openr,lun, list, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      msg = 'Cannot OPEN '+list
+      exit
+   ENDIF
+   fname = ''
+   cmd = 'cat '+list+' | wc -l'
+   spawn,cmd,str
+   siz = fix(str[0])
+   filename = strarr(siz)
+
+   WHILE (NOT eof(lun)) DO BEGIN
+      readf, lun, fname
+      img1.fname = fname
+      filename[nimg] = fname
+      print,'Reading '+img1.fname+'...'
+      IF (GETFRAME(img1, msg) NE 0) THEN BEGIN
+         message, msg
+         exit
+      ENDIF 
+      nimg = nimg + 1
+      img = reform(*img1.data, [1,vol])
+      IF ((size(arr))[0] EQ 0) THEN arr = transpose(img[msk]) $
+      ELSE arr = [arr, transpose(img[msk])]
+   ENDWHILE
+   close,lun
+   help,arr
+
+   coef = 1
+   eval = 1
+   var = 1
+   B = PCOMP(arr, COEFFICIENTS=coef, EIGENVALUES=eval, VARIANCES=var)
+
+   extra = strarr(nimg+8)
+   extra[0] = 'program name       := pcimages'
+   extra[1] = 'program version    := 1.0'
+   extra[2] = 'program date       := 2003:06:10'
+   extra[3] = 'atlas origin [1]   := ' + string(org[0],format='(F5.1)')
+   extra[4] = 'atlas origin [2]   := ' + string(org[1],format='(F5.1)')
+   extra[5] = 'atlas origin [3]   := ' + string(org[2],format='(F5.1)')
+
+   FOR k=1,nimg DO BEGIN
+      str1 = 'input file ' + strcompress(string(k),/remove_all) + '       := '
+      str2 = strtrim(filename[k-1])
+      extra[k+5] = str1 + str2
+   ENDFOR
+
+   img = fltarr(1,vol)
+   FOR k=1,nimg/2 DO BEGIN
+      outfile = outroot + string(k,format='(I2.2)')
+      print,'Writing '+outfile+'  Var ='+string(var[k-1],format='(F8.5)')
+      extra[nimg+6] = 'pca component      := ' + strcompress(string(k),/remove_all)
+      extra[nimg+7] = 'variance           := ' + string(var[k-1],format='(F7.5)')
+      img[msk] = b[k-1,*]
+      ;;*img1.data = reform(b[k-1,*],[dim[0],dim[1],dim[2]])
+      *img1.data = reform(img,[dim[0],dim[1],dim[2]])
+      IF (max(*img1.data) GT 32767) THEN img1.ntype = type(0.0) $
+      ELSE img1.ntype = type(0)
+      IF (PUTINTERFILE(img1, outfile, msg, EXTRA=extra) NE 0) THEN BEGIN
+         message, msg
+         exit
+      ENDIF 
+   ENDFOR
+END
+@

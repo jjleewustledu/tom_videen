@@ -1,0 +1,255 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2004.02.16.19.29.45;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.26.22.33.49;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.09.06.19.31.46;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.01.06.20.17.08;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@/* $Log: imgznorm.c,v $
+ * Revision 1.3  2002/11/26  22:33:49  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2000/09/06  19:31:46  tom
+ * strcpy filename
+ *
+ * Revision 1.1  1997/01/06  20:17:08  tom
+ * Initial revision
+ * */
+/*	=========================================================================
+ *	Module:			imgznorm.c
+ *	Author:			Tom Videen
+ *	Description:	scale individual slice values to those in a list
+ *	=========================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgznorm/RCS/imgznorm.c,v 1.3 2002/11/26 22:33:49 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <imgutil.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	MainHeader     *mh;
+	SubHeader      *sh;
+	FILE           *fp;				 /* file pointer */
+	FILE           *recfp;			 /* recfile pointer */
+	char           *fname1;			 /* image to read */
+	char           *fname2;			 /* image to write */
+	char           *list;			 /* file to read factors from */
+	char           *recfile;		 /* rec filename */
+	float        ***img;			 /* image array */
+	int             n;
+	char            runstamp[40];	 /* version, date and userid info */
+	char            record[100];	 /* for reading list */
+	float          *fac;			 /* scale factors */
+	unsigned long   dim1, dim2, dim3; /* array dimensions */
+	long            i, j, k;
+
+	fname1 = argv[1];
+	fname2 = argv[2];
+	list = argv[3];
+	recfile = argv[4];
+	n = 4;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[n + 1], argv[n + 2], argv[n + 3],
+		 argv[n + 5], argv[n + 6], argv[n + 7]);
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [imgznorm]: Cannot open %s\n", recfile);
+		return (ERROR);
+	}
+	fp = fopen (list, "r");
+	if (fp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [imgznorm]: Cannot open %s\n", list);
+		return (ERROR);
+	}
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	file = make_imgfile (fname1);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [imgznorm]: Could not open %s\n", fname1);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [imgznorm]: Could not get MainHeader from %s\n", fname1);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		indx.frm = 2;
+		if (existimgfrm (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [imgznorm]: cannot find %s frame 1 or 2\n", fname1);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [imgznorm]: Could not read file subheader in %s\n", fname1);
+		return (ERROR);
+	}
+	mh = file->mh;
+	sh = file->sh;
+
+	(void) save_rcs (file, rcsid, runstamp);
+
+	dim1 = (unsigned long) sh->dim1;
+	dim2 = (unsigned long) sh->dim2;
+	dim3 = (unsigned long) sh->dim3;
+
+	fac = (float *) calloc (dim3, sizeof (float));
+	if (fac == NULL) {
+		fprintf (stderr, "ERROR [imgznorm]: allocating fac\n");
+		return (ERROR);
+	}
+	for (i = 0; i < dim3; i++) {
+		if (fgets (record, sizeof (record), fp) == NULL) {
+			fprintf (stderr, "ERROR [imgznorm]: reading %s at line %ld\n", list, i + 1);
+			return (ERROR);
+		}
+		fac[i] = atof (record);
+	}
+	printf ("Scaling %s, frame %d\n", fname1, indx.frm);
+	if ((img = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	recout (recfp, fname1);
+
+	for (i = 1; i <= dim3; i++)
+		for (j = 1; j <= dim2; j++)
+			for (k = 1; k <= dim1; k++)
+				img[i][j][k] = fac[i] * img[i][j][k];
+
+	printf ("Writing %s, frame %d\n", fname2, indx.frm);
+	close_imgfile (file);
+	(void) strcpy (file->name, fname2);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [imgznorm]: Could not open %s\n", fname2);
+		return (ERROR);
+	}
+	mh->nframe = indx.frm;
+	if (put_mh (file) == ERROR)
+		return (ERROR);
+	if (writetensor (file, &indx, img) == ERROR)
+		return (ERROR);
+	free_f3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+	close_imgfile (file);
+	free_imgfile (file);
+	free (fac);
+	(void) fclose (recfp);
+	(void) fclose (fp);
+	return (OK);
+}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgznorm/RCS/imgznorm.c,v 1.2 2000/09/06 19:31:46 tom Exp tom $";
+d29 1
+d56 1
+a56 1
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[n + 1], argv[n + 2], argv[n + 3],
+d98 1
+a98 1
+	save_rcs (file, rcsid, runstamp);
+d128 2
+a129 2
+	strcpy (file->name, fname2);
+	strcpy (file->mode, "w");
+d143 2
+a144 2
+	fclose (recfp);
+	fclose (fp);
+@
+
+
+1.2
+log
+@strcpy filename
+@
+text
+@d2 3
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgznorm/RCS/imgznorm.c,v 1.1 1997/01/06 20:17:08 tom Exp tom $";
+d18 1
+a18 1
+#include <math.h>
+d20 1
+a22 1
+#include <nr.h>
+d51 3
+a64 4
+	n = 4;
+	recfile = argv[n];
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[n + 1], argv[n + 2], argv[n + 3],
+		 argv[n + 5], argv[n + 6], argv[n + 7]);
+d138 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d11 1
+a11 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgznorm/RCS/imgznorm.c,v 2.13 1996/10/16 16:35:04 tom Exp $";
+a69 1
+	file->name = fname1;
+d122 1
+a122 1
+	file->name = fname2;
+@

@@ -1,0 +1,45 @@
+#ifndef _TOOLS_H_
+#define _TOOLS_H_
+/** \file tools.h
+    \brief Some very basic tools...
+*/
+#ifndef min
+#define min(a,b) ((a)<(b) ? (a) : (b))
+#endif
+
+#ifndef max
+#define max(a,b) ((a)<(b) ? (b) : (a))
+#endif
+
+
+/** \brief C[i] = A[i] + B[i]  */
+void add(const double* A, const double* B, double* C, size_t len);
+
+/** \brief C[i] = A[i] - B[i]  */
+void sub(const double* A, const double* B, double* C, size_t len);
+
+/** \brief C[i] = alpha * B[i]  */
+void mult(const double alpha, const double* B, double* C, size_t len);
+
+/** \brief C[i] = A[i] * B[i]  */
+void dot(const double* A, const double* B, double* C, size_t len);
+
+/** \brief iprod(A,B) = sum_i A[i] * B[i] */
+double iprod(const double* A, const double* B, size_t len);
+
+/** \brief A[i] = val */
+void setValue(double* A, size_t len, double val);
+
+/** \brief norm2 = sqrt(iprod(A,A)) */
+double norm2(const double* A, size_t len);
+
+/** \brief normInf = max_i abs(A[i] */
+double normInf(const double* A, size_t len);
+
+/** \brief dist2 = sum_i (A[i] - B[i])^2*/
+double dist2(const double* A, const double* B, size_t len);
+
+/** \brief distInf = max_i (abs(A[i] - B[i]) */
+double distInf(const double* A, const double* B, size_t len);
+
+#endif

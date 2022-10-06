@@ -1,0 +1,589 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial checking in, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*------------------------------------------------------------------
+
+Program: sino_2d_extract
+
+Purpose: Extract 2d sinograms from a fully 3D file.
+
+Date: August 26, 1992
+
+By: John Ollinger
+
+------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <math.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include <petutil/matrix.h>
+#include "cti_proto.h"
+#include "cube.h"
+#include "scatter.h"
+#include "unistd.h"
+
+static char rcsid [] = "$Header$";
+
+/* CUB_WR(filnam,image,xdim,ydim,type,id)*/
+#define CUB_WR(A,B,C,D,E) PutCubePlaneZero(A,B,C,D,E,A);
+
+#define	INTERP_FCT 20	/* Interpolation dsamp_factor.		*/
+#define INTERP_LEN  INTERP_FCT*IMGDIM /* Length of interpolated data.*/
+#define FFT_LEN 2048
+#define CCW 1.	/* CCW backprojection in bakpro. */
+#define CW -1.	/* CW backprojection in bakpro. */
+
+#define CTI953_START .26179
+#define CTI953_OFFSET .5
+
+#define NORM 1
+#define SCAN 2
+
+static 	int numray2,numray4,numrayp1,numray2p2;
+
+static float  start_angle; 	/* Starting angle in radians. 		*/
+static int    bakpro_dir;  	/* Rotation of backprojection.		*/
+static float  sino_offset; 	/* Offset of sinogram center from image center. */
+float  gaus_fwhm,	/* FWHM for Gaussian filter.		*/
+	*norm,
+	*image;
+
+int	plane,		/* Plane being processed.			*/
+	lcinit,		/* True: recompute tables in sc structure. 	*/
+        num_psi_factor, /* Factor for sampling frequency of psi.        */
+	imgdim_final,	/* Image dimension to use for final estimate. 	*/
+	numang_final,	/* Number of angles to use for final estimate.  */
+	theta_step,	/* Step size for processing transverse angles. 	*/
+	quiet=FALSE,	/* TRUE: Minimal output to screen.		*/
+	pln_step=1,pln_cti,total_sum,filtyp,
+	rings[NUM_RINGS] = RING_LIST;
+
+char	*datapath,id[MAXNAME],*matchfile=NULL,outfil[MAXNAME],
+	emisfile[MAXNAME],tranfile[MAXNAME],emis_body[MAXNAME],
+	tran_body[MAXNAME],cmd[120],blankfile[MAXNAME],normfile[MAXNAME],
+	filnam[MAXNAME],*imgpath,*getenv(),emisbody[MAXNAME],
+	cutoff_str[MAXNAME],ring_option[MAXNAME],
+	*ptr,*septa_model,
+	scat_dsamp_id[MAX_PLANE_3D][MAXNAME];
+
+FILE	*fp,*fopen();
+
+Main_header    *mhdr;
+
+
+/*************/
+main(argc,argv)
+/*************/
+
+int	argc;
+char	*argv[];
+
+{
+
+struct scatter_tab *sc;
+
+struct  cube_header *outhdr,*nrmhdr;
+
+float	*getimg(),zoom,
+	*interp(),
+	*scat_interp,	/* Interpolated scatter estimage.	*/
+	**emis,			/* Volume of emission data.		*/
+	**mu;			/* Volume of survival probabilities.	*/
+
+int	i,j,joff,koff,iang,jang,stat,ring_diff,iter=0,ring,plnoff,
+	ring1,ring2,pln,k,idir,isc;
+
+long	time0,time1,time2;
+
+void	calc_scat(),process_args(),read_images(),write_scatter(),time();
+
+char	tag[MAXNAME];
+
+Scan_subheader *sh;
+
+time(&time0);
+if( argc < 2) {
+    printf("Usage: sino_2d_extract emis_file -pln plane\n");
+    exit(ERROR);
+    }
+
+if(NULL == (sc = (struct scatter_tab *)
+        malloc((unsigned)sizeof(struct scatter_tab)))) {
+    printf("Could not malloc memory for sc, \"scat_3d\".\n");
+    exit(ERROR);
+    }
+
+/* Process command-line arguments. */
+sc->imgdim = NUMRAY;
+sc->numang = NUMANG;
+process_args(sc,argc,argv,&zoom);
+
+if((sh = getsbhdr(emisfile,1,1,1,0,0)) == NULL) {
+    printf("Error in getsbhdr.\n");
+    exit(ERROR);
+    }
+sc->numray = sh->dimension_1;
+sc->numang = sh->dimension_2;
+sc->lensin = sc->numray*sc->numang;
+sc->img_step = sc->imgdim*OUTPUT_MODULUS/IMGDIM;
+sc->imgsq  = sc->imgdim*sc->imgdim;
+sc->pixsiz = RAYSIZ*sc->numray/sc->imgdim/zoom;
+sc->raysiz = RAYSIZ*NUMRAY/sc->numray;
+
+quiet = FALSE;
+recon1 (emisfile, tranfile, blankfile, matchfile, sc, 
+	&emis, &mu, iter, quiet, zoom);
+}
+
+/**********************************/
+void process_args(sc,argc,argv,zoom)
+/**********************************/
+
+/* Process command-line arguments. */
+
+struct scatter_tab *sc;
+int	argc;
+char	*argv[];
+float	*zoom;
+
+{
+
+int	i,j,ring_list[NUM_RINGS];
+
+sc->iter_type = SS;
+strcpy(emisfile,argv[1]);
+matchfile = argv[1];
+
+if(strstr(emisfile,"scn") != NULL)
+    filtyp = SCAN;
+else
+    filtyp = NORM;
+
+sc->num_psi_att = MAXPSI_ATTEN_OVER_MAXPSI;
+sc->num_iter = 1;
+sc->relax = 1.;
+sc->frame = 1;
+for(i=0;i<argc;i++) {
+    if(!strcmp(argv[i],"-frame") && argc > i+1)
+	sc->frame = atoi(argv[i+1]);
+    }
+
+strcpy(emisbody,emisfile);
+ptr = strstr(emisbody,".");
+*ptr = 0;
+
+}
+
+/*-------------------------------------------------------------
+
+Subroutine: recon1
+
+Perpetrator: John Ollinger
+
+Date of infraction: August 5, 1989
+
+-------------------------------------------------------------------*/
+
+
+/************************************************************************/
+recon1 (emis_file, tran_file, blank_file, matchfile, sc, 
+	emis_img, tran_img, iter, quiet, zoom)
+/************************************************************************/
+
+char	*emis_file,
+	*tran_file,
+	*blank_file,
+	*matchfile;
+
+struct 	scatter_tab *sc;
+
+float 	***emis_img,
+	***tran_img;
+
+int	iter,
+	quiet;
+
+float	zoom;
+
+{
+
+float	tran_duration,blank_duration,emis_duration,min,normm1,normp1,scat,corr,
+	tran_scl,x,sum,total_sum,max,sum1,sum2,sclm1,sclp1,ang_dsamp,
+	*get_2d_sino(),
+	*get_emis_sino1(),
+	*fbp();
+
+static float emis_scl,
+	**blank_sino,
+	**emis_sino,
+	**tran_sino;
+
+int	i,j,k,p,ioff,joff,koff,moff,gate=1,data=0,bed=0,stat,
+	plane,pln,ring1,ring2,pln_3d,offset,plnm1,plnp1,maxpln=MAX_PLANE,
+	recon_emis = TRUE, frmout = 1, ring,
+	dsamp_factor = 1,	/* Sinogram downsampling dsamp_factor. */
+	plnnum_f3d();
+
+static int 	first=TRUE,imgdimm1=-1,
+		recon_tran = FALSE,
+		numraym1 = -1,
+		numangm1 = -1;
+
+static FILE 	*fd_emis,*fd_tran,*fd_emis_file,*fd_tran_cube;
+
+char	emis_img_file[MAXNAME],
+	emis_cub_file[MAXNAME],
+	tran_cube[MAXNAME],
+	*dot;
+
+struct  cube_header *match_cubhdr;
+
+void *sh;
+Scan_subheader *shscan;
+Norm_subheader *shnorm;
+
+if((emis_sino = (float **)malloc((maxpln+1)*sizeof(float *))) == NULL) {
+    fprintf(stderr,"Malloc failed of *emis_sino in recon.\n");
+    return;
+    }
+if((emis_sino = (float **)malloc((maxpln+1)*sizeof(float *))) == NULL) {
+    fprintf(stderr,"Malloc failed of *emis_sino in recon.\n");
+    return;
+    }
+    
+#ifdef cti953b
+        start_angle = -PI/2 - CTI953_START;
+        bakpro_dir = CCW;
+        sino_offset = CTI953_OFFSET;
+#endif
+
+strcpy(outfil,emis_file);
+dot = strrchr(outfil,(int)'.');
+*dot = NULL;
+if(filtyp == SCAN) {
+    strcat(outfil,"_2d.scn");
+    if(NULL==(shscan=(Scan_subheader *)malloc(sizeof(Scan_subheader)))) {
+        fprintf(stderr,"Could not malloc memory for shimg in \"recon\".\n");
+        return(NULL);
+        }
+    }
+else {
+    strcat(outfil,"_2d.nrm");
+    if(NULL==(shnorm=(Norm_subheader *)malloc(sizeof(Norm_subheader)))) {
+        fprintf(stderr,"Could not malloc memory for shimg in \"recon\".\n");
+        return(NULL);
+        }
+    }
+	
+if((mhdr = getmhdr(emisfile)) == NULL) {
+    printf("Error in getmhdr.\n");
+    exit(ERROR);
+    }
+mhdr->num_planes = MAX_PLANE;
+sc->numray = NUMRAY_CTI;
+
+    /* Extract and combine sinograms. */
+for(plane=1;plane<=maxpln;plane++) {
+    emis_sino[plane] = get_emis_sino1(emis_file,plane,&emis_duration,sc);
+    ring = (plane - 1)/2;
+    pln_3d = plnnum_f3d(ring+1,ring+1);
+    if((sh = getsbhdr(emis_file,pln_3d,sc->frame,gate,data,bed)) == NULL) {
+        printf("Error in getsbhdr.\n");
+        exit(ERROR);
+        }
+    if((stat=wrimg(outfil,emis_sino[plane],mhdr,sh,plane,frmout,
+							gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",outfil,plane);
+        exit(ERROR);
+        }
+    }
+printf("2D file written to %s\n",outfil);
+
+}
+
+/**********************************************/
+float *get_emis_sino1 (sinofile,plane,duration,sc)
+/**********************************************/
+
+/* Get sinogram "plane" using combinations to yield 31 planes, with
+   straight slices from two crosses, one straight and cross planes
+   from four crosses. */
+
+char	*sinofile;
+int	plane;
+float	*duration;
+struct scatter_tab *sc;
+
+{
+
+int 	i,ring;
+
+float	*sino,*sino1,*sino2,*sino3,
+	*get_3d_plane();
+
+
+static	int first=TRUE;
+
+if(plane == 1 || plane == MAX_PLANE) {
+    /* No planes to combine for this straight slice. */
+    ring = (plane - 1)/2;
+    sino = get_3d_plane(sinofile,ring,ring,duration,sc);
+    }
+else if(plane == 2 || plane == MAX_PLANE-1) {
+    /* Combine two cross slices for this cross slice. */
+    ring = (plane-1)/2;
+    sino = get_3d_plane(sinofile,ring,ring+1,duration,sc);
+
+    sino1 = get_3d_plane(sinofile,ring+1,ring,duration,sc);
+    for(i=0;i<sc->lensin;i++) 
+	sino[i] = .5*(sino1[i] + sino[i]);
+    free(sino1);
+    }
+else if(2*(plane/2) != plane) {
+    /* Odd planes are straight, combine three planes. */
+    ring = (plane-1)/2 - 1;
+    sino = get_3d_plane(sinofile,ring,ring+2,duration,sc);
+    sino1 = get_3d_plane(sinofile,ring+2,ring,duration,sc);
+    sino2 = get_3d_plane(sinofile,ring+1,ring+1,duration,sc);
+
+    for(i=0;i<sc->lensin;i++) 
+	sino[i] = (sino[i] + sino1[i] + sino2[i])/3.;
+
+    free(sino1);
+    free(sino2);
+    }
+else {
+    /* Must be cross plane, combine four crosses. */
+    ring = plane/2 - 2;
+    sino = get_3d_plane(sinofile,ring,ring+3,duration,sc);
+    sino1 = get_3d_plane(sinofile,ring+3,ring,duration,sc);
+    sino2 = get_3d_plane(sinofile,ring+1,ring+2,duration,sc);
+    sino3 = get_3d_plane(sinofile,ring+2,ring+1,duration,sc);
+
+    for(i=0;i<sc->lensin;i++) 
+	sino[i] = .25*(sino[i] + sino1[i] + sino2[i] + sino3[i]);
+    free(sino1);
+    free(sino2);
+    free(sino3);
+    }
+
+return(sino);
+
+}
+
+/***************************************************/
+float *get_3d_plane(sinofile,ring1,ring2,duration,sc)
+/***************************************************/
+
+char	*sinofile;	/* Sinogram file to be read. */
+int	ring1,ring2;	/* Rings defining plane to read. */
+float	*duration;	/* Duration in seconds. */
+struct 	scatter_tab *sc;
+
+{
+
+float 	*sino,norm[NUMANG],
+	*get_cti_plane(),
+	*get_cube_sino();
+
+int 	i,iang,pln_3d,ring_pair,ioff,plnoff;
+
+static int first = TRUE;
+
+/* Get normalization factor into 1D array. */
+pln_3d = ( (ring1 << 4) & 0xf0) | (ring2 & 0xf) + 1;
+plnoff = (pln_3d - 1)*NUMANG;
+
+pln_3d = plnnum_f3d(ring1+1,ring2+1);
+sino = get_cti_plane(sinofile,pln_3d,duration,sc,norm,sc->frame);
+
+return(sino);
+
+}
+
+
+/*********************************************************/
+float *get_cti_plane(sinofile,plane,duration,sc,norm,frame)
+/*********************************************************/
+
+/* Read specified plane from cti-file, returns sinogram.  Note that
+   the returned array is overwritten on the next call. */
+
+char	*sinofile;	/* Sinogram file to be read. */
+int	plane;		/* Plane number in 3D file. */
+float	*duration;	/* Duration in seconds. */
+struct	scatter_tab *sc;
+float	*norm;
+int	frame;
+
+{
+
+float	*sino=NULL,scl;
+
+static int first=TRUE;
+
+int	i,j,k,iang,joff,koff,moff,ang_dsamp,gate=1,data=0,bed=0,
+	stat,filnum,ioff,length,xdim,ydim;
+
+static FILE	*fd,
+		*fdtab[3] = {NULL, NULL, NULL};
+
+static char	filnam[3][MAXNAME];
+
+Scan_subheader *shscn;
+Norm_subheader *shnrm;
+
+if(filtyp == SCAN) {
+    if((shscn = (Scan_subheader *)
+		getsbhdr(sinofile,plane,frame,gate,data,bed)) == NULL) {
+        printf("Error in getsbhdr.\n");
+        exit(ERROR);
+        }
+    xdim = shscn->dimension_1;
+    ydim = shscn->dimension_2;
+    *duration = .001*(float)shscn->frame_duration;
+    }
+else {
+    if((shnrm = (Norm_subheader *)
+		getsbhdr(sinofile,plane,frame,gate,data,bed)) == NULL) {
+        printf("Error in getsbhdr.\n");
+        exit(ERROR);
+        }
+    xdim = shnrm->dimension_1;
+    ydim = shnrm->dimension_2;
+    }
+
+length = xdim*ydim;
+if((sino=rdimg(sinofile,plane,frame,gate,data,bed)) == NULL) {
+    printf("Error while reading %s in rdimg.\n",filnam);
+    return(NULL);
+    }
+
+/* Eliminate pad. */
+for(i=0,koff=0,joff=0;i<ydim;i++,koff+=xdim,joff+=sc->numray) {
+    for(j=0,k=(xdim - sc->numray)/2;j<sc->numray;j++,k++) 
+        sino[j+joff] = sino[k+koff];
+    }
+
+if(sc->numang*(ydim/sc->numang) != ydim) {
+    fprintf(stderr,"Invalid value of numang in get_cti_plane.\n");
+    exit(ERROR);
+    }
+else
+    ang_dsamp = ydim/sc->numang;
+
+if(ang_dsamp > 1) {
+    /* Sum adjacent sinogram angles. */
+    for(i=0,joff=0,koff=0;i<sc->numang;
+		i++,joff+=sc->numray,koff+=ang_dsamp*sc->numray) {
+        for(j=0;j<sc->numray;j++) {
+	    sino[j+joff] = sino[j+koff];
+	    for(k=1,moff=sc->numray;k<ang_dsamp;k++,moff+=sc->numray) 
+	        sino[j+joff] += sino[j+koff+moff];
+	    }
+        }
+    }
+
+
+return(sino);
+
+}
+
+/***************************************************/
+float *get_cube_sino(sinofile,plane,duration,sc,norm)
+/***************************************************/
+
+/* Read specified plane from cti-file, returns sinogram.  Note that
+   the returned array is overwritten on the next call. */
+
+char	*sinofile;	/* Sinogram file to be read. */
+int	plane;		/* Plane number in 3D file. */
+float	*duration;	/* Duration in seconds. */
+struct	scatter_tab *sc;
+float	*norm;
+
+{
+
+struct cube_header *cubhdr;
+
+float	*sino;
+
+int	i,j,k,ioff,joff,koff,moff,ang_dsamp,plnoff,iang;
+
+if((cubhdr = GetCubeHeader(sinofile,plane-1)) == NULL) {
+    fprintf(stderr,"Call to GetCubeHeader failed in get_cube_sino.\n");
+    return(NULL);
+    }
+*duration = cubhdr->duration;
+
+if((sino = GetCubePlane(sinofile,cubhdr,plane-1)) == NULL) {
+    fprintf(stderr,"Call to GetCubePlane failed in get_cube_sino.\n");
+    return(NULL);
+    }
+/* Crop sinogram. */
+k = (cubhdr->xdim - sc->numray)/2;
+if(k > 0) { 
+    for(i=0,koff=0,joff=0;i<cubhdr->ydim;
+				i++,koff+=cubhdr->xdim,joff+=sc->numray) {
+        for(j=0,k=(cubhdr->xdim - sc->numray)/2;j<sc->numray;j++,k++) 
+            sino[j+joff] = sino[k+koff];
+	}
+    }
+
+/* Normalize sinogram. */
+for(iang=0,ioff=0;iang<NUMANG;iang++,ioff+=sc->numray) {
+    for(i=0;i<sc->numray;i++)
+        sino[i+ioff] *= norm[iang];
+    }
+
+if(sc->numang*(cubhdr->ydim/sc->numang) != cubhdr->ydim) {
+    fprintf(stderr,"Invalid value of numang in get_cube_sino.\n");
+    exit(ERROR);
+    }
+else
+    ang_dsamp = cubhdr->ydim/sc->numang;
+
+if(ang_dsamp > 1) {
+    /* Sum adjacent sinogram angles. */
+    for(i=0,joff=0,koff=0;i<sc->numang;
+		i++,joff+=sc->numray,koff+=ang_dsamp*sc->numray) {
+        for(j=0;j<sc->numray;j++) {
+	    sino[j+joff] = sino[j+koff];
+	    for(k=1,moff=sc->numray;k<ang_dsamp;k++,moff+=sc->numray) 
+	        sino[j+joff] += sino[j+koff+moff];
+	    }
+        }
+    }
+
+free(cubhdr);
+return(sino);
+
+}
+
+@

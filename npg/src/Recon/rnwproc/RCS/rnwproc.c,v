@@ -1,0 +1,1819 @@
+head	1.14;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.14
+date	2002.11.27.17.29.45;	author tom;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	98.07.28.15.29.09;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	98.07.21.17.36.05;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	94.03.18.16.54.43;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	94.03.17.21.40.46;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	94.03.17.21.34.22;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	94.03.14.19.58.30;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	94.03.03.22.43.19;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	94.03.03.20.04.19;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.03.03.20.01.40;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.02.03.16.33.51;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.02.03.15.56.55;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.02.02.18.05.33;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial RCS version
+@
+
+
+1.14
+log
+@*** empty log message ***
+@
+text
+@/* rnwproc.c */
+
+/* 1993 July 19  GCJ */
+/* Corrected a serious bug involving the md_pr->data_ptr */
+/* where the code as written was having free_matrixx_data() */
+/* free an alloced pointer, but not the one actually alloced */
+/* by the matrixx_read() call. */
+/* Also, added getopt() to scan the command line options so that */
+/* options can be added easily. */
+/* The single-frame selection option is new, */
+/* output file selection is new, */
+/* and the prompt-rndelayed combination output file for */
+/* ml emission reconstruction is new. ( if we ever do that again! ) */
+
+
+
+/* 1992 May 20    Added a third output file to support */
+/* maximum-likelihood processing with smoothed delayeds. GCJ */
+/* 1992 May 4   Gerald C. Johns */
+/* merge all the code for reduced-noise processing into */
+/* this one source file for now.  The purpose is to make */
+/* this program independent of the size of the sinogram */
+/* records to be processed.  */
+/* We will only handle two sizes for sure for now:  */
+/* Stationary ECAT 953B   192x160  */
+/* Wobbled ECAT 953B      384x320  */
+
+/* rnproc.c */
+
+/* 1992 April 16  Gerald C. Johns */
+
+/* Input    A CTI-Siemens scan file with prompts and delayeds */
+/* Output   Three files     */
+/*      The first file has only trues = prompts - delayeds */
+/*      The second file has only smoothed trues  */
+/*  The third is just the smoothed delayeds */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <matrix.h>
+#include "cti_proto.h"
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/rnwproc/RCS/rnwproc.c,v 1.13 1998/07/28 15:29:09 tom Exp tom $";
+
+#define PR_DATA 0
+#define DL_DATA 1
+#define FALSE 0
+#define TRUE 1
+
+#define maxd(x,y) (x>y)?  x : y
+#define mind(x,y) (x<y)?  x : y
+
+#ifdef DEBUG
+FILE           *fsino;				 /* used for debugging only */
+#endif
+
+#define DATA1MASK 0x40000000
+/* the data for prompts are 0, delayeds 4, and multiples 8 */
+
+extern char    *optarg;
+extern int      optind, opterr, optopt;
+
+int             ndets, ndets2, dbins, dbins2, lowdbins2, numang, mash, lensin;
+
+void            initlkup ();			 /* initialize sinogram lookup table */
+void            rndelayeds ();			 /* calculate reduced-noise sinogram */
+
+char            Usage[] = "Usage: rnwproc -rtd -f framenumber -p output_path inputfile.scn\n";
+
+char            flist[128];
+char            truename[128];
+char            rntruename[128];
+char            rndelname[128];
+
+int           **pslkup;
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	Scan_subheader *shpr;
+	Scan_subheader *shdl;
+	Main_header    *mhpr;
+	char           *f1;
+	int             i, j;
+	float          *rnsino;			 /* reduced-noise delayeds sinogram goes here */
+	float          *trues;
+	float          *rntrues;
+	float          *prpin;
+	float          *dlpin;
+	float           truesmax;
+	float           truesmin;
+	int             pln, frame = 1, gate = 1, bed = 0, stat;
+	char           *sptr;
+	char            outpath[120];
+
+	char            basename[128];
+	short           ndbins;			 /* Scan_subheader dimensions for sinogram data */
+	short           numang;
+
+	int             optc;
+	int             optoutflg = 0;
+	int             optdflg = 0;
+	int             optrflg = 0;
+	int             optrnflg = 0;
+	int             opttflg = 0;
+	int             optfflg = 0;
+	int             opterrflg = 0;
+	int             oneframe = FALSE;
+	int             minfrm = 1;
+	int             maxfrm = 1;
+	int             frm, outfrm;
+
+	ndbins = 0;
+	numang = 0;				 /* initialize to impossible values */
+	strcpy (outpath, "");
+
+
+	opterr = 0;				 /* supress automatic error messges */
+	while ((optc = getopt (argc, argv, "rtdf:p:")) != EOF) {
+		switch (optc) {
+		case 'd':			 /* prompts and reduced-noise delayeds  data 0,1 */
+			optrnflg++;
+			optoutflg++;
+			optdflg++;
+			break;
+		case 'r':			 /* corrected trues = prompts - rn-delayeds data 0 */
+			optrnflg++;
+			optoutflg++;
+			optrflg++;
+			break;
+		case 't':			 /* CTI trues = prompts - delayeds */
+			optoutflg++;
+			opttflg++;
+			break;
+		case 'f':
+			optfflg++;
+			frame = atoi (optarg);
+			oneframe = TRUE;
+			break;
+		case 'p':
+			optfflg++;
+			strcpy (outpath, optarg);
+			break;
+		case '?':
+			opterrflg++;
+			fprintf (stderr, "rnwproc: unknown option %c\n", optopt);
+			break;
+		}
+	}
+	if (optoutflg == 0)
+		opterrflg++;
+
+	if (opterrflg) {
+		fprintf (stderr, Usage);
+		return (-1);
+	}
+	f1 = argv[argc - 1];
+	strcpy (basename, argv[argc - 1]);
+	sptr = strstr (basename, ".");
+	*sptr = 0;
+
+	if (strlen (outpath) == 0) {
+		sprintf (truename, "%s_tu.scn", basename);
+		sprintf (rntruename, "%s_rn.scn", basename);
+		sprintf (rndelname, "%s_rndel.scn", basename);
+	} else {
+		sprintf (truename, "%s/%s_tu.scn", outpath, basename);
+		sprintf (rntruename, "%s/%s_rn.scn", outpath, basename);
+		sprintf (rndelname, "%s/%s_rndel.scn", outpath, basename);
+	}
+
+	if ((mhpr = getmhdr (f1)) == NULL) {
+		fprintf (stderr, "Could not read main header., %s\n", f1);
+		return (ERROR);
+	}
+	if (mhpr->system_type == 953)
+		ndets = 384;
+	else if (mhpr->system_type == 951)
+		ndets = 512;
+	else if (mhpr->system_type == 961)
+		ndets = 784;
+	else {
+		fprintf (stderr, "Scanner not supported: %d\n", mhpr->system_type);
+		return (-1);
+	}
+	ndets2 = ndets / 2;
+
+	if (mhpr->file_type != RAW_DATA) {
+		fprintf (stderr,
+			 "rnwproc: matrix main header file_type of %d is not a scan file\n",
+			 mhpr->file_type);
+		return (-1);
+	}
+	if (oneframe == TRUE) {
+		mhpr->num_frames = 1;
+		minfrm = frame;
+		maxfrm = frame;
+	} else {
+		minfrm = 1;
+		maxfrm = mhpr->num_frames;
+	}
+	for (frm = minfrm; frm <= maxfrm; frm++) {
+		for (pln = 1; pln <= mhpr->num_planes; pln++) {
+			/* printf ("pln: %d\n", pln); */
+			if (oneframe == TRUE)
+				outfrm = 1;
+			else
+				outfrm = frm;
+
+			/* read the prompts sinogram */
+			if ((prpin = rdimg (f1, pln, frm, gate, PR_DATA, bed)) == NULL) {
+				fprintf (stderr, "Error reading %s, plane %d\n", prpin, pln);
+				return (ERROR);
+			}
+			if ((shpr = getsbhdr (f1, pln, frm, gate, PR_DATA, bed)) == NULL) {
+				fprintf (stderr, "Could not read main header., %s\n", f1);
+				return (ERROR);
+			}
+			/* read the delayeds sinogram */
+			if ((dlpin = rdimg (f1, pln, frm, gate, DL_DATA, bed)) == NULL) {
+				fprintf (stderr, "Error reading %s, plane %d\n", prpin, pln);
+				return (ERROR);
+			}
+			if ((shdl = getsbhdr (f1, pln, frm, gate, DL_DATA, bed)) == NULL) {
+				fprintf (stderr, "Could not read main header., %s\n", f1);
+				return (ERROR);
+			}
+			if (pln == 1 && frm == minfrm) {	/* we need to initialize things */
+				/* debug  */
+/*            fprintf(stderr,"Sinogram is %d by %d\n",
+                shpr->dimension_1,shpr->dimension_2);*/
+				ndbins = shpr->dimension_1;	/* number of distance bins */
+				numang = shpr->dimension_2;	/* number of view angles */
+				mash = ndets / (2 * numang);
+				if (mash < 1)
+					mash = 1;
+				lensin = ndbins * numang;	/* size in bins */
+				if (opttflg)
+					trues = (float *) malloc (lensin * sizeof (float));
+				if (optrnflg) {
+					dbins = ndbins;
+					dbins2 = ndbins / 2;
+					lowdbins2 = dbins2 - 1;
+					pslkup = (int **) malloc (ndets * sizeof (int *));
+					pslkup[0] = (int *) malloc (ndets * ndets * sizeof (int));
+					for (i = 1; i < ndets; i++)
+						pslkup[i] = pslkup[i - 1] + ndets;
+					rnsino = (float *) malloc (lensin * sizeof (float));
+					rntrues = (float *) malloc (lensin * sizeof (float));
+					/* this is very important  */
+					/* initialize the sinogram index lookup table */
+					initlkup ();
+				}
+			} else if (ndbins != shpr->dimension_1) {
+				fprintf (stderr, "rnwproc: inconsistent sinogram size\n");
+				return (-1);
+			}
+			/* Use sinograms that are not corrected for deadtime. */
+			for (j = 0; j < lensin; j++) {
+				prpin[j] /= shpr->loss_correction_fctr;
+				dlpin[j] /= shpr->loss_correction_fctr;
+			}
+
+			/* calculate the Casey-Hoffman reduced-noise delayeds sinogram */
+			if (optrnflg)
+				rndelayeds (dlpin, rnsino);
+			for (j = 0; j < lensin; j++) {
+				if (rnsino[j] < 0)
+					rnsino[j] = 0.;
+			}
+
+
+			if (opttflg) {
+				/* calculate trues */
+				truesmin = 1.e20;
+				truesmax = -1.e20;
+				for (j = 0; j < lensin; j++) {
+					trues[j] = prpin[j] - dlpin[j];
+					if (trues[j] > truesmax)
+						truesmax = trues[j];
+					if (trues[j] < truesmin)
+						truesmin = trues[j];
+				}
+/*            fprintf(stderr,"truesmax %f  truesmin %f\n",
+						truesmax,truesmin);*/
+			}
+			if (optrnflg) {
+				/* calculate reduced-noise trues whether we write them or not */
+				for (j = 0; j < lensin; j++)
+					rntrues[j] = prpin[j] - rnsino[j];
+			}
+			if (opttflg) {
+				if ((stat = wrimg
+				(truename, trues, mhpr, shpr, pln, outfrm, gate, 0, bed)) != OK) {
+					fprintf (stderr, "Error writing %s, plane %d\n", truename, pln);
+					return (ERROR);
+				}
+			}
+			if (optrflg) {
+				if ((stat = wrimg
+				     (rntruename, rntrues, mhpr, shpr, pln, outfrm, gate, 0, bed)) != OK) {
+					fprintf (stderr, "Error writing %s, plane %d\n", rntrues, pln);
+					return (ERROR);
+				}
+			}
+			if (optdflg) {
+				if ((stat = wrimg
+				     (rndelname, rnsino, mhpr, shdl, pln, outfrm, gate, 0, bed)) != OK) {
+					fprintf (stderr, "Error writing %s, plane %d\n", rndelayeds, pln);
+					return (ERROR);
+				}
+			}
+			free (prpin);
+			free (dlpin);
+		}
+	}
+}
+
+/**************/
+void            initlkup ()
+/**************/
+
+/* Initialize the detector-pair to sinogram-index lookup table */
+
+{
+	int             i;
+	int             j;
+	int             deta;
+	int             detb;
+	int           **slkup = pslkup;
+
+	void            sino_2_det_pair ();
+
+	/* compute the array of detector pair indexes */
+	for (i = 0; i < ndets; i++)
+		for (j = 0; j < ndets; j++)
+			slkup[i][j] = -1;
+	for (i = 0; i < lensin; i++) {
+		sino_2_det_pair (i, &deta, &detb);
+		slkup[deta][detb] = i;
+		slkup[detb][deta] = i;
+		slkup[(deta + 1) % ndets][(detb + 1) % ndets] = i;
+		slkup[(detb + 1) % ndets][(deta + 1) % ndets] = i;
+	}
+}
+
+/***************************/
+void            rndelayeds (sino, prnsino)
+/***************************/
+
+	float           sino[];			 /* array of delayeds as collected by scanner */
+	float          *prnsino;		 /* pointer used to fill reduced-noise sinogram */
+
+{
+	void            sino_2_det_pair ();
+	static int      first = TRUE;
+	static float   *RAsum, *RBsum, *RABsum;
+	int             i, bin, deta, detb;
+
+	if (first == TRUE) {
+		first = FALSE;
+		RAsum = (float *) malloc (ndets * sizeof (float));
+		RBsum = (float *) malloc (ndets * sizeof (float));
+		RABsum = (float *) malloc (ndets * sizeof (float));
+	}
+	for (i = 0; i < ndets; i++) {
+		RAsum[i] = 0.;
+		RBsum[i] = 0.;
+	}
+
+	for (deta = 0; deta < ndets; deta++) {
+		for (detb = 0; detb < ndets; detb++) {
+			if (pslkup[deta][detb] != -1)
+				RAsum[deta] += sino[pslkup[deta][detb]];
+			if (pslkup[detb][deta] != -1)
+				RBsum[detb] += sino[pslkup[detb][deta]];
+		}
+	}
+	for (deta = 0; deta < ndets; deta++) {
+		for (i = 0, RABsum[deta] = 0.; i < ndets; i++) {
+			if (pslkup[deta][i] != -1) {
+				RABsum[deta] += RBsum[i];
+			}
+		}
+	}
+
+	for (bin = 0; bin < lensin; bin++) {
+		sino_2_det_pair (bin, &deta, &detb);
+		if (RABsum[deta] > 0)
+			prnsino[bin] = RAsum[deta] * RBsum[detb] / RABsum[deta];
+		else
+			prnsino[bin] = 0.;
+	}
+
+}
+
+
+/***************************************/
+void            sino_2_det_pair (ibin, deta, detb)
+/***************************************/
+
+	int             ibin;			 /* index into sinogram array */
+	int            *deta;			 /* detector 1 of 2    0 <= deta < ndets   */
+	int            *detb;			 /* detector 2 of 2 */
+{
+	int             d;
+	int             theta;
+
+	theta = ibin / dbins;			 /* view angle */
+	d = ibin % dbins;			 /* distance */
+	*deta = (ndets + (((d - (d % 2)) - dbins2) / 2) + theta * mash) % ndets;
+	*detb = (ndets2 - (((d + (d % 2)) - dbins2) / 2) + theta * mash) % ndets;
+}
+@
+
+
+1.13
+log
+@minimize user messages
+@
+text
+@d44 1
+a44 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/rnwproc/RCS/rnwproc.c,v 1.12 1998/07/21 17:36:05 tom Exp tom $";
+a86 1
+	int             status;
+d157 1
+a157 1
+		exit (-1);
+d176 1
+a176 1
+		exit (ERROR);
+d186 1
+a186 1
+		exit (-1);
+d194 1
+a194 1
+		exit (-1);
+d215 1
+a215 1
+				exit (ERROR);
+d219 1
+a219 1
+				exit (ERROR);
+d224 1
+a224 1
+				exit (ERROR);
+d228 1
+a228 1
+				exit (ERROR);
+d258 1
+a258 1
+				exit (-1);
+d298 1
+a298 1
+					exit (ERROR);
+d305 1
+a305 1
+					exit (ERROR);
+d312 1
+a312 1
+					exit (ERROR);
+d360 1
+a360 2
+	int             i, j, bin, deta, detb;
+	float           suma, sumb;
+@
+
+
+1.12
+log
+@Solaris version
+@
+text
+@d44 1
+a44 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/rnwproc/new1/RCS/rnwproc.c,v 1.13 1995/04/27 20:30:06 jmo Exp $";
+d69 1
+a69 1
+char            Usage[] = "Usage: (94Mar18)  rnwproc -rtd -f framenumber -p output_path inputfile.scn\n";
+d124 1
+a124 1
+		case 'd':			 /* prompts and reduced-noise delayeds    data 0,1 */
+d129 1
+a129 2
+		case 'r':			 /* corrected trues = prompts - rn-delayeds   data
+						  * 0 */
+d207 1
+a207 1
+			printf ("pln: %d\n", pln);
+a319 1
+
+@
+
+
+1.11
+log
+@JMO version from Mar 18 for HP
+@
+text
+@d44 1
+a44 1
+static char rcsid [] = "$Header$";
+a53 4
+#define NDETS 384
+#define DBINS 160
+#define THBINS 192
+
+d55 1
+a55 1
+FILE *fsino;  /* used for debugging only */
+d61 2
+a62 3
+extern int errno;
+extern char *optarg;
+extern int optind, opterr, optopt;
+d64 1
+a64 12
+extern int thbins;
+extern int dbins;
+extern int dbins2;
+extern int lowdbins2;
+extern int ndets;
+extern int ndets2;
+extern int sinosize;  /* computed size of sinogram in bins */
+extern int **pslkup;
+extern float *pRAaB;
+extern float *pRAAb;
+extern int szofRAaB;
+extern int szofRAAb;
+d66 2
+a67 1
+extern int **imatrix();  /* from Numerical Recipes */
+d69 1
+d71 4
+a74 2
+void initlkup ();  /* initialize sinogram lookup table */
+void rndelayeds ();  /* calculate reduced-noise sinogram */
+d76 1
+a76 1
+char Usage [] = "Usage: (94Mar18)  rnwproc -rtd -f framenumber -p output_path inputfile.scn\n";
+d78 3
+a80 8
+char flist [128];
+char truename [128];
+char rntruename [128];
+char rndelname [128];
+
+main ( argc, argv )
+int argc;
+char **argv;
+d82 16
+a97 17
+    Scan_subheader *shpr;
+    Scan_subheader *shdl;
+    Main_header	   *mhpr;
+    char *f1;
+    int j;
+    int status;
+    /*short rnsino [192*160];  /* reduced-noise delayeds sinogram goes here */
+    float *rnsino;
+    float *trues;
+    float *rntrues;
+    float *prpin;
+    float *dlpin;
+    float truesmax;
+    float truesmin;
+    int pln,frame=1,gate=1,bed=0,stat;
+    char *sptr;
+    char outpath[120];
+d99 3
+a101 3
+    char basename [128];
+    short ndbins;  /* Scan_subheader dimensions for sinogram data */
+    short nangles;
+d103 12
+a114 12
+    int optc;
+    int optoutflg = 0;
+    int optdflg = 0;
+    int optrflg = 0;
+    int optrnflg = 0;
+    int opttflg = 0;
+    int optfflg = 0;
+    int opterrflg = 0;
+    int oneframe = FALSE;
+    int minfrm = 1;
+    int maxfrm = 1;
+    int frm,outfrm;
+d116 3
+a118 3
+    ndbins = 0;
+    nangles = 0;  /* initialize to impossible values */
+    strcpy(outpath,"");
+d121 31
+a151 75
+    opterr = 0;  /* supress automatic error messges */
+    while ( ( optc = getopt ( argc, argv, "rtdf:p:" ) ) != EOF )
+    {
+        /*fprintf(stderr,"info  optind %d  optopt %c optc %c\n",optind,optopt,optc);*/
+        switch ( optc )
+        {
+        case 'd': /* prompts and reduced-noise delayeds    data 0,1 */
+            optrnflg++;
+            optoutflg++;
+            optdflg++;
+            break;
+        case 'r': /* corrected trues = prompts - rn-delayeds   data 0 */
+            optrnflg++;
+            optoutflg++;
+            optrflg++;
+            break;
+        case 't': /* CTI trues = prompts - delayeds */
+            optoutflg++;
+            opttflg++;
+            break;
+        case 'f':
+            optfflg++;
+	    frame = atoi(optarg);
+	    oneframe = TRUE;
+            break;
+        case 'p':
+            optfflg++;
+ 	    strcpy(outpath,optarg);
+            break;
+        case '?':
+            opterrflg++;
+            fprintf(stderr,"rnwproc: unknown option %c\n",optopt);
+            break;
+        }
+    }
+    /*fprintf(stderr,"info argc %d  optind %d  optopt %c\n",argc,optind,optopt);
+    fprintf(stderr,"info  optoutflg %d  opterrflg %d\n",optoutflg,opterrflg);*/
+    if ( optoutflg == 0 ) opterrflg++;
+
+    if ( opterrflg )
+    {
+        fprintf(stderr,Usage);
+        exit(-1);
+    }
+    if ( optind < argc )
+        f1 = argv[optind];
+    else
+    {
+        fprintf(stderr,"rnwproc: one input file name required\n");
+        fprintf(stderr,Usage);
+        exit (-1);
+    }
+    if ( (argc - optind) > 1 )
+    {
+        fprintf(stderr,"rnwproc: only one input file name allowed, cannot process:\n");
+        for ( ++optind; optind < argc; optind++ )
+        {
+            fprintf(stderr,"%s\n",argv[optind]);
+        }
+        fprintf(stderr,Usage);
+        exit (-1);
+    }
+
+    strcpy(basename,f1);
+    sptr = strstr(basename,".");
+    *sptr = 0;
+
+		if (strlen(outpath) == 0) {
+      sprintf(truename,"%s_tu.scn",basename);
+      sprintf(rntruename,"%s_rn.scn",basename);
+      sprintf(rndelname,"%s_rndel.scn",basename);
+		} else {
+    	sprintf(truename,"%s/%s_tu.scn",outpath,basename);
+    	sprintf(rntruename,"%s/%s_rn.scn",outpath,basename);
+    	sprintf(rndelname,"%s/%s_rndel.scn",outpath,basename);
+d153 3
+d157 8
+a164 4
+    if((mhpr=getmhdr(f1)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",f1);
+    exit(ERROR);
+    }
+d166 9
+a174 6
+    if ( mhpr->file_type != RAW_DATA ) {
+        fprintf(stderr,
+        "rnwproc: matrix main header file_type of %d is not a scan file\n",
+            mhpr->file_type);
+        exit(-1);
+    }
+d176 3
+a178 8
+    if(oneframe == TRUE) {
+        mhpr->num_frames = 1;
+	minfrm = frame;
+	maxfrm = frame;
+  	}
+    else {
+	minfrm = 1;
+	maxfrm = mhpr->num_frames;
+d180 11
+a190 6
+  for(frm=minfrm;frm<=maxfrm;frm++) {
+    for(pln=1 ; pln <= mhpr->num_planes ; pln++) {
+	if(oneframe == TRUE) 
+	    outfrm = 1;
+	else
+	    outfrm = frm;
+d192 21
+a212 9
+        /* read the prompts sinogram */
+        if((prpin=rdimg(f1,pln,frm,gate,PR_DATA,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",prpin,pln);
+            exit(ERROR);
+            }
+	if((shpr=getsbhdr(f1,pln,frm,gate,PR_DATA,bed)) == NULL) {
+            fprintf(stderr,"Could not read main header., %s\n",f1);
+            exit(ERROR);
+            }
+d214 20
+a233 12
+        /* read the delayeds sinogram */
+        if((dlpin=rdimg(f1,pln,frm,gate,DL_DATA,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",prpin,pln);
+            exit(ERROR);
+            }
+	if((shdl=getsbhdr(f1,pln,frm,gate,DL_DATA,bed)) == NULL) {
+            fprintf(stderr,"Could not read main header., %s\n",f1);
+            exit(ERROR);
+            }
+
+        if ( pln == 1  && frm == minfrm) {  /* we need to initialize things */
+            /* debug  */
+d236 31
+a266 38
+            ndbins = shpr->dimension_1; /* number of distance bins */
+            nangles = shpr->dimension_2; /* number of view angles */
+            sinosize = ndbins * nangles;  /* size in bins */
+            if ( opttflg )
+                trues = (float*) malloc ( sinosize * sizeof(float) );
+            if ( optrnflg ) {
+                ndets = 2 * nangles;
+                ndets2 = nangles;
+                dbins = ndbins;
+                dbins2 = ndbins / 2;
+                lowdbins2 = dbins2 - 1;
+                thbins = nangles;
+                /* use the matrix allocation scheme from Numerical Recipes */
+                pslkup = imatrix ( 0, (ndets-1), 0, (ndets-1) );
+                szofRAaB = ((ndets2-1)+dbins2+1)*sizeof(float *);
+                szofRAAb = ((ndets2-1)+dbins2+2)*sizeof(float *);
+                pRAaB = (float *) malloc( szofRAaB);
+                pRAAb = (float *) malloc( szofRAAb);
+	        for(j=0;j<(ndets2-1)+dbins2+1;j++) {
+		    pRAaB[j] = 0.;
+                    pRAAb[j] = 0.;
+		    }
+                rnsino = (float*) malloc ( sinosize * sizeof(float) );
+                rntrues = (float*) malloc ( sinosize * sizeof(float) );
+                /* this is very important  */
+                /* initialize the sinogram index lookup table */
+                initlkup ();
+            }
+        }
+        else if ( ndbins != shpr->dimension_1 ) {
+            fprintf(stderr,"rnwproc: inconsistent sinogram size\n");
+            exit(-1);
+        }
+	/* Use sinograms that are not corrected for deadtime.*/
+        for ( j = 0; j < sinosize; j++ ) {
+	    prpin[j] /= shpr->loss_correction_fctr;
+	    dlpin[j] /= shpr->loss_correction_fctr;
+  	    }
+d268 7
+a274 7
+        /* calculate the Casey-Hoffman reduced-noise delayeds sinogram */
+        if ( optrnflg )
+            rndelayeds ( dlpin, rnsino );
+        for ( j = 0; j < sinosize; j++ ) {
+	    if(rnsino[j] < 0) 
+		rnsino[j] = 0.;
+	    }
+d277 11
+a287 9
+        if ( opttflg ) {
+            /* calculate trues */
+            truesmin = 1.e20;
+            truesmax = -1.e20;
+            for ( j = 0; j < sinosize; j++ ) {
+                trues[j] = prpin[j] - dlpin[j];
+                if ( trues[j] > truesmax ) truesmax = trues[j];
+                if ( trues[j] < truesmin ) truesmin = trues[j];
+            }
+d290 31
+a320 1
+        }
+a321 35
+        if ( optrnflg ) {
+            /* calculate reduced-noise trues whether we write them or not */
+            for ( j = 0; j < sinosize; j++ )
+                rntrues[j] = prpin[j] - rnsino[j];
+            }
+
+        if ( opttflg ) {
+	    if((stat=wrimg
+		(truename,trues,mhpr,shpr,pln,outfrm,gate,0,bed)) != OK) {
+	        fprintf(stderr,"Error writing %s, plane %d\n",truename,pln);
+        	exit(ERROR);
+        	}
+	    }
+
+        if ( optrflg ) {
+	    if((stat=wrimg
+		(rntruename,rntrues,mhpr,shpr,pln,outfrm,gate,0,bed)) != OK) {
+	        fprintf(stderr,"Error writing %s, plane %d\n",rntrues,pln);
+        	exit(ERROR);
+        	}
+            }
+
+        if ( optdflg ) {
+	    if((stat=wrimg
+	      (rndelname,rnsino,mhpr,shdl,pln,outfrm,gate,0,bed)) != OK) {
+	      fprintf(stderr,"Error writing %s, plane %d\n",rndelayeds,pln);
+              exit(ERROR);
+              }
+            }
+
+            free(prpin);
+	    free(dlpin);
+    }
+  }
+
+d324 3
+a326 6
+/* quantitsubs.c */
+/* 1992 April 16 */
+/* This version of the smoothed-delayeds calculation */
+/* is meant to be called from a program which will be */
+/* processing one or more sinogram records from a   */
+/* CTI datacalc matrix file. */
+d328 1
+a329 42
+
+/* 1992 March 26 */
+/* Versions 1 through 4 are reasonably clear, but slow. */
+/* Abandon hope of understanding or reverse-engineering */
+/* this version unless you have access to the design notes. */
+/* Instead of doing 81*80*192 = 1,244,160 summation steps,  */
+/* this version does 81*80+(4*(81+80)) = 130,128 summations */
+/* which ought to be about 9.5 times faster. */
+/* version  quantit4   ran in about 8.8 seconds per sinogram */
+/* of delayeds on a SUN SparcStation 2 (wuhydra) when the    */
+/* processor load was about 4.00  */
+
+
+/* now that it works (1992 Mar 24), try to speed it up */
+extern int thbins;
+extern int dbins;
+extern int dbins2;
+extern int lowdbins2;
+extern int ndets;
+extern int ndets2;
+extern int sinosize;  /* computed size of sinogram in bins */
+
+/* 1992 March 23   Gerald C. Johns */
+/* This is the first attempt to process PET accidental data */
+/* in the manner described in */
+/* "Quantitation in Positron Emission Computed Tomography: */
+/* A Technique to Reduce Noise in Accidental Coincidence   */
+/* Measurements and Coincidence Efficiency Calibration"    */
+/* Michael E. Casey and Edward J. Hoffman */
+/* Journal of Computer Assisted Tomography 10(5):845-850   */
+/* September/October 1986 */
+
+
+
+/* The sinogram index lookup table must be calculated once */
+/* before any call to the Casey-Hoffman noise-reduction    */
+/* function is made.  */
+void sino_2_det_pair ();
+
+/* initialize the detector-pair to sinogram-index lookup table */
+
+void initlkup ()
+d331 5
+a335 5
+    int i;
+    int j;
+    int deta;
+    int detb;
+    int **slkup = pslkup;
+d337 1
+a337 17
+    /* compute the array of detector pair indexes */
+    for ( i = 0; i < ndets; i++ )
+        for ( j = 0; j < ndets; j++ )
+            slkup[i][j] =  -1;
+    for ( i = 0; i < (sinosize); i++ )
+    {
+        sino_2_det_pair ( i, &deta, &detb );
+        slkup [deta][detb] = i;
+        slkup [detb][deta] = i;
+    }
+}
+void rndelayeds (sino, prnsino)
+float sino [];  /* array of delayeds as collected by scanner */
+float *prnsino;  /* pointer used to fill reduced-noise sinogram */
+{
+    /*float sino [192*160];  /* sinogram of delayeds */
+    /*float rnsino [192*160];  /* reduced noise sinogram */
+d339 11
+a349 159
+    /* RAaB is the bank of detectors centered on the origin of the */
+    /* detector coordinate system. */
+    /*int RAaB [191+VSIZE+1]; /* vector of fan sums */
+    float *RAaB = pRAaB;
+    /* RAAb is the bank of detectors centered on the center of the */
+    /* detector coordinate system. */
+    /*int RAAb [191+VSIZE]; /* opposing vector of fan sums */
+    float *RAAb = pRAAb;
+    float RAB;  /* sum of all coincidences */
+    int siRAaB; /* current starting index into RAaB */
+    int siRAAb; /* current starting index into RAAb */
+
+    int i;
+    int j;
+    int m;  /* starting detector   nearest origin of coordinates */
+    int em;  /* ending detector  nearest origin of coordinates */
+    int p;  /* starting detector   nearest center of coordinates */
+    int ep; /* ending detector   nearest center of coordinates */
+    int deta;  /* a detector in bank a */
+    int detb;  /* a detector in bank b */
+    int row;   /* a row index into a square array */
+    int col;   /* a column index */
+    int iangle;  /* index through the view angles */
+    float vsino=0.;  /* a single value extracted from a sinogram */
+    float vrow=0.;  /* accumulator used to avoid repetitive array index */
+    float vcol=0.;  /* accumulator used to avoid repetitive array index */
+    int **slkup = pslkup;
+
+    /* somewhat superstitious initialization of everything */
+    sino_2_det_pair ( 0, &deta, &detb );
+    for(j=0;j<(ndets2-1)+dbins2+1;j++)
+	pRAaB[j] = 0.;
+    for(j=0;j<(ndets2-1)+dbins2+2;j++)
+        pRAAb[j] = 0.;
+    m = deta;
+    p = detb;
+    ep = (detb - dbins2 + ndets) % ndets;  /* end index of centered detectors */
+
+    RAB = 0;
+    siRAaB = 0; /* the column of row sums index counts up */
+    siRAAb = ndets2;
+    /*the row of column sums index counts down */
+    /* fill the Rate-of-Accidentals vectors for view angle zero */
+    for ( row = siRAaB, deta = m;
+        row < (dbins2+siRAaB);
+        row++, deta=(deta+1)%ndets ) {
+        vrow = 0;
+        for ( col = siRAAb, detb = p;
+            col <= (dbins2+siRAAb);
+            col++, detb=(detb-1+ndets)%ndets ) {
+            vsino = sino [slkup [deta][detb]];
+            /* debug */
+            if ( slkup[deta][detb] == -1 )
+                fprintf(stdout,"bad detector pair      deta %d    detb %d\n",deta,detb);
+            vrow += vsino;  /* calculate equation (6) */
+            RAAb [col] += vsino; /* calculate equation (7) */
+            RAB += vsino;  /* compute equation (8) */
+        }
+        RAaB [row] = vrow;  /* only one array lookup per row */
+    }
+
+    /* compute equation (9) for the first row of the output sinogram */
+    for ( i=0, row=siRAaB, col=siRAAb; i < dbins; i++ ) {
+	if(RAB > 0) 
+            *prnsino++  =  ( RAaB [row] * RAAb [col] ) / RAB;
+	else
+            *prnsino++  =  0.;
+        if ( (i % 2) == 0 )
+            col++;
+        else
+            row++;
+    }
+    /* now the fun begins! */
+    /* for the remaining view angles, we move each of the two */
+    /* detector arrays by exactly one detector. */
+    /* RAAb loses one detector from the end of the vector with */
+    /* the higher index, and RAAb gains one detector on the end */
+    /* with the lower index. */
+    /* etc. */
+
+    for ( iangle = 1; iangle < thbins; iangle++ ) {
+     /* remove the effect of the discarded detectors from the overall sum */
+        RAB = RAB - RAaB[siRAaB] - RAAb[siRAAb+dbins2] + sino[ slkup [m][ep] ];
+        /* the corner bin sino[m][ep] is contained in both the row */
+        /* and column sums, so it gets subtracted out twice, and   */
+        /* thus has to be added back in once.   Got that?          */
+
+        /* now remove the contributions of the discarded detector */
+        /* in bank a in coincidence with the remaining detectors  */
+        /* in bank b       */
+        for ( deta = m, col = siRAAb, detb = p;
+            col < (dbins2+siRAAb);
+            col++, detb = (detb-1+ndets)%ndets )
+        {
+            RAAb[col] -= sino [ slkup[deta][detb] ];
+        }
+        /* now remove the contributions of the discarded detector */
+        /* in bank b in coincidence with the remaining detectors  */
+        /* in bank a       */
+        /* important increment here */
+        m = (m+1)%ndets;
+        em = (m + lowdbins2) % ndets;
+        siRAaB++;
+        for ( deta = m, detb = ep, row = siRAaB;
+            row < (siRAaB+lowdbins2);
+            row++, deta = (deta+1)%ndets )
+        {
+            RAaB[row] -= sino [ slkup[deta][detb] ];
+        }
+        /* important decrement here */
+        p = (p + 1) % ndets;
+        ep = (p - dbins2 + ndets) % ndets;  /* end index of centered detectors */
+        siRAAb--;
+
+        /* add in the contributions from the new detector in bank a */
+        /* in coincidence with the new set of detectors in bank b   */
+        for (vrow = 0, deta = em, col = siRAAb, detb = p;
+            col <= (dbins2+siRAAb);
+            col++, detb=(detb-1+ndets)%ndets )
+        {
+            vsino = sino[ slkup [deta][detb] ];
+            /* debug */
+            if ( slkup[deta][detb] == -1 )
+                fprintf(stdout,"bad detector pair      deta %d    detb %d\n",deta,detb);
+            vrow += vsino;
+            RAAb[col] += vsino;  /* incremental update to eq (7) */
+            RAB += vsino;  /* incremental update to eq (8) */
+        }
+        RAaB[siRAaB+lowdbins2] = vrow;  /* incremental update to eq (6) */
+
+        /* add in the contributions from the new detector in bank b in */
+        /* coincidence with the survivor set of detectors in bank a   */
+        /* do not include the new detector in bank a because it has */
+        /* already been included in RAAb[siRAAb] and RAA  */
+        for (vcol = 0, deta = m, row = siRAaB, detb = p;
+            row < (lowdbins2+siRAaB);
+            row++, deta=(deta+1)%ndets )
+        {
+            vsino = sino[ slkup [deta][detb] ];
+            vcol += vsino;
+            RAaB[row] += vsino;  /* incremental update to eq (7) */
+            RAB += vsino;  /* incremental update to eq (8) */
+        }
+        RAAb[siRAAb] += vcol;  /* incremental update to eq (6) */
+
+
+        /* Compute equation (9)    from Casey and Hoffman */
+        /* fill in one row of the reduced-noise sinogram */
+        for ( i=0, row=siRAaB, col=siRAAb; i < dbins; i++ ) {
+	    if(RAB > 0.)
+                *prnsino++  =  ( RAaB [row] * RAAb [col] ) / RAB;
+	    else
+                *prnsino++  =  0.;
+            if ( (i % 2) == 0 )
+                col++;
+            else
+                row++;
+        }
+    }
+a350 1
+/* sinosubs.c */
+d352 3
+a354 2
+/* CTI and GCJ subroutines for converting between */
+/* sinogram coordinates and detector pair coordinates */
+d356 2
+a358 32
+/* 1992 March 16 */
+/* The subroutines provided by CTI treat theta as a view number */
+/*  1 <= view <= 192     and the distance is named   element    */
+/*  -79 <= element <= 80   */
+
+/* Let us treat the sinogram as a single-dimensioned array      */
+/*      short sino [ibinmax]     where ibinmax = dbins * thbins */
+/* dbins is the number of distance (projection) bins, and */
+/* thbins is the number of angle (view) bins. */
+
+/* At the beginning of time, initialize the following global variables */
+/* for the scanner that provided the data. */
+
+int ndets = NDETS;
+int ndets2 = NDETS / 2;
+int dbins = DBINS;
+int dbins2 = DBINS / 2;
+int lowdbins2 = (DBINS / 2) -1;
+int thbins = THBINS;
+int sinosize;
+int **pslkup;
+float *pRAaB;
+float *pRAAb;
+int szofRAaB;
+int szofRAAb;
+
+
+
+void sino_2_det_pair ( ibin, deta, detb )
+int ibin; /* index into sinogram array */
+int *deta; /* detector 1 of 2    0 <= deta < ndets   */
+int *detb; /* detector 2 of 2 */
+d360 5
+a364 2
+    int d;
+    int theta;
+d366 10
+a375 5
+    theta = ibin / dbins;  /* view angle */
+    d = ibin % dbins;  /* distance */
+    *deta = (ndets  + (((d - (d%2)) - dbins2 ) / 2) + theta) % ndets;
+    *detb = (ndets2 - (((d + (d%2)) - dbins2 ) / 2) + theta) % ndets;
+}
+d377 15
+d393 7
+a400 33
+/* given a detector pair, return the index into the sinogram */
+/* treated as a linear array.  If the detector pair cannot   */
+/* be represented in the sinogram, return a negative index.  */
+
+
+int det_pair_2_sino ( deta, detb )
+int deta;
+int detb;
+{
+    int d;
+    int theta;
+    int x;
+    int y;
+    int ctr;
+    int index;
+
+    x = maxd (deta, detb);
+    y = mind (deta, detb);
+    theta = ((x + y + ndets2 + 1) % ndets) / 2;
+    ctr = theta + ndets2;
+    /* compute distance in ECAT coordinates (-80 <= d <= +79 for stationary)  */
+    d = abs (ndets2 - x + y);
+    if ( (y < theta)  ||  (ctr < x) )
+    {
+        d = -d;
+        if ( ( d < -dbins2 ) || ( d >= dbins2 ) ) return (-1);
+    }
+    /*printf("%3d  %3d    %3d  %3d    %3d  %3d\n", y, theta, ctr, x, d, theta);*/
+    index = ( theta * dbins ) + ( d + lowdbins2 + 1 );
+    /* look out here -- may want to re-define   lowdbins2 */
+    return index;
+
+
+d404 3
+d408 3
+a410 6
+void ve_to_dets (element, view, deta, detb, ndet)
+int element;    /* Input Sinogram Element Offset (+/-) */
+int view;   /* Input Sinogram View Number (1-NVIEWS) */
+int *deta;  /* Output Detector Number (1 of 2) */
+int *detb;  /* Output Detector Number (2 of 2) */
+int ndet;   /* Number of Detectors in Ring */
+d412 2
+a413 4
+    *deta = ((ndet + (element - (abs (element) % 2)) / 2 + view - 1) % ndet);
+    *detb = (((ndet / 2) - (element + (abs (element) % 2)) / 2 + view - 1) % ndet);
+    return;
+}
+d415 4
+a418 64
+void dets_to_ve (deta, detb, element, view, ndet, nproj)
+int deta;   /* First Detector Number (1 of 2) */
+int detb;   /* Second Detector  Number (2 of 2) */
+int *element;   /* Output Sinogram Element Offset (0,+/-) */
+int *view;  /* Output Sinogram View Number (1-NVIEWS) */
+int ndet;   /* Number of Detectors in Ring */
+int nproj;  /* number of projection bins in Sinogram */
+{
+    int x, y, a, b;
+
+    x = maxd (deta, detb);
+    y = mind (deta, detb);
+    *view = 1 + ((x + y + (ndet / 2) + 1) % ndet) / 2;  /* This gives us the View # */
+    a = *view - 1;                  /* Center Detector Pair for this View */
+    b = a + (ndet / 2);
+    *element = abs (x - y - (ndet / 2));        /* Positive Element Offset */
+    if ((y < a) || (b < x))
+    {
+        *element = -(*element); /* Adjust for detectors left of center */
+        if ( *element == -(nproj/2) ) (*element)++;
+    }
+    return;
+}
+
+void find_fan_limits (detector, num_dets, num_proj, min_a, max_a)
+int detector;   /* Detector to find the fan of */
+int num_dets;   /* Number of detectors in the ring */
+int num_proj;   /* Number of projections in the sinogram */
+int *min_a; /* Starting detector for fan */
+int *max_a; /* Ending detector for fan */
+{
+    int center, fan_min, fan_max;
+
+    center = (detector + (num_dets / 2)) % num_dets;
+    fan_min = center - (num_proj / 2 - 1);
+    fan_max = center + (num_proj / 2);
+    *min_a = (fan_min + num_dets) % num_dets;
+    *max_a = fan_max % num_dets;
+    return;
+}
+
+/* from Numerical Recipes */
+
+int **imatrix(nrl,nrh,ncl,nch)
+int nrl,nrh,ncl,nch;
+{
+    int i,**m;
+
+    m=(int **)malloc((unsigned) (nrh-nrl+1)*sizeof(int*));
+    if (!m) nrerror("allocation failure 1 in imatrix()");
+    m -= nrl;
+
+    for(i=nrl;i<=nrh;i++) {
+        m[i]=(int *)malloc((unsigned) (nch-ncl+1)*sizeof(int));
+        if (!m[i]) nrerror("Allocation failure 2 in imatrix()");
+        m[i] -= ncl;
+    }
+    return m;
+}
+nrerror(string)
+char *string;
+{
+    fprintf(stderr,"%s\n",string);
+
+@
+
+
+1.10
+log
+@removed debugging commands
+@
+text
+@a2 2
+/* 1993 Mar 17 TOV fixed bug in output names and increased char[256] */
+
+d36 1
+a36 1
+/*  		The third is just the smoothed delayeds */
+d44 1
+a44 1
+static char rcsid [] = "$Header: /home/petsun2/tom/src/rnwproc/RCS/rnwproc.c,v 1.9 1994/03/17 21:34:22 tom Exp tom $";
+d51 7
+d85 1
+a85 1
+void initlkup ();    /* initialize sinogram lookup table */
+d88 1
+a88 1
+char Usage [] = "Usage: (94Mar17)  rnwproc -rtd -f framenumber -p output_path inputfile.scn\n";
+d90 4
+a93 4
+char flist [256];
+char truename [256];
+char rntruename [256];
+char rndelname [256];
+a98 2
+    Mlist *inmlist;
+    Mlist outmlist;
+a102 3
+    char *f2;
+    int diff;  /* number of differences between spec and actual */
+    int i;
+a103 1
+    int k; /* for debug */
+a108 3
+    float prompt;
+    float *prp;  /* pointer to read the  prompts  */
+    float *dlp;  /* pointer to read the  delayeds  */
+a110 5
+    float *prptmp;
+    float *dlptmp;
+    short *prps;
+    short *dlps;
+    float prsum, dlsum, tusum, rndlsum, rntrsum;
+d113 1
+a113 6
+    float rntruesmax;
+    float rntruesmin;
+    float rnsinomax;
+    float rnsinomin;
+    int rnsmxindx;
+    int pln,frame=1,frame_out=1,gate=1,bed=0,stat;
+d115 1
+a115 1
+    char outpath[256];
+d117 1
+a117 4
+    char *ep;
+    char *bp;
+    int len,ii;
+    char basename [256];
+a127 3
+    int optpflg = 0;
+    int optgflg = 0;
+    int optbflg = 0;
+d161 2
+a162 2
+	          frame = atoi(optarg);
+	          oneframe = TRUE;
+d166 1
+a166 1
+            strcpy(outpath,optarg);
+d178 2
+a179 1
+    if ( opterrflg ) {
+d185 2
+a186 1
+    else {
+d191 2
+a192 1
+    if ( (argc - optind) > 1 ) {
+d194 2
+a195 1
+        for ( ++optind; optind < argc; optind++ ) {
+d205 1
+d217 2
+a218 2
+       fprintf(stderr,"Could not read main header., %s\n",f1);
+       exit(ERROR);
+d223 1
+a223 1
+           "rnwproc: matrix main header file_type of %d is not a scan file\n",
+d230 2
+a231 5
+	      minfrm = frame;
+        maxfrm = frame;
+  	} else {
+	      minfrm = 1;
+	      maxfrm = mhpr->num_frames;
+d233 10
+a242 6
+    for(frm=minfrm;frm<=maxfrm;frm++) {
+       for(pln=1 ; pln <= mhpr->num_planes ; pln++) {
+         if(oneframe == TRUE)
+           outfrm = 1;
+         else
+           outfrm = frm;
+d248 2
+a249 2
+        }
+	      if((shpr=getsbhdr(f1,pln,frm,gate,PR_DATA,bed)) == NULL) {
+d252 1
+a252 1
+        }
+d258 2
+a259 2
+         }
+	       if((shdl=getsbhdr(f1,pln,frm,gate,DL_DATA,bed)) == NULL) {
+d262 1
+a262 1
+         }
+d264 1
+a264 1
+         if ( pln == 1 && frm == minfrm) {  /* we need to initialize things */
+d266 2
+a267 2
+/*          fprintf(stderr,"Sinogram is %d by %d\n",
+             shpr->dimension_1,shpr->dimension_2);    */
+d286 4
+a289 4
+	              for(j=0;j<(ndets2-1)+dbins2+1;j++) {
+		               pRAaB[j] = 0.;
+                   pRAAb[j] = 0.;
+		            }
+d301 1
+a301 1
+	      /* Use sinograms that are not corrected for deadtime.*/
+d303 2
+a304 2
+	          prpin[j] /= shpr->loss_correction_fctr;
+	          dlpin[j] /= shpr->loss_correction_fctr;
+d311 3
+a313 3
+	          if(rnsino[j] < 0) 
+		        rnsino[j] = 0.;
+	      }
+d315 1
+a319 2
+            prptmp = prpin;
+            dlptmp = dlpin;
+a332 15
+        }
+
+        /* sum each of the prompts and delayeds sinograms */
+/*        if ( optrnflg ) {
+            prsum = 0.;
+            dlsum = 0.;
+            rndlsum = 0.;
+            rntrsum = 0.;
+            prptmp = (float*) prpin;
+            dlptmp = (float*) dlpin;
+            for ( j = 0; j < sinosize; j++ ) {
+                prsum += (float)  *prptmp++;
+                dlsum += (float)  *dlptmp++;
+                rndlsum += (float) rnsino[j];
+                rntrsum += (float) rntrues[j];
+a333 2
+            fprintf(stderr,"pln: %d, prsum  %6.0f, dlsum  %6.0f, rndlsum  %6.0f, rntrsum     %6.0f\n",pln,prsum,dlsum,rndlsum,rntrsum);
+        }  */
+d336 6
+a341 5
+	         if((stat=wrimg(truename,trues,mhpr,shpr,pln,outfrm,gate,0,bed)) != OK) {
+	            fprintf(stderr,"Error writing %s, plane %d\n",truename,pln);
+        	    exit(ERROR);
+        	 }
+	      } 
+d344 6
+a349 5
+	         if((stat=wrimg(rntruename,rntrues,mhpr,shpr,pln,outfrm,gate,0,bed)) != OK) {
+	            fprintf(stderr,"Error writing %s, plane %d\n",rntrues,pln);
+        	    exit(ERROR);
+        	 }
+        }
+d352 3
+a354 2
+	         if((stat=wrimg(rndelname,rnsino,mhpr,shdl,pln,outfrm,gate,0,bed)) != OK) {
+	            fprintf(stderr,"Error writing %s, plane %d\n",rndelayeds,pln);
+d356 2
+a357 2
+           }
+        }
+d359 2
+a360 2
+       free(prpin);
+  	   free(dlpin);
+d363 1
+a407 5
+/* later on, this should be related to the number of */
+/* distance bins (over 2) for the particular sinogram */
+/*#define VSIZE 80*/
+
+
+a410 2
+/*int slkup [384][384];  /* sinogram index lookup table */
+int *slkup;
+d504 4
+a507 1
+        *prnsino++  =  ( RAaB [row] * RAAb [col] ) / RAB;
+d590 4
+a593 1
+            *prnsino++  =  ( RAaB [row] * RAAb [col] ) / RAB;
+a619 3
+#define NDETS 384
+#define DBINS 160
+#define THBINS 192
+a648 3
+
+#define maxd(x,y) (x>y)?  x : y
+#define mind(x,y) (x<y)?  x : y
+@
+
+
+1.9
+log
+@correct output path for non-local input path
+increased name & path array sizes to 256
+@
+text
+@d46 1
+a46 1
+static char rcsid [] = "$Header: /home/petsun2/tom/src/rnwproc/RCS/rnwproc.c,v 1.8 1994/03/14 19:58:30 tom Exp tom $";
+d83 1
+a83 1
+char Usage [] = "Usage: (94Mar10)  rnwproc -rtd -f framenumber -p output_path inputfile.scn\n";
+a229 3
+    printf("%s\n",basename);
+    printf("%s\n",rntruename);
+exit;
+@
+
+
+1.8
+log
+@JMO fixed to handle multiframe sinograms
+@
+text
+@d3 2
+d46 1
+a46 1
+static char rcsid [] = "$Header: /home/petsun2/tom/src/rnwproc/RCS/rnwproc.c,v 1.7 1994/03/03 22:43:19 tom Exp $";
+d85 4
+a88 4
+char flist [128];
+char truename [128];
+char rntruename [128];
+char rndelname [128];
+d129 1
+a129 1
+    char outpath[120];
+d134 1
+a134 1
+    char basename [128];
+d156 1
+a156 1
+    strcpy(outpath,".");
+d221 12
+a232 3
+    sprintf(truename,"%s/%s_tu.scn",outpath,basename);
+    sprintf(rntruename,"%s/%s_rn.scn",outpath,basename);
+    sprintf(rndelname,"%s/%s_rndel.scn",outpath,basename);
+@
+
+
+1.7
+log
+@resync version number with Version
+@
+text
+@d44 1
+a44 1
+static char rcsid [] = "$Header: /home/petsun2/tom/src/rnwproc/RCS/rnwproc.c,v 1.6 1994/03/03 20:04:19 tom Exp tom $";
+d81 1
+a81 1
+char Usage [] = "Usage: (94Feb03)  rnwproc -rtd -f framenumber inputfile.scn\n";
+d127 1
+d150 1
+a150 1
+    int frm;
+d154 1
+d156 1
+d158 1
+a158 1
+    while ( ( optc = getopt ( argc, argv, "rtdf:" ) ) != EOF )
+d182 4
+d219 3
+a221 3
+    sprintf(truename,"%s_tu.scn",basename);
+    sprintf(rntruename,"%s_rn.scn",basename);
+    sprintf(rndelname,"%s_rndel.scn",basename);
+d245 4
+d360 1
+a360 1
+	         if((stat=wrimg(truename,trues,mhpr,shpr,pln,1,gate,0,bed)) != OK) {
+d367 1
+a367 1
+	         if((stat=wrimg(rntruename,rntrues,mhpr,shpr,pln,1,gate,0,bed)) != OK) {
+d374 1
+a374 1
+	         if((stat=wrimg(rndelname,rnsino,mhpr,shdl,pln,1,gate,0,bed)) != OK) {
+@
+
+
+1.6
+log
+@match version number with Version
+@
+text
+@d44 1
+a44 1
+static char rcsid [] = "$Header: /home/petsun2/tom/src/rnwproc/RCS/rnwproc.c,v 1.4 1994/03/03 20:01:40 tom Exp tom $";
+@
+
+
+1.4
+log
+@replace Id with $Header$
+@
+text
+@d44 1
+a44 1
+static char rcsid [] = "$Header$";
+@
+
+
+1.3
+log
+@free matrix data in rdimg in cti.c
+@
+text
+@d44 1
+a44 1
+static char rcsid [] = "$Id: rnwproc.c,v 1.2 1994/02/03 15:56:55 tom Exp tom $";
+@
+
+
+1.2
+log
+@fixed memory-fill bug
+@
+text
+@d44 1
+a44 1
+static char rcsid [] = "$Id: rnwproc.c,v 1.1 1994/02/02 18:05:33 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d36 1
+a36 1
+/*  The third is just the smoothed delayeds */
+d44 1
+a44 1
+static char rcsid [] = "$Id$";
+d78 1
+a78 1
+void initlkup ();  /* initialize sinogram lookup table */
+d81 1
+a81 1
+char Usage [] = "Usage: (94Jan25)  rnwproc -rtd -f framenumber inputfile.scn\n";
+a153 1
+
+d176 2
+a177 2
+	    frame = atoi(optarg);
+	    oneframe = TRUE;
+d189 1
+a189 2
+    if ( opterrflg )
+    {
+d195 1
+a195 2
+    else
+    {
+d200 1
+a200 2
+    if ( (argc - optind) > 1 )
+    {
+d202 1
+a202 2
+        for ( ++optind; optind < argc; optind++ )
+        {
+d217 2
+a218 2
+    fprintf(stderr,"Could not read main header., %s\n",f1);
+    exit(ERROR);
+d223 1
+a223 1
+        "rnwproc: matrix main header file_type of %d is not a scan file\n",
+d230 5
+a234 2
+	minfrm = frame;
+	maxfrm = frame;
+d236 2
+a237 6
+    else {
+	minfrm = 1;
+	maxfrm = mhpr->num_frames;
+	}
+  for(frm=minfrm;frm<=maxfrm;frm++) {
+    for(pln=1 ; pln <= mhpr->num_planes ; pln++) {
+d243 2
+a244 2
+            }
+	if((shpr=getsbhdr(f1,pln,frm,gate,PR_DATA,bed)) == NULL) {
+d247 1
+a247 1
+            }
+d253 2
+a254 2
+            }
+	if((shdl=getsbhdr(f1,pln,frm,gate,DL_DATA,bed)) == NULL) {
+d257 1
+a257 1
+            }
+d259 1
+a259 1
+        if ( pln == 1 ) {  /* we need to initialize things */
+d261 2
+a262 2
+/*            fprintf(stderr,"Sinogram is %d by %d\n",
+                shpr->dimension_1,shpr->dimension_2);*/
+d281 4
+a284 4
+	        for(j=0;j<(ndets2-1)+dbins2+1;j++) {
+		    pRAaB[j] = 0.;
+                    pRAAb[j] = 0.;
+		    }
+d296 1
+a296 1
+	/* Use sinograms that are not corrected for deadtime.*/
+d298 2
+a299 2
+	    prpin[j] /= shpr->loss_correction_fctr;
+	    dlpin[j] /= shpr->loss_correction_fctr;
+d306 3
+a308 3
+	    if(rnsino[j] < 0) 
+		rnsino[j] = 0.;
+	    }
+a309 1
+
+d329 1
+a329 1
+            }
+d345 2
+a346 2
+            fprintf(stderr,"pln: %d, prsum  %6.0f, dlsum  %6.0f, rndlsum  %6.0f, rntrsum %6.0f\n",pln,prsum,dlsum,rndlsum,rntrsum);
+        }*/
+d349 5
+a353 6
+	    if((stat=wrimg
+		(truename,trues,mhpr,shpr,pln,1,gate,0,bed)) != OK) {
+	        fprintf(stderr,"Error writing %s, plane %d\n",truename,pln);
+        	exit(ERROR);
+        	}
+	    }
+d356 5
+a360 6
+	    if((stat=wrimg
+		(rntruename,rntrues,mhpr,shpr,pln,1,gate,0,bed)) != OK) {
+	        fprintf(stderr,"Error writing %s, plane %d\n",rntrues,pln);
+        	exit(ERROR);
+        	}
+            }
+d363 2
+a364 3
+	    if((stat=wrimg
+	      (rndelname,rnsino,mhpr,shdl,pln,1,gate,0,bed)) != OK) {
+	      fprintf(stderr,"Error writing %s, plane %d\n",rndelayeds,pln);
+d366 2
+a367 2
+              }
+            }
+d369 2
+a370 2
+            free(prpin);
+	    free(dlpin);
+a372 1
+
+@

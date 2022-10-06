@@ -1,0 +1,396 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2008.10.28.19.53.30;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2004.02.20.14.48.01;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.02.18.22.20.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@sum both integer and floats
+@
+text
+@/*	$Log: sumana.c,v $
+ * Revision 1.4  2004/02/20  14:48:01  tom
+ * Feb 2004
+ *
+ * Revision 1.1  2003/02/18  22:20:56  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			sumana.c
+ *	Date:			Feb 2003
+ *	Author:			Tom Videen
+ *	Description:	Add 2 or more Analyze images
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumana/RCS/sumana.c,v 1.4 2004/02/20 14:48:01 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <myvalues.h>
+#include <dbh.h>
+
+/*	----------------------------
+ *	Function:			sumana
+ *	----------------------------
+ */
+int             main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *in;
+	char           *out;
+	char            inhdr[256];
+	char            inimg[256];
+	char            outhdr[256];
+	char            outimg[256];
+	long            dim1, dim2, dim3;
+	long            nvox, i;
+	int             num, n;
+	short          *imga, *imgb;
+	float          *fimga, *fimgb;
+
+	if (argc < 4) {
+		fprintf (stderr, "Usage: sumana out img1 img2 ...\n");
+		return (ERROR);
+	}
+	num = argc;
+	out = argv[1];
+	(void) strcpy (outhdr, out);
+	(void) strcat (outhdr, ".hdr");
+	(void) strcpy (outimg, out);
+	(void) strcat (outimg, ".img");
+
+/*	Get first image */
+
+	in = argv[2];
+	(void) strcpy (inhdr, in);
+	(void) strcat (inhdr, ".hdr");
+	(void) strcpy (inimg, in);
+	(void) strcat (inimg, ".img");
+
+	if ((fd_hdr = fopen (inhdr, "r")) == 0) {
+		fprintf (stderr, "ERROR [sumana]: opening %s\n", inhdr);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [sumana]: reading %s\n", inhdr);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] < 3) {
+		fprintf (stderr, "ERROR [sumana]: reading %s\n", inhdr);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != DT_SIGNED_SHORT && hdr.dime.datatype != DT_SIGNED_INT && hdr.dime.datatype != DT_FLOAT) {
+		fprintf (stderr, "ERROR [sumana]: reading %s\n", inhdr);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16 && hdr.dime.bitpix != 32) {
+		fprintf (stderr, "ERROR [sumana]: reading %s\n", inhdr);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+	nvox = dim1 * dim2 * dim3;
+
+	if (hdr.dime.bitpix == 16) {
+		imga = (short *) calloc (nvox, sizeof (short));
+		if (imga == NULL) {
+			fprintf (stderr, "ERROR [sumana]: calloc imga\n");
+			return (ERROR);
+		}
+		imgb = (short *) calloc (nvox, sizeof (short));
+		if (imgb == NULL) {
+			fprintf (stderr, "ERROR [sumana]: calloc imgb\n");
+			return (ERROR);
+		}
+	} else {
+		fimga = (float *) calloc (nvox, sizeof (float));
+		if (fimga == NULL) {
+			fprintf (stderr, "ERROR [sumana]: calloc fimga\n");
+			return (ERROR);
+		}
+		fimgb = (float *) calloc (nvox, sizeof (float));
+		if (fimgb == NULL) {
+			fprintf (stderr, "ERROR [sumana]: calloc fimgb\n");
+			return (ERROR);
+		}
+	}
+	if ((fd_img = fopen (inimg, "r")) == 0) {
+		fprintf (stderr, "ERROR [sumana]: opening %s\n", inimg);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix == 16) {
+		if ((fread (imga, sizeof (short), nvox, fd_img)) != nvox) {
+			fprintf (stderr, "ERROR [sumana]: reading %s\n", inimg);
+			return (ERROR);
+		}
+	} else {
+		if ((fread (fimga, sizeof (float), nvox, fd_img)) != nvox) {
+			fprintf (stderr, "ERROR [sumana]: reading %s\n", inimg);
+			return (ERROR);
+		}
+	}
+	(void) fclose (fd_img);
+	fprintf (stdout, "Read %s\n", inimg);
+
+/*	Read and add other images */
+
+	for (n = 3; n < num; n++) {
+		in = argv[n];
+		(void) strcpy (inhdr, in);
+		(void) strcat (inhdr, ".hdr");
+		(void) strcpy (inimg, in);
+		(void) strcat (inimg, ".img");
+
+		if ((fd_hdr = fopen (inhdr, "r")) == 0) {
+			fprintf (stderr, "ERROR [sumana]: opening %s\n", inhdr);
+			return (ERROR);
+		}
+		if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+			fprintf (stderr, "ERROR [sumana]: reading %s\n", inhdr);
+			return (ERROR);
+		}
+		if (hdr.dime.dim[0] < 3) {
+			fprintf (stderr, "ERROR [sumana]: reading %s\n", inhdr);
+			fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+			return (ERROR);
+		}
+		if (hdr.dime.datatype != DT_SIGNED_SHORT && hdr.dime.datatype != DT_SIGNED_INT && hdr.dime.datatype != DT_FLOAT) {
+			fprintf (stderr, "ERROR [sumana]: reading %s\n", inhdr);
+			fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+			return (ERROR);
+		}
+		if (hdr.dime.bitpix != 16 && hdr.dime.bitpix != 32) {
+			fprintf (stderr, "ERROR [sumana]: reading %s\n", inhdr);
+			fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+			return (ERROR);
+		}
+		dim1 = hdr.dime.dim[1];
+		dim2 = hdr.dime.dim[2];
+		dim3 = hdr.dime.dim[3];
+		(void) fclose (fd_hdr);
+
+		if (nvox != dim1 * dim2 * dim3) {
+			fprintf (stderr, "ERROR [sumana]: Image size differs from previous one\n");
+			return (ERROR);
+		}
+		if ((fd_img = fopen (inimg, "r")) == 0) {
+			fprintf (stderr, "ERROR [sumana]: opening %s\n", inimg);
+			return (ERROR);
+		}
+		if (hdr.dime.bitpix == 16) {
+			if ((fread (imgb, sizeof (short), nvox, fd_img)) != nvox) {
+				fprintf (stderr, "ERROR [sumana]: reading %s\n", inimg);
+				return (ERROR);
+			}
+		} else {
+			if ((fread (fimgb, sizeof (float), nvox, fd_img)) != nvox) {
+				fprintf (stderr, "ERROR [sumana]: reading %s\n", inimg);
+				return (ERROR);
+			}
+		}
+		if (hdr.dime.bitpix == 16) {
+			for (i = 0; i < nvox; i++)
+				imga[i] += imgb[i];
+		} else {
+			for (i = 0; i < nvox; i++)
+				fimga[i] += fimgb[i];
+		}
+		(void) fclose (fd_img);
+		fprintf (stdout, "Read %s\n", inimg);
+	}
+
+/*	Write summed image */
+
+	if ((fd_img = fopen (outimg, "w")) == 0) {
+		fprintf (stderr, "ERROR [sumana]: opening %s\n", outimg);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix == 16) {
+		if ((fwrite (imga, sizeof (short), nvox, fd_img)) != nvox) {
+			fprintf (stderr, "ERROR [sumana]: writing %s\n", outimg);
+			return (ERROR);
+		}
+	} else {
+		if ((fwrite (fimga, sizeof (float), nvox, fd_img)) != nvox) {
+			fprintf (stderr, "ERROR [sumana]: writing %s\n", outimg);
+			return (ERROR);
+		}
+	}
+	(void) fclose (fd_img);
+
+	if ((fd_hdr = fopen (outhdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [sumana]: opening %s\n", outhdr);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [sumana]: writing %s\n", outhdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	fprintf (stdout, "Sum = %s\n", outimg);
+	if (hdr.dime.bitpix == 16) {
+		free (imga);
+		free (imgb);
+	} else {
+		free (fimga);
+		free (fimgb);
+	}
+	return (OK);
+}
+@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@d2 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumana/RCS/sumana.c,v 1.1 2003/02/18 22:20:56 tom Exp tom $";
+d24 1
+a24 1
+#include <ANALYZE.h>
+d30 1
+a30 1
+main (argc, argv)
+d48 1
+d70 1
+a70 1
+		fprintf (stderr, "ERROR [sumana]: Cannot open: %s\n", inhdr);
+d74 1
+a74 1
+		fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inhdr);
+d77 2
+a78 2
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inhdr);
+d82 2
+a83 2
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inhdr);
+d87 2
+a88 2
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inhdr);
+d98 22
+a119 4
+	imga = (short *) calloc (nvox, sizeof (short));
+	if (imga == NULL) {
+		fprintf (stderr, "ERROR [sumana]: calloc imga\n");
+		return (ERROR);
+a120 5
+	imgb = (short *) calloc (nvox, sizeof (short));
+	if (imgb == NULL) {
+		fprintf (stderr, "ERROR [sumana]: calloc imgb\n");
+		return (ERROR);
+	}
+d122 1
+a122 1
+		fprintf (stderr, "ERROR [sumana]: Cannot open: %s\n", inimg);
+d125 10
+a134 3
+	if ((fread (imga, sizeof (short), nvox, fd_img)) != nvox) {
+		fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inimg);
+		return (ERROR);
+d149 1
+a149 1
+			fprintf (stderr, "ERROR [sumana]: Cannot open: %s\n", inhdr);
+d153 1
+a153 1
+			fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inhdr);
+d156 2
+a157 2
+		if (hdr.dime.dim[0] != 4) {
+			fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inhdr);
+d161 2
+a162 2
+		if (hdr.dime.datatype != 4) {
+			fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inhdr);
+d166 2
+a167 2
+		if (hdr.dime.bitpix != 16) {
+			fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inhdr);
+d181 1
+a181 1
+			fprintf (stderr, "ERROR [sumana]: Cannot open: %s\n", inimg);
+d184 10
+a193 3
+		if ((fread (imgb, sizeof (short), nvox, fd_img)) != nvox) {
+			fprintf (stderr, "ERROR [sumana]: Reading: %s\n", inimg);
+			return (ERROR);
+d195 7
+a201 2
+		for (i = 0; i < nvox; i++)
+			imga[i] += imgb[i];
+d209 1
+a209 1
+		fprintf (stderr, "ERROR [sumana]: Cannot open %s\n", outimg);
+d212 10
+a221 3
+	if ((fwrite (imga, sizeof (short), nvox, fd_img)) != nvox) {
+		fprintf (stderr, "ERROR [sumana]: Writing: %s\n", outimg);
+		return (ERROR);
+d226 1
+a226 1
+		fprintf (stderr, "ERROR [sumana]: Cannot open %s\n", outhdr);
+d230 1
+a230 1
+		fprintf (stderr, "ERROR [sumana]: Writing: %s\n", outhdr);
+d235 7
+a241 2
+	free (imga);
+	free (imgb);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/sumana/RCS/sumana.c,v 1.3 1999/12/16 18:00:47 tom Exp $";
+@

@@ -1,0 +1,113 @@
+#!/usr/local/bin/perl
+# Author:	Tom Videen
+# Date:		Dec 2003
+# Purpose:	Get slice position of a list of sequential DICOM files (.ima).
+# -----------------------------------------------
+if ($#ARGV != 1) {
+	print STDERR "Usage: dcm_order <first> <last>\n";
+	print STDERR " e.g.: dcm_order 129 256\n";
+	exit(0);
+}
+
+$first = $ARGV[0];
+$last = $ARGV[1];
+$tmp = "dcm_order$$.tmp";
+
+if ($first > $last) {
+	print STDERR "Usage: dcm_order <first> <last>\n";
+	print STDERR " e.g.: dcm_order 129 256\n";
+	exit(0);
+}
+
+# Add prefix to file numbers and check DICOM format
+# -------------------------------------------------
+if ($first < 10 ) {
+	$prefix = "0000";
+} elsif ($first < 100) {
+	$prefix = "000";
+} elsif ($first < 1000) {
+	$prefix = "00";
+} elsif ($first < 10000) {
+	$prefix = "0";
+} 
+$file = $prefix . $first . ".dcm";
+
+# Sort on:  0020 1041 = REL Slice Location
+#      or:  0020 0013 = REL Image Number
+
+$key = "1041";
+`dcm_dump_element -t 0020 $key $file $tmp 2> /dev/null`;
+if (!$?) {		# DICOM Part 10 format
+	$type = "-t";
+} else {
+	`dcm_dump_element 0020 $key $file $tmp 2> /dev/null`;
+	if (!$?) {
+		$type = "";
+	} else {
+		$key = "0013";
+		`dcm_dump_element -t 0020 $key $file $tmp 2> /dev/null`;
+		if (!$?) {		# DICOM Part 10 format
+			$type = "-t";
+		} else {
+			`dcm_dump_element 0020 $key $file $tmp 2> /dev/null`;
+			if (!$?) {
+				$type = "";
+			} else {
+				print STDERR "$file is not DICOM format\n";
+				exit (1)
+			}
+		}
+	}
+}
+
+# Get slice location of each file
+# Note:     0018 0024 = REL Sequence Name
+#  and      0018 0086 = REL Echo Number
+# ---------------------------------------
+print STDOUT " File  Slice   Step  Echo#  Name\n";
+foreach $fileno ($first..$last) {
+	if ($fileno < 10 ) {
+		$prefix = "0000";
+	} elsif ($fileno < 100) {
+		$prefix = "000";
+	} elsif ($fileno < 1000) {
+		$prefix = "00";
+	} elsif ($fileno < 10000) {
+		$prefix = "0";
+	} 
+	$file = $prefix . $fileno . ".dcm";
+
+	`dcm_dump_element $type 0020 $key $file $tmp`;
+	open(OUTFILE, "$tmp");
+	@out = <OUTFILE>;
+	$slice_loc{$fileno} = $out[0];
+	$last_loc = $out[0];
+
+    `dcm_dump_element $type 0018 0086 $file $tmp`;
+    open(OUTFILE, "$tmp");
+    @out = <OUTFILE>;
+    $echo_num = $out[0];
+
+    `dcm_dump_element $type 0018 0024 $file $tmp`;
+    open(OUTFILE, "$tmp");
+    @out = <OUTFILE>;
+    $acq_nam = $out[0];
+
+	if ($fileno > $first) {
+	    if ($echo_num == $last_echo) {
+			$incr = $slice_loc{$fileno} - $slice_loc{($fileno - 1)};
+	  	} else {
+			$incr = 0;
+			print STDOUT "\n";
+		}
+	} else {
+		$incr = 0;
+	}
+	$last_echo = $echo_num;
+	printf STDOUT "%5d %6.2f %6.2f %4d  %s\n", $fileno, $slice_loc{$fileno}, $incr, $echo_num, $acq_nam;
+}
+
+# Remove temporary file and exit
+# ---------------------------
+`rm $tmp`;
+exit(0);

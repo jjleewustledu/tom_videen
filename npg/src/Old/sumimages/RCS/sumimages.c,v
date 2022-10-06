@@ -1,0 +1,191 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.01.03.18.10.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@original version to replace CTI program
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+/*  ===============================================================================
+ *  Module:         sumimages.c
+ *  Date:           03-Jan-95
+ *  Author:         Tom Videen
+ *  Description:    Sum multiple single frame images
+ *  ===============================================================================
+ */
+
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <petutil/petutil.h>
+#include <petutil/imglist.h>
+#include <petutil/matrix.h>
+
+static char     rcsid[] = "$Header$";
+TOL = 0.001;
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+    Image_subheader **subheader;
+    Image_subheader **subheader2;
+    Main_header    *main_header;
+    Main_header    *main_header2;
+    MatrixFile     *fptr;
+	struct Matval   matval;
+    FILE        *recfp;
+
+    char           *outfile;
+    char           *firstfile;
+	char		   *nextfile;
+    char        version [MAXLINE];
+    char        date [MAXLINE];
+    char        recfile [MAXPATH];
+	time_t		now;
+	short			nx, ny, nx2, ny2;
+	short			num_slices, num_slices2;
+	int				scanner, scanner2;
+	int				num, i, j;
+	int				dimension;
+	float			*image;
+	float			*image2;
+    float       pixel_size;
+    float       pixel_size2;
+    float       plane_separation;
+    float       plane_separation2;
+
+	matval.frame = 1;
+	matval.plane = 1;
+	matval.gate = 1;
+	matval.data = 0;
+	matval.bed = 0;
+
+/*
+ * Get command line arguments.
+ */
+    if (argc < 4) {
+        printf ("Usage: sumimages outfile infile1 infile2 [infile3] [infile4] ...\n");
+        exit (1);
+    }
+	num = argc - 2;
+	outfile = argv[1];
+	now = time(NULL);
+	strftime(date, MAXLINE, "%a %c", localtime(&now));
+
+/*
+ * Read and sum the images
+ */
+
+	firstfile = argv[2];
+    if (getimagedim (firstfile, matval, &scanner, &nx, &ny, &num_slices,
+	        &pixel_size, &pixel_size, &plane_separation) != 0) {
+        fprintf (stderr, "Error reading %s\n", firstfile);
+        exit (1);
+    }
+
+    main_header = (Main_header *) calloc (1, sizeof (Main_header));
+    main_header2 = (Main_header *) calloc (1, sizeof (Main_header));
+    subheader = (Image_subheader **) malloc (num_slices * sizeof (caddr_t));
+    subheader2 = (Image_subheader **) malloc (num_slices * sizeof (caddr_t));
+	dimension = nx * ny * num_slices;
+	image  = (float *) malloc (dimension * sizeof (float));
+	image2 = (float *) malloc (dimension * sizeof (float));
+
+    if (getrealimg (firstfile, scanner, matval, nx, ny, num_slices, image,
+            main_header, subheader) == FAIL) {
+        fprintf (stderr, "Error reading %s\n", firstfile);
+        exit (1);
+    }
+
+	for (i=1; i<num; i++) {
+		nextfile = argv[i+2];
+    	if (getimagedim (nextfile, matval, &scanner2, &nx2, &ny2, &num_slices2,
+	   			&pixel_size2, &pixel_size2, &plane_separation2) != 0) {
+        	fprintf (stderr, "Error reading %s\n", nextfile);
+        	exit (1);
+    	}
+		if (scanner != scanner2 || nx != nx2 || ny != ny2 || num_slices != num_slices2 ||
+    			pkg_abs (pixel_size - pixel_size2) > TOL ||
+    			pkg_abs (plane_separation - plane_separation2) > TOL) {
+			fprintf (stderr, "ERROR: images do not match: %s  %s\n",firstfile, nextfile);
+			exit (1);
+		}
+    	if (getrealimg (nextfile, scanner2, matval, nx2, ny2, num_slices2, image2,
+           		main_header2, subheader2) == FAIL) {
+        	fprintf (stderr, "Error reading %s\n", nextfile);
+			exit (1);
+		}
+		for (j = 0; j < dimension; j++)
+			image[j] += image2[j];
+	}
+
+	for (i = 0; i < num_slices; i++)
+		free (subheader2[i]);
+	free (subheader2);
+	free (main_header2);
+	free (image2);
+
+/*
+ * Write output
+ */
+    if (GetVersion (rcsid, version) == FAIL)
+        strcpy (version, rcsid + 5);
+	strncpy (main_header->physician_name, version, sizeof (main_header->physician_name) - 1);
+	strncpy (main_header->operator_name, date, sizeof (main_header->operator_name) - 1);
+
+	if (writerealimg (outfile, matval, nx, ny, num_slices, image,
+			  main_header, subheader) != 0) {
+		fprintf (stderr, "Error writing %s\n", outfile);
+	}
+	for (i = 0; i < num_slices; i++) 
+		free (subheader[i]);
+	free (subheader);
+	free (main_header);
+	free (image);
+
+/*
+ * Create the rec file and copy all input rec files
+ */
+	strcpy (recfile, outfile);
+	strcat (recfile, REC_EXT);
+
+	recfp = fopen (recfile, "w");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "Error in opening rec file %s\n", recfile);
+		exit (1);
+	}
+	fprintf (recfp, "rec %s %s\n", outfile, date);
+	for (i = 0; i < argc; i++)
+		fprintf (recfp, "%s ", argv[i]);
+	fprintf (recfp, "\n");
+	fprintf (recfp, "   %s\n\n", rcsid);
+
+	for (i=0; i<num; i++) {
+		nextfile = argv[i+2];
+		strcpy (recfile, nextfile);
+		strcat (recfile, REC_EXT);
+		copyrec (recfp, recfile);
+	}
+	fprintf (recfp, "endrec\n");
+	fclose (recfp);
+
+}
+@

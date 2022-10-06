@@ -1,0 +1,391 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   R2STATS.FTN
+C     Author:       Tom O. Videen
+C     Date:         22-May-87
+C     Intent:
+C     .  This routine performs statistical computations on all points
+C     .  included within a region R and writes the result to the terminal.
+C     History:
+C     .  Modified by TOV 29-Dec-87 to write to terminal instead of Ramtek;
+C     .  Modified 15-Sep-88 by TOV:
+C     .     1) Incorporate % diff scaling into SCALER and eliminate factor
+C     .        of 0.1 used formerly for percent difference images.
+C     .  Modified by Tom Yang 29-Oct-91 to write region information to terminal.
+C     
+C     Common Blocks from SPIDERAM:
+C     .  **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .  **DISPLAY  - display parameters             (read only)
+C     .  **FILES    - scan file list                 (read only)
+C     .  **REGION   - region analysis parameters     (read only)
+C     .  **AREA     - area used in region analysis   (write)
+C     
+C     Variables Passed:
+C     .  R = number of region (1-100);
+C     
+C     Local Variables:
+C     .  N = number of included points;
+C     .  MEAN = mean activity of all included points;
+C     .  SD = standard deviation (unbiased estimate);
+C     .  XC,YC = coordinates for first letter of labels;
+C     .  NX = N divided by SLCLINES for coronal/sagittal regions;
+C     .  SLC = slice location of region for coronal/sagittal regions;
+C     .  SLOFFSET = slice offset to convert YLOC to SLC;
+C     
+C     Uses:
+C     .  P2AREAR
+C     .  P2AREAI
+C     .  P2STATS
+C     
+C     FIELDS.LIB
+C     .  WRTFIELD - write text to a field on the terminal screen;
+C     
+C     Called by:  M2REGION
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: r2stats.f,v 1.4 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE R2STATS(R)
+
+      INTEGER*4    R,N,XC,YC,XSIZE,YSIZE,SCAN,L,LEN,ROW,COL
+      REAL*4       MEAN,SD,NX,SLC,SLOFFSET
+      CHARACTER*1  TEXT(100)
+      CHARACTER*80 STR
+      LOGICAL*1    PERCENT
+
+      EQUIVALENCE (TEXT,STR)
+
+      INCLUDE 'spideram.inc'
+
+      DATA XSIZE,YSIZE,SCAN /1,2,0/
+      DATA XC,YC /150,410/
+      DATA ROW,COL /22,5/
+
+C     When comparisons are made using a divisor file,
+C     '%' is added to the value written to the user.
+
+      IF (COMPARE .AND. FILE(3).NE.0) THEN
+         PERCENT = .TRUE.
+      ELSE
+         PERCENT = .FALSE.
+      END IF
+
+      IF (REGTYPE(R).EQ.'R') THEN
+         CALL P2AREAR(R)
+      ELSE IF (REGTYPE(R).EQ.'I') THEN
+         CALL P2AREAI(R)
+      ELSE
+         RETURN
+      END IF
+      CALL P2STATS(N,MEAN,SD)
+
+ 8000 FORMAT(F8.2)
+ 8010 FORMAT(I4)
+ 8020 FORMAT(F5.1)
+ 8025 FORMAT(F4.1)
+ 8030 FORMAT(I3)
+
+C     Write MEAN, SD, AREA
+
+      STR = 'MEAN = '
+      WRITE(STR(8:18),8000) MEAN
+      IF (PERCENT) THEN
+         L = INANYR(STR,' ')
+         IF (L.LT.18) STR(L+1:L+1) = '%'
+      END IF
+      STR(19:26) = '   SD = '
+      WRITE(STR(27:35),8000) SD
+      STR(36:45) = '   AREA = '
+      WRITE(STR(46:56),8010) N
+      LEN = 56
+      CALL WRTFIELD(STR,LEN,ROW,COL)
+
+C     Write coordinates
+
+      IF (ORIENT.EQ.'T') THEN
+         STR = 'X = '
+         WRITE(STR(5:9),8020) XLOC(R)
+         STR(10:16) = '   Y = '
+         WRITE(STR(17:21),8020) YLOC(R)
+         STR(30:37) = 'REGION #'
+         WRITE(STR(38:40),8030) R
+         STR(42:51) = REGNAME(R)
+         LEN = 51
+         CALL WRTFIELD(STR,LEN,ROW+1,COL)
+
+C     Correct for fractional point size:
+C     Vertical dimension of coronal/sagittal regions is in
+C     units of 1/SLCLINES.
+
+      ELSE
+         SLOFFSET = FLOAT(SLCLINES/2)
+         SLC = (YLOC(R)+SLOFFSET)/FLOAT(SLCLINES)
+         STR = 'SLICE = '
+         WRITE(STR(9:13),8020) SLC
+         IF (ORIENT.EQ.'C') THEN
+            STR(14:20) = '   X = '
+         ELSE
+            STR(14:20) = '   Y = '
+         END IF
+         WRITE(STR(21:24),8025) XLOC(R)
+         STR(30:37) = 'REGION #'
+         WRITE(STR(38:40),8030) R
+         STR(42:51) = REGNAME(R)
+         LEN = 51
+         CALL WRTFIELD(STR,LEN,ROW+1,COL)
+
+C     Write message
+
+         NX = FLOAT(N)/FLOAT(SLCLINES)
+         STR = 'Adjusted Slice Area = '
+         WRITE(STR(23:33),8000) NX
+         STR(36:68) = '[SD based on interpolated points]'
+         LEN = 68
+         CALL WRTFIELD(STR,LEN,ROW+2,COL)
+
+      END IF
+
+      RETURN
+      END
+@
+
+
+1.4
+log
+@format changes plus fixes for g77
+@
+text
+@d46 1
+a46 1
+C     rcsheader = "$Id: r2stats.f,v 1.3 1993/10/04 21:55:32 tom Exp tom $"
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d2 43
+a44 47
+C
+C  Subroutine:   R2STATS.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         22-May-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This routine performs statistical computations on all points
+C     included within a region R and writes the result to the terminal.
+C
+C  History:
+C     Modified by TOV 29-Dec-87 to write to terminal instead of Ramtek;
+C     Modified 15-Sep-88 by TOV:
+C        1) Incorporate % diff scaling into SCALER and eliminate factor
+C           of 0.1 used formerly for percent difference images.
+C     Modified by Tom Yang 29-Oct-91 to write region information to terminal.
+C
+C  Common Blocks from SPIDERAM:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (read only)
+C     **FILES    - scan file list                 (read only)
+C     **REGION   - region analysis parameters     (read only)
+C     **AREA     - area used in region analysis   (write)
+C
+C  Variables Passed:
+C     R = number of region (1-100);
+C
+C  Local Variables:
+C     N = number of included points;
+C     MEAN = mean activity of all included points;
+C     SD = standard deviation (unbiased estimate);
+C     XC,YC = coordinates for first letter of labels;
+C     NX = N divided by SLCLINES for coronal/sagittal regions;
+C     SLC = slice location of region for coronal/sagittal regions;
+C     SLOFFSET = slice offset to convert YLOC to SLC;
+C
+C  Uses:
+C     P2AREAR
+C     P2AREAI
+C     P2STATS
+C
+C  FIELDS.LIB
+C     WRTFIELD - write text to a field on the terminal screen;
+C
+C  Called by:  M2REGION
+C
+d46 2
+a47 1
+C
+d49 1
+a49 1
+C
+d55 1
+a55 2
+      character*256 rcsheader
+C
+d57 1
+a57 1
+C
+a58 1
+      rcsheader = "$Id$"
+d63 4
+a66 4
+C
+C  When comparisons are made using a divisor file,
+C  '%' is added to the value written to the user.
+C
+d68 1
+a68 1
+        PERCENT = .TRUE.
+d70 1
+a70 1
+        PERCENT = .FALSE.
+d72 1
+a72 1
+C
+d74 1
+a74 1
+        CALL P2AREAR(R)
+d76 1
+a76 1
+        CALL P2AREAI(R)
+d78 1
+a78 1
+        RETURN
+d81 9
+a89 9
+C
+8000  FORMAT(F8.2)
+8010  FORMAT(I4)
+8020  FORMAT(F5.1)
+8025  FORMAT(F4.1)
+8030  FORMAT(I3)
+C
+C  Write MEAN, SD, AREA
+C
+d93 2
+a94 2
+        L = INANYR(STR,' ')
+        IF (L.LT.18) STR(L+1:L+1) = '%'
+d102 3
+a104 3
+C
+C  Write coordinates
+C
+d106 14
+a119 14
+        STR = 'X = '
+        WRITE(STR(5:9),8020) XLOC(R)
+        STR(10:16) = '   Y = '
+        WRITE(STR(17:21),8020) YLOC(R)
+        STR(30:37) = 'REGION #'
+        WRITE(STR(38:40),8030) R
+        STR(42:51) = REGNAME(R)
+        LEN = 51
+        CALL WRTFIELD(STR,LEN,ROW+1,COL)
+C
+C  Correct for fractional point size:
+C  Vertical dimension of coronal/sagittal regions is in
+C  units of 1/SLCLINES.
+C
+d121 25
+a145 25
+        SLOFFSET = FLOAT(SLCLINES/2)
+        SLC = (YLOC(R)+SLOFFSET)/FLOAT(SLCLINES)
+        STR = 'SLICE = '
+        WRITE(STR(9:13),8020) SLC
+        IF (ORIENT.EQ.'C') THEN
+          STR(14:20) = '   X = '
+        ELSE
+          STR(14:20) = '   Y = '
+        END IF
+        WRITE(STR(21:24),8025) XLOC(R)
+        STR(30:37) = 'REGION #'
+        WRITE(STR(38:40),8030) R
+        STR(42:51) = REGNAME(R)
+        LEN = 51
+        CALL WRTFIELD(STR,LEN,ROW+1,COL)
+C
+C  Write message
+C
+        NX = FLOAT(N)/FLOAT(SLCLINES)
+        STR = 'Adjusted Slice Area = '
+        WRITE(STR(23:33),8000) NX
+        STR(36:68) = '[SD based on interpolated points]'
+        LEN = 68
+        CALL WRTFIELD(STR,LEN,ROW+2,COL)
+C
+d147 1
+a147 1
+C
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@a52 6
+C
+C
+C
+C
+C
+C
+d58 1
+d63 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

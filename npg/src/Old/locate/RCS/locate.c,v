@@ -1,0 +1,324 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	94.10.03.16.57.37;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	94.09.30.20.15.45;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.05.19.18.54.27;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.02.09.23.22.09;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@First checking in, working version.
+@
+
+
+1.4
+log
+@libhp.a is updated.
+@
+text
+@/*$Id: locate.c,v 1.3 1994/09/30 20:15:45 ty7777 Exp ty7777 $*/
+/*$Log: locate.c,v $
+ * Revision 1.3  1994/09/30  20:15:45  ty7777
+ * Uses Header as rcsid.
+ *
+ * Revision 1.2  1994/05/19  18:54:27  ty7777
+ * Use the right hand coordinate system.
+ *
+ * Revision 1.1  1994/02/09  23:22:09  ty7777
+ * Initial revision
+ **/
+
+/*_________________________________________________________________
+  Description:	This program convert a list of vois from the atlas 
+		space to the PET image space.
+
+  History:	Created by Tom Yang on 02/02/94. 
+_________________________________________________________________*/
+
+#include <petutil/imglist.h>
+#include <petutil/atlas.h>
+#include "locate.h"
+
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/locate/RCS/locate.c,v 1.3 1994/09/30 20:15:45 ty7777 Exp ty7777 $";
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	BOOLEAN			atlas;
+	BOOLEAN			demigrate;
+	BOOLEAN			right_handed;
+	BRAIN_ATLAS		brain_atlas;
+	FLOAT_POINT3D		*petlist;
+	VOIDATA			*voilist;
+	IMAGE_LIST_DATA		*subject_list;
+	PARAMETER_DATA		parameter_data;
+	SXR_OUTPUT		sxr_output;
+	char			complete_sxrfile [MAXPATH];
+	char			*extension;
+	char			id [MAXNAME];
+	char			*parameter_list_file;
+	char			program [MAXNAME];
+	char			regfile [MAXLINE];
+	char			*short_atlfile;
+	char			short_sxrfile [MAXLINE];
+	char			*subject_list_file;
+	char			version [MAXNAME];
+	int			i;
+	int			num_subject_list;
+	int			nvoi;
+
+	/*
+	 * Get command line arguments.
+	 */
+	parameter_list_file	= argv [1];
+	subject_list_file	= argv [2];
+	right_handed		= atoi (argv [3]);
+	sscanf (rcsid + 45, "%s %s", program, version);
+	strcat (program, " ");
+	strcat (program, version);
+
+	/*
+	 * Generates the copyright message.
+	 */
+	fprintf (stdout, "\nCopyright 1994, Washington University.\n"); 
+	fprintf (stdout, "All rights reserved. Unauthorized reproduction prohibited.\n\n");
+
+	/* 
+	 * Read the parameters in the image parameters file to the structure
+	 * INFO_TYPE finfo.
+	 */
+	if (readparm (parameter_list_file, &parameter_data) == FAIL)
+	{
+		fprintf (stderr, "Error: from readparm ().\n");
+		exit (FAIL);
+	}
+
+	if (strlen (parameter_data.atlfile) == 0)
+	{
+		fprintf (stderr, 
+		"Error: parameter file %s does not contain any atlfile.\n", 
+		parameter_list_file);
+		exit (FAIL);
+	}
+
+	if (strrchr (parameter_data.atlfile, '/') != NULL)
+		short_atlfile	= strrchr (parameter_data.atlfile, '/') + 1;
+	else
+		short_atlfile	= parameter_data.atlfile;
+
+	/* 
+	 * Read list from subject_list_file to IMAGE_LIST_DATA structure list
+	 * subject_list for manipulation. Convert coordinates to the right
+	 * handed coordinate system if it is necessary.
+	 */
+	voilist		= (VOIDATA *) pkg_malloc (sizeof (VOIDATA) 
+			* MAX_IMAGE_LIST_SIZE, "locate", "voilist");
+	if (readatl (parameter_data.atlfile, &atlas, &nvoi, voilist) == FAIL)
+	{
+		fprintf (stderr, "Error: from readatl ().\n");
+		free (voilist);
+		exit (FAIL);
+	}
+
+	if (!right_handed)
+	{
+		for (i = 0; i < nvoi; i++)
+		{
+			voilist [i].center.x	*= -1;
+		}
+	}
+
+	/* 
+	 * Define the atlas parameters to use.
+	 */
+	if (atlas == T88_BRAIN)
+		getatlas_t88 (&brain_atlas);
+	else if (atlas == HD6_BRAIN)
+		getatlas_hd6 (&brain_atlas);
+
+	/* 
+	 * Read the atlas file.
+	 * subject_list for manipulation.
+	 */
+	subject_list	= (IMAGE_LIST_DATA *) pkg_malloc (sizeof (IMAGE_LIST_DATA) 
+			* MAX_IMAGE_LIST_SIZE, "locate", "subject_list");
+	if (readimglist (subject_list_file, subject_list, &num_subject_list) == FAIL)
+	{
+		fprintf (stderr, "Error: from readimglist ().\n");
+		free (subject_list);
+		exit (FAIL);
+	}
+
+	petlist	= (FLOAT_POINT3D *) pkg_malloc (sizeof (FLOAT_POINT3D) * nvoi, 
+			"locate", "petlist");
+
+	/* 
+	 * Generate the reg file for each atl file.
+	 */
+	demigrate	= TRUE;
+
+	for (i = 0; i < num_subject_list; i++)
+	{
+		/* 
+	 	 * Construct the short sxr file.
+	 	 */
+		strncpy (short_sxrfile, "\0", MAXLINE);
+		strcpy (short_sxrfile, parameter_data.species);
+		strcat (short_sxrfile, subject_list [i].subject_id);
+
+		if (strlen (subject_list [i].sxrid) > 0)
+			strcat (short_sxrfile, subject_list [i].sxrid);
+		else
+			strcat (short_sxrfile, SXR_EXT);
+
+		/*
+		 * Check if the sxr file exists.
+		 */
+		if (checksxr (parameter_data, subject_list [i], demigrate, 
+		short_sxrfile, complete_sxrfile) == FAIL)
+		{
+			fprintf (stderr, "Error: the sxr file %s can not be found.\n", short_sxrfile);
+			exit (ERROR);
+		}
+
+		if (getsxr (complete_sxrfile, &sxr_output) != SUCCEED)
+		{
+			fprintf (stderr, "Error: in reading sxr file %s.\n", complete_sxrfile);
+			exit (ERROR);
+		}
+
+		/*
+		 * Transform points from the atlas space to the PET image.
+		 */
+		atlas2pet (nvoi, petlist, voilist, sxr_output, brain_atlas);
+		free (sxr_output.rlpetdim);		
+		free (sxr_output.rlcenter);		
+		free (sxr_output.vertical_petdim);	
+		free (sxr_output.rlslicedim);		
+
+		/*
+		 * Construct the short reg file name.
+		 */
+		strncpy (regfile, "\0", MAXLINE);
+		extension	= strrchr (short_sxrfile, '.');
+		if (*extension)
+			strncpy (regfile, short_sxrfile, 
+			strlen (short_sxrfile) - strlen (extension));
+		else
+			strcpy (regfile, short_sxrfile);
+
+		extension	= strrchr (short_atlfile, '.');
+		if (*extension)
+			strncat (regfile, short_atlfile, strlen (short_atlfile) - strlen (extension));
+		else
+			strcat (regfile, short_atlfile);
+		strcat (regfile, REG_EXT);
+
+		/*
+		 * Write the pet data to the reg file.
+		 */
+		writevoi (regfile, atlas, program, short_atlfile, 
+		short_sxrfile, nvoi, voilist, petlist);
+	}
+
+	free (brain_atlas.xdim);
+	free (brain_atlas.ydim);
+	free (subject_list);
+	free (voilist);
+	free (petlist);
+
+	exit (SUCCEED);
+}
+@
+
+
+1.3
+log
+@Uses Header as rcsid.
+@
+text
+@d1 1
+a1 1
+/*$Id: locate.c,v 1.2 1994/05/19 18:54:27 ty7777 Exp ty7777 $*/
+d3 3
+d24 1
+a24 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/locate/RCS/locate.c,v 1.2 1994/05/19 18:54:27 ty7777 Exp ty7777 $";
+d212 2
+@
+
+
+1.2
+log
+@Use the right hand coordinate system.
+@
+text
+@d1 1
+a1 1
+/*$Id: locate.c,v 1.1 1994/02/09 23:22:09 ty7777 Exp ty7777 $*/
+d3 3
+d21 1
+a21 1
+static char rcsid [] = "$Header$";
+d56 1
+a56 1
+	sscanf (rcsid, "%s %s %s", id, program, version);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d18 1
+a18 1
+#define	REG_EXT	".reg"
+a19 2
+static char rcsid [] = "$Id: locate.c,v 1.1 1994/02/09 17:46:42 ty7777 Exp ty7777 $";
+
+d26 1
+a41 1
+	char			sxr_root [MAXNAME];
+d52 1
+d88 2
+a89 1
+	 * subject_list for manipulation.
+d100 8
+d142 3
+a144 2
+		strcpy (sxr_root, parameter_data.species);
+		strcat (sxr_root, subject_list [i].subject_id);
+a145 1
+		strcpy (short_sxrfile, sxr_root);
+d179 8
+a186 3
+		strcpy (regfile, sxr_root);
+		strcat (regfile, parameter_data.tracer);
+		strcat (regfile, subject_list [i].scanset1_id);
+@

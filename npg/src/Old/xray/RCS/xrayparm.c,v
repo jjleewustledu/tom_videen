@@ -1,0 +1,947 @@
+head	1.9;
+access;
+symbols;
+locks
+	tom:1.9; strict;
+comment	@ * @;
+
+
+1.9
+date	94.08.31.20.30.14;	author ty7777;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	93.12.20.21.26.53;	author ty7777;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	93.11.01.22.30.57;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.03.02.22.15.34;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.02.19.16.49.48;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.02.17.20.40.58;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.02.15.20.35.07;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.01.27.20.44.23;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.01.26.21.00.26;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@xrayparm.c initial checking in.
+@
+
+
+1.9
+log
+@Before the algorithm change.
+@
+text
+@/*$Id: xrayparm.c,v 1.8 1993/12/20 21:26:53 ty7777 Exp ty7777 $*/
+/*$Log$*/
+#ifndef lint
+static char sccsid [] = "@@(#)xrayparm.c	10/27/92  Copyright Neural Pet Group, Washington University 1992";
+#endif
+
+static char rcsid [] = "$Id: xrayparm.c,v 1.8 1993/12/20 21:26:53 ty7777 Exp ty7777 $";
+
+/*___________________________________________________________________________
+  File:		xrayparm.c
+
+  Function:	void GetXRayParameters ()
+
+  Arguments:	
+
+  Description:	This function obtains the parameters that are pertinent to
+		the skull X ray.
+
+  History:	Created by Tom Yang on 10/27/92. 
+___________________________________________________________________________*/
+
+#include "xray.h"
+#include <math.h>
+
+PRIVATE void ComputeXRayParameters ();
+PRIVATE void DefineACPC ();
+PRIVATE int FindZmax ();
+PRIVATE void TransACPC ();
+
+PUBLIC void GetXRayParameters (cols, rows, tracing, defining_points, drawing_points, sxr_output)
+	int			cols;
+	int			rows;
+	short int		*tracing;
+	DEFINING_POINTS		defining_points;
+	DRAWING_POINTS		*drawing_points;
+	SXR_OUTPUT		*sxr_output;
+{
+	POINT2D	anterior;	
+	POINT2D	apZmax;	
+	POINT2D	giZmax;	
+	POINT2D	*glabella;	
+	POINT2D	*inion;	
+	POINT2D	posterior;	
+	POINT2D	vertexZmax;	
+	float	slope;
+
+	glabella	= &defining_points.glabella;
+	inion		= &defining_points.inion;
+
+	if (glabella->x == inion->x)
+	{
+		fprintf (stderr, "The glabella and inion lies on a line parallel to the Z axis\n");
+		return;
+	}
+
+	slope	= ((float) inion->y - glabella->y) / (inion->x - glabella->x); 
+
+	FindZmax (cols, rows, tracing, glabella, inion, slope, &giZmax, &apZmax, &vertexZmax);
+
+	DefineACPC (cols, rows, tracing, slope, apZmax, &anterior, &posterior);
+
+	ComputeXRayParameters (cols, rows, tracing, slope, defining_points, 
+				drawing_points, anterior, posterior, sxr_output);
+
+	sxr_output->apxray	*= RASPIXEL_SIZE;
+	sxr_output->zxray	*= RASPIXEL_SIZE;
+	sxr_output->dz		*= RASPIXEL_SIZE;
+	sxr_output->dap		*= RASPIXEL_SIZE;
+	sxr_output->eardap	*= RASPIXEL_SIZE;
+	sxr_output->eardz	*= RASPIXEL_SIZE;
+
+	drawing_points->glabella.x		= glabella->x;
+	drawing_points->glabella.y		= glabella->y;
+	drawing_points->inion.x			= inion->x;
+	drawing_points->inion.y			= inion->y;
+	drawing_points->acpc_anterior.x		= anterior.x;
+	drawing_points->acpc_anterior.y		= anterior.y;
+	drawing_points->acpc_posterior.x	= posterior.x;
+	drawing_points->acpc_posterior.y	= posterior.y;
+	drawing_points->acpc_center.x		= (anterior.x + posterior.x) / 2;
+	drawing_points->acpc_center.y		= (anterior.y + posterior.y) / 2;
+	drawing_points->vertex_zmax.x		= vertexZmax.x;
+	drawing_points->vertex_zmax.y		= vertexZmax.y;
+}
+
+/*___________________________________________________________________________
+  Function:	int FindZmax ()
+
+  Arguments:	
+
+  Return Value:
+
+  Description:	This function finds the point on the Zmax line that defines
+		the AC-PC line.
+
+  History:	Created by Tom Yang on 10/27/92. 
+___________________________________________________________________________*/
+
+PRIVATE int FindZmax (cols, rows, tracing, glabella, inion, slope, giZmax, apZmax, vertexZmax)
+	int		cols;
+	int		rows;
+	short int	*tracing;
+	POINT2D		glabella;
+	POINT2D		inion;
+	float		slope;
+	POINT2D		*giZmax;
+	POINT2D		*apZmax;
+	POINT2D		*vertexZmax;
+{
+	int	left;
+	int	right;
+	int	x;
+	int	y;
+	int	xn;
+	int	yn;
+	float	length;
+	float	temp_length;
+
+	/*
+	 * Find the point where it is not part of the glabella point.
+	 */
+	left	= glabella.x;
+	for (x = glabella.x; x < inion.x; x++)  
+	{
+		y	= ROUND (glabella.y + slope * (x - glabella.x)); 
+		if (tracing [y * cols + x] <= 0)
+			break;
+	}
+	left	= x;
+
+	/*
+	 * Find the point where it is the left most point on the skull xray on
+	 * the glabella-inion line.
+	 */
+	for (x = left + 1; x < inion.x; x++)  
+	{
+		y	= ROUND (glabella.y + slope * (x - glabella.x)); 
+		if (tracing [y * cols + x] > 0)
+			break;
+	}
+	left	= x;
+
+	/*
+	 * Find the point where it is not part of the inion point.
+	 */
+	right	= inion.x;
+	for (x = inion.x; x > glabella.x; x--)  
+	{
+		y	= ROUND (glabella.y + slope * (x - glabella.x)); 
+		if (tracing [y * cols + x] <= 0)
+			break;
+	}
+	right	= x;
+
+	/*
+	 * Find the point where it is the right most point on the skull xray on
+	 * the glabella-inion line.
+	 */
+	for (x = right - 1; x > glabella.x; x--)  
+	{
+		y	= ROUND (glabella.y + slope * (x - glabella.x)); 
+		if (tracing [y * cols + x] > 0)
+			break;
+	}
+	right	= x;
+
+	length		= 0.0;
+	giZmax->x	= left;
+	giZmax->y	= ROUND (glabella.y + slope * (left - glabella.x));
+	vertexZmax->x	= ROUND (left - slope);
+	vertexZmax->y	= giZmax->y + 1;
+	for (x = left; x <= right; x++)  
+	{
+		y	= ROUND (glabella.y + slope * (x - glabella.x)); 
+
+		for (yn = y + 1; yn >= 0; yn--)
+		{
+			xn	= ROUND (x - slope * (yn - y));
+			if (xn >= 0 && xn < cols && tracing [yn * cols + xn] > 0)
+			{
+				temp_length	= sqrt (((float)xn - x) * (xn - x) 
+							+ ((float)yn - y) * (yn - y)); 
+				if (temp_length > length)
+				{
+					length		= temp_length;
+					giZmax->x	= x;
+					giZmax->y	= y;
+					vertexZmax->x	= xn;
+					vertexZmax->y	= yn;
+				}
+				break;
+			}
+		}
+	}
+
+	apZmax->x	= ROUND (giZmax->x + ACPC_PERCENTAGE * (vertexZmax->x - giZmax->x));
+	apZmax->y	= ROUND (giZmax->y + ACPC_PERCENTAGE * (vertexZmax->y - giZmax->y));
+
+	return SUCCEED;
+}
+
+/*___________________________________________________________________________
+  Function:	int DefineACPC ()
+
+  Arguments:	
+
+  Return Value:
+
+  Description:	This function finds the two boundary points that define the 
+		AC-PC line.
+
+  History:	Created by Tom Yang on 10/28/92. 
+___________________________________________________________________________*/
+
+PRIVATE void DefineACPC (cols, rows, tracing, slope, apZmax, anterior, posterior)
+	int		cols;
+	int		rows;
+	short int	*tracing;
+	float		slope;
+	POINT2D		apZmax;
+	POINT2D		*anterior;	
+	POINT2D		*posterior;	
+{
+	int		x;
+	int		y;
+	int		thickness;
+	int		anterior_thickness;
+	int		posterior_thickness;
+	
+	/*
+	 * Search for anterior intersection of AC-PC line and X ray tracing.
+	 */
+	for (x = apZmax.x - 1; x >= 0; x--)
+	{
+		y	= ROUND (apZmax.y + slope * (x - apZmax.x));
+		if (y >= 0 && y < rows && tracing [y * cols + x] > 0)
+		{
+			anterior->x	= x;
+			anterior->y	= y;
+			break;
+		}
+	}
+
+	/*
+	 * Find the thickness of anterior intersection of X ray tracing and and AC-PC.  
+	 */
+	anterior_thickness	= 0;
+	for (x = anterior->x; x >= 0; x--)
+	{
+		y	= ROUND (apZmax.y + slope * (x - apZmax.x));
+		if (y >= 0 && y < rows && tracing [y * cols + x] == 0)
+		{
+			break;
+		}
+		anterior_thickness++;
+	}
+
+	/*
+	 * Search for posterior intersection of AC-PC line and X ray tracing.
+	 */
+	for (x = apZmax.x; x < cols; x++)
+	{
+		y	= ROUND (apZmax.y + slope * (x - apZmax.x));
+		if (y >= 0 && y < rows && tracing [y * cols + x] > 0)
+		{
+			posterior->x	= x;
+			posterior->y	= y;
+			break;
+		}
+	}
+
+	/*
+	 * Find the thickness of posterior intersection of X ray tracing and and AC-PC.  
+	 */
+	posterior_thickness	= 0;
+	for (x = posterior->x; x < cols; x++)
+	{
+		y	= ROUND (apZmax.y + slope * (x - apZmax.x));
+		if (y >= 0 && y < rows && tracing [y * cols + x] == 0)
+		{
+			break;
+		}
+		posterior_thickness++;
+	}
+
+	/*
+	 * Redefine the anterior and posterior point on AC-PC.
+	 */
+	thickness	= (anterior_thickness + posterior_thickness) / 2;
+	anterior->x	-= thickness;
+	anterior->y	= ROUND (apZmax.y + slope * (anterior->x - apZmax.x));
+
+	posterior->x	+= thickness;
+	posterior->y	= ROUND (apZmax.y + slope * (posterior->x - apZmax.x));
+}
+
+/*___________________________________________________________________________
+  Function:	void ComputeXRayParameters ()
+
+  Arguments:	
+
+  Return Value:
+
+  Description:	This function computes all the parameters that are pertinent
+		to the X ray tracing.
+
+  History:	Created by Tom Yang on 10/28/92. 
+___________________________________________________________________________*/
+
+PRIVATE void ComputeXRayParameters (cols, rows, tracing, slope, defining_points, 
+				drawing_points, anterior, posterior, sxr_output)
+	int			cols;
+	int			rows;
+	short int		*tracing;
+	float			slope;
+	DEFINING_POINTS		defining_points;
+	DRAWING_POINTS		*drawing_points;
+	POINT2D			anterior;	
+	POINT2D			posterior;	
+	SXR_OUTPUT		*sxr_output;
+{
+	FLOAT_POINT2D		acpc_vector;	
+	FLOAT_POINT2D		acpc_unit_vector;	
+	FLOAT_POINT2D		deltaz_refslice;	
+	FLOAT_POINT2D		left_ear_acpc;	
+	FLOAT_POINT2D		left_ear_marker;	
+	FLOAT_POINT2D		right_ear_acpc;	
+	FLOAT_POINT2D		right_ear_marker;	
+	FLOAT_POINT2D		lslice_acpc;	
+	FLOAT_POINT2D		rslice_acpc;	
+	FLOAT_POINT2D		slice_center;	
+	FLOAT_POINT2D		slice_lpoint;	
+	FLOAT_POINT2D		slice_rpoint;	
+	FLOAT_POINT2D		slice_vector;	
+	POINT2D			acpc_center;	
+	POINT2D			slice_anterior;	
+	POINT2D			slice_left;
+	POINT2D			slice_posterior;	
+	POINT2D			slice_right;
+	POINT2D			zvertex;	
+	float			degxcos;
+	float			determinant;
+	float			length;
+	float			offset;
+	float			separation_pixels;
+	float			slice_offset;
+	float			slice_slope;
+	float			theta;
+	float			xdeterminant;
+	float			xn;
+	float			ydeterminant;
+	float			yn;
+	float			ystep;
+	int			i;
+	int			x;
+	int			y;
+
+	/*
+	 * Compute the center of AC-PC.
+	 */
+	acpc_center.x	= (anterior.x + posterior.x) / 2;
+	acpc_center.y	= (anterior.y + posterior.y) / 2;
+
+	/*
+	 * Compute the length of the AC-PC line.
+	 */
+	acpc_vector.x		= (float) (posterior.x - anterior.x);
+	acpc_vector.y		= (float) (posterior.y - anterior.y);
+
+	sxr_output->apxray	= sqrt (acpc_vector.x * acpc_vector.x +
+					acpc_vector.y * acpc_vector.y);
+	/*
+	 * Compute the angle between the reference PET slice and the AC-PC line.
+	 */
+	slice_lpoint.x	= (float) defining_points.slice_lpoint.x;
+	slice_lpoint.y	= (float) defining_points.slice_lpoint.y;
+	slice_rpoint.x	= (float) defining_points.slice_rpoint.x;
+	slice_rpoint.y	= (float) defining_points.slice_rpoint.y;
+	slice_vector.x	= slice_rpoint.x - slice_lpoint.x;
+	slice_vector.y	= slice_rpoint.y - slice_lpoint.y;
+	theta 		= atan (slope);
+
+	TransACPC (acpc_center, theta, slice_lpoint, &lslice_acpc);
+	TransACPC (acpc_center, theta, slice_rpoint, &rslice_acpc);
+
+
+	slice_slope	= (rslice_acpc.y - lslice_acpc.y) / (rslice_acpc.x - lslice_acpc.x);
+	sxr_output->degx	= -radian2deg (atan (slice_slope));
+
+	/*
+	 * Compute the distance from the center of AC-PC to the vertex of the skull.
+	 */
+	for (y = 0; y <= acpc_center.y; y++)
+	{
+		x	= ROUND (acpc_center.x - slope * (y - acpc_center.y));
+		if (x >= 0 && x < cols && tracing [y * cols + x] > 0)
+		{
+			zvertex.x	= x;
+			zvertex.y	= y;
+			break;
+		}
+	}
+
+	sxr_output->zxray	= sqrt (((float)zvertex.x - acpc_center.x) * (zvertex.x - acpc_center.x) 
+				+ ((float)zvertex.y - acpc_center.y) * (zvertex.y - acpc_center.y)); 
+
+	/*
+	 * Compute the distance from the center of AC-PC to the reference slice, using a
+	 * line perpendicular to the reference slice.
+	 */
+	determinant	= -(slice_vector.x * slice_vector.x + slice_vector.y * slice_vector.y);
+	xdeterminant	= -(slice_vector.x * slice_vector.x * acpc_center.x)
+			+ slice_vector.x * slice_vector.y * (slice_lpoint.y - acpc_center.y) 
+			- slice_vector.y * slice_vector.y * slice_lpoint.x;
+	ydeterminant	= -(slice_vector.y * slice_vector.y * acpc_center.y)
+			+ slice_vector.x * slice_vector.y * (slice_lpoint.x - acpc_center.x) 
+			- slice_vector.x * slice_vector.x * slice_lpoint.y;
+
+	xn		= xdeterminant / determinant;
+	yn		= ydeterminant / determinant;
+	length		= sqrt ((xn - acpc_center.x) * (xn - acpc_center.x) 
+			+ (yn - acpc_center.y) * (yn - acpc_center.y));
+	slice_offset	= ((sxr_output->reference_slice - sxr_output->init_slice) 
+			* sxr_output->slice_separation) / RASPIXEL_SIZE;
+	offset		= sxr_output->reference_offset / (MMS_PER_CM * RASPIXEL_SIZE)
+			+ slice_offset;
+	offset		/= sxr_output->magnification_factor;
+
+	if (acpc_center.y - yn < 0.0) 
+	{
+		offset	*= -1;
+	}
+
+	deltaz_refslice.x	= xn + (offset / length) * (acpc_center.x - xn);
+	deltaz_refslice.y	= yn + (offset / length) * (acpc_center.y - yn);
+	sxr_output->dz		= sqrt ((deltaz_refslice.x - acpc_center.x) 
+					* (deltaz_refslice.x - acpc_center.x) 
+					+ (deltaz_refslice.y - acpc_center.y) 
+					* (deltaz_refslice.y - acpc_center.y));
+
+	if (deltaz_refslice.y < acpc_center.y)
+		sxr_output->dz	*= -1;
+
+	slice_slope	= (slice_rpoint.y - slice_lpoint.y) / (slice_rpoint.x - slice_lpoint.x);
+	for (x = deltaz_refslice.x; x >= 0; x--)
+	{
+		y	= ROUND (deltaz_refslice.y + slice_slope * (x - deltaz_refslice.x));
+		if (y >= 0 && y < rows && tracing [y * cols + x] > 0)
+			break;
+	}
+	drawing_points->slice_anterior.x	= x;
+	drawing_points->slice_anterior.y	= y;
+
+	for (x = deltaz_refslice.x; x < cols; x++)
+	{
+		y	= ROUND (deltaz_refslice.y + slice_slope * (x - deltaz_refslice.x));
+		if (y >= 0 && y < rows && tracing [y * cols + x] > 0)
+			break;
+	}
+
+	drawing_points->slice_posterior.x	= x;
+	drawing_points->slice_posterior.y	= y;
+
+	/*
+	 * Modified for Fran on March 2, 1993 by Tom Yang.
+	 */
+	separation_pixels	= sxr_output->slice_separation / (RASPIXEL_SIZE 
+					* sxr_output->magnification_factor);
+	ystep			= separation_pixels / sqrt (1 + slice_slope * slice_slope);
+	for (i = 1; i <= sxr_output->number_slices; i++)
+	{
+		xn	= deltaz_refslice.x - slice_slope * (i - sxr_output->reference_slice) * ystep;
+		yn	= deltaz_refslice.y + (i - sxr_output->reference_slice) * ystep;
+
+		for (x = xn; x >= 0; x--)
+		{
+			y	= ROUND (yn + slice_slope * (x - xn));
+			if (y >= 0 && y < rows && tracing [y * cols + x] > 0)
+				break;
+		}
+
+		slice_anterior.x	= x;
+		slice_anterior.y	= y;
+		drawing_points->slices_ap [2 * (i - 1)].x	= x;
+		drawing_points->slices_ap [2 * (i - 1)].y	= y;
+
+		for (x = 0; x <= xn; x++)
+		{
+			y	= ROUND (yn + slice_slope * (x - xn));
+			if (y >= 0 && y < rows && tracing [y * cols + x] > 0)
+				break;
+		}
+		slice_left.x	= x;
+		slice_left.y	= y;
+
+		for (x = xn; x < cols; x++)
+		{
+			y	= ROUND (yn + slice_slope * (x - xn));
+			if (y >= 0 && y < rows && tracing [y * cols + x] > 0)
+				break;
+		}
+
+		slice_posterior.x	= x;
+		slice_posterior.y	= y;
+		drawing_points->slices_ap [2 * (i - 1) + 1].x	= x;
+		drawing_points->slices_ap [2 * (i - 1) + 1].y	= y;
+
+		for (x = cols - 1; x >= xn; x--)
+		{
+			y	= ROUND (yn + slice_slope * (x - xn));
+			if (y >= 0 && y < rows && tracing [y * cols + x] > 0)
+				break;
+		}
+		slice_right.x	= x;
+		slice_right.y	= y;
+
+		length	= sqrt (((float)slice_right.x - slice_left.x)
+				* (slice_right.x - slice_left.x)
+				+ ((float)slice_right.y - slice_left.y)
+				* (slice_right.y - slice_left.y)) * RASPIXEL_SIZE;
+
+		sxr_output->rlslicedim [i - 1]	
+			= sqrt (((float)slice_posterior.x - slice_anterior.x)
+				* (slice_posterior.x - slice_anterior.x)
+				+ ((float)slice_posterior.y - slice_anterior.y)
+				* (slice_posterior.y - slice_anterior.y)) * RASPIXEL_SIZE;
+
+		if (sxr_output->rlslicedim [i - 1] > length)
+		{
+			sxr_output->rlslicedim [i - 1]	= 0.0;
+		}
+	}
+
+	/*
+	 * Compute the distance from the center of the reference slice to the point of 
+	 * intersection of the the reference slice and the normal line of the reference 
+	 * slice passing through the AC-PC center.
+	 */
+	slice_center.x	= (drawing_points->slice_anterior.x + drawing_points->slice_posterior.x) / 2;
+	slice_center.y	= (drawing_points->slice_anterior.y + drawing_points->slice_posterior.y) / 2;
+
+	sxr_output->dap	= sqrt ((deltaz_refslice.x - slice_center.x) 
+				* (deltaz_refslice.x - slice_center.x)
+				+ (deltaz_refslice.y - slice_center.y) 
+				* (deltaz_refslice.y - slice_center.y));
+	if (slice_center.x > deltaz_refslice.x)
+		sxr_output->dap	*= -1;
+
+	/*
+	 * Compute the left and right separation of the ear markers.
+	 */
+	left_ear_marker.x	= (float) defining_points.left_ear_marker.x;
+	left_ear_marker.y	= (float) defining_points.left_ear_marker.y;
+	right_ear_marker.x	= (float) defining_points.right_ear_marker.x;
+	right_ear_marker.y	= (float) defining_points.right_ear_marker.y;
+	TransACPC (acpc_center, theta, left_ear_marker, &left_ear_acpc);
+	TransACPC (acpc_center, theta, right_ear_marker, &right_ear_acpc);
+
+	sxr_output->eardap	= left_ear_acpc.x - right_ear_acpc.x; 
+	sxr_output->eardz	= left_ear_acpc.y - right_ear_acpc.y; 
+
+	drawing_points->zvertex.x	= zvertex.x;
+	drawing_points->zvertex.y	= zvertex.y;
+	drawing_points->ref_normalref.x	= deltaz_refslice.x;
+	drawing_points->ref_normalref.y	= deltaz_refslice.y;
+}
+
+/*___________________________________________________________________________
+  Function:	void TransACPC ()
+
+  Arguments:	center,	coordinates of Talairach space origin in the image space.	
+		theta,	angle (degrees) of glabella-inion line with respect to the
+			horizontal line.
+
+  Return Value:
+
+  Description:	Transformation from image sapce to Talairach space. 
+
+  History:	Created by Tom Yang on 11/06/92. 
+___________________________________________________________________________*/
+
+PRIVATE void TransACPC (center, theta, old, new)
+	FLOAT_POINT2D	center;
+	float		theta;
+	FLOAT_POINT2D	old;
+	FLOAT_POINT2D	*new;
+{
+	new->x	= (old.x - center.x) * cos (theta) + (old.y - center.y) * sin (theta); 
+	new->y	= -(old.x - center.x) * sin (theta) + (old.y - center.y) * cos (theta); 
+}
+@
+
+
+1.8
+log
+@Added reference slice modification.
+@
+text
+@d1 2
+a2 2
+/*$Id: xrayparm.c,v 1.7 1993/11/01 22:30:57 ty7777 Exp ty7777 $*/
+/*$Log*/
+d7 1
+a7 1
+static char rcsid [] = "$Id: xrayparm.c,v 1.7 1993/11/01 22:30:57 ty7777 Exp ty7777 $";
+d122 1
+d146 1
+d167 5
+a171 1
+	length	= 0.0;
+d185 1
+a185 1
+					length	= temp_length;
+@
+
+
+1.7
+log
+@Fix error for Waygn.
+@
+text
+@d1 1
+a1 1
+/*$Id: xrayparm.c,v 1.6 1993/03/02 22:15:34 ty7777 Exp ty7777 $*/
+d7 1
+a7 1
+static char rcsid [] = "$Id: xrayparm.c,v 1.6 1993/03/02 22:15:34 ty7777 Exp ty7777 $";
+d340 1
+d413 3
+a415 3
+	xn	= xdeterminant / determinant;
+	yn	= ydeterminant / determinant;
+	length	= sqrt ((xn - acpc_center.x) * (xn - acpc_center.x) 
+d417 5
+a421 1
+	offset	= sxr_output->reference_offset /  (MMS_PER_CM * RASPIXEL_SIZE);
+d423 1
+a423 2
+	if ( (offset > 0.0 && (acpc_center.y - yn) < 0.0) 
+		|| (offset < 0.0 && (acpc_center.y - yn) < 0.0) )
+a460 10
+	offset	= sxr_output->reference_offset /  (MMS_PER_CM * RASPIXEL_SIZE 
+					* sxr_output->magnification_factor);
+	if ( (offset > 0.0 && (acpc_center.y - yn) < 0.0) 
+		|| (offset < 0.0 && (acpc_center.y - yn) < 0.0) )
+	{
+		offset	*= -1;
+	}
+	deltaz_refslice.x	= xn + (offset / length) * (acpc_center.x - xn);
+	deltaz_refslice.y	= yn + (offset / length) * (acpc_center.y - yn);
+
+@
+
+
+1.6
+log
+@After using magnification factor.
+@
+text
+@d1 1
+a1 1
+/*$Id: xrayparm.c,v 1.5 1993/02/19 16:49:48 ty7777 Exp ty7777 $*/
+d7 1
+a7 1
+static char rcsid [] = "$Id: xrayparm.c,v 1.5 1993/02/19 16:49:48 ty7777 Exp ty7777 $";
+d221 2
+d227 1
+a227 1
+	for (x = 0; x < cols; x++)
+d241 2
+a242 2
+	thickness	= 0;
+	for (x = anterior->x; x < cols; x++)
+d249 1
+a249 1
+		thickness++;
+a252 6
+	 * Redefine anterior point on AC-PC.
+	 */
+	anterior->x	+= thickness;
+	anterior->y	= ROUND (apZmax.y + slope * (anterior->x - apZmax.x));
+
+	/*
+d255 1
+a255 1
+	for (x = cols - 1; x >= 0; x--)
+d269 2
+a270 2
+	thickness	= 0;
+	for (x = posterior->x; x >= 0; x--)
+d277 1
+a277 1
+		thickness++;
+d281 1
+a281 1
+	 * Redefine posterior point on AC-PC.
+d283 5
+a287 1
+	posterior->x	-= thickness;
+a364 1
+
+@
+
+
+1.5
+log
+@Before addingg film position, scan position, and offset.
+@
+text
+@d1 1
+a1 1
+/*$Id: xrayparm.c,v 1.4 1993/02/17 20:40:58 ty7777 Exp ty7777 $*/
+d7 1
+a7 1
+static char rcsid [] = "$Id: xrayparm.c,v 1.4 1993/02/17 20:40:58 ty7777 Exp ty7777 $";
+d427 4
+a430 2
+	length	= sqrt ((deltaz_refslice.x - acpc_center.x) * (deltaz_refslice.x - acpc_center.x) 
+			+ (deltaz_refslice.y - acpc_center.y) * (deltaz_refslice.y - acpc_center.y));
+a431 1
+	sxr_output->dz	= length;
+d455 15
+a469 1
+	separation_pixels	= sxr_output->slice_separation / RASPIXEL_SIZE;
+@
+
+
+1.4
+log
+@Before changing computation order of xray slices lengths.
+@
+text
+@d1 1
+a1 1
+/*$Id: xrayparm.c,v 1.3 1993/02/15 20:35:07 ty7777 Exp ty7777 $*/
+d7 1
+a7 1
+static char rcsid [] = "$Id: xrayparm.c,v 1.3 1993/02/15 20:35:07 ty7777 Exp ty7777 $";
+d331 1
+d333 1
+d435 1
+a435 1
+	for (x = 0; x < deltaz_refslice.x; x++)
+d444 1
+a444 1
+	for (x = cols - 1; x > deltaz_refslice.x; x--)
+d461 1
+a461 1
+		for (x = 0; x <= cols - 1; x++)
+d467 1
+d473 1
+a473 1
+		for (x = cols - 1; x >= 0; x--)
+d479 2
+d482 7
+d491 2
+d494 1
+a494 1
+		if (slice_anterior.x > slice_posterior.x)
+d496 3
+a498 4
+			drawing_points->slices_ap [2 * (i - 1) + 1].x	= slice_anterior.x;
+			drawing_points->slices_ap [2 * (i - 1) + 1].y	= slice_anterior.y;
+
+			sxr_output->rlslicedim [i - 1]	= 0.0;
+d500 2
+a501 4
+		else
+		{
+			drawing_points->slices_ap [2 * (i - 1) + 1].x	= slice_posterior.x;
+			drawing_points->slices_ap [2 * (i - 1) + 1].y	= slice_posterior.y;
+d503 6
+a508 1
+			sxr_output->rlslicedim [i - 1]	
+d513 4
+@
+
+
+1.3
+log
+@Before adding lines for xray slice lines.
+@
+text
+@d1 1
+a1 1
+/*$Id: xrayparm.c,v 1.2 1993/01/27 20:44:23 ty7777 Exp ty7777 $*/
+d7 1
+a7 1
+static char rcsid [] = "$Id: xrayparm.c,v 1.2 1993/01/27 20:44:23 ty7777 Exp ty7777 $";
+d467 2
+d481 4
+d486 1
+d488 4
+d497 1
+@
+
+
+1.2
+log
+@After adding PET image width and skull X ray width.
+@
+text
+@d1 1
+a1 1
+/*$Id: xrayparm.c,v 1.1 1993/01/26 21:00:26 ty7777 Exp ty7777 $*/
+d7 1
+a7 1
+static char rcsid [] = "$Id: xrayparm.c,v 1.1 1993/01/26 21:00:26 ty7777 Exp ty7777 $";
+d82 2
+d110 8
+a117 6
+	int		x;
+	int		y;
+	int		xn;
+	int		yn;
+	float		length;
+	float		temp_length;
+d119 46
+d166 1
+a166 1
+	for (x = glabella.x + 1; x < inion.x; x++)  
+d170 1
+a170 1
+		for (yn = 0; yn < y; yn++)
+d336 1
+d411 5
+a415 2
+	deltaz_refslice.x	= xdeterminant / determinant;
+	deltaz_refslice.y	= ydeterminant / determinant;
+d417 12
+a428 4
+	sxr_output->dz	= sqrt ((deltaz_refslice.x - acpc_center.x) 
+				* (deltaz_refslice.x - acpc_center.x)
+				+ (deltaz_refslice.y - acpc_center.y) 
+				* (deltaz_refslice.y - acpc_center.y));
+a431 13
+	/*
+	 * Compute the left and right separation of the ear markers.
+	 */
+	left_ear_marker.x	= (float) defining_points.left_ear_marker.x;
+	left_ear_marker.y	= (float) defining_points.left_ear_marker.y;
+	right_ear_marker.x	= (float) defining_points.right_ear_marker.x;
+	right_ear_marker.y	= (float) defining_points.right_ear_marker.y;
+	TransACPC (acpc_center, theta, left_ear_marker, &left_ear_acpc);
+	TransACPC (acpc_center, theta, right_ear_marker, &right_ear_acpc);
+
+	sxr_output->eardap	= left_ear_acpc.x - right_ear_acpc.x; 
+	sxr_output->eardz	= left_ear_acpc.y - right_ear_acpc.y; 
+
+d433 1
+a433 1
+	for (x = 0; x < defining_points.slice_lpoint.x; x++)
+d435 1
+a435 1
+		y	= ROUND (slice_lpoint.y + slice_slope * (x - slice_lpoint.x));
+d442 1
+a442 1
+	for (x = cols - 1; x > defining_points.slice_rpoint.x; x--)
+d444 1
+a444 1
+		y	= ROUND (slice_lpoint.y + slice_slope * (x - slice_lpoint.x));
+d502 13
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+/*$Id$*/
+d7 1
+a7 1
+static char rcsid [] = "$Id$";
+d280 2
+d286 1
+d290 1
+d292 3
+d399 1
+d402 36
+@

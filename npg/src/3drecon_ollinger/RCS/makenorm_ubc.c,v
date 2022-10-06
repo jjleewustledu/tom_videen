@@ -1,0 +1,429 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: makenorm_ubc.c,v 1.2 1998/03/24 23:43:10 jmo Exp jmo $*/
+/*$Log: makenorm_ubc.c,v $
+ * Revision 1.2  1998/03/24  23:43:10  jmo
+ * ..
+ *
+ * Revision 1.1  1997/08/06  18:22:04  jmo
+ * Initial revision
+ *
+ * Revision 2.6  1997/04/04  20:50:17  jmo
+ * Prior to mods for multiple bed positions.
+ *
+ * Revision 2.5  1996/06/27  19:15:05  jmo
+ * Fix bug inserted during debugging GE code with Steve Vannoy.
+ *
+ * Revision 2.4  1996/06/19  11:20:19  jmo
+ *
+ * Revision 2.3  1996/04/23  15:02:05  jmo
+ * Version released April 23, 1996
+ *
+ * Revision 2.2  1996/04/23  14:56:14  jmo
+ * Version Released on Web site, April 23, 1996
+ *
+ * Revision 2.1  1996/03/15  21:57:19  jmo
+ * Version installed in St. Louis.
+ *
+ * Revision 2.0  1996/01/27  13:44:52  jmo
+ * Version installed at Neuro-imaging group, January 1996
+ *
+ * Revision 1.2  1996/01/18  16:10:02  jmo
+ * Modified file formats, Interfile and Matrix Rev 7.0 support.
+ *
+ * Revision 1.1  1996/01/12  18:09:15  jmo
+ * Initial revision
+ *
+ * Revision 1.18  1995/10/25  16:36:24  jmo
+ * *** empty log message ***
+ *
+ * Revision 1.17  1995/09/20  15:01:55  jmo
+ * Version sent to Pittsburgh
+ *
+ * Revision 1.16  95/09/19  10:44:02  jmo
+ * Version for revised paper to physics in medicine and biology.
+ * 
+ * Revision 1.15  95/08/07  10:04:35  jmo
+ * *** empty log message ***
+ * 
+ * Revision 1.14  95/06/19  16:46:38  jmo
+ * Modify method for mashed sinograms.
+ * 
+ * Revision 1.13  95/06/17  09:13:09  jmo
+ * Last version before modification to fix mashing.
+ * 
+ * Revision 1.12  95/05/26  14:29:38  jmo
+ * Version sent to Pittsburgh, 5/26/95
+ * 
+ * Revision 1.11  95/05/12  16:17:19  jmo
+ * Before adding call to scatscl
+ * 
+ * Revision 1.10  95/05/04  10:37:25  jmo
+ * Modified normalization files.
+ * 
+ * Revision 1.9  1995/04/27  17:43:24  jmo
+ * Version used for 3d95
+ *
+ * Revision 1.8  95/03/31  15:47:30  jmo
+ *  Version for 951 sent to Pittsburgh.
+ * 
+ * Revision 1.7  95/03/03  16:25:19  jmo
+ * Partially modified for cti951
+ * 
+ * Revision 1.6  95/01/30  21:55:18  jmo
+ * Fix memory leak.
+ * 
+ * Revision 1.5  1995/01/27  16:13:56  ty7777
+ * Use GetVersion () in the local directory.
+ *
+ * Revision 1.4  1995/01/20  23:25:05  ty7777
+ * Added petutil.h.
+ *
+ * Revision 1.3  1995/01/20  23:13:26  ty7777
+ * Added program version to the main_header.
+ *
+ * Revision 1.2  1995/01/20  16:31:32  ty7777
+ * Deleted escape sequences.
+ *
+ * Revision 1.1  1995/01/19  22:40:20  ty7777
+ * Initial revision
+ **/
+
+/*--------------------------------------------------------------------
+
+Program: makenorm
+
+Purpose: Calculate detector efficiency normalization factors.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string.h>
+#include <imagio.h>
+#include <petutil.h>
+#include <cti_proto.h>
+#include <scatter.h>
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/makenorm_ubc.c,v 1.2 1998/03/24 23:43:10 jmo Exp jmo $";
+
+#define abs(a) (((a)<0)?-(a):(a))
+
+int	lenblk,numray,numray_raw,numang,lensin,lensin_raw,
+	scanner_type;
+
+float	*sinocor,*geo,*geosino;
+
+char	*plneffil,*geofile=NULL,nrmfil[MAXNAME],
+	tranfil[MAXNAME];
+
+SubHeader	*shg;
+NormData 	*read_norm();
+struct  ringinfo *rng;
+
+/******************/
+void main(argc,argv)
+/******************/
+
+int	argc;
+char	*argv[];
+
+{
+
+MainHeader     	*mh;
+SubHeader  	*sh;
+NormData 	*nrm;
+
+FILE	*fp;
+
+int	i,j,joff,stat,iter=0,ioff,iang,numiter=1,m,
+	plane=1,frame=1,gate=1,data=0,bed=0,pad,
+	noscatcomp=FALSE,scatdim=1,jang,nsum,pln,dpln,
+	***tran_sup;
+
+float	*norm,*normsc,*scat,x,avgscl,sum,*scale,*sino,sclcnts,
+	*scat_interp(),scatscl(),**tran,tran_extend_up_dwn,emis_extend_up_dwn;
+
+SubHeader *sh1;
+
+char	*ptr,*blank_file=NULL,*scat_file,dum[MAXNAME],version[5],date[9];
+
+void	upsamp(),compute_detsum(),compute_eff();
+int     ***get_tran_support();
+
+sscanf(rcsid,"%s %s %s %s %s %s %s %s",dum,dum,version,date,dum,dum,dum,dum);
+printf("\nmakenorm Version %s, %s\n\n",version,date);
+printf ("Copyright 1991-1994, Washington University\n");
+printf ("All rights reserved. Unauthorized reproduction prohibited.\n");
+if(argc < 2) {
+        fprintf(stderr,"Usage: makenorm plane_eff_3d [-nf norm_filename -geo geofile\n");
+        exit(-1);
+        }
+
+plneffil  = argv[1];
+
+for(i=1;i<argc;i++) {
+    if(!strcmp(argv[i],"-nf") && i < argc-1)
+	strcpy(nrmfil,argv[i+1]);
+    else if(!strcmp(argv[i],"-geo") && i < argc-1) {
+	geofile = argv[i+1];
+	}
+    }
+
+fprintf(stdout,"---------------------------------------------------------\n");
+fprintf(stdout,"Plane efficiency file: %s\n",plneffil);
+fprintf(stdout,"Geometric factors: %s\n",geofile);
+fprintf(stdout,"Output file for normalization factors: %s\n",nrmfil);
+fprintf(stdout,"---------------------------------------------------------\n");
+
+if((mh=getmhdr(plneffil)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",plneffil);
+    exit(ERROR);
+    }
+scanner_type = mh->scanner_type;
+if((sh1=(SubHeader *)getsbhdr(plneffil,1,1,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",plneffil);
+    exit(ERROR);
+    }
+numray_raw = sh1->dim1;
+numang = sh1->dim2;
+numray = numray_raw;
+lensin = numray*numang;
+lensin_raw = numray_raw*numang;
+lenblk = numray*DET_STRIDE;
+
+norm = (float *)malloc(lensin*sizeof(float));
+normsc = (float *)malloc(lensin*sizeof(float));
+sinocor = (float *)malloc(lensin*sizeof(float));
+geosino = (float *)malloc(lensin*sizeof(float));
+scale = (float *)malloc((mh->nplane+1)*sizeof(float));
+for(i=0;i<mh->nplane+1;i++)
+    scale[i] = 0.;
+nrm = (NormData *)malloc(sizeof(NormData));
+nrm->true_plane_eff = 1.;
+nrm->scat_plane_eff = 1.;
+
+    avgscl = 0.;
+    for(plane=1;plane<=mh->nplane;plane++) {
+
+	if(plane%4 == 0) {
+            fprintf(stdout,".");
+            fflush(stdout);
+	    }
+
+        if((sino=rdimg(plneffil,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",plneffil,plane);
+            exit(ERROR);
+            }
+	if((sh=(SubHeader *)
+			getsbhdr(plneffil,plane,frame,gate,data,bed))==NULL) {
+	    fprintf(stderr,"Could not read main header., %s\n",plneffil);
+	    exit(ERROR);
+	    }
+
+        for(i=0;i<lensin;i++)
+            sinocor[i] = sino[i];
+
+        if((geo=rdimg(geofile,plane,frame,gate,data,bed)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",geofile,plane);
+            exit(ERROR);
+            }
+	if((shg=(SubHeader *)
+			getsbhdr(geofile,plane,frame,gate,data,bed))==NULL) {
+	    fprintf(stderr,"Could not read main header., %s\n",geofile);
+	    exit(ERROR);
+	    }
+	for(iang=0,ioff=0,joff=0;iang<DET_STRIDE/MASH;iang++,ioff+=NUMRAY) {
+	    for(m=0;m<MASH;m++,joff+=NUMRAY) {
+		if(m == 0) {
+		    for(i=0;i<NUMRAY;i++)
+		        geo[i+ioff] = geo[i+joff];
+		    }
+		else {
+		    for(i=0;i<NUMRAY;i++)
+                        geo[i+ioff] += geo[i+joff];
+		    }
+		}
+	    }
+        /* Remove geometric effect. */
+	for(iang=0,ioff=0;iang<numang/DET_STRIDE;iang++) {
+ 	    for(jang=0,joff=0;jang<DET_STRIDE;jang++,ioff+=numray,joff+=numray)
+	        for(i=0;i<numray;i++)
+                    sinocor[i+ioff] = geo[i+joff]*sinocor[i+ioff];
+            }
+
+        /* Compute detector efficiencies. */
+        compute_detsum(numang,numray,sinocor,nrm);
+        compute_eff(norm,numang,numray,nrm);
+
+	/* Calculate scatter normalization factors. */
+        sum = 0.; nsum = 0;
+        for(i=0;i<lensin;i++)
+            if(norm[i] > 0) {
+                sum += norm[i];
+                ++nsum;
+                }
+        nrm->scat_scale = (float)nsum/sum;
+        for(i=0;i<lensin;i++)
+            normsc[i] = norm[i]*nrm->scat_scale;
+
+        /* Compute true normalization factors. */
+	sum = 0.; nsum = 0;
+	for(iang=0,ioff=0;iang<numang/DET_STRIDE;iang++) {
+ 	    for(jang=0,joff=0;jang<DET_STRIDE;jang++,ioff+=numray,joff+=numray)
+	        for(i=0;i<numray;i++) {
+                    norm[i+ioff] *= geo[i+joff];
+		    if(norm[i+ioff] > 0) {
+                        sum += norm[i+ioff];
+	                ++nsum;
+	                }
+		    }
+            }
+	nrm->scat_plane_eff = 1.;
+	nrm->true_scale = (float)nsum/sum;
+        for(i=0;i<lensin;i++)
+
+        if((stat=write_norm(nrmfil,nrm,plane)) != OK) {
+            fprintf(stderr,"Error writing %s, plane %d\n",nrmfil,plane);
+            exit(ERROR);
+            }
+
+	scale[plane] = 0.;
+	for(iang=0,ioff=0;iang<numang/DET_STRIDE;iang++) {
+ 	    for(jang=0,joff=0;jang<DET_STRIDE;jang++,ioff+=numray,joff+=numray)
+	        for(i=0;i<numray;i++)
+		    if(geo[i+joff] > 0)
+	    	        scale[plane]+=norm[i+ioff]*sinocor[i+ioff]/geo[i+joff];
+	    }
+
+	free(sino);
+	free(geo);
+	free(sh);
+	free(shg);
+        }
+    avgscl = mh->nplane;
+    printf("\nAverage scatter scale factor: %f\n",avgscl/(float)mh->nplane);
+
+    /* Now calculate trues plane efficiency and store in subheaders. */
+    for(sum=0.,plane=1;plane<=mh->nplane;plane++)
+    	sum += scale[plane];
+avgscl = 0.;
+    for(plane=1;plane<=mh->nplane;plane++) {
+        scale[plane] = sum/((float)mh->nplane*scale[plane]);
+	avgscl += scale[plane];
+	}
+printf("Average true_plane_eff: %f\n",avgscl/mh->nplane);
+    if((write_true_plane_eff(nrmfil,scale,mh->nplane)) != NULL) {
+        fprintf(stderr,"Could not write to %s,plane %d in makenorm\n",nrmfil,plane);
+        exit(ERROR);
+        }
+
+
+}
+
+
+/*****************************************/
+void compute_detsum(numang,numray,sino,nrm)
+/*****************************************/
+
+float 	*sino;
+int 	numang, 
+	numray;
+NormData *nrm;
+
+{
+int iang,deta,detb,i,ioff,ray,m;
+
+float mean;
+
+for(i=0;i<NCRYSTALS;i++) nrm->detsum[i] = 0.;
+for (iang=0,ioff=0;iang<numang; iang++,ioff+=numray) {
+    for(m=0;m<MASH;m++) {
+        for (ray=0; ray<numray; ray++) {
+            get_dets(iang*MASH+m,ray-numray/2,&deta,&detb);
+	    nrm->detsum[deta] += sino[ray+ioff];
+	    nrm->detsum[detb] += sino[ray+ioff];
+	    }
+	}
+    }
+
+mean = 0.;
+for(i=0;i<NCRYSTALS;i++) mean += nrm->detsum[i];
+mean /= NCRYSTALS;
+for(i=0;i<NCRYSTALS;i++)  {
+    if(nrm->detsum[i] > 0.)
+	nrm->detsum[i] = mean/nrm->detsum[i];
+    else
+	nrm->detsum[i] = 1.;
+    }
+
+/* Compute sums over banks of detectors. */
+/*for(deta=0;deta<NCRYSTALS;deta++) {
+    nrm->detsum_bank[deta] = 0.;
+    for(ray=-NUMRAY/2;ray<NUMRAY/2;ray++) {
+	detb = (deta - ray + NCRYSTALS/2)%NCRYSTALS;
+	nrm->detsum_bank[deta] += nrm->detsum[detb];
+	}
+    }*/
+
+}
+
+/**************************************/
+void compute_eff(norm,numang,numray,nrm)
+/**************************************/
+
+float 	*norm;
+int 	numang, 
+	numray;
+NormData *nrm;
+
+{
+int iang,deta,detb,i,ray;
+
+float norm1;
+
+for(i=0;i<numang*numray;i++) 
+    norm[i] = 0.;
+for (iang=0;iang<numang*MASH;iang++) {
+    for (ray=0; ray<numray; ray++) {
+        get_dets(iang,ray-numray/2,&deta,&detb);
+/*        norm1 = (nrm->detsum_bank[deta] + nrm->detsum_bank[detb] 
+		- nrm->detsum[deta] - nrm->detsum[detb])/
+				(nrm->detsum[deta]*nrm->detsum[detb]);*/
+        norm1 = 1./(nrm->detsum[deta]*nrm->detsum[detb]);
+        norm[ray+numray*(iang/MASH)] += norm1;
+	}
+    }
+for(i=0;i<numang*numray;i++) 
+    norm[i] = MASH/norm[i];
+
+}
+@

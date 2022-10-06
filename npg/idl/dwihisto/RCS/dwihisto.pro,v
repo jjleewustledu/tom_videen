@@ -1,0 +1,184 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2005.07.11.14.49.00;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@; $Id: dwihisto.pro,v 1.3 2001/03/02 14:59:58 tom Exp $
+;
+;+
+; NAME:
+;   DWIHISTO
+;
+; PURPOSE:
+;   Plot histogram of difference of 2 images within a VOI
+;
+; CATEGORY:
+;   Visualization.
+;
+; CALLING SEQUENCE:
+;   dwihisto
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, Jun 2005.
+;-
+
+PRO dwihisto
+
+   @@IMAGE_UTILS.h
+
+   on_error, 2
+   loadct,5
+
+   vname = getenv('VOIFILE')
+   id = getenv('VOI')
+   xmax = float(getenv('XMAX'))
+   ymax = float(getenv('YMAX'))
+
+   voi = ptr_new({VOI})
+   (*voi).id = 'VOI'
+   
+   img = {VIMAGE}
+   img.ff = 1
+   img.lf = 1
+   img.fp = 1
+   img.lp = 255
+   img.proc = 0
+   img.fname = getenv('IMGFILE')
+   msg = ''
+   IF (getframe(img, msg) NE 0) THEN BEGIN
+      print, msg
+      RETURN
+   ENDIF
+
+   IF (VOI_READ(voi, vname, msg) NE 0) THEN BEGIN
+      print, msg
+      RETURN
+   ENDIF
+
+   voilist = VOI_LIST(voi)
+   listing = VOI_LISTING(voi,voilist,img.dim[2])
+   IF (listing[0] EQ '') THEN BEGIN
+      print,  'No data.  VOI file is incorrect format or incompatible with current image.'
+      RETURN
+   END
+
+   roi = VOI_LOCATE(voi, id)
+   IF ptr_valid(roi) THEN BEGIN
+      IF ((*roi).num GT 0) THEN BEGIN
+         pixels = VOI_COORDS(voi, id, img.dim, msg)
+         IF ((size(pixels))[2] GT 1) THEN BEGIN
+            pixels = pixels[sort(pixels)]
+            pixels = pixels[uniq(pixels)]
+         ENDIF
+      ENDIF
+   ENDIF
+   nvox = n_elements(pixels)
+   print, id+'   Pixels = '+string(nvox)
+   IF (nvox LE 0) THEN RETURN
+
+   image = (*img.data)[pixels]
+
+   bmax = xmax
+   IF (bmax EQ 0) THEN bmax = max(image) > abs(min(image))
+   binsize = 10 
+   IF (bmax GT 200) THEN binsize = 20
+   IF (bmax GT 500) THEN binsize = 50
+   IF (bmax GT 1000) THEN binsize = 100
+
+   IF (xmax EQ 0) THEN BEGIN
+      xmin = min(image)
+      xmax = max(image)
+      IF (abs(xmin) GT abs(xmax)) THEN BEGIN
+         val = ((abs(xmin)/binsize)+1)*binsize
+         xmin = -val
+         xmax = val
+      ENDIF ELSE BEGIN
+         val = ((abs(xmax)/binsize)+1)*binsize
+         xmin = -val
+         xmax = val
+      ENDELSE
+   ENDIF ELSE xmin = -xmax
+   xrange=[xmin, xmax]
+
+   hist = histogram(image, MIN=xmin, MAX=xmax, BINSIZE=binsize)
+   nbins = n_elements(hist)
+   pos = rstrpos(img.fname,'/')
+   title = strmid(img.fname,pos+1)
+   xtitle = 'Difference in Intensity'
+   ytitle = 'Number of Voxels' 
+   y0 = 0.
+   IF (ymax EQ 0) THEN ymax = max(hist)
+   yrange=[0, ymax] 
+
+   red = [0,255,255,255]
+   green = [0,0,255,255]
+   blue = [0,0,0,255]
+   tvlct,red,green,blue
+   plot, hist, /nodata, title=title, xtitle=xtitle, ytitle=ytitle, $
+      xrange=xrange, yrange=yrange, xstyle=1, ystyle=1, ytickformat='(I6)',$
+      xtickformat='(I)', charsize=1.4, charthick=2, color=3
+   x0 = xmin
+   FOR i=0,nbins-1 DO BEGIN
+      x1 = x0 + binsize
+      y1 = hist[i]
+      IF (y1 GT yrange[1]) THEN y1 = yrange[1]
+      x = [x0,x0,x1,x1]
+      y = [y0,y1,y1,y0]
+      polyfill,x,y,color=2
+      plots,x,y,color=1
+      x0 = x1
+   ENDFOR 
+   
+   ch = ''
+   read,prompt='P=Print, Return=Quit ',ch
+   IF (ch eq 'P' or ch eq 'p') THEN BEGIN
+      printname = '/tmp/dwihisto.ps'
+      set_plot,'ps'
+      device,filename=printname,xsize=7,ysize=6,xoffset=0.8,yoffset=3,/inches
+      plot, hist, /nodata, title=title, xtitle=xtitle, ytitle=ytitle, $
+         xrange=xrange, yrange=yrange, xstyle=1, ystyle=1, ytickformat='(I6)', $
+         xtickformat='(I)', charsize=1.4, charthick=2
+      x0 = xmin
+      FOR i=0,nbins-1 DO BEGIN
+         x1 = x0 + binsize
+         y1 = hist[i]
+         IF (y1 GT yrange[1]) THEN y1 = yrange[1]
+         x = [x0,x0,x1,x1]
+         y = [y0,y1,y1,y0]
+         plots,x,y
+         x0 = x1
+      ENDFOR
+      !p.noclip=1
+
+      yloc = -ymax/4
+      caption = id+' '+strcompress(string(nvox),/remove_all)+' voxels'
+      xyouts, 0, yloc, caption, alignment=0.5, charsize=1.5, charthick=1.5
+      yloc = -ymax/3
+      xyouts, 0, yloc, vname, alignment=0.5, charsize=1.5, charthick=1.5
+
+      device,/close
+      ;cmd = 'cat '+printname+' | lpr'
+      ;spawn, cmd
+      ;cmd = '/usr/bin/rm '+printname
+      ;spawn, cmd
+   END
+   RETURN
+END
+@

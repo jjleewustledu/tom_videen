@@ -1,0 +1,72 @@
+#!/bin/csh
+#	Module:	align_latefd
+#   Date:	May 2005
+#   Author:	Tom Videen
+#	Use:	Align all frames of a late dynamic fdg image 
+#			previously separated into single frames and filtered (singlefrm_gauss)
+
+if ($#argv != 7) then
+	echo "Usage: align_latefd root filter extension msk firstfrm lastfrm thresh"
+	echo " e.g., align_latefd p6000fd _g3 v p6000msk.v 2 11 100"
+	exit 1
+endif
+
+set ROOT  = $1
+set FILT  = $2
+set EXT   = $3
+set MSK   = $4
+set FRM1  = $5
+set FRM2  = $6
+set THRSH = $7
+
+set REF     = a$ROOT$FRM1$FILT
+set TLOG    = $ROOT.tmp
+set NULLAIR = ${ROOT}_null.air
+set ALOG    = ${ROOT}_align.log
+set CLOG    = ${ROOT}_align.fit
+set PRM = "-m 6 -t1 $THRSH -p1 1 -t2 $THRSH -p2 1 -x 3 -v"
+
+if (! -e $MSK) then
+	echo "ERROR [align_latefd]: Missing $MSK"
+	exit 1
+endif
+if (! -e $REF.img) then
+	echo "ERROR [align_latefd]: Missing $REF.img"
+	exit 1
+endif
+set i = $FRM1
+while ($i <= $FRM2)
+	set IMG = $ROOT$i$FILT
+	if (! -e a$IMG.img) then
+		echo "ERROR [align_latefd]: missing a$IMG.img"
+		exit 1
+	endif
+	@ i++
+end
+
+echo `date` >! $ALOG
+echo `date` >! $CLOG
+echo $PRM >> $CLOG
+
+setanamin $REF 0
+alignlinear $REF $REF $NULLAIR -m 6 -p1 1 -p2 0 -t1 $THRSH 
+
+set i = $FRM1
+while ($i <= $FRM2)
+	set IMG = $ROOT$i$FILT
+	set AIR = $ROOT${i}_to_$ROOT$FRM1
+	setanamin $REF 0
+	setanamin a$IMG 0
+    alignlinear $REF a$IMG $AIR.air $PRM >! $TLOG
+    tail -1 $TLOG >> $CLOG
+    airdif $AIR.air $NULLAIR $MSK | grep Mean >> $ALOG
+    tail -1 $TLOG
+    tail -1 $ALOG
+	rm $TLOG
+	imgreslice a$IMG $AIR
+	@ i++
+end
+
+echo "plot_aligndyn $ALOG"
+echo "----------------------------------------"
+

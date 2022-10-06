@@ -1,0 +1,133 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2000.02.18.17.06.04;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@FUNCTION GETSINO6, img, msg
+   
+   COMMON IMAGE_UTILS
+   
+   fname = img.fname
+   IF (strlen(fname) EQ 0) THEN BEGIN
+      msg =  'No file entered'
+      RETURN, -1
+   ENDIF 
+
+   str=''
+   dim = lonarr(3)
+   ffrm = img.ff
+   lfrm = img.lf
+   fpln = img.fp
+   lpln = img.lp
+   mh6 = {M6header}
+   ss6 = {Subheader6_scn}
+   sa6 = {Subheader6_atn}
+   M6sino_init, mh6, ss6, sa6
+   IF (img.data NE ptr_new()) THEN ptr_free, img.data
+   
+   cmd = '/usr/local/npg/bin/dynscan6_read ' $
+      + fname + string(ffrm) + string(lfrm) + string(fpln) + string(lpln)
+   spawn,cmd,unit=lun
+   dtype = 0
+   str = ''
+   readf,lun,dtype,str,format='(I0,A)'
+   IF (dtype EQ -1) THEN BEGIN 
+      msg = 'Read Error: ' + str
+      RETURN, -1
+   ENDIF
+   
+   firstfrm = 0L
+   lastfrm = 0L
+   firstpln = 0L
+   lastpln = 0L
+   readf,lun, ffrm, lfrm, format='(2I0)'
+   readf,lun, fpln, lpln, format='(2I0)'
+   readf,lun,dim,format='(3I0)'
+   img.p  = fpln
+   img.fp = fpln
+   img.lp = lpln
+   img.f  = ffrm
+   img.ff = ffrm
+   img.lf = lfrm
+   ff = img.ff
+   lf = img.lf
+   frames = lfrm-ffrm+1
+   planes = lpln-fpln+1
+   
+   readu,lun,mh6
+   img.h.mh6 = mh6
+
+   IF (dtype EQ 3) THEN BEGIN	; AttenCor 
+      readu,lun,sa6
+      img.h.sa6 = sa6
+      img.ntype = type(0.0)
+      dptr = ptr_new(fltarr(dim[0],dim[1],planes,frames),/allocate)
+   ENDIF ELSE BEGIN				; Sinogram 
+      readu,lun,ss6
+      img.h.ss6 = ss6
+      img.ntype = type(0)
+      dptr = ptr_new(intarr(dim[0],dim[1],planes,frames),/allocate)
+   ENDELSE
+   
+   readu,lun,*dptr
+
+   IF (dtype EQ 3) THEN BEGIN				; AttenCor  
+      img.min = min(*dptr)
+      img.max = max(*dptr)
+   ENDIF ELSE IF (frames EQ 1) THEN BEGIN	; Sinogram 
+      img.min = ss6.scan_min
+      img.max = ss6.scan_max
+      img.start[ffrm] = ss6.frame_start_time
+      img.len[ffrm] = ss6.frame_duration
+   ENDIF ELSE BEGIN
+      img.min = min(*dptr)
+      img.max = max(*dptr)
+      start = 0.0
+      len = 0.0
+      FOR k=ffrm, lfrm DO BEGIN 
+         readf, lun, start, len, format='(2I0)'
+         img.start[k] = start
+         img.len[k] = len
+      ENDFOR 
+   ENDELSE 
+   close,lun
+   free_lun,lun
+
+   img.data = dptr
+   img.itype = MATRIX_REV6
+   img.order = 1
+   img.dim[0] = dim[0]
+   img.dim[1] = dim[1]
+   img.dim[2] = planes
+   img.dim[3] = frames
+   img.pdim[0] = 10*ss6.sample_distance
+   img.pdim[1] = 10*ss6.sample_distance
+   img.pdim[2] = 10*mh6.plane_separation
+   img.org[0] = 0
+   img.org[1] = 0
+   img.org[2] = 0
+   img.org[3] = 0
+   img.scale =  1.0
+   img.gcal = 1.0
+   img.ical = 1.0
+   FOR k=0,8 DO img.mcal[k] = 0.0
+   RETURN, 0
+END
+@

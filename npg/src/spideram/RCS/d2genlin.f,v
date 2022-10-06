@@ -1,0 +1,580 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.02.17.18.43.30;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   D2GENLIN.FTN
+C     Author:       Tom O. Videen
+C     Date:         01-Jun-87
+C     Intent:
+C     .  This subroutine generates a single line to send to the Ramtek.
+C     .  The elements of the line will be zoomed and interpolated if
+C     .  ZFACTOR*MAG > 1.
+C     
+C     .  The algorithm keeps the actual PET value of an element either
+C     .  in the center of the group of pixels representing it (for an
+C     .  odd number of Ramtek pixels, or to the immediate left of center
+C     .  of the group of pixels representing it (for an even number of
+C     .  Ramtek pixels).  The values of pixels to either side of the
+C     .  actual value are linear interpolations with the adjacent actual
+C     .  PET value.
+C     
+C     .  If SIDE is not zero, then only points on the specified
+C     .  side of the midline are used to generate the LINE.
+C     .  This is implemented only for MAG=7 with no zoom.
+C     
+C     .  The subroutine D2SCALER must have been called previous to
+C     .  D2SMOOTH.  D2SCALER scales the image and stores the result
+C     .  in the common array IARRAY.
+C     
+C     Common Blocks from SPIDERAM.INC:
+C     .  **IMAGEDAT - image arrays                   (write)
+C     .  **DISPLAY  - display parameters             (read only)
+C     .  **REGION   - region analysis parameters     (read only)
+C     
+C     Passed Variables:
+C     .  NUM - line number to generate (1 or 3) (e.g., LINE(n,NUM));
+C     .  ROW - row number of the line;
+C     .  SIDE - side of image to generate:
+C     .     0 --> entire image;
+C     .     1 --> left side only;
+C     .     2 --> right side only;
+C     
+C     Local Variables:
+C     .  R   - row number of the line (1-128);
+C     .  DIM - length of the line (Ramtek pixels);
+C     .  Z   - LMAG*ZFACTOR
+C     .  Y   - half of Z  or (Z+1)/2
+C     .  MID - integer value of XMIDLINE;
+C     .  ONPIX = true if midline is on a pixel (i.e.,XMIDLINE is integer);
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: d2genlin.f,v 1.5 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE D2GENLIN(NUM,ROW,SIDE)
+
+      INTEGER*4  NUM,ROW,SIDE,DIM,MID,FIRST,LAST,I,J,K,M,N,R,Y,Z
+      INTEGER*4  LMAG
+      LOGICAL*1  ONPIX
+
+      INCLUDE 'spideram.inc'
+
+      IF (ROW.GT.AMAX) THEN
+         R = AMAX
+      ELSE
+         R = ROW
+      END IF
+      IF (MAG.LE.7) THEN
+         LMAG = MAG
+      ELSE IF (MAG.EQ.8) THEN
+         LMAG = 1
+      ELSE IF (MAG.EQ.9) THEN
+         LMAG = 2
+      ENDIF
+
+      Z = ZFACTOR*LMAG
+
+      IF (ABS(XMIDLINE-FLOAT(INT(XMIDLINE))).LT.0.25) THEN
+         ONPIX = .TRUE.
+         MID = NINT(XMIDLINE)
+      ELSE
+         ONPIX = .FALSE.
+         MID = INT(XMIDLINE)
+      END IF
+
+      IF (Z.EQ.1) THEN
+         DO 100 I=1,128
+            LINE(I,NUM) = IARRAY(I,R)
+ 100     CONTINUE
+      ELSE
+         Y = (Z+1)/2
+
+         IF (SIDE.EQ.0) THEN
+            FIRST = XLOW
+            LAST = XHIGH
+            N = 1
+            DIM = SIZE*Z
+         ELSE IF (SIDE.EQ.1) THEN
+            FIRST = XLOW
+            IF (ONPIX) THEN
+               LAST = MID - 1
+            ELSE
+               LAST = MID
+            END IF
+            N = 1
+            DIM = MID*Z
+         ELSE
+            FIRST = MID + 1
+            LAST = XHIGH
+            N = MID*Z + 1
+            DIM = SIZE*Z
+         END IF
+
+         DO 500 J=FIRST,LAST
+            IF (SIDE.EQ.0) THEN
+               IF (J.EQ.1) THEN
+                  I = J
+                  K = J+1
+               ELSE IF (J.LT.AMAX) THEN
+                  I = J-1
+                  K = J+1
+               ELSE
+                  I = J-1
+                  K = J
+               END IF
+            ELSE
+               IF (J.EQ.FIRST) THEN
+                  I = J
+                  K = J+1
+               ELSE IF (J.LT.LAST) THEN
+                  I = J-1
+                  K = J+1
+               ELSE
+                  I = J-1
+                  K = J
+               END IF
+            END IF
+            DO 300 M=1,Y
+               LINE(N,NUM) = ((Y-M)*IARRAY(I,R) + (Z-(Y-M))*IARRAY(J,R))/Z
+               N = N+1
+ 300        CONTINUE
+            DO 400 M=Y+1,Z
+               LINE(N,NUM) = ((Z-(M-Y))*IARRAY(J,R) + (M-Y)*IARRAY(K,R))/Z
+               N = N+1
+ 400        CONTINUE
+ 500     CONTINUE
+
+ 1000    IF (N.LE.DIM) THEN
+            LINE(N,NUM) = 0
+            N = N+1
+            GO TO 1000
+         END IF
+      END IF
+
+      RETURN
+      END
+@
+
+
+1.5
+log
+@format changes plus fixes for g77
+@
+text
+@d49 1
+a49 1
+C     rcsheader = "$Id: d2genlin.f,v 1.4 1999/02/17 18:43:30 tom Exp tom $"
+@
+
+
+1.4
+log
+@add 8x6 and 3x2 displays for PC uinsg 1024x768 screen resolution
+@
+text
+@d2 46
+a47 53
+C
+C  Subroutine:   D2GENLIN.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         01-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This subroutine generates a single line to send to the Ramtek.
+C     The elements of the line will be zoomed and interpolated if
+C     ZFACTOR*MAG > 1.
+C
+C     The algorithm keeps the actual PET value of an element either
+C     in the center of the group of pixels representing it (for an
+C     odd number of Ramtek pixels, or to the immediate left of center
+C     of the group of pixels representing it (for an even number of
+C     Ramtek pixels).  The values of pixels to either side of the
+C     actual value are linear interpolations with the adjacent actual
+C     PET value.
+C
+C     If SIDE is not zero, then only points on the specified
+C     side of the midline are used to generate the LINE.
+C     This is implemented only for MAG=7 with no zoom.
+C
+C     The subroutine D2SCALER must have been called previous to
+C     D2SMOOTH.  D2SCALER scales the image and stores the result
+C     in the common array IARRAY.
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (write)
+C     **DISPLAY  - display parameters             (read only)
+C     **REGION   - region analysis parameters     (read only)
+C
+C  Passed Variables:
+C     NUM - line number to generate (1 or 3) (e.g., LINE(n,NUM));
+C     ROW - row number of the line;
+C     SIDE - side of image to generate:
+C        0 --> entire image;
+C        1 --> left side only;
+C        2 --> right side only;
+C
+C  Local Variables:
+C     R   - row number of the line (1-128);
+C     DIM - length of the line (Ramtek pixels);
+C     Z   - LMAG*ZFACTOR
+C     Y   - half of Z  or (Z+1)/2
+C     MID - integer value of XMIDLINE;
+C     ONPIX = true if midline is on a pixel (i.e.,XMIDLINE is integer);
+C
+C  Called by:
+C     D2SMOOTH
+C     D2SMOX
+C
+d49 2
+a50 1
+C
+d52 1
+a52 1
+C
+d56 1
+a56 2
+      character*256 rcsheader
+C
+d58 1
+a58 2
+      rcsheader = "$Id: d2genlin.f,v 1.3 1993/10/04 21:55:32 tom Exp tom $"
+C
+d60 1
+a60 1
+        R = AMAX
+d62 1
+a62 1
+        R = ROW
+d65 1
+a65 1
+        LMAG = MAG
+d67 1
+a67 1
+        LMAG = 1
+d69 1
+a69 1
+        LMAG = 2
+d73 1
+a73 1
+C
+d75 2
+a76 2
+        ONPIX = .TRUE.
+        MID = NINT(XMIDLINE)
+d78 2
+a79 2
+        ONPIX = .FALSE.
+        MID = INT(XMIDLINE)
+d81 1
+a81 1
+C
+d83 3
+a85 3
+        DO 100 I=1,128
+          LINE(I,NUM) = IARRAY(I,R)
+100     CONTINUE
+d87 11
+a97 31
+        Y = (Z+1)/2
+C
+        IF (SIDE.EQ.0) THEN
+          FIRST = XLOW
+          LAST = XHIGH
+          N = 1
+          DIM = SIZE*Z
+        ELSE IF (SIDE.EQ.1) THEN
+          FIRST = XLOW
+          IF (ONPIX) THEN
+            LAST = MID - 1
+          ELSE
+            LAST = MID
+          END IF
+          N = 1
+          DIM = MID*Z
+        ELSE
+          FIRST = MID + 1
+          LAST = XHIGH
+          N = MID*Z + 1
+          DIM = SIZE*Z
+        END IF
+C
+        DO 500 J=FIRST,LAST
+          IF (SIDE.EQ.0) THEN
+            IF (J.EQ.1) THEN
+              I = J
+              K = J+1
+            ELSE IF (J.LT.AMAX) THEN
+              I = J-1
+              K = J+1
+d99 1
+a99 2
+              I = J-1
+              K = J
+d101 21
+a121 7
+          ELSE
+            IF (J.EQ.FIRST) THEN
+              I = J
+              K = J+1
+            ELSE IF (J.LT.LAST) THEN
+              I = J-1
+              K = J+1
+d123 10
+a132 2
+              I = J-1
+              K = J
+d134 12
+a145 3
+          END IF
+          DO 300 M=1,Y
+            LINE(N,NUM) = ((Y-M)*IARRAY(I,R) + (Z-(Y-M))*IARRAY(J,R))/Z
+d147 2
+a148 12
+300       CONTINUE
+          DO 400 M=Y+1,Z
+            LINE(N,NUM) = ((Z-(M-Y))*IARRAY(J,R) + (M-Y)*IARRAY(K,R))/Z
+            N = N+1
+400       CONTINUE
+500     CONTINUE
+C
+1000    IF (N.LE.DIM) THEN
+          LINE(N,NUM) = 0
+          N = N+1
+          GO TO 1000
+        END IF
+d150 1
+a150 1
+C
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d46 1
+a46 1
+C     Z   - MAG*ZFACTOR
+d60 1
+d65 1
+a65 1
+      rcsheader = "$Id$"
+d72 9
+a80 1
+      Z = ZFACTOR*MAG
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d1 151
+a151 149
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   D2GENLIN.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         01-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This subroutine generates a single line to send to the Ramtek.
+C     The elements of the line will be zoomed and interpolated if
+C     ZFACTOR*MAG > 1.
+C
+C     The algorithm keeps the actual PET value of an element either
+C     in the center of the group of pixels representing it (for an
+C     odd number of Ramtek pixels, or to the immediate left of center
+C     of the group of pixels representing it (for an even number of
+C     Ramtek pixels).  The values of pixels to either side of the
+C     actual value are linear interpolations with the adjacent actual
+C     PET value.
+C
+C     If SIDE is not zero, then only points on the specified
+C     side of the midline are used to generate the LINE.
+C     This is implemented only for MAG=7 with no zoom.
+C
+C     The subroutine D2SCALER must have been called previous to
+C     D2SMOOTH.  D2SCALER scales the image and stores the result
+C     in the common array IARRAY.
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (write)
+C     **DISPLAY  - display parameters             (read only)
+C     **REGION   - region analysis parameters     (read only)
+C
+C  Passed Variables:
+C     NUM - line number to generate (1 or 3) (e.g., LINE(n,NUM));
+C     ROW - row number of the line;
+C     SIDE - side of image to generate:
+C        0 --> entire image;
+C        1 --> left side only;
+C        2 --> right side only;
+C
+C  Local Variables:
+C     R   - row number of the line (1-128);
+C     DIM - length of the line (Ramtek pixels);
+C     Z   - MAG*ZFACTOR
+C     Y   - half of Z  or (Z+1)/2
+C     MID - integer value of XMIDLINE;
+C     ONPIX = true if midline is on a pixel (i.e.,XMIDLINE is integer);
+C
+C  Called by:
+C     D2SMOOTH
+C     D2SMOX
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE D2GENLIN(NUM,ROW,SIDE)
+C
+      INTEGER*4  NUM,ROW,SIDE,DIM,MID,FIRST,LAST,I,J,K,M,N,R,Y,Z
+      LOGICAL*1  ONPIX
+C
+      INCLUDE 'spideram.inc'
+C
+      IF (ROW.GT.AMAX) THEN
+        R = AMAX
+      ELSE
+        R = ROW
+      END IF
+      Z = ZFACTOR*MAG
+C
+      IF (ABS(XMIDLINE-FLOAT(INT(XMIDLINE))).LT.0.25) THEN
+        ONPIX = .TRUE.
+        MID = NINT(XMIDLINE)
+      ELSE
+        ONPIX = .FALSE.
+        MID = INT(XMIDLINE)
+      END IF
+C
+      IF (Z.EQ.1) THEN
+        DO 100 I=1,128
+          LINE(I,NUM) = IARRAY(I,R)
+100     CONTINUE
+      ELSE
+        Y = (Z+1)/2
+C
+        IF (SIDE.EQ.0) THEN
+          FIRST = XLOW
+          LAST = XHIGH
+          N = 1
+          DIM = SIZE*Z
+        ELSE IF (SIDE.EQ.1) THEN
+          FIRST = XLOW
+          IF (ONPIX) THEN
+            LAST = MID - 1
+          ELSE
+            LAST = MID
+          END IF
+          N = 1
+          DIM = MID*Z
+        ELSE
+          FIRST = MID + 1
+          LAST = XHIGH
+          N = MID*Z + 1
+          DIM = SIZE*Z
+        END IF
+C
+        DO 500 J=FIRST,LAST
+          IF (SIDE.EQ.0) THEN
+            IF (J.EQ.1) THEN
+              I = J
+              K = J+1
+            ELSE IF (J.LT.AMAX) THEN
+              I = J-1
+              K = J+1
+            ELSE
+              I = J-1
+              K = J
+            END IF
+          ELSE
+            IF (J.EQ.FIRST) THEN
+              I = J
+              K = J+1
+            ELSE IF (J.LT.LAST) THEN
+              I = J-1
+              K = J+1
+            ELSE
+              I = J-1
+              K = J
+            END IF
+          END IF
+          DO 300 M=1,Y
+            LINE(N,NUM) = ((Y-M)*IARRAY(I,R) + (Z-(Y-M))*IARRAY(J,R))/Z
+            N = N+1
+300       CONTINUE
+          DO 400 M=Y+1,Z
+            LINE(N,NUM) = ((Z-(M-Y))*IARRAY(J,R) + (M-Y)*IARRAY(K,R))/Z
+            N = N+1
+400       CONTINUE
+500     CONTINUE
+C
+1000    IF (N.LE.DIM) THEN
+          LINE(N,NUM) = 0
+          N = N+1
+          GO TO 1000
+        END IF
+      END IF
+C
+      RETURN
+      END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

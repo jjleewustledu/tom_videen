@@ -1,0 +1,684 @@
+head	2.21;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.21
+date	2006.02.03.20.49.44;	author tom;	state Exp;
+branches;
+next	2.20;
+
+2.20
+date	2004.02.16.20.59.12;	author tom;	state Exp;
+branches;
+next	2.13;
+
+2.13
+date	2002.11.27.15.50.51;	author tom;	state Exp;
+branches;
+next	2.12;
+
+2.12
+date	2000.09.06.19.36.41;	author tom;	state Exp;
+branches;
+next	2.11;
+
+2.11
+date	99.05.14.18.10.26;	author tom;	state Exp;
+branches;
+next	2.10;
+
+2.10
+date	96.10.16.16.47.45;	author tom;	state Exp;
+branches;
+next	2.6;
+
+2.6
+date	96.08.22.21.08.14;	author tom;	state Exp;
+branches;
+next	2.5;
+
+2.5
+date	96.05.24.17.37.18;	author tom;	state Exp;
+branches;
+next	2.4;
+
+2.4
+date	96.05.23.19.40.20;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	96.05.23.18.47.27;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	96.05.23.18.11.20;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.05.23.18.10.11;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.05.23.17.56.20;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.03.17.20.38.10;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+2.21
+log
+@*** empty log message ***
+@
+text
+@/* $Log: maskpct.c,v $
+ * Revision 2.20  2004/02/16  20:59:12  tom
+ * Feb 2004
+ *
+ * Revision 2.13  2002/11/27  15:50:51  tom
+ * *** empty log message ***
+ *
+ * Revision 2.12  2000/09/06  19:36:41  tom
+ * strcpy filename
+ *
+ * Revision 2.11  1999/05/14  18:10:26  tom
+ * change messages
+ *
+ * Revision 2.10  1996/10/16  16:47:45  tom
+ * sync with Version
+ * new libimage
+ *
+ * Revision 2.6  1996/08/22  21:08:14  tom
+ * new libimage
+ *
+ * Revision 2.5  1996/05/24  17:37:18  tom
+ * new libimage and libnrimg
+ *
+ * Revision 2.4  1996/05/23  19:40:20  tom
+ * debugged
+ *
+ * Revision 2.3  1996/05/23  18:47:27  tom
+ * use maskalltensor
+ *
+ * Revision 2.2  1996/05/23  18:11:20  tom
+ * *** empty log message ***
+ *
+ * Revision 2.1  1996/05/23  18:10:11  tom
+ * reads normslices
+ *
+ * Revision 2.0  1996/05/23  17:56:20  tom
+ * *** empty log message ***
+ * */
+/*	=========================================================================
+ *	Module:			maskpct.c
+ *	Author:			Tom Videen
+ *	Description:	Create a masked image based on percent of max counts.
+ *	=================================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: maskpct.c,v 2.20 2004/02/16 20:59:12 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	char           *imgname;		 /* image filenames */
+	char           *mskname;		 /* mask image filename */
+	char           *range;		  	 /* slice range to use for peak */
+	int             mskpct;			 /* percent to mask by */
+	int             firstpln;		 /* first plane to use in computing mean */
+	int             lastpln;		 /* last plane to use in computing mean */
+	int             peakpln = 0;	 /* plane in which peak to use is located */
+	long            npixels = 0;
+	long            dim[3];			 /* dimensions of tensors */
+	float        ***image = NULL;	 /* primary image tensor */
+
+/*
+ *	Get command line arguments.
+ */
+	imgname = argv[1];
+	mskname = argv[2];
+	mskpct = atoi (argv[3]);
+	range = argv[4];
+/*
+ *	Initializations
+ */
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ *	Read image and generate mask
+ */
+
+	file = make_imgfile (imgname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskpct]: opening %s\n", imgname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskpct]: reading MainHeader %s\n", imgname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [maskpct]: reading subheader %s\n", imgname);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	if ((image = readtensor (file, &indx)) == NULL) {
+		fprintf (stderr, "ERROR [maskpct]: reading %s\n", imgname);
+		return (ERROR);
+	}
+	if (strncmp (range, "all", 3) == 0) {
+		firstpln = 1;
+		lastpln = dim[2];
+	} else if (sscanf (range, "%dto%d", &firstpln, &lastpln) != 2) {
+		fprintf (stderr, "ERROR [maskpct]: Format error in %s\n", range);
+		return (ERROR);
+	}
+	maskalltensor (file, image, mskpct, firstpln, lastpln, peakpln, &npixels);
+
+/*	Write the masked image */
+
+	printf ("Pixels in mask = %ld  (%s)\n", npixels, mskname);
+	close_imgfile (file);
+	(void) strcpy (file->name, mskname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskpct]: opening %s\n", mskname);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskpct]: writing %s\n", mskname);
+		return (ERROR);
+	}
+	if (writetensor (file, &indx, image) == ERROR) {
+		fprintf (stderr, "ERROR [maskpct]: writing %s\n", mskname);
+		return (ERROR);
+	}
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+2.20
+log
+@Feb 2004
+@
+text
+@d2 3
+d47 1
+a47 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.13 2002/11/27 15:50:51 tom Exp tom $";
+d98 1
+a98 1
+		fprintf (stderr, "ERROR [maskpct]: Cannot open %s\n", imgname);
+d102 1
+a102 1
+		fprintf (stderr, "ERROR [maskpct]: Cannot get MainHeader from %s\n", imgname);
+d106 1
+a106 1
+		fprintf (stderr, "ERROR [maskpct]: Cannot read file subheader in %s\n", imgname);
+d113 1
+a113 1
+		fprintf (stderr, "ERROR [maskpct]: Cannot read %s\n", imgname);
+d132 1
+a132 1
+		fprintf (stderr, "ERROR [maskpct]: Cannot open %s\n", mskname);
+d136 1
+a136 1
+		fprintf (stderr, "ERROR [maskpct]: Cannot write %s\n", mskname);
+d140 1
+a140 1
+		fprintf (stderr, "ERROR [maskpct]: Cannot write %s\n", mskname);
+@
+
+
+2.13
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d42 1
+d44 1
+a44 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.12 2000/09/06 19:36:41 tom Exp tom $";
+d56 1
+d126 2
+a127 2
+	strcpy (file->name, mskname);
+	strcpy (file->mode, "w");
+@
+
+
+2.12
+log
+@strcpy filename
+@
+text
+@d2 3
+d40 1
+a40 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.11 1999/05/14 18:10:26 tom Exp tom $";
+a47 1
+#include <nr.h>
+a49 1
+#include <imgutil.h>
+d119 1
+a119 1
+	printf ("Pixels in mask = %d  (%s)\n", npixels, mskname);
+@
+
+
+2.11
+log
+@change messages
+@
+text
+@d2 3
+d37 1
+a37 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.10 1996/10/16 16:47:45 tom Exp tom $";
+d120 1
+a120 2
+	free (file->name);
+	file->name = mskname;
+@
+
+
+2.10
+log
+@sync with Version
+new libimage
+@
+text
+@d2 4
+d34 1
+a34 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.6 1996/08/22 21:08:14 tom Exp tom $";
+d115 1
+a115 2
+	printf ("Writing masked image %s\n", mskname);
+	printf ("Pixels in mask = %d\n", npixels);
+@
+
+
+2.6
+log
+@new libimage
+@
+text
+@d2 3
+d30 1
+a30 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.5 1996/05/24 17:37:18 tom Exp tom $";
+@
+
+
+2.5
+log
+@new libimage and libnrimg
+@
+text
+@d2 3
+d27 1
+a27 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.4 1996/05/23 19:40:20 tom Exp tom $";
+@
+
+
+2.4
+log
+@debugged
+@
+text
+@d2 3
+d24 1
+a24 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.3 1996/05/23 18:47:27 tom Exp tom $";
+@
+
+
+2.3
+log
+@use maskalltensor
+@
+text
+@d2 3
+d21 1
+a21 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.2 1996/05/23 18:11:20 tom Exp tom $";
+d42 1
+a42 1
+	char           *normslices;		 /* slice range to use for normalization */
+d56 2
+a57 2
+	mskpct = atoi(argv[3]);
+	normslices = argv[4];
+d91 6
+a96 5
+	if (strncmp (normslices, "all", 3) != 0) {
+		if (sscanf (normslices, "%dto%d", &firstpln, &lastpln) != 2) {
+			firstpln = 1;
+			lastpln = dim[2];
+		}
+@
+
+
+2.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.1 1996/05/23 18:10:11 tom Exp tom $";
+d94 1
+a94 1
+	masktensor (file, image, mskpct, firstpln, lastpln, peakpln, &npixels);
+@
+
+
+2.1
+log
+@reads normslices
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.0 1996/05/23 17:56:20 tom Exp tom $";
+d109 1
+a109 1
+	if (writetensor (file, &indx, image) == ERROR)
+@
+
+
+2.0
+log
+@*** empty log message ***
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Id: maskpct.c,v 2.1 1996/05/17 18:13:10 tom Exp $";
+d48 1
+a48 1
+	normslices = argv[3];
+d64 1
+a64 1
+		fprintf (stderr, "ERROR [template]: Cannot open %s\n", imgname);
+d68 1
+a68 1
+		fprintf (stderr, "ERROR [template]: Cannot get MainHeader from %s\n", imgname);
+d72 1
+a72 1
+		fprintf (stderr, "ERROR [template]: Cannot read file subheader in %s\n", imgname);
+d79 1
+d99 1
+a99 1
+		fprintf (stderr, "ERROR [gauss]: Could not open %s\n", mskname);
+d102 2
+a103 1
+	if (put_mh (file) == ERROR)
+d105 1
+d107 1
+d109 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 10
+a10 2
+/*$Id$*/
+/*$Log$*/
+d12 9
+a20 3
+/*_________________________________________________________________
+  Description:	This program mask an ECAT or PETT VI image by a 
+		certain percentage.
+a21 9
+  History:	Created by Tom Yang on 03/17/94. 
+_________________________________________________________________*/
+
+#include <fcntl.h>
+#include <petutil/imglist.h>
+#include <petutil/matrix.h>
+
+static char rcsid [] = "$Header$";
+
+d23 2
+a24 2
+	int	argc;
+	char	**argv;
+d26 12
+a37 3
+	FILE		*recfp;
+	Image_subheader	**image_subheader_list;
+	Main_header	*image_main_header;
+d39 15
+a53 11
+	char		date [MAXLINE];
+	char		*extension;
+	char		image_recfile [MAXPATH];
+	char		*input_image;
+	char		*output_image;
+	char		rcsid_keyword [MAXNAME];
+	char		rcsid_path [MAXLINE];
+	char		rcsid_version [MAXNAME];
+	char		recfile [MAXPATH];
+	char		*short_program_name;
+	char		*uid;
+d55 3
+a57 5
+	float		*image3d;
+	float		image_pixel_size;
+	float		image_plane_separation;
+	float		maximum_pixel_value;
+	float		threshold_value;
+d59 4
+a62 29
+	int		i;
+	int		image_scanner;
+	int		percentage;
+
+	long		dimension;
+	long		total_pixel_num;
+
+	short		image_height;
+	short		image_num_slices;
+	short		image_width;
+	short		*mask3d;
+
+	struct Matval	matval;
+
+	/*______________________________________________________
+	 * Get command line arguments.
+	 *______________________________________________________*/
+	input_image	= argv [1];
+	output_image	= argv [2];
+	percentage	= ROUND (atof (argv [3]));
+	sprintf (date, "%s %s %s %s %s %s", argv [4], argv [5], argv [6], argv [7], argv [8], argv [9]);
+	uid		= argv [10];
+
+	if (percentage < 0.0 || percentage > 100.0)
+	{
+		fprintf (stderr, "Your percentage is %f\n", percentage);
+		fprintf (stderr, "Please specify a number in [0, 100].\n");
+
+		exit (FAIL);
+d64 3
+a66 9
+
+	/*
+	 * Get the image dimensions.
+	 */
+	if (getimagedim (input_image, matval, &image_scanner, &image_width, &image_height, 
+	&image_num_slices, &image_pixel_size, &image_pixel_size, &image_plane_separation) == FAIL) 
+	{
+		fprintf (stderr, "Error: input image file %s cannot be found\n", input_image);
+		exit (FAIL);
+d68 3
+a70 13
+	dimension	= image_width * ((long) image_height) * image_num_slices;
+
+	/*
+	 * Create the mask image.
+	 */
+	mask3d	= (short *) pkg_malloc (dimension * sizeof (short), "maskpct", "mask3d");
+	if (threshold (input_image, image_scanner, percentage, image_width, image_height, 
+	image_num_slices, 1, image_num_slices, mask3d, &total_pixel_num) == FAIL)
+	{
+		fprintf (stderr, "Error in thresholding image () for %s.\n", input_image);
+		free (mask3d);
+
+		exit (FAIL);
+d72 5
+a76 19
+
+	/*
+	 * Read the input image.
+	 */
+	image_subheader_list	= (Image_subheader **) pkg_malloc (image_num_slices * sizeof (caddr_t), 
+				"maskpct", "image_subheader_list");
+	image_main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+	image3d			= (float *) pkg_malloc (dimension * sizeof (float), "maskpct", "image3d");
+
+	if (getrealimg (input_image, image_scanner, matval, image_width, image_height, 
+	image_num_slices, image3d, image_main_header, image_subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in getrealimg () for %s.\n", input_image);
+		free (mask3d);
+		free (image_subheader_list);
+		free (image_main_header);
+		free (image3d);
+
+		exit (FAIL);
+d78 5
+a82 8
+
+	/*
+	 * Masking the image.
+	 */
+	for (i = 0; i < dimension; i++)
+	{
+		if (mask3d [i] <= 0)
+			image3d [i]	= 0.0;
+d84 1
+d86 1
+a86 5
+	/*
+	 * Generate the recfile.
+	 */
+	strcpy (recfile, output_image);
+	strcat (recfile, REC_EXT);
+d88 9
+a96 5
+	recfp	= fopen (recfile, "w");
+	if (recfp == (FILE *) NULL)
+	{
+		fprintf (stderr, "Error in opening rec file %s\n", recfile);
+		exit (FAIL);
+d98 6
+a103 58
+	fprintf (recfp, "rec %s %s %s\n", output_image, date, uid);
+	fprintf (recfp, "maskpct %s %s %s\n", argv [1], argv [2], argv [3]);
+	fprintf (recfp, "   %s\n\n", rcsid);
+
+	/*
+ 	 * Copy the input_image rec file if there is any.
+ 	 */
+	strcpy (image_recfile, input_image);
+	strcat (image_recfile, REC_EXT);
+	copyrec (recfp, image_recfile);
+
+	fprintf (recfp, "\nTotal number of contributing pixels = %d.\n\n", total_pixel_num);
+	fprintf (stdout, "Total number of contributing pixels = %d.\n", total_pixel_num);
+
+	fprintf (recfp, "endrec\n");
+	fclose (recfp);
+
+	/*
+	 * Write the masked image.
+	 */
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+	sscanf (rcsid, "%s %s %s", rcsid_keyword, rcsid_path, rcsid_version);
+	extension	= strrchr (rcsid_path, '/');
+	if (extension != NULL && strncmp (extension, "/", 1) == 0)
+		short_program_name	= extension + 1;
+	else
+		short_program_name	= rcsid_path;
+
+	strncpy (image_main_header->physician_name, short_program_name, 
+		strlen (short_program_name));
+	strncat (image_main_header->physician_name, " ", 1);
+	strncat (image_main_header->physician_name, rcsid_version, 
+		sizeof (image_main_header->physician_name) - 1);
+	strncpy (image_main_header->operator_name, date, 
+		sizeof (image_main_header->operator_name) - 1);
+
+	if (writerealimg (output_image, matval, image_width, image_height, image_num_slices, 
+	image3d, image_main_header, image_subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in writerealimg () for %s.\n", output_image);
+	}
+
+	/*
+	 * Free memories.
+	 */
+	free (mask3d);
+	for (i = 0; i < image_num_slices; i++)
+	{
+		free (image_subheader_list [i]);
+	}
+	free (image_subheader_list);
+	free (image_main_header);
+	free (image3d);
+@

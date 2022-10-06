@@ -1,0 +1,87 @@
+#!/bin/csh
+#   Module: align_pib2ho
+#   Author: Tom Videen
+#   Date:   Dec 2007
+#   Use:    Align PIB to HO image using predefined mask
+
+if ($#argv != 3) then
+    echo "Usage:  align_pib2ho ho pib mask"
+	echo " e.g.,  align_pib2ho sub5_hoall sub5_pib sub5_homask"
+    exit 1
+endif
+
+set STD  = $1
+set RES  = $2
+set MASK = $3
+set AIR  = ${RES}_to_$STD
+set FIL  = _g3
+set STDF = $STD$FIL
+set RESF = $RES$FIL
+set THR  = 50
+set AMASK = a$MASK
+
+# Check existence of files:
+
+set EFILES = "$STD.v $RES.v $MASK.v"
+set STATUS = 0
+foreach i ($EFILES)
+    if (! -e $i) then
+        echo "ERROR [align_pib2ho]: $i does not exist."
+        set STATUS = 1
+    endif
+end
+if ( $STATUS != 0) exit 1
+
+# Check the pixel size in PET headers:
+ 
+set STATUS = 0
+set ORGSIZE = 0
+foreach i ($EFILES)
+    set PIXSIZE = `imghdr $i | grep 'Pixel size' | cut -f4 -d' '`
+    if ($PIXSIZE == 0.208634) echo "Note: pixel size of $i is $PIXSIZE"
+    if ($ORGSIZE == 0) then
+        set ORGSIZE = $PIXSIZE
+        set ORGFILE = $i
+    else if ($PIXSIZE != $ORGSIZE) then
+        echo "ERROR [align_pib2ho]: different pixel sizes:"
+        echo "  $ORGFILE = $ORGSIZE"
+        echo "  $i = $PIXSIZE"
+        set STATUS = 1
+    endif
+end
+if ($STATUS != 0) exit 1
+
+# Filter and Convert images to Analyze format:
+
+if (! -e $STDF.v) gauss $STD.v 0.3
+if (! -e $RESF.v) gauss $RES.v 0.3
+img2analyze $MASK.v $AMASK
+img2analyze $STDF.v a$STDF
+img2analyze $RESF.v a$RESF
+
+setanamin $AMASK 0
+setanamin a$STDF 0
+setanamin a$RESF 0
+
+# Align RES to STD, then reslice:
+ 
+echo "Aligning:  $RESF to $STDF"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 0 -e1 $AMASK -x 1 -v"
+ 
+alignlinear a$STDF a$RESF $AIR.air $PRM >! log
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file"
+endif
+
+if (! -e null.air) alignlinear a$STDF a$STDF null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+imgreslice a$RESF $AIR
+analyze2img ra$RESF r$RESF.v $RESF.v 1
+
+echo "----------------------------------------------------------------------"
+airdif1 $AIR.air null.air $MASK.v 
+echo "Compare:    $STDF.v and r$RESF.v"
+rm $AMASK.* a$STDF.* a$RESF.* ra$RESF.* null.air log
+

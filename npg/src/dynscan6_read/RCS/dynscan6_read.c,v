@@ -1,0 +1,270 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.16.14.18.28;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2000.02.18.21.52.44;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.02.18.16.30.54;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/*	$Id: dynscan6_read.c,v 1.2 2000/02/18 21:52:44 tom Exp tom $ */
+/*	$Log: dynscan6_read.c,v $
+ * Revision 1.2  2000/02/18  21:52:44  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  2000/02/18  16:30:54  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			dynscan6_read.c
+ *	Date:			Feb 2000
+ *	Author:			Tom Videen
+ *	Description:	Read one or more planes and one or more frames
+ *		of a dynamic ECAT6 sinogram file for IDL
+ *	Notes:
+ *		If error, write -1 followed by string message to stdout
+ *		To read all planes, fp=1, lp>last plane (e.g., 1,100)
+ *		To read all frames, ff=1, lf>last frame (e.g., 1,100)
+ *	Otherwise write:
+ *		file_format (integer)
+ *		first and last frames (2 integers)
+ *		first and last planes (2 integers)
+ *		dim1, dim2, dim3 (3 integers)
+ *	if (file_format eq 2)
+ *		mh6		sizeof (Main_header)
+ *		scn		sizeof (Scan_subheader)
+ *	then write 1 plane of each as dim1 x dim2 floats
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynscan6_read/RCS/dynscan6_read.c,v 1.2 2000/02/18 21:52:44 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <libimage.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	DataSetType		dtype;
+	short          *smatrix;
+	float          *fmatrix;
+	char           *fname;
+	int             first, last;
+	int             firstfrm, lastfrm, firstpln, lastpln;
+	int            *starttime, *duration;
+	long            frm, pln, sizepln;
+	unsigned long   dim1, dim2, dim3;
+
+	fname = argv[1];
+	firstfrm = atoi (argv[2]);
+	lastfrm = atoi (argv[3]);
+	firstpln = atoi (argv[4]);
+	lastpln = atoi (argv[5]);
+
+	indx.frm = firstfrm;
+	indx.pln = firstpln;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		(void) fprintf (stdout, "-1  Cannot open %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		(void) fprintf (stdout, "-1  Cannot get MainHeader from %s\n", fname);
+		return (ERROR);
+	}
+	if (file->mh->file_format != MATRIX_REV6) {
+		(void) fprintf (stdout, "-1  File is not type Matrix 6 %s\n", fname);
+		return (ERROR);
+	}
+	dtype = (DataSetType) file->m6->mh->file_type;
+	if (dtype != Sinogram && dtype != AttenCor) {
+		(void) fprintf (stdout, "-1  File is not sinogram or attencor %s\n", fname);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (indx.frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR) {
+					(void) fprintf (stdout, "-1  Cannot find %s frame 1, 2 or 3\n", fname);
+					return (ERROR);
+				}
+			}
+		} else {
+			(void) fprintf (stdout, "-1  Cannot find %s frame %d\n",
+				 fname, indx.frm);
+			return (ERROR);
+		}
+	}
+	first = indx.frm;
+
+	if (dtype == Sinogram) {
+		if (get_ss6 (file, &indx) == ERROR) {
+			(void) fprintf (stdout, "-1  Cannot read file subheader in %s\n", fname);
+			return (ERROR);
+		}
+		if (use_ss6 (file, &indx) == ERROR) {
+			(void) fprintf (stdout, "-1  Cannot convert file subheader in %s\n", fname);
+			return (ERROR);
+		}
+	} else {
+		if (get_sa6 (file, &indx) == ERROR) {
+			(void) fprintf (stdout, "-1  Cannot read file subheader in %s\n", fname);
+			return (ERROR);
+		}
+		if (use_sa6 (file, &indx) == ERROR) {
+			(void) fprintf (stdout, "-1  Cannot convert file subheader in %s\n", fname);
+			return (ERROR);
+		}
+	}
+	dim1 = (unsigned long) file->sh->dim1;
+	dim2 = (unsigned long) file->sh->dim2;
+	dim3 = (unsigned long) file->sh->dim3;
+	sizepln = dim1 * dim2;
+
+	if (firstpln > dim3) {
+		(void) fprintf (stdout, "-1  Cannot read plane %d in %s\n", firstpln, fname);
+		return (ERROR);
+	}
+	if (lastpln > dim3)
+		lastpln = dim3;
+
+	while (existimgfrm (file, &indx) != ERROR)
+		indx.frm++;
+	last = indx.frm - 1;
+	if (last < lastfrm)
+		lastfrm = last;
+	if (first > firstfrm) {
+		if (firstfrm <= 1) {
+			firstfrm = first;
+			if (lastfrm < firstfrm)
+				lastfrm = firstfrm;
+		} else {
+			(void) fprintf (stdout, "-1  Cannot read frame %d in %s\n", firstfrm, fname);
+			return (ERROR);
+		}
+	}
+	if (firstfrm > lastfrm) {
+		(void) fprintf (stdout, "-1  Cannot read frame %d in %s\n", firstfrm, fname);
+		return (ERROR);
+	}
+
+	(void) fprintf (stdout, "%d\n", dtype);
+	(void) fprintf (stdout, "%d %d\n", firstfrm, lastfrm);
+	(void) fprintf (stdout, "%d %d\n", firstpln, lastpln);
+	(void) fprintf (stdout, "%d %d %d\n", (int) dim1, (int) dim2, (int) dim3);
+	(void) fwrite (file->m6->mh, sizeof (Main_header), 1, stdout);
+
+	if (dtype == Sinogram) {
+		(void) fwrite (file->m6->scn, sizeof (Scan_subheader), 1, stdout);
+		starttime = (int *) calloc (100, sizeof (int));
+		duration = (int *) calloc (100, sizeof (int));
+		for (frm = firstfrm; frm <= lastfrm; frm++) {
+			indx.frm = frm;
+			for (pln = firstpln; pln <= lastpln; pln++) {
+				indx.pln = pln;
+				if ((smatrix = rdscan6 (file, indx)) == NULL) {
+					(void) fprintf (stdout, "-1  Cannot read frame %d plane %d of %s\n",
+					 	indx.frm, (int) pln, fname);
+					return (ERROR);
+				}
+				(void) fwrite (smatrix, sizeof (short), sizepln, stdout);
+				free (smatrix);
+				starttime[frm] = file->sh->start_time;
+				duration[frm] = file->sh->duration;
+			}
+		}
+		for (frm = firstfrm; frm <= lastfrm; frm++)
+			(void) fprintf (stdout, "%d  %d\n", starttime[frm], duration[frm]);
+		free (starttime);
+		free (duration);
+	} else {
+		(void) fwrite (file->m6->atn, sizeof (Attn_subheader), 1, stdout);
+		indx.frm = first;
+		for (pln = firstpln; pln <= lastpln; pln++) {
+			indx.pln = pln;
+			if ((fmatrix = rdattn6 (file, indx)) == NULL) {
+				(void) fprintf (stdout, "-1  Cannot read frame %d plane %d of %s\n",
+				 	indx.frm, (int) pln, fname);
+				return (ERROR);
+			}
+			(void) fwrite (fmatrix, sizeof (float), sizepln, stdout);
+			free (fmatrix);
+		}
+	}
+	close_imgfile (file);
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*	$Id: dynscan6_read.c,v 1.1 2000/02/18 16:30:54 tom Exp tom $ */
+d3 3
+d11 1
+a11 1
+ *	Date:			Feb-2000
+d30 1
+d32 1
+a32 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynscan6_read/RCS/dynscan6_read.c,v 1.1 2000/02/18 16:30:54 tom Exp tom $";
+d41 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*	$Id$ */
+/*	$Log$ */
+d28 1
+a28 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynscan6_read/RCS/dynscan6_read.c,v 1.2 2000/01/20 21:38:24 tom Exp $";
+d57 1
+@

@@ -1,0 +1,380 @@
+<PRE><LI><H2>FILE: machine_indep.c</H2>#include  &lt;<A NAME=1 HREF="stdlib.h.html">stdlib.h</A>&gt; 
+#include  &lt;<A NAME=2 HREF="string.h.html">string.h</A>&gt; 
+#include  "<A NAME=3 HREF="matrix.h.html">matrix.h</A>" 
+
+#if defined(__STDC__)
+void <a href="machine_indep.c.html#SWAB">SWAB</a>(const void *from, void *to, int length)
+#else
+<LI><H3><a name="SWAB">void SWAB( from, to, length)</a></H3>
+char *from, *to;
+int length;
+#endif
+{
+	if (ntohs(1) == 1) swab(from, to, length);
+	else memcpy(to,from,length);
+}
+
+void SWAW ( from, to, length)
+#if defined(__STDC__)
+const short *from;
+#else
+short *from;
+#endif
+short *to;
+int length;
+{
+	if (ntohs(1) == 1) <a href="matrix.c.html#swaw">swaw</a>(from,to,length);
+	else memcpy(to,from,length*2);
+} 
+
+#if defined(__alpha) || defined (sun)
+<LI><H3><a name="vaxftohf">float vaxftohf( bufr, off)</a></H3>
+unsigned short *bufr;
+int off;
+{
+	unsigned int sign_exp, high, low, mantissa, ret;
+	unsigned u = (bufr[off+1] &lt;< 16) + bufr[off];
+	
+	if (u == 0) return 0.0;	
+	sign_exp = u & 0x0000ff80;
+	sign_exp = (sign_exp - 0x0100) & 0xff80; 
+	high = u & 0x0000007f;
+	low  = u & 0xffff0000;
+	mantissa = (high &lt;< 16) + (low &gt;> 16);
+	sign_exp = sign_exp &lt;< 16;
+	ret = sign_exp + mantissa;
+	return *(float*)(&ret);
+}
+#endif
+#if defined(__alpha)
+<LI><H3><a name="ftovaxf">ftovaxf(f, bufr)</a></H3>
+float f;
+unsigned short *bufr;
+{
+	unsigned *u, sign_exp, low, high, mantissa, ret;
+	float f_tmp = f;
+
+	u = (unsigned*)(&f_tmp);
+	if (u == 0)  {
+		bufr[0]	= bufr[1] = 0;
+		return;
+	}
+	sign_exp = *u & 0xff800000;
+	sign_exp = sign_exp &gt;> 16;
+	sign_exp = (sign_exp + 0x0110) & 0xff80; 
+	low   = *u & 0x0000ffff;
+	high  = *u & 0x007f0000;
+	mantissa = (high &gt;> 16) + (low &lt;< 16);
+	ret = sign_exp + mantissa;
+	bufr[0] = ret;
+	bufr[1] =  ret &gt;>16;
+}
+#endif  /* __alpha */
+#if defined(mips)
+float <a href="machine_indep.c.html#vaxftohf">vaxftohf</a>( bufr, off)
+unsigned short *bufr;
+int off;
+{
+	union { unsigned short t[2]; float t4; } test ;
+
+	test.t[0] = bufr[off];
+	test.t[1] = bufr[off+1];
+	ftoi(&test.t4);
+	return test.t4;
+}
+<a href="machine_indep.c.html#ftovaxf">ftovaxf</a>(f, bufr)
+float f;
+unsigned short *bufr;
+{
+	union { unsigned short t[2]; float t4; } test ;
+
+	test.t4 = f;
+	bufr[0] = 0;
+	bufr[1] = 0;
+	if (test.t4 == 0.0) return;
+	itof(&test.t4);
+	bufr[1] = test.t[1];
+	bufr[0] = test.t[0];
+	return;
+}
+#endif
+
+#ifdef sun
+<a href="machine_indep.c.html#ftovaxf">ftovaxf</a>(orig,number)
+  unsigned short number[2];
+  float orig;
+{
+
+  	/* convert from sun float to vax float */
+
+  	union {
+	 	  unsigned short t[2]; 
+		  float t4;
+	      } test;
+	unsigned short int exp;
+
+	number[0] = 0;
+	number[1] = 0;
+
+	test.t4 = orig;
+	if (test.t4 == 0.0) return;
+
+	number[1] = test.t[1];
+
+	exp = ((test.t[0] & 0x7f00) + 0x0100) & 0x7f00;
+	test.t[0] = (test.t[0] & 0x80ff) + exp;
+
+	number[0] = test.t[0];
+
+}
+#endif
+
+<LI><H3><a name="file_data_to_host">int file_data_to_host(dptr,nblks,dtype)</a></H3>
+char *dptr;
+int nblks,dtype;
+{
+	int i;
+	char *tmp = malloc(512*nblks);
+
+	switch( dtype)
+	{
+	case ByteData:
+		break;
+	case VAX_Ix2:
+		if (ntohs(1) == 1) {
+			swab( dptr, tmp, 512*nblks);
+			memcpy(dptr,tmp,512*nblks);
+		}
+		break;
+	case VAX_Ix4:
+		if (ntohs(1) == 1) {
+			swab( dptr, tmp, 512*nblks);
+			<a href="matrix.c.html#swaw">swaw</a>( tmp, dptr, 256*nblks);
+		}
+		break;
+	case VAX_Rx4:
+	 	if (ntohs(1) == 1) {
+			swab( dptr, tmp, 512*nblks);
+			<a href="matrix.c.html#swaw">swaw</a>(tmp, dptr, 256*nblks);
+		}
+		for (i=0; i&lt;nblks*128; i++)
+			((float *)dptr)[i] = <a href="machine_indep.c.html#vaxftohf">vaxftohf</a>( (unsigned short *)dptr, i*2) ;
+		break;
+	case SunShort:
+		if (ntohs(1) != 1) {
+			swab(dptr, tmp, 512*nblks);
+			memcpy(dptr,tmp,512*nblks);
+		}
+		break;
+	case SunLong:
+	case IeeeFloat:
+		if (ntohs(1) != 1) {
+			swab(dptr, tmp, 512*nblks);
+			<a href="matrix.c.html#swaw">swaw</a>(tmp, dptr, 256*nblks);
+		}
+		break;
+	default:	/* something else...treat as Vax I*2 */
+		if (ntohs(1) == 1) {
+			swab(dptr, tmp, 512*nblks);
+			memcpy(dptr,tmp,512*nblks);
+		}
+		break;
+	}
+	free(tmp);
+	return 0;
+}
+
+<LI><H3><a name="read_raw_acs_data">int read_raw_acs_data( fname, strtblk, nblks, dptr, dtype)</a></H3>
+char *fname;
+int strtblk, nblks, dtype;
+char * dptr;
+{
+	int i, err;
+
+	for (i=0; i&lt;nblks; i++)
+	{
+	  err = <a href="rts_cmd.c.html#rtsRblk">rtsRblk</a>( fname, strtblk+i, dptr+512*i);
+	  if (err) return -1;
+	}
+	return <a href="machine_indep.c.html#file_data_to_host">file_data_to_host</a>(dptr,nblks,dtype);
+}
+
+
+<LI><H3><a name="read_matrix_data">read_matrix_data( fptr, strtblk, nblks, dptr, dtype)</a></H3>
+  FILE *fptr;
+  int strtblk, nblks, dtype;
+  char * dptr;
+{
+	int i, err;
+
+	err = <a href="matrix.c.html#mat_rblk">mat_rblk</a>( fptr, strtblk, dptr, nblks);
+	if (err) return -1;
+	return <a href="machine_indep.c.html#file_data_to_host">file_data_to_host</a>(dptr,nblks,dtype);
+}
+
+
+<LI><H3><a name="write_matrix_data">write_matrix_data( fptr, strtblk, nblks, dptr, dtype)</a></H3>
+FILE *fptr;
+int strtblk, nblks, dtype;
+char *dptr;
+{
+	int err ;
+	int i, dsize = 512*nblks;
+	char *bufr;
+
+	bufr = malloc(dsize);
+	switch( dtype)
+	{
+	case ByteData:
+		break;
+	case VAX_Ix2: 
+	default:	/* something else...treat as Vax I*2 */
+		if (ntohs(1) == 1) {
+			swab( dptr, bufr, dsize);
+			memcpy(dptr,bufr,dsize);
+		}
+		break;
+	case VAX_Ix4:
+		if (ntohs(1) == 1)  {
+			swab( dptr, bufr, dsize);
+			<a href="matrix.c.html#swaw">swaw</a>( bufr, dptr, dsize/2);
+		}
+		break;
+	case VAX_Rx4:
+		for (i=0; i&lt;dsize; i += sizeof(float))
+			<a href="machine_indep.c.html#ftovaxf">ftovaxf</a>(*((float*)&dptr[i]),&bufr[i]);
+		memcpy(dptr,bufr,dsize);
+		break;
+	case IeeeFloat:
+	case SunLong:
+		if (ntohs(1) != 1) {
+			swab( dptr, bufr, dsize);
+			<a href="matrix.c.html#swaw">swaw</a>( bufr, dptr, dsize/2);
+		}
+		break;
+	case SunShort:
+		if (ntohs(1) != 1) {
+			swab( dptr, bufr, dsize);
+			memcpy(dptr,bufr,dsize);
+		}
+		break;
+	}
+	free(bufr);
+	return  <a href="matrix.c.html#mat_wblk">mat_wblk</a>( fptr, strtblk, dptr, nblks);
+}
+
+/* buf...(...) - functions to handle copying header data to and from a buffer
+   in the most type safe way possible; note that i is incremented
+   by the size of the item copied so these functions must be
+   called in the right order
+*/
+
+
+<LI><H3><a name="bufWrite">void bufWrite(s, buf, i, len)</a></H3>
+char *s, *buf;
+int *i, len;
+{
+   strncpy(&buf[*i], s, len);
+    *i += len;
+}
+
+#ifdef __STDC__
+void <a href="machine_indep.c.html#bufWrite_s">bufWrite_s</a>(short val, char *buf, int *i)
+#else
+<LI><H3><a name="bufWrite_s">void bufWrite_s(val, buf, i)</a></H3>
+short val;
+char *buf;
+int *i;
+#endif
+{
+	union { short s; char b[2]; } tmp;
+	tmp.s = val;
+	if (ntohs(1) != 1) swab(tmp.b,&buf[*i],2);
+    else memcpy(&buf[*i], tmp.b, sizeof(short));
+    *i += sizeof(short);
+}
+
+<LI><H3><a name="bufWrite_i">void bufWrite_i(val, buf, i)</a></H3>
+int val, *i;
+char *buf;
+{
+	union { int i; char b[4]; } tmp;
+	union { short s[2]; char b[4]; } tmp1;
+	tmp.i = val;
+	if (ntohs(1) != 1) {
+		swab(tmp.b,tmp1.b,4);
+		<a href="matrix.c.html#swaw">swaw</a>(tmp1.s,(short*)&buf[*i],2);
+	} else memcpy(&buf[*i], tmp.b, sizeof(int));
+    *i += sizeof(int);
+}
+
+#ifdef __STDC__
+void <a href="machine_indep.c.html#bufWrite_f">bufWrite_f</a>(float val, char *buf, int *i)
+#else
+<LI><H3><a name="bufWrite_f">void bufWrite_f(val, buf, i)</a></H3>
+float val;
+char *buf;
+int *i;
+#endif
+{
+	union { float f; char b[4]; } tmp;
+	union { short s[2]; char b[4]; } tmp1;
+	tmp.f = val;
+	if (ntohs(1) != 1) {
+		swab(tmp.b,tmp1.b,4);
+		<a href="matrix.c.html#swaw">swaw</a>(tmp1.s,(short*)&buf[*i],2);
+	} else memcpy(&buf[*i], tmp.b, sizeof(float));
+    *i += sizeof(float);
+}
+
+<LI><H3><a name="bufRead">void bufRead(s, buf, i, len)</a></H3>
+char *s, *buf;
+int *i, len;
+{
+    strncpy(s, &buf[*i], len);
+    *i += len;
+}
+
+<LI><H3><a name="bufRead_s">void bufRead_s(val, buf, i)</a></H3>
+short* val;
+char* buf;
+int* i;
+{
+	union { short s; u_char b[2]; } tmp, tmp1;
+	memcpy(tmp.b,&buf[*i],2);
+	if (ntohs(1) != 1) {
+		swab(tmp.b,tmp1.b,2);
+		*val = tmp1.s;
+	} else *val = tmp.s;
+    *i += sizeof(short);
+}
+
+<LI><H3><a name="bufRead_i">void bufRead_i(val, buf, i)</a></H3>
+int* val;
+char* buf;
+int* i;
+{
+	union {int i; u_char b[4]; } tmp, tmp1;
+	memcpy(tmp1.b,&buf[*i],4);
+	if (ntohs(1) != 1) {
+		swab(tmp1.b,tmp.b,4);
+		<a href="matrix.c.html#swaw">swaw</a>(tmp.b,tmp1.b,2);
+	}
+	*val = tmp1.i;
+    *i += sizeof(int);
+}
+
+<LI><H3><a name="bufRead_f">void bufRead_f(val, buf, i)</a></H3>
+float* val;
+char* buf;
+int* i;
+{
+	union {float f; u_char b[2]; } tmp, tmp1;
+    memcpy(tmp1.b, &buf[*i], sizeof(float));
+	if (ntohs(1) != 1) {
+		swab(tmp1.b,tmp.b,4);
+		<a href="matrix.c.html#swaw">swaw</a>(tmp.b,tmp1.b,2);
+	}
+	*val = tmp1.f;
+    *i += sizeof(float);
+}

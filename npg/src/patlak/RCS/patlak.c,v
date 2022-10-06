@@ -1,0 +1,276 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2010.05.21.13.48.08;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*  ===============================================================================
+ *  Module:         patlak.c
+ *  Date:           May 2010
+ *  Author:         Jon Koller
+ *  Modified:       Tom Videen
+ *  Description:    Compute Patlak Ki using input read as decay-corrected values
+ *  ===============================================================================
+ */
+
+#include <math.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "dtypes.h"
+#include "list_to_filenames.h"
+#include "ifh.h"
+#include "filesize.h"
+#include "file_open.h"
+#include "stats.h"
+
+enum {MAX_LEN = 100};
+
+int main (int argc, char *argv[]) {
+
+	int             start_frame;
+	int             n_frames;
+	float          *image_data[MAX_LEN];
+
+	LST_DATA        lst;
+	FILE           *dat;
+	FILE           *kref_f;
+	FILE           *mean_f;
+	FILE           *r_f;
+	FILE           *images[MAX_LEN];
+	R_DATA          output;
+	IFH_INFO        ifh1, ifh2;
+
+	char           *fname;
+	char           *refdata;
+	char            kref_name[MAX_LEN];
+	char            mean_name[MAX_LEN];
+	char            r_name[MAX_LEN];
+	char            dat_line[MAX_LEN];
+	char            meantime[] = "Mid_Time";
+
+	int             read = 0;
+	int             file_size1 = 0;
+	int             file_size2 = 0;
+	int             cnt;
+	int             last_frame;
+	int             i,j;
+
+	float           vox_sum;
+	float          *kref_img;
+	float          *mean_img;
+	float          *r_img;
+
+	float           mean_start[MAX_LEN];
+	float           dat_counts[MAX_LEN];
+	float           dat_start[MAX_LEN];
+	float           dat_dur[MAX_LEN];
+	float           decay_cor[MAX_LEN];
+
+	float           mean_time[MAX_LEN];
+	float           dat_integral[MAX_LEN];
+    float			correction[MAX_LEN];
+	F2              patlak_points[MAX_LEN];
+
+    if (argc != 5) {
+        fprintf (stderr, "Usage: patlak lst ref_data start_frame number_frames\n");
+        return (1);
+    }
+    fname = argv[1];
+    refdata = argv[2];
+    start_frame = atoi (argv[3]);
+    n_frames = atoi (argv[4]);
+
+	if ((dat = fopen (refdata, "r")) == NULL) {
+		perror (fname);
+		return (1);
+	}
+
+	lst = lst2filenames (fname, 0);
+	strncpy (kref_name, refdata, strlen (refdata) - 4);
+	strcat (kref_name, "_kref.4dfp.img");
+	kref_f = open_4dfp (kref_name, "wb");
+
+	strncpy (mean_name, refdata, strlen (refdata) - 4);
+	strcat (mean_name, "_mean.4dfp.img");
+	mean_f = open_4dfp (mean_name, "wb");
+
+	strncpy (r_name, refdata, strlen (refdata) - 4);
+	strcat (r_name, "_r.4dfp.img");
+	r_f = open_4dfp (r_name, "wb");
+
+/* Read in dat file data */
+
+	cnt = 0;
+	while (fgets (dat_line, MAX_LEN, dat) != NULL) {
+		if (read == 1) {
+			if (strlen (dat_line) > 3) {
+				(void) sscanf (dat_line, "%f%f%f%f%f", &mean_start[cnt], &dat_counts[cnt], &dat_start[cnt], &dat_dur[cnt], &decay_cor[cnt]);
+				cnt++;
+			} else {
+				read = 0;
+			}
+		} else {
+			if (strstr (dat_line, meantime) != NULL)
+				read = 1;
+		}
+	}
+	(void) fclose (dat);
+
+	last_frame = (start_frame + n_frames) - 1;
+
+	printf ("Fit to frames: %d - %d\n", start_frame, last_frame);
+
+	if (start_frame + n_frames - 1 > cnt) {
+		printf ("ERROR [patlak]: too many frames requested\n");
+		printf ("start frame = %d\nframes to use = %d\nnumber of total frames in dat file and lst file = %d\n", start_frame, n_frames, cnt);
+		return (1);
+	}
+	if (cnt == 0) {
+		printf ("ERROR [patlak]: problem with %s, number of frames = 0\n", refdata);
+		return (1);
+	}
+	if (cnt != lst.imgnum) {
+		printf ("ERROR [patlak]: number of images in %s does not equal number of frames in %s\n", fname, refdata);
+		printf ("Frames in %s: %d\n", fname, lst.imgnum);
+		printf ("Frames in %s: %d\n", refdata, cnt);
+		return (1);
+	}
+
+/* Open files from list file */
+
+	for (i = 0; i < last_frame; i++)
+		images[i] = open_4dfp (lst.names[i], "rb");
+
+/* Check ifh files */
+
+	for (i = 0; i < last_frame; i++) {
+		ifh1 = readifh (lst.names[i], 0);
+		if (i != 0 && checkifh (&ifh1, &ifh2, 1) != 0) {
+			printf ("ERROR [patlak]: info in ifh files %s and %s do not match\n", ifh2.name, ifh1.name);
+			return (1);
+		}
+		ifh2 = ifh1;
+	}
+
+/* Find file sizes of input files */
+
+	for (i = 0; i < last_frame; i++) {
+		file_size1 = filesize (images[i]);
+		if (i != 0 && file_size1 != file_size2) {
+			printf ("ERROR [patlak]: input files %s and %s have unequal sizes\n", lst.names[i - 1], lst.names[i]);
+			return (1);
+		}
+		file_size2 = file_size1;
+	}
+	if (file_size1 == 0) {
+		printf ("ERROR [patlak]: input files may have no data\n");
+		return (1);
+	}
+
+/* Allocate memory for image files */
+
+	for (i = 0; i < last_frame; i++) {
+		image_data[i] = calloc (file_size1 / sizeof (float), sizeof (float));
+		if (image_data[i] == NULL) {
+			printf ("ERROR [patlak]: calloc %s\n", lst.names[i]);
+			return (1);
+		}
+	}
+
+/* Load image files from disk to memory and close image files */
+
+	for (i = 0; i < last_frame; i++) {
+		(void) fread (image_data[i], file_size1, 1, images[i]);
+		(void) fclose (images[i]);
+	}
+
+/* Allocate memory for output files */
+
+	kref_img = calloc (file_size1 / sizeof (float), sizeof (float));
+	if (kref_img == NULL) {
+		printf ("ERROR [patlak]: calloc kref_img\n");
+		return (1);
+	}
+
+	mean_img = calloc (file_size1 / sizeof (float), sizeof (float));
+	if (mean_img == NULL) {
+		printf ("ERROR [patlak]: calloc mean_img\n");
+		return (1);
+	}
+
+	r_img = calloc (file_size1 / sizeof (float), sizeof (float));
+	if (r_img == NULL) {
+		printf ("ERROR [patlak]: calloc r_img\n");
+		return (1);
+	}
+
+/* Compute slope for each voxel */
+
+	for (j = 0; j < last_frame; j++) {
+		correction[j] = 1 / dat_dur[j];
+		if (j == 0)
+			dat_integral[0] = dat_counts[0] * mean_time[0];
+		else
+			dat_integral[j] = (dat_counts[j] * mean_time[j]) + dat_integral[j - 1] + (dat_counts[j - 1] * (dat_dur[j - 1] - mean_time[j - 1]));
+	}
+
+	for (i = 0; i < file_size1 / sizeof (float); i++) {
+		vox_sum = 0;
+		for (j = 0; j < last_frame; j++) {
+			vox_sum = vox_sum + *(image_data[j] + i);
+			*(image_data[j] + i) = *(image_data[j] + i) * correction[j];
+			if (j + 1 >= start_frame) {
+				patlak_points[(j + 1) - start_frame].x = dat_integral[j] / dat_counts[j];
+				patlak_points[(j + 1) - start_frame].y = 60.0 * (*(image_data[j] + i) / dat_counts[j]);
+			}
+		}
+		output = regress (patlak_points, n_frames);
+		*(kref_img + i) = output.m;
+		*(mean_img + i) = vox_sum / last_frame;
+		*(r_img + i) = output.r;
+	}
+
+/* Write output files to disk */
+
+	(void) fwrite (kref_img, 1, file_size1, kref_f);
+	free (kref_img);
+	(void) fclose (kref_f);
+	writeifh (kref_name, &ifh1, argv[0], 0);
+
+	(void) fwrite (mean_img, 1, file_size1, mean_f);
+	free (mean_img);
+	(void) fclose (mean_f);
+	writeifh (mean_name, &ifh1, argv[0], 0);
+	
+	(void) fwrite (r_img, 1, file_size1, r_f);
+	free (r_img);
+	(void) fclose (r_f);
+	writeifh (r_name, &ifh1, argv[0], 0);
+
+/* free memory */
+
+	for (j = 0; j < lst.imgnum; j++)
+		if (image_data[j] != NULL)
+			free (image_data[j]);
+
+	return(0);
+}
+@

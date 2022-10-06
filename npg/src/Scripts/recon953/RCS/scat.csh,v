@@ -1,0 +1,237 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2002.12.16.21.03.10;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/bin/csh
+#Copyright 1991-1996, Washington University.
+#All rights reserved. Unauthorized reproduction prohibited.
+
+if($#argv < 5) then
+    echo  Usage: scat.csh emis.scn tran.scn blank.scn norm.nrm geo.scn
+    echo "       [-tu ext_tran_up_mm -td ext_tran_dwn_mm  -iter num_iterations"
+    echo "       -eu ext_emis_up_mm -ed ext_emis_dwn_mm -v"
+    echo "       -np num_psi_factor -if imgdim_factor -correct_data"
+    echo "       -scale_tails high_count/low_count/none -debug]" 
+    echo "       norm.nrm is the file of normalizaton factors."
+    echo "       geo.scn is the file of geometric factors."
+    exit(-1)
+endif
+
+if(`echo $5 | grep normal3d` == $5) then
+#   Old version of makenorm, run old version of scat.csh
+    scat.csh $argv[1-$#argv]
+    exit
+endif
+
+set EMIS  = $1
+set MATCH = $EMIS
+set TRAN  = $2
+set BLANK = $3
+set NORM = $4
+set GEO = $5
+set NUM_ITER = 5
+setenv QUIET -quiet
+set NUM_PSI_FCTR = 1
+set IMGDIM_FCTR = 1
+set EXT_TRAN_UP = 0
+set EXT_TRAN_DWN = 0
+set EXT_EMIS_UP = 0
+set EXT_EMIS_DWN = 0
+set CORRECT_DATA = 
+set FRAME = 1
+set SUNCPU = pethp2
+set OS = `uname -s`
+set SCALE_TAILS = high_count
+set DEBUG = false
+if($OS == HP-UX) then
+    set RSH = remsh
+else if($OS == SunOS) then
+    set RSH = rsh
+endif
+unalias rm mv ls
+
+setenv TABLES /usr/local/lib/tables
+#echo "Tables assumed to be located in $TABLES"
+
+set i = 6
+while ($i <= $#argv)
+    switch ($argv[$i])
+        case -np:
+            @@ i++
+            set NUM_PSI_FCTR = $argv[$i]
+	breaksw
+        case -if:
+            @@ i++
+            set IMGDIM_FCTR = $argv[$i]
+	breaksw
+        case -iter:
+            @@ i++
+            set NUM_ITER = $argv[$i]
+	breaksw
+        case -v:
+            set QUIET =
+	breaksw
+        case -correct_data:
+            set CORRECT_DATA = -correct_data
+	breaksw
+        case -scale_tails:
+            @@ i++
+	    if($i <= $#argv) then
+                set SCALE_TAILS = $argv[$i]
+	    else
+                set SCALE_TAILS =
+	    endif
+	breaksw
+        case -debug:
+            set DEBUG = true
+	breaksw
+        case -tu:
+            @@ i++
+            set EXT_TRAN_UP = $argv[$i]
+	breaksw
+        case -f:
+            @@ i++
+            set FRAME = $argv[$i]
+	breaksw
+        case -td:
+            @@ i++
+            set EXT_TRAN_DWN = $argv[$i]
+        breaksw
+        case -eu:
+            @@ i++
+            set EXT_EMIS_UP = $argv[$i]
+	breaksw
+	case -ed
+            @@ i++
+            set EXT_EMIS_DWN = $argv[$i]
+        breaksw
+    endsw
+    @@ i++
+end
+
+set SCANNER_TYPE = `cti_getparam $EMIS -scanner_type`
+set NUMANG = `cti_getparam $EMIS -ydim -p 1`
+if($SCANNER_TYPE == 951 && $NUMANG == 128) then
+    set SCANNER_TYPE = 951m
+endif
+setenv RINGS all
+setenv ITER_TYPE ss
+set EMIS_CUTOFF = .2
+set TRAN_CUTOFF = .25
+set THETA_STEP = 1
+switch ($SCANNER_TYPE)
+case 951:
+    @@ NUMANG = 64 * $IMGDIM_FCTR
+    @@ IMGDIM = 48 * $IMGDIM_FCTR
+    set ENERGY_THRESH = 250
+breaksw
+case 951m:
+    @@ NUMANG = 64 * $IMGDIM_FCTR
+    @@ IMGDIM = 40 * $IMGDIM_FCTR
+    set ENERGY_THRESH = 250
+breaksw
+case 953:
+    @@ NUMANG = 48 * $IMGDIM_FCTR
+    @@ IMGDIM = 40 * $IMGDIM_FCTR
+    set ENERGY_THRESH = 380
+breaksw
+case 961:
+    @@ NUMANG = 56 * $IMGDIM_FCTR
+    @@ IMGDIM = 40 * $IMGDIM_FCTR
+    set ENERGY_THRESH = 350
+breaksw
+default:
+    echo Invalid scanner type, $SCANNER_TYPE specified.
+    exit(-1)
+endsw
+
+set NARG = 1
+set NUM_PSI = `expr $NUM_PSI_FCTR \* 6`
+set NUM_PSI = `expr $NUM_PSI + 1`
+set NUM_PSI_ATTEN_FCTR = 4
+set NUM_PSI_ATTEN_FCTR = 2
+set NUMANG_FINAL = $NUMANG
+set IMGDIM_FINAL = $IMGDIM
+set ID = $IMGDIM\x$IMGDIM\_$NUMANG
+
+set OPTIONS = (-id $ID -psi $NUM_PSI_FCTR \
+    -cutoff $EMIS_CUTOFF $TRAN_CUTOFF -theta_step $THETA_STEP \
+    -rings $RINGS -ethrsh $ENERGY_THRESH -frame $FRAME \
+    -numang_iter $NUMANG -imgdim_iter $IMGDIM \
+    -attpsi $NUM_PSI_ATTEN_FCTR -numiter $NUM_ITER $QUIET \
+    -imgdim_final $IMGDIM_FINAL -numang_final $NUMANG_FINAL \
+    -iter_type $ITER_TYPE \
+    -ext_tran_up $EXT_TRAN_UP -ext_emis_up $EXT_EMIS_UP \
+    -ext_tran_dwn $EXT_TRAN_DWN -ext_emis_dwn $EXT_EMIS_DWN \
+    $CORRECT_DATA -scale_tails $SCALE_TAILS)
+
+#echo $EMIS $TRAN $BLANK -gf $GEO $OPTIONS
+
+switch ($SCANNER_TYPE)
+case 951:
+    set ARGS = ($EMIS $TRAN $BLANK -gf $GEO -nf $NORM $OPTIONS)
+    nice scat_cti951 $ARGS
+    set stat = $status
+#    nice x11ups `which scat_cti951` -a "$ARGS "
+breaksw
+case 951m:
+    set ARGS = ($EMIS $TRAN $BLANK -gf $GEO -nf $NORM $OPTIONS)
+    nice scat_cti951m $ARGS
+    set stat = $status
+breaksw
+case 953:
+    set ARGS = ($EMIS $TRAN $BLANK -gf $GEO -nf $NORM $OPTIONS)
+#   Not enough memory on HPs for multiple spawns of scat_cti953b for
+#   IMGDIM_FCTR = 2, so do scatter correction on nnicu (used for
+#   normalization only).
+#    if (($IMGDIM_FCTR == 1) || ((`hostname` != `hostname | grep pethp`) && \
+#    if (($IMGDIM_FCTR == 1) || ($EMIS != `echo $EMIS | grep plane_eff_3d`)) then
+    if ((`hostname` != `hostname | grep pethp`) || \
+        ($IMGDIM_FCTR == 1) || ($EMIS != `echo $EMIS | grep plane_eff_3d`)) then
+        if($DEBUG == true) then
+            set ARGS = ($EMIS:t $TRAN:t $BLANK:t -gf $GEO -nf $NORM:t $OPTIONS)
+            x11ups `which scat_cti953b` -a "$ARGS "
+	    exit(-1)
+        endif
+        set ARGS = ($EMIS $TRAN $BLANK -gf $GEO -nf $NORM $OPTIONS)
+        nice scat_cti953b $ARGS
+        set stat = $status
+    else
+#	Send the data to remote CPU and scatter correct it there.
+	echo "Correcting remotely."
+	hprsh `pwd` $EMIS $TRAN $BLANK $NORM $GEO "$OPTIONS"
+        set stat = $status
+    endif
+breaksw
+case 961:
+    set ARGS = ($EMIS $TRAN $BLANK -gf $GEO -nf $NORM $OPTIONS)
+    nice scat_cti961 $ARGS
+    set stat = $status
+breaksw
+default:
+    echo Invalid scanner type, $SCANNER_TYPE specified.
+    exit(-1)
+endsw
+
+if($stat != 0) then
+    exit(-1)
+endif
+@

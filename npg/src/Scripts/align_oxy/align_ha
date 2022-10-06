@@ -1,0 +1,117 @@
+#!/bin/csh
+#   Module: align_ha
+#   Author: Tom Videen
+#   Date:   Dec 2007
+#   Use:    Align 2 HA images using predefined mask
+#		Modification of align_ho to use "ha" tracer name
+
+if ($#argv != 4) then
+    echo "Usage:  align_ha pid std res mask"
+	echo " e.g.,  align_ha p5000 1 2 p5000mask.v"
+    exit 1
+endif
+
+set PID = $1
+set STD = ha$2
+set RES = ha$3
+set MASK = $4
+
+set THR = 50
+set FIL = _g3
+set HO1 = r$PID$STD$FIL
+set H2  = $PID$RES
+set HO2 = $PID$RES$FIL
+set AIR = $PID${RES}_to_$STD
+set AMASK = a$MASK:r
+
+# Check existence of files:
+
+set EFILES = "$HO1.v $HO2.v $H2.v $MASK"
+set STATUS = 0
+foreach i ($EFILES)
+    if (! -e $i) then
+        echo "ERROR [align_ha]: $i does not exist."
+        set STATUS = 1
+    endif
+end
+if ( $STATUS != 0) exit 1
+
+# Check the pixel size in PET headers:
+ 
+set STATUS = 0
+set ORGSIZE = 0
+foreach i ($EFILES)
+    set PIXSIZE = `imghdr $i | grep 'Pixel size' | cut -f4 -d' '`
+    if ($PIXSIZE == 0.208634) echo "Note: pixel size of $i is $PIXSIZE"
+    if ($ORGSIZE == 0) then
+        set ORGSIZE = $PIXSIZE
+        set ORGFILE = $i
+    else if ($PIXSIZE != $ORGSIZE) then
+        echo "ERROR [align_oxy]: different pixel sizes:"
+        echo "  $ORGFILE = $ORGSIZE"
+        echo "  $i = $PIXSIZE"
+        set STATUS = 1
+    endif
+end
+if ($STATUS != 0) exit 1
+
+# Setup log file:
+
+set BINFILE = `which align_ha`
+set VER = `grep rcsid $BINFILE | cut -f2- -d: | cut -f1 -dE | head -1`
+set LOGFILE = ${PID}_align.log
+if (-e $LOGFILE) then
+	echo "" >> $LOGFILE
+else
+	touch $LOGFILE
+endif
+echo "$H2 alignment:  " `whoami` `date` >> $LOGFILE
+echo "Version: " $VER             >> $LOGFILE
+echo ""                           >> $LOGFILE
+
+# Convert images to Analyze format:
+
+img2analyze $MASK $AMASK
+img2analyze $HO1.v a$HO1
+img2analyze $HO2.v a$HO2
+setanamin $AMASK 0
+setanamin a$HO1 0
+setanamin a$HO2 0
+
+# Align HO2 to HO1, then reslice:
+ 
+echo "Aligning:  $HO2 to $HO1"
+set PRM = "-m 6 -p1 1 -t1 $THR -p2 1 -t2 $THR -e1 $AMASK -e2 $AMASK -x 3 -v"
+echo ">> alignlinear $PID$HO2 to $HO1" >> $LOGFILE
+echo $PRM >> $LOGFILE
+ 
+alignlinear a$HO1 a$HO2 ${AIR}.air $PRM >! log
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file"
+	echo $ERROR >> $LOGFILE
+endif
+
+if (! -e null.air) alignlinear a$HO1 a$HO1 null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 ${AIR}.air null.air $MASK >> $LOGFILE
+imgreslice a$HO2 $AIR
+analyze2img ra$HO2 r${HO2}.v $HO2.v 1
+
+if (-e $HO2.hdr) /usr/bin/cp $HO2.hdr r${HO2}.hdr
+
+img2analyze $H2.v a$H2
+imgreslice  a$H2  $AIR
+analyze2img ra$H2 r$H2.v $H2.v 1
+if (-e $HO2.hdr) /usr/bin/cp $HO2.hdr r$H2.hdr
+
+if ($CHK > 0) then
+	echo "Check alignment and enter RETURN to continue or CTRL-C to quit"
+	set data=`line`
+endif
+
+echo "Complete [align_ho] =========================="
+

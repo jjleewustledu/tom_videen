@@ -1,0 +1,237 @@
+#!/bin/csh
+#   Module: align_triple3to1
+#   Author: Tom Videen with edits from Allyson Zazulia
+#   Date:   Dec 2012
+#   Use:    Align a second triple (HO3, OO3, OC3) to another (HO1, OO1, OC1)
+		(no mask for "Align OO3 to OO1, then reslice" since HO3 likely to be too far off for alignlinear to work)  
+
+if ($#argv != 7) then
+    echo "Usage:  align_triple3to1 ho1 oc1 oo1 ho3 oc3 oo3 mask"
+	echo " e.g.,  align_triple3to1 rp7668ho1 rp7668oc1 rp7668oo1 p7668ho3 p7668oc3 p7668oo3 p7668_alignmask"
+	echo "       (extensions should all be .v)"
+    exit 1
+endif
+
+
+set VER  = 06-Dec-2012
+set HO1  = $1
+set OC1  = $2
+set OO1  = $3
+set HO3  = $4
+set OC3  = $5
+set OO3  = $6
+set MASK = $7
+
+set HOHO  = ${HO3}_to_$HO1
+set OCOC  = ${OC3}_to_$OC1
+set OOOO  = ${OO3}_to_$OO1
+set LOG   = Align_triple3to1.log
+set THR   = 50
+set FIL   = _g3
+set HO1f  = $HO1$FIL
+set OC1f  = $OC1$FIL
+set OO1f  = $OO1$FIL
+set HO3f  = $HO3$FIL
+set OC3f  = $OC3$FIL
+set OO3f  = $OO3$FIL
+set AMASK = a$MASK
+
+unalias cp
+unalias rm
+
+# Move dynamic images and summed images to subdirectory
+
+if (! -e Orig_images) mkdir Orig_images
+if (! -e Orig_images/$HO3.v) mv $HO3.v Orig_images
+if (! -e Orig_images/$OO3.v) mv $OO3.v Orig_images
+if (! -e Orig_images/${HO3}_f*to*.v) then
+    echo "ERROR [align_triple]: there is no summed water Orig_images/${HO3}_fmmtonn.v"
+    exit (1)
+endif
+if (! -e Orig_images/${OO3}_f*to*.v) then
+    echo "ERROR [align_triple]: there is no summed oxygen Orig_images/${OO3}_fmmtonn.v"
+    exit (1)
+endif
+cp Orig_images/${HO3}_f*to*.v $HO3.v
+cp Orig_images/${OO3}_f*to*.v $OO3.v
+gauss $HO3.v 0.3
+gauss $OO3.v 0.3
+if (! -e $OC3f.v) gauss $OC3.v 0.3
+
+# Check existence of files:
+
+set EFILES1 = "$HO1.v $OO1.v $OC1.v $HO1f.v $OO1f.v $OC1f.v $MASK.v"
+set EFILES2 = "$HO3.v $OO3.v $OC3.v $HO3f.v $OO3f.v $OC3f.v"
+set EFILES = ($EFILES1 $EFILES2)
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_triple2]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit (1)
+
+# Check frame duration of oxygen and water:
+
+set PFILES = "$HO1.v $OO1.v $HO3.v $OO3.v $HO1f.v $OO1f.v $HO3f.v $OO3f.v"
+set STATUS = 0
+foreach i ($PFILES)
+    set len = `imghdr $i | grep "Frame length" | cut -f2 -d= | cut -f1 -d.`
+    if ($len != 40) then
+        echo "ERROR [align_triple]: $i frame length = $len sec"
+        set STATUS = 1
+    endif
+end
+if ( $STATUS != 0) exit (1)
+
+# Check the pixel size in PET headers:
+
+set STATUS = 0
+set ORGSIZE = 0
+foreach i ($EFILES)
+	set PIXSIZE = `imghdr $i | grep 'Pixel size' | cut -f4 -d' '`
+	if ($ORGSIZE == 0) then
+		set ORGSIZE = $PIXSIZE
+		set ORGFILE = $i
+	else if ($PIXSIZE != $ORGSIZE) then
+		echo "ERROR [align_triple2]: different pixel sizes:"
+		echo "  $ORGFILE = $ORGSIZE"
+		echo "  $i = $PIXSIZE"
+		set STATUS = 1
+	endif
+end
+if ($STATUS != 0) exit (1)
+
+# Setup log file:
+
+echo "Align Triple:  " `whoami` `date` >! $LOG
+echo "Version: " $VER  >> $LOG
+echo ""                >> $LOG
+
+# =================================================
+# CHECKING COMPLETE -- Start Alignment
+# Convert images to Analyze format: 
+# =================================================
+foreach i ($EFILES)
+	set nam = a$i:r
+	img2analyze $i $nam
+end
+
+# Align HO3 to HO1, then reslice:
+# -------------------------------
+echo "Aligning:  $HO3 to $HO1"
+set PRM = "-m 6 -p1 1 -t1 $THR -p2 0 -x 3 -v"
+echo ">> alignlinear ho3 to ho1" >> $LOG
+echo $PRM >> $LOG
+
+setanamin a$HO1f 0
+setanamin a$HO3f 0
+alignlinear a$HO1f a$HO3f $HOHO.air $PRM >! log
+tail -6 log | head -3 >> $LOG
+tail -1 log >> $LOG
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOG
+    exit 1
+endif
+if (! -e null.air) alignlinear a$HO1f a$HO1f null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 $HOHO.air null.air $MASK.v >> $LOG
+set CHK = `airdif1 $HOHO.air null.air $MASK.v | cut -f2- -d. | cut -c4-`
+echo Mean Movement = $CHK[1] mm
+echo " "
+if ($CHK[1] == 0.0) then
+	echo "WARNING: Either ho1 and ho3 are identical or they are probably not aligned" >> $LOG
+	echo "--------------------------------------------------------------------------" >> $LOG
+	echo "WARNING: Either ho1 and ho3 are identical or they are probably not aligned"
+	echo "--------------------------------------------------------------------------"
+endif
+echo " " >> $LOG
+
+# Align OO3 to OO1, then reslice:
+# -------------------------------
+echo "Aligning:  $OO3 to $OO1"
+set PRM = "-m 6 -p1 1 -t1 $THR -p2 0 -x 3 -v"
+echo ">> alignlinear oo3 to oo1" >> $LOG
+echo $PRM >> $LOG
+
+setanamin a$OO1f 0
+setanamin a$OO3f 0
+alignlinear a$OO1f a$OO3f $OOOO.air $PRM >! log
+tail -6 log | head -3 >> $LOG
+tail -1 log >> $LOG
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOG
+    exit 1
+endif
+airdif1 $OOOO.air null.air $MASK.v >> $LOG
+set CHK = `airdif1 $OOOO.air null.air $MASK.v | cut -f2- -d. | cut -c4-`
+echo Mean Movement = $CHK[1] mm
+echo " "
+if ($CHK[1] == 0.0) then
+	echo "WARNING: Either oo1 and oo3 are identical or they are probably not aligned" >> $LOG
+	echo "--------------------------------------------------------------------------" >> $LOG
+	echo "WARNING: Either oo1 and oo3 are identical or they are probably not aligned"
+	echo "--------------------------------------------------------------------------"
+endif
+echo " " >> $LOG
+
+# Align OC3 to OC1, then reslice:
+# -------------------------------
+echo "Aligning:  $OC3 to $OC1"
+set PRM = "-m 6 -p1 1 -t1 $THR -p2 0 -x 3 -v"
+echo ">> alignlinear oc3 to oc1" >> $LOG
+echo $PRM >> $LOG
+
+setanamin a$OC1f 0
+setanamin a$OC3f 0
+alignlinear a$OC1f a$OC3f $OCOC.air $PRM >! log
+tail -6 log | head -3 >> $LOG
+tail -1 log >> $LOG
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOG
+    exit 1
+endif
+airdif1 $OCOC.air null.air $MASK.v >> $LOG
+set CHK = `airdif1 $OCOC.air null.air $MASK.v | cut -f2- -d. | cut -c4-`
+echo Mean Movement = $CHK[1] mm
+echo " "
+if ($CHK[1] == 0.0) then
+	echo "WARNING: Either oc1 and oc3 are identical or they are probably not aligned" >> $LOG
+	echo "--------------------------------------------------------------------------" >> $LOG
+	echo "WARNING: Either oc1 and oc3 are identical or they are probably not aligned"
+	echo "--------------------------------------------------------------------------"
+endif
+echo " " >> $LOG
+
+# Reslice unfiltered images, then filter them
+# -------------------------------------------
+imgreslice a$HO3 $HOHO
+imgreslice a$OO3 $OOOO
+imgreslice a$OC3 $OCOC
+analyze2img ra$HO3 r$HO3.v $HO3f.v 1
+analyze2img ra$OO3 r$OO3.v $OO3f.v 1
+analyze2img ra$OC3 r$OC3.v $OC3f.v 1
+
+gauss r$HO3.v 0.3
+gauss r$OO3.v 0.3
+gauss r$OC3.v 0.3
+
+rm a${MASK}*
+rm a${HO1}* a${OO1}* a${OC1}* a${HO3}* a${OO3}* a${OC3}*
+rm ra${HO3}* ra${OO3}* ra${OC3}*
+rm null.air log
+
+echo "Complete [align_triple3to1] =================================================="
+cat $LOG

@@ -1,0 +1,630 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	2005.09.27.14.17.23;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2004.04.14.16.36.50;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2004.02.18.20.02.59;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2004.02.16.15.18.50;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2003.12.15.22.11.09;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.12.15.21.41.00;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@correct inferior/superior inversion
+@
+text
+@/*	$Log: focus2if.c,v $
+ * Revision 1.5  2004/04/14  16:36:50  tom
+ * Intel floats instead of VAX
+ *
+ * Revision 1.4  2004/02/18  20:02:59  tom
+ * read dynamic frames
+ *
+ * Revision 1.3  2004/02/16  15:18:50  tom
+ * Feb 2004
+ *
+ * Revision 1.2  2003/12/15  22:11:09  tom
+ * ignore scale calibration
+ *
+ * Revision 1.1  2003/12/15  21:41:00  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			focus2if.c
+ *	Date:			Dec 2003
+ *	Author:			Tom Videen
+ *	Description:	Convert FOCUS images into Interfile format
+ *    NOTE: images are NOT corrected for decay or multiplied by frame duration
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2if/RCS/focus2if.c,v 1.5 2004/04/14 16:36:50 tom Exp tom $";
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <image.h>
+#include <nrutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	FILE           *ffh;			 /* FOCUS file header */
+	FILE           *ffi;			 /* FOCUS file image */
+	FILE           *ifh;			 /* Interfile header */
+	FILE           *ifi;			 /* Interfile image */
+	char           *output;
+	char           *ffhname;		 /* FOCUS header filename  */
+	char           *ffiname;		 /* FOCUS image filename */
+	char           *ifhname;		 /* Interfile header filename  */
+	char           *ifiname;		 /* Interfile image filename */
+	char           *ptr;
+	char            str[256];
+	char           *version;
+	char           *program_date;
+	char           *institution;
+	short          *simg;
+	float          *fimg;
+	float           val;
+	float           size[3];
+	long            dim[4];
+	int             i, j, k, m;
+	int             len;
+	long            nbytes;
+	long			itmp, itmp0;
+	float			ftmp;
+	double			dtmp;
+	int             order = 0;
+	int             ftype = 0;
+	int             ntype = 0;
+	int             ndim = 0;
+	float           global_max = 0.;
+	float           global_min = 0.;
+
+    union {
+        unsigned short  s[2];
+        float           f;
+    }               conv;
+
+
+/*
+ *	Get command line arguments and initialize filenames:
+ */
+
+	if (argc != 4) {
+		(void) printf ("Usage: focus2if focus.hdr focus.img output\n");
+		return (ERROR);
+	}
+	ffhname = argv[1];
+	ffiname = argv[2];
+	output = argv[3];
+	ifiname = (char *) calloc (256, sizeof (char));
+	ifhname = (char *) calloc (256, sizeof (char));
+	institution = (char *) calloc (256, sizeof (char));
+	version = (char *) calloc (5, sizeof (char));
+	program_date = (char *) calloc (12, sizeof (char));
+
+	if (ifiname == NULL) return (ERROR);
+	if (ifhname == NULL) return (ERROR);
+	if (institution == NULL) return (ERROR);
+	if (version == NULL) return (ERROR);
+	if (program_date == NULL) return (ERROR);
+
+	(void) strcpy (ifhname, output);
+	(void) strcat (ifhname, ".ifh");
+	(void) strcpy (ifiname, output);
+	(void) strcat (ifiname, ".ifi");
+
+	ptr = strstr (rcsid, "v ");
+	if (ptr != NULL) {
+		ptr += 2;
+		(void) strncpy (version, ptr, 4);
+		ptr = strstr (ptr, " ");
+		ptr++;
+		(void) strncpy (program_date, ptr, 10);
+	}
+	ptr = strchr (program_date, '/');
+	if (ptr != NULL) 
+		*ptr = ':';
+	ptr = strchr (program_date, '/');
+	if (ptr != NULL) 
+		*ptr = ':';
+
+	if ((ifh = fopen (ifhname, "w")) == 0) {
+		fprintf (stderr, "ERROR [focus2if]: Unable to create Interfile Format header %s\n", ifhname);
+		return (ERROR);
+	}
+	if ((ifi = fopen (ifiname, "w")) == 0) {
+		fprintf (stderr, "ERROR [focus2if]: Unable to create Interfile image %s\n", ifiname);
+		return (ERROR);
+	}
+/*
+ * Read FOCUS file
+ */
+
+	if ((ffh = fopen (ffhname, "r")) == 0) {
+		(void) printf ("Unable to open FOCUS header %s\n", ffhname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), ffh) == NULL) {
+		(void) printf ("ERROR [focus2if]: reading %s\n", ffhname);
+		return (ERROR);
+	}
+	if (strncmp (str, "#", 1) != 0) {
+		(void) printf ("%s\n", str);
+		(void) printf ("ERROR [focus2if]: %s is not in FOCUS format\n", ffhname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), ffh) == NULL) {
+		(void) printf ("ERROR [focus2if]: reading %s\n", ffhname);
+		return (ERROR);
+	}
+	if (strncmp (str, "# Header file", 13) != 0) {
+		(void) printf ("%s\n", str);
+		(void) printf ("ERROR [focus2if]: %s is not in FOCUS format\n", ffhname);
+		return (ERROR);
+	}
+	while (fgets (str, sizeof (str), ffh) != NULL) {
+		if (strncmp (str, "#", 1) != 0) {
+			if (strstr (str, "end_of_header") != NULL)
+				break;
+			ptr = strstr (str, " ");
+			if (ptr != NULL) {
+				ptr++;
+				if (strstr (str, "data_type") != NULL) {
+					(void) sscanf (ptr, "%d", &ntype);
+					continue;
+				}
+				if (strstr (str, "number_of_dimensions") != NULL) {
+					(void) sscanf (ptr, "%d", &ndim);
+					continue;
+				}
+				if (strstr (str, "x_dimension") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[0]);
+					continue;
+				}
+				if (strstr (str, "y_dimension") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[1]);
+					continue;
+				}
+				if (strstr (str, "z_dimension") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[2]);
+					continue;
+				}
+				if (strstr (str, "total_frames") != NULL) {
+					(void) sscanf (ptr, "%ld", &dim[3]);
+					continue;
+				}
+				if (strstr (str, "pixel_size") != NULL) {
+					(void) sscanf (ptr, "%f", &size[0]);
+					size[1] = size[0];
+					continue;
+				}
+				if (strstr (str, "axial_plane_size") != NULL) {
+					(void) sscanf (ptr, "%f", &size[2]);
+					continue;
+				}
+				if (strstr (str, "file_type") != NULL) {
+					(void) sscanf (ptr, "%d", &ftype);
+					if (ftype != 5 && ftype != 8) {
+						(void) printf ("ERROR [focus2if]: file_type must be 5 or 8 for images and not %d\n", ftype);
+						return (ERROR);
+					}
+					continue;
+				}
+				if (strstr (str, "data_order") != NULL) {
+					(void) sscanf (ptr, "%d", &order);
+					if (order != 1) {
+						(void) printf ("ERROR [focus2if]: data_order must be 1 for images and not %d\n", order);
+						return (ERROR);
+					}
+					continue;
+				}
+				if (strstr (str, "institution") != NULL) {
+					(void) strcpy (institution, ptr);
+					continue;
+				}
+			}
+		}
+	}
+
+/*
+ *	Read image data and compute min and max
+ */
+
+	len = dim[0];
+	fimg = (float *) calloc (len, sizeof (float));
+	if (fimg == NULL) return (ERROR);
+	if ((ffi = fopen (ffiname, "r")) == 0) {
+		(void) printf ("ERROR [focus2if]: Unable to open FOCUS image %s\n", ffiname);
+		return (ERROR);
+	}
+	switch (ntype) {
+	case 2:				 /* VAX short integer */
+		nbytes = len * sizeof (short);
+		simg = (short *) calloc (len, sizeof (short));
+		if (simg == NULL) return (ERROR);
+		for (m = 1; m <= dim[3]; m++) {
+			for (k = 1; k <= dim[2]; k++) {
+				for (j = 1; j <= dim[1]; j++) {
+					if (fread (simg, nbytes, 1, ffi) != 1) {
+						(void) printf ("ERROR [focus2if]: reading %s\n", ffiname);
+						return (ERROR);
+					} else {
+						swap_byte ((char *) simg, nbytes);
+						for (i = 0; i < len; i++) {
+							val = (float) simg[i];
+							fimg[len - 1 - i] = val;
+							if (val > global_max)
+								global_max = val;
+							else if (val < global_min)
+								global_min = val;
+						}
+					}
+					(void) fwrite (fimg, sizeof (float), len, ifi);
+				}
+			}
+		}
+		break;
+
+	case 4:				 /* VAX float */
+		nbytes = len * sizeof (long);
+		simg = (short *) calloc (2 * len, sizeof (short));
+		if (simg == NULL) return (ERROR);
+		for (m = 1; m <= dim[3]; m++) {
+			for (k = 1; k <= dim[2]; k++) {
+				for (j = 1; j <= dim[1]; j++) {
+					if (fread (simg, nbytes, 1, ffi) != 1) {
+						(void) printf ("ERROR [focus2if]: reading %s\n", ffiname);
+						return (ERROR);
+					} else {
+						swap_word (simg, nbytes / 2);
+						swap_byte ((char *) simg, nbytes);
+						for (i = 0; i < len; i++) {
+							conv.s[0] = simg[2*i];
+							conv.s[1] = simg[2*i + 1];
+							val = conv.f;
+							fimg[len - 1 - i] = val;
+							if (val > global_max)
+								global_max = val;
+							else if (val < global_min)
+								global_min = val;
+						}
+					}
+					(void) fwrite (fimg, sizeof (float), len, ifi);
+				}
+			}
+		}
+		break;
+
+	default:
+		(void) printf ("Unrecognize data_type %d\n", ntype);
+		return (ERROR);
+	}
+
+	(void) fclose (ffi);
+	free (fimg);
+
+/*
+ * Create Interfile Format header file
+ */
+
+	(void) fclose (ifi);
+	fprintf (ifh, "INTERFILE :=\n");
+	fprintf (ifh, "version of keys    := 3.3\n");
+	fprintf (ifh, "date of keys       := 1992:01:01\n");
+	fprintf (ifh, "conversion program := focus2if\n");
+	fprintf (ifh, "program version    := %s\n", version);
+	fprintf (ifh, "program date       := %s\n", program_date);
+	fprintf (ifh, ";\n");
+	fprintf (ifh, "GENERAL DATA :=\n");
+	fprintf (ifh, "original institution := %s\n", institution);
+	fprintf (ifh, "data starting block  := 0\n");
+	fprintf (ifh, "name of data file    := %s\n", ifiname);
+	fprintf (ifh, ";\n");
+	fprintf (ifh, "GENERAL IMAGE DATA :=\n");
+	fprintf (ifh, "type of data := tomographic\n");
+	fprintf (ifh, "total number of images := %d\n", (int) dim[2]);
+	fprintf (ifh, "imagedata byte order   := bigendian\n");
+	fprintf (ifh, ";\n");
+	fprintf (ifh, "IMAGE STUDY :=\n");
+	fprintf (ifh, "process status := reconstructed\n");
+	fprintf (ifh, "number of dimensions := %d\n", ndim);
+	fprintf (ifh, "number of slices := %d\n", (int) dim[2]);
+	fprintf (ifh, "matrix size [1] := %d\n", (int) dim[0]);
+	fprintf (ifh, "matrix size [2] := %d\n", (int) dim[1]);
+	fprintf (ifh, "matrix size [3] := %d\n", (int) dim[2]);
+	fprintf (ifh, "matrix size [4] := %d\n", (int) dim[3]);
+	fprintf (ifh, "number format   := float\n");
+	fprintf (ifh, "number of bytes per pixel  := %d\n", sizeof (float));
+	fprintf (ifh, "scaling factor (mm/pixel) [1]  := %f\n", 10. * size[0]);
+	fprintf (ifh, "scaling factor (mm/pixel) [2]  := %f\n", 10. * size[1]);
+	fprintf (ifh, "scaling factor (mm/pixel) [3]  := %f\n", 10. * size[2]);
+	fprintf (ifh, "maximum pixel count := %f\n", global_max);
+	fprintf (ifh, "minimum pixel count := %f\n", global_min);
+	if (order == 1) {
+		fprintf (ifh, "matrix initial element [1] := left\n");
+		fprintf (ifh, "matrix initial element [2] := anterior\n");
+		fprintf (ifh, "matrix initial element [3] := superior\n");
+	} else
+		(void) printf ("Unexpected data order = %d", order);
+
+/* Read Frame Data */
+
+	while (fgets (str, sizeof (str), ffh) != NULL) {
+		if (strncmp (str, "#", 1) != 0) {
+			ptr = strstr (str, " ");
+			if (ptr != NULL) {
+				ptr++;
+				if (strstr (str, "frame ") != NULL) {
+					(void) sscanf (ptr, "%ld", &itmp);
+					fprintf (ifh, ";\nframe := %ld\n", itmp+1);
+					continue;
+				}
+				if (strstr (str, "data_file_pointer") != NULL) {
+					(void) sscanf (ptr, "%ld %ld", &itmp0, &itmp);
+					fprintf (ifh, "offset := %ld\n", itmp);
+					continue;
+				}
+				if (strstr (str, "frame_start") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					fprintf (ifh, "frame_start := %f\n", ftmp);
+					continue;
+				}
+				if (strstr (str, "frame_duration") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					fprintf (ifh, "frame_duration := %f\n", ftmp);
+					continue;
+				}
+				if (strstr (str, "scale_factor") != NULL) {
+					(void) sscanf (ptr, "%lf", &dtmp);
+					fprintf (ifh, "scale_factor := %e\n", dtmp);
+					continue;
+				}
+				if (strstr (str, "deadtime_correction") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					fprintf (ifh, "deadtime_correction := %f\n", ftmp);
+					continue;
+				}
+				if (strstr (str, "decay_correction") != NULL) {
+					(void) sscanf (ptr, "%f", &ftmp);
+					fprintf (ifh, "decay_correction := %f\n", ftmp);
+					continue;
+				}
+				if (strstr (str, "end_of_header") != NULL) {
+					break;
+				}
+			}
+		}
+	}
+
+	fprintf (ifh, "END OF INTERFILE :=\n");
+	(void) fclose (ifh);
+	(void) fclose (ffh);
+
+	(void) printf ("Converted: %s to %s\n", ffhname, ifhname);
+	return (OK);
+}
+@
+
+
+1.5
+log
+@Intel floats instead of VAX
+@
+text
+@d2 3
+d22 1
+d25 1
+a25 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2if/RCS/focus2if.c,v 1.4 2004/02/18 20:02:59 tom Exp $";
+d334 1
+a334 1
+		fprintf (ifh, "matrix initial element [3] := inferior\n");
+@
+
+
+1.4
+log
+@read dynamic frames
+@
+text
+@d2 3
+d21 1
+a21 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2if/RCS/focus2if.c,v 1.3 2004/02/16 15:18:50 tom Exp tom $";
+a62 1
+	float           scale = 1.;
+d66 6
+d238 1
+a238 1
+							val = scale * (float) simg[i];
+d266 3
+a268 1
+							val = scale * get_vax_float (simg, 2 * i);
+@
+
+
+1.3
+log
+@Feb 2004
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2if/RCS/focus2if.c,v 1.2 2003/12/15 22:11:09 tom Exp tom $";
+d42 2
+a43 2
+	char            version[5];
+	char            program_date[12];
+d53 3
+d76 5
+a81 1
+	ifhname = (char *) calloc (256, sizeof (char));
+a82 1
+	institution = (char *) calloc (256, sizeof (char));
+d84 3
+d93 2
+a94 3
+	ptr += 2;
+	(void) strcpy (version, "    ");
+	if (ptr != NULL)
+a95 1
+	if (ptr != NULL)
+d97 1
+a97 3
+	ptr++;
+	(void) strcpy (program_date, "           ");
+	if (ptr != NULL)
+d99 1
+d101 2
+a102 1
+	*ptr = ':';
+d104 2
+a105 1
+	*ptr = ':';
+d143 2
+d183 2
+a184 2
+					if (ftype != 5) {
+						(void) printf ("ERROR [focus2if]: file_type must be 5 for images and not %d\n", ftype);
+a200 9
+/*
+				if (strstr (str, "scale_factor") != NULL) {
+					(void) sscanf (ptr, "%f", &scale);
+					continue;
+				}
+*/
+				if (strstr (str, "end_of_header") != NULL) {
+					break;
+				}
+a277 2
+	(void) fclose (ifi);
+	(void) fclose (ffh);
+d284 1
+d312 3
+a314 3
+	fprintf (ifh, "scaling factor (mm/pixel) [1]  := %f\n", size[0]);
+	fprintf (ifh, "scaling factor (mm/pixel) [2]  := %f\n", size[1]);
+	fprintf (ifh, "scaling factor (mm/pixel) [3]  := %f\n", size[2]);
+d323 50
+d375 1
+@
+
+
+1.2
+log
+@ignore scale calibration
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2if/RCS/focus2if.c,v 1.1 2003/12/15 21:41:00 tom Exp tom $";
+d47 1
+a47 1
+	int             i, j, k;
+d70 1
+d72 1
+d74 1
+d83 4
+a86 2
+	(void) strncpy (version, ptr, 4);
+	ptr = strstr (ptr, " ");
+d89 2
+a90 1
+	(void) strncpy (program_date, ptr, 10);
+d155 1
+a155 1
+				if (strstr (str, "w_dimension") != NULL) {
+d207 1
+d216 17
+a232 14
+		for (k = 1; k <= dim[2]; k++) {
+			for (j = 1; j <= dim[1]; j++) {
+				if (fread (simg, nbytes, 1, ffi) != 1) {
+					(void) printf ("ERROR [focus2if]: reading %s\n", ffiname);
+					return (ERROR);
+				} else {
+					swap_byte ((char *) simg, nbytes);
+					for (i = 0; i < len; i++) {
+						val = scale * (float) simg[i];
+						fimg[len - 1 - i] = val;
+						if (val > global_max)
+							global_max = val;
+						else if (val < global_min)
+							global_min = val;
+d234 1
+a235 1
+				(void) fwrite (fimg, sizeof (float), len, ifi);
+d243 18
+a260 15
+		for (k = 1; k <= dim[2]; k++) {
+			for (j = 1; j <= dim[1]; j++) {
+				if (fread (simg, nbytes, 1, ffi) != 1) {
+					(void) printf ("ERROR [focus2if]: reading %s\n", ffiname);
+					return (ERROR);
+				} else {
+					swap_word (simg, nbytes / 2);
+					swap_byte ((char *) simg, nbytes);
+					for (i = 0; i < len; i++) {
+						val = scale * get_vax_float (simg, 2 * i);
+						fimg[len - 1 - i] = val;
+						if (val > global_max)
+							global_max = val;
+						else if (val < global_min)
+							global_min = val;
+d262 1
+a263 1
+				(void) fwrite (fimg, sizeof (float), len, ifi);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/focus2if/RCS/focus2if.c,v 1.0 2003/12/15 14:53:19 tom Exp $";
+d179 1
+d184 1
+@

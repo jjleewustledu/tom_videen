@@ -1,0 +1,201 @@
+#!/bin/csh
+#	Name:	cos_align_ho2ref
+#	Author: Tom Videen
+#	Date:	May 2007
+#	Created for: COSS PET Processing
+#	Intent: Coregister HO to reference t88-atlas brain
+#	Requires:
+#		meanpet.img
+#		meanpet.t88
+#		meanmask.img
+#		cs01-001-ho1_g3.v
+#		cs01-001-oo1_g3.v
+#	Creates:
+#		cs01-001-ho1_to_meanpet.air
+#		cs01-001-oo1_to_meanpet.air
+#		cs01-001-ho1_to_meanpet.log
+
+if (! $?STUDY) then
+	echo "ERROR: env STUDY not defined"
+	exit 1
+else if (! $?OO) then
+	echo "ERROR: env OO not defined"
+	exit 1
+else if (! $?HO) then
+	echo "ERROR: env HO not defined"
+	exit 1
+else if (! $?LOGFILE) then
+	echo "ERROR: env LOGFILE not defined"
+	exit 1
+endif
+
+#set REF  = /usr/local/npg/lib/t88/meanpet
+#set MASK = /usr/local/npg/lib/t88/meanmask
+set REF  = /data/cvl/coss/Reference/meanpet
+set MASK = /data/cvl/coss/Reference/meanmask
+set Z0	= 38
+
+set VER   = 1.0
+set PID   = $STUDY-
+set GAUSS = _g3
+set to    = _to_
+set HO1   = $PID$HO$GAUSS
+set OO1   = $PID$OO$GAUSS
+set OOHO  = $PID$OO$to$HO
+set HOREF = $PID$HO$to${REF:t}
+set HOREF6 = $PID$HO$to${REF:t}6
+set OOHO  = $PID$OO$to$HO
+set OOREF = $PID$OO$to${REF:t}
+set INIT  = $HOREF.init
+set DDIR  = `pwd`
+
+# Check existence of files:
+# -------------------------
+set EFILES = "$HO1.v $OO1.v $REF.img $MASK.img $REF.t88"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ($STATUS != 0) exit 1
+
+echo "==========================================================================" >>! $LOGFILE
+echo "cos_align_ho2ref  Version:" $VER `whoami` `date` >> $LOGFILE
+
+# Coregister to standard image
+# --------------------------------
+set RMAX = `imghdr $REF.t88 | grep Max | cut -f2 -d= | cut -f1 -dM`
+maskimg $HO1.v ${PID}mask.v tmpho.v 1
+
+# If 6-parameter fit fails, try masking out more slices to set scaling factor, e.g.,
+#maskslc $HO1.v tmpho.v 26to47
+
+# SCALE is set to facilitate the coregistration to the standard and is restored later
+set HMAX = `imghdr tmpho.v | grep Max | cut -f2 -d= | cut -f1 -dM`
+set SCALE = `echo "$RMAX / $HMAX" | bc -l | cut -c1-11`
+set INVSCALE = `echo "1.0 / $SCALE" | bc -l | cut -c1-11`
+echo "Scale = $SCALE   Inverse Scale = $INVSCALE" >> $LOGFILE
+echo "Scale = $SCALE   Inverse Scale = $INVSCALE"
+scaleimage $HO1.v $SCALE
+img2analyze $HO1.v a$HO1
+scaleimage $HO1.v $INVSCALE
+
+if (-e $INIT) goto 9_PARAMETER
+
+setanamin a$HO1 0
+if (-e air_init) then
+	set N = `wc air_init | cut -c1-8`
+	if ($N != 6) then
+		echo "ERROR: air_init must have 6 lines"
+		echo "   Be certain to run manualreslice with scale-down factors=1"
+		echo 
+		exit 1
+	endif
+	set PRM = "-m 6 -p1 1 -t1 100 -e1 $MASK -x 3 -f air_init -v"
+	echo "Initial 6-parameter coregistration using air_init ..."
+else
+	set PRM = "-m 6 -p1 1 -t1 100 -e1 $MASK -x 3 -v"
+	echo "Initial 6-parameter coregistration ..."
+endif
+echo alignlinear $REF a$HO1 $HOREF.air $PRM >> $LOGFILE
+
+alignlinear $REF a$HO1 $HOREF.air $PRM >! log
+set ERROR = `grep HESSIAN log`
+if (`echo $ERROR | wc -w` != 0) then
+	echo $ERROR
+	echo "Alignment has probably failed..."
+endif
+imgreslice a$HO1 $HOREF
+tail -8 log >> $LOGFILE
+echo ""
+
+# Check, then set up initialization file 
+echo "============================================================"
+echo "Use vidi to check co-registration of ra$HO1.img to standard"
+echo "   Image 1: $REF.t88		(PET Rainbow)"
+echo "   Image 2: $DDIR/ra$HO1.img	(Hot Metal)"
+#echo "Press RETURN to continue (CTRL-C to quit)"
+#set data = `line`
+
+echo 0.0 >! $INIT
+echo 0.0 >> $INIT
+echo 0.0 >> $INIT
+set shifts = `scanair $HOREF.air | tail -6 | head -3 | cut -f4 -d' '`
+foreach i ($shifts)
+	set a = `echo $i | cut -f1 -de`
+	set chk = `echo $i | grep "+"`
+	if ($chk == "") then
+		set b = `echo $i | cut -f2 -de`
+	else
+		set b = `echo $i | cut -f2 -d+`
+	endif
+	set n = `echo "-2 * $a * 10^$b" | bc -l`
+	echo $n | cut -c1-6 >> $INIT
+end
+echo 1.0 >> $INIT
+echo 1.0 >> $INIT
+echo 1.0 >> $INIT
+mv $HOREF.air $HOREF6.air
+
+9_PARAMETER:
+
+set PRM = "-m 9 -p1 1 -t1 100 -e1 $MASK -f $INIT -x 3 -v"
+setanamin a$HO1 0
+echo "Final 9-parameter coregistration ..."
+echo "Initialization file:" >> $LOGFILE
+cat $INIT >> $LOGFILE
+echo alignlinear $REF a$HO1 $HOREF.air $PRM >> $LOGFILE
+
+alignlinear $REF a$HO1 $HOREF.air $PRM >! log
+set ERROR = `grep HESSIAN log`
+if (`echo $ERROR | wc -w` != 0) then
+	echo $ERROR
+	echo "Alignment failed and will require manual processing" 
+	exit 1
+endif
+# Most common reason for failure with 9-parameter fit when 6-prm succeeds
+# is a difference in scaling between $REF and a$HO1
+
+imgreslice a$HO1 $HOREF
+set check = `grep HESSIAN log`
+echo $check
+tail -8 log | tee -a $LOGFILE
+analyze2img ra$HO1 $HO1.t88
+scaleimage $HO1.t88 $INVSCALE
+setz0 $HO1.t88 $Z0
+
+combine_air $OOREF.air y $HOREF.air $OOHO.air
+img2analyze $OO1.v a$OO1
+imgreslice a$OO1 $OOREF
+analyze2img ra$OO1 $OO1.t88
+setz0 $OO1.t88 $Z0
+
+echo "============================================================"
+echo "Use vidi to check co-registration of $HO1.t88 and $OO1.t88 to standard"
+echo "   Image 1: $REF.t88		(PET Rainbow)"
+echo "   Image 2: $DDIR/$HO1.t88	(Hot Metal)"
+echo "   Image 2: $DDIR/$OO1.t88	(Hot Metal)"
+echo "   Compare composite transverse, sagittal, and coronal views."
+echo "Press RETURN to cleanup and finish (CTRL-C to quit)"
+echo ""
+echo "Note: if 6 prm fit was good but 9 prm distorted it, then after CTRL-C"
+echo "use Manualreslice_ho2atlas_tweek (copy and edit from /data/cvl/coss/Reference)"
+set data = `line`
+
+unalias rm
+rm tmpho.v
+rm a$HO1.*
+rm a$OO1.*
+rm ra$HO1.*
+rm ra$OO1.*
+rm log
+cvl
+
+echo "HO-to-atlas AIR file:  $HOREF.air" | tee -a $LOGFILE
+echo "OO-to-atlas AIR file:  $OOREF.air" | tee -a $LOGFILE
+echo "HO atlas-image:        $HO1.t88" | tee -a $LOGFILE
+echo "OO atlas-image:        $OO1.t88" | tee -a $LOGFILE
+echo "============================================================"
+

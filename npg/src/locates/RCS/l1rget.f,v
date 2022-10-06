@@ -1,0 +1,293 @@
+head	2.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.5
+date	2004.02.16.19.39.57;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	98.06.17.19.25.50;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.10.23.21.26.41;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.06.30.17.22.28;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.09.21.18.29.49;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.01.28.22.32.35;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+2.5
+log
+@Feb 2004
+@
+text
+@C$Log: l1rget.f,v $
+c Revision 2.1  1998/06/17  19:25:50  tom
+c permit reading new PET region files
+c
+c Revision 2.0  1996/10/23  21:26:41  tom
+c Solaris
+c
+c Revision 1.3  1995/06/30  17:22:28  tom
+c *** empty log message ***
+c
+c Revision 1.2  1994/09/21  18:29:49  ty7777
+c Change the comments.
+c
+c Revision 1.1  1994/01/28  22:32:35  ty7777
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   L1RGET.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         05-May-87
+C  Written For:  LOCATES.FTN
+C
+C  History:
+C     Modified by TOV 15-Jul-87 to changes absolute color scale range
+C        to 0-240 (instead of 0-255) and from 320-480 for relative images
+C        (instead of 300-500);
+C     Modified by Tom Yang on 28-Jan-94 to port to the UNIX platform.
+C
+C  Intent:
+C     This procedure reads a regions file from disk.
+C
+C     See REGFORM.TXT for a description of the file format.
+C
+C  Common Blocks from LOCATES.INC:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **REGION   - region analysis parameters     (write)
+C     **ATLDATA  - atlas region parameters        (write)
+C
+C  Variable Passed back:
+C     ERROR: false--> successfully read a region file;
+C            true --> did not read a region file;
+C
+C  Variables:
+C     VAR = REAL variables read from file;
+C     FNAME = file name
+C     RS,RX,RY = used to read SLICE, RLPET, APPET
+C     AV,BV = used to read AVAL, BVAL
+C
+C  Uses:
+C     L1FILE
+C
+C  Called by:
+C     L1RDATA
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE L1RGET(ERROR)
+C
+      INCLUDE 'locates.inc'
+C
+      INTEGER*4    RTYPE, AV, BV, I 
+      REAL         RS, RX, RY
+      CHARACTER*1  CH, BELL
+      CHARACTER*3  EXT
+      CHARACTER*10 RNAME
+      CHARACTER*256 FNAME, BLANK
+      CHARACTER*80 STR
+      LOGICAL*1    ERROR, NEW
+      CHARACTER*256 RCSHEADER
+C
+      RCSHEADER = '$Id: l1rget.f,v 2.1 1998/06/17 19:25:50 tom Exp tom $'
+C
+      BELL = CHAR(7)
+      BLANK = ' '
+      EXT = 'reg'
+      NEW = .FALSE.
+      ERROR = .TRUE.
+C
+C  Get the file name where the old parameters are stored
+C
+100   FNAME = BLANK
+      CALL L1FILE(FNAME,EXT,NEW)
+      IF (FNAME.EQ.BLANK) RETURN
+C
+C  Zero the regions list
+C
+      DO 200 I = 1, 100
+        REGNAME (I) = ' '
+        REGTYPE (I) = ' '
+        SLICE (I)   = 0.0
+        RLPET (I)   = 0.0
+        APPET (I)   = 0.0
+        AVAL (I)    = 0
+        BVAL (I)    = 0
+      	NREGS       = 0
+200   CONTINUE
+C
+C  Read file type information, atlas and header
+C
+8000  FORMAT (I3, 5X, A10, 3X, A14, 3X, I2)
+8100  FORMAT (A80)
+8200  FORMAT (A12)
+C
+      READ (DISK, 8000)    RTYPE, RORIENT, RSCANNER, RSLICES
+      WRITE (USEROUT, 8000) RTYPE, RORIENT, RSCANNER, RSLICES
+      IF (RORIENT .NE. 'TRANSVERSE') THEN
+        WRITE (USEROUT, *) '*** ERROR:  LOCATES does not handle ', RORIENT,
+     2    ' slices',BELL
+        CLOSE (DISK)
+        GO TO 100
+      END IF
+      IF (RSCANNER .NE. 'PETT 6' .AND. RSCANNER .NE. 'SUPER PETT I'
+     2  .AND. RSCANNER .NE. 'SUPER PETT II' .AND. RSCANNER .NE. 'ECAT 953B'
+     &  .AND. RSCANNER .NE. 'ECAT 961') THEN
+        WRITE (USEROUT, *) '*** ILLEGAL SCANNER NAME IN FILE ***', BELL
+        CLOSE (DISK)
+        GO TO 100
+      END IF
+C
+C  Read atlas name and header
+C
+      READ (DISK, 8200) ATLAS
+      WRITE (USEROUT, *) ATLAS
+      READ (DISK, 8100) STR
+      WRITE (USEROUT, *) STR
+C
+C  Read region information
+C
+8300  FORMAT (I3, 3X, A10, 5X, A1, F9.2, F8.2, F8.2, 3X, I4, 3X, I4)
+C
+300   READ (DISK, 8300) I, RNAME, CH, RS, RX, RY, AV, BV
+      IF (I .GT. 0) THEN
+        REGNAME (I) = RNAME
+        REGTYPE (I) = CH
+        SLICE (I)   = RS
+        RLPET (I)   = RX
+        APPET (I)   = RY
+        AVAL (I)    = AV
+        BVAL (I)    = BV
+        IF (REGTYPE (I) .EQ. 'I') THEN
+400       READ (DISK, *)
+          AV = AV - 20
+          IF (AV .GT. 0) GO TO 400
+        ELSE IF (CH .NE. 'R') THEN
+          WRITE (USEROUT, *) '*** ERROR: Illegal region type in file',
+     2      BELL
+        END IF
+	NREGS = NREGS + 1
+        GO TO 300
+      ELSE
+        NREGS = BV
+      END IF
+C
+      REGFILE = FNAME
+      CLOSE (DISK)
+      ERROR = .FALSE.
+      WRITE(USEROUT,*) 'Regions read from ',REGFILE
+C
+      RETURN
+      END
+@
+
+
+2.1
+log
+@permit reading new PET region files
+@
+text
+@d2 3
+d73 1
+a73 1
+      RCSHEADER = '$Id: l1rget.f,v 2.0 1996/10/23 21:26:41 tom Exp tom $'
+@
+
+
+2.0
+log
+@Solaris
+@
+text
+@d2 3
+d70 1
+a70 1
+      RCSHEADER = '$Id: l1rget.f,v 1.3 1995/06/30 17:22:28 tom Exp tom $'
+d112 2
+a113 1
+     2  .AND. RSCANNER .NE. 'SUPER PETT II') THEN
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@a0 2
+
+C$Id: l1rget.f,v 1.2 1994/09/21 18:29:49 ty7777 Exp tom $
+d2 3
+a10 1
+C
+a54 2
+C
+C
+d62 1
+a62 1
+      CHARACTER*20 FNAME, BLANK
+d67 1
+a67 1
+      RCSHEADER = '$Id: l1rget.f,v 1.2 1994/09/21 18:29:49 ty7777 Exp tom $'
+@
+
+
+1.2
+log
+@Change the comments.
+@
+text
+@d2 1
+a2 1
+C$Id: l1rget.f,v 1.1 1994/01/28 22:32:35 ty7777 Exp ty7777 $
+d4 3
+d69 1
+a69 1
+      RCSHEADER = '$Id: l1rget.f,v 1.1 1994/01/28 22:32:35 ty7777 Exp ty7777 $'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 5
+a6 2
+C$Id$
+C$Log$
+d66 1
+a66 1
+      RCSHEADER = '$Id$'
+a122 1
+C8300  FORMAT (I3, 3X, A10, 5X, A1, 3F, 2I)
+@

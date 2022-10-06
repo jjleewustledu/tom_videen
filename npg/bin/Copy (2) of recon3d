@@ -1,0 +1,130 @@
+#!/bin/tcsh
+# Name: recon3D
+# $Revision: 1.1 $
+# $Date: 2002/12/16 21:03:10 $
+# Author: Fran Miezin
+# Intent: Reduce the number of keystrokes needed to do reconstructions
+#	on 3D HO sinogram data. The following assumptions are made:
+#	1. the files are being reconstructed in a subvolume of 
+#		/data/(pethp1 or pethp3]/img2/recon or /data/pethp2/recon
+#			 depending on which machine the recon is run on
+#	2. the subvolume has the name of the subject,ie, p2222
+#	3. the transmission filename has the form p2222tr(n]l.scn.
+#		where n = 1 or 2
+#	4. the plane efficiency file has the form plane_eff_3d_930304
+#	5. only the second frame will be reconstructed
+#	7. the temporary files created on /tmp are deleted
+#
+#Copyright 1991-1998, Washington University.
+#All rights reserved. Unauthorized reproduction prohibited.
+
+setenv TABLES /usr/local/lib/tables
+setenv ND /usr/local/npg/953norms
+
+if ( $#argv < 3 ) then
+	echo "------------------------------------------"
+	echo " Incorrect number of input parameters specified"
+	echo " Usage: recon3D_scat eff_date tr# blank_date -scat/-norm [-f frame] subj# "
+	echo " 		where:"
+	echo "			subj# = the # of the subject"
+	echo "	                eff_date = the date the efficiency scan"
+	echo "	                was performed"
+	echo "                  tr# = the # of the transmission scan"
+	echo "                  Date of blank scan, eg, 950123"
+	echo "                  -scat: scatter correct and normalize"
+	echo "                  -norm: normalize but don't scatter correct"
+	echo "                  Default is norm if neither scat nor norm are specified."
+	echo "                  frame is the frame number. It defaults to 2."
+	echo " Examples:  recon3D_scat 930304 1 930311 -norm p2222ho1"
+	echo ".           recon3D_scat 930304 2 930311 -norm p2222ho{1,2,4,5}.scn"
+	echo ".           recon3D_scat 930304 2 930311 -norm p2222ho*.scn to do all scans"
+	echo "            ho1 - ho9 using transmission scan 2 (tr2)"
+	echo "   "
+	echo " NOTICE THAT THE SCRIPT IS MACHINE SPECIFIC SO THE "
+	echo "   DATA FILES ( .scn files) MUST BE IN THE CORRECT DIRECTORY"
+	echo "   AND ON THE CURRENT MACHINE"
+	echo "----------------------------------------------"
+else
+	set scat = $4
+	if($scat == -scat) then
+	    set imgdim = 80
+	else
+	    set imgdim = 40
+	endif
+	set imgdim_fctr = `expr $imgdim / 40`
+	set frame = 2
+	set i = 1
+	set offset = 5
+	while ($i <= $#argv)
+            switch ($argv[$i])
+                case -f:
+                    @ i++
+                    set frame = $argv[$i]
+		    set offset = `expr $offset + 2`
+                breaksw
+            endsw
+            @ i++
+        end
+
+        set scanfiles = ($argv[$offset-])
+
+# 	Use only 1st 5 chars of name for dir & tr1 filename
+	set ddir=`echo $scanfiles[1] | awk '{ printf("%-.5s",$1)}'`
+	if ( $#ddir == 0) then
+	   echo "---------subdirectory name has zero length-----"
+	   exit
+	endif
+	set dpath = `pwd`
+	set blank = {$3}bl1.scn
+	set tran  = ${ddir}tr$2.scn
+	set norm = normal3d_${imgdim}x${imgdim}_{$1}.nrm
+
+
+#	Check that files exist.
+	if (!(-e ${blank})) then
+		echo ${blank} does not exist
+		exit
+	else if (!(-e ${tran})) then
+		echo ${tran} does not exist
+		exit
+	endif
+	foreach scanfile ($scanfiles)
+		if (!(-e ${scanfile})) then
+			echo ${scanfile} does not exist
+			exit
+		endif
+	end
+	if ( ! -e $dpath ) then
+	   echo "--------Directory $dpath does not exist------------"
+	   echo " execution aborted"
+	   exit
+	endif
+
+#	If normalization files don't exist, create them.
+	if(! -e $ND\/$norm) then
+	    makenorm_f3d $1 $imgdim_fctr
+	    mv $norm $ND
+        endif
+
+	foreach scanfile ($scanfiles)
+	    set frames = `cti_getparam $scanfile -nframe`
+	    if(${frames} > 2) then
+		set frm = 1
+		echo Reconstructing dynamic data.
+	        while($frm <= $frames)
+		    echo Reconstructing frame $frm
+		    set ARGS = ($dpath $scanfile:r \ $ND\/$norm:r $tran:r \
+			$blank:r -f $frm $scat -fo $frm -if $imgdim_fctr)
+ 	            recon3d_scat $ARGS
+	            @ frm++
+	        end
+	    else
+	       echo Reconstructing frame $frame
+	       set ARGS = ($dpath $scanfile:r $ND\/$norm:r $tran:r \
+			$blank:r -f $frame -fo $frame $scat -if $imgdim_fctr)
+ 	        recon3d_scat $ARGS
+	    endif
+
+		/bin/rm -f /tmp/{$scanfile:r}*
+	end
+endif

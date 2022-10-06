@@ -1,0 +1,243 @@
+.TH PEAKID 1 "08-Jan-97" "Neuroimaging Lab"
+
+.SH NAME
+peakid - identify distinct peaks in an image
+
+.SH SYNOPSIS
+peakid in out cutoff threshold separation radius [mask]
+
+.SH DESCRIPTION
+Peakid identifies distinct peaks in an image with selectable
+criteria for the peaks (e.g., volume summed, amplitude,
+separation, intermediate valley).
+
+.SH PARAMETERS
+.nf
+in	-	Input filename (with up to 75 slices)
+
+out	-	Output filename for peak information 
+
+cutoff -	Minimum pixel value for identified peaks.
+		This must be a positive or negative integer; if it 
+		is negative, negative peaks will be identified.
+
+threshold - Threshold for fraction of peak amplitude which 
+		must be reached to identify separate peaks; 
+		i.e., 0.9 means that 2 distinct peaks must be separated by a
+		valley dropping 10% below the peak amplitude of both peaks.
+
+separation - Minimum distance between distinct peaks (in mm).
+		Typically on the order of the image resolution.
+
+radius -	Radius of the averaging sphere applied to the 
+		input data (0-4 pixels). If the radius is 0, single
+		pixel peaks are identified. If the radius is 3,
+		the peaks will represent the average over a 7-pixel
+		diameter region (147 pixel volume) analogous to
+		the original search volume in af3d.
+
+mask -	(optional) Filename of a masking image.
+		Peaks will be identified in the input image only for
+		pixels which are greater than 0 in this image.
+		This permits regional averages for peaks located on
+		the edge of the brain (or subject global volume)
+		to include pixels which are outside the mask, thus
+		allowing peaks to exist on the edge of an image rather
+		than shifted inward due to zero values beyond the mask.
+.bp
+.SH OUTPUT FILE FORMAT:
+.nf
+ genrep.img         mask.img           Averaging Radius =  3 pixels (vol = 147)
+ Threshold =     50 Separation Fraction =  0.90  Separation Distance =  18.0 mm
+ # 1  41  57  46    82     13   X= -47.0  Y=  15.0  Z= -30.0  D=   0.0 (# 1)
+ # 2  79 100  45    65     79   X=  29.0  Y= -71.0  Z= -28.0  D= 114.8 (# 1)
+ # 3  43  53  21    62     99   X= -43.0  Y=  23.0  Z=  20.0  D=  50.8 (# 1)
+ # 4  85  51  46    60     15   X=  41.0  Y=  27.0  Z= -30.0  D=  88.8 (# 1)
+ # 5  72 111  46    54     26   X=  15.0  Y= -93.0  Z= -30.0  D=  26.2 (# 2)
+
+.fi
+The first line of the output file contains the name of the image file
+on which the peaks were identified, the name of the masking file (if any), the
+pixel radius of the averaging sphere used to define peaks, and the volume of
+this sphere in pixels.
+
+The second line of the output file contains the minimum threshold,
+separation fraction, and separation distance used to identify the peaks in the
+file.
+
+For each peak, the numbers correspond to the following:
+
+1) The peak number beginning with #1 and listed in descending amplitude.
+
+2) The X, Y, and Z pixel coordinates of the peak where X=1-128, Y=1-128,
+and Z=1-49 (slice number).  The image center is X=64.5, Y=64.5.  The
+intercommissural line passes through the zorigin (see imghdr).
+
+3) The image pixel value of the peak.  Note that for difference images
+where the input images were scaled to 1000, this value represents 10 times the
+percent difference.  I.e., 95 = 9.5% increase; -56 = 5.6% decrease.
+
+4) The number of voxels comprising the peak and contiguous voxels with
+magnitudes > Separation Fraction x Peak.  (If this is very small, it is likely
+that the peak represents noise or an artifact.  Using an averaging radius of
+3 instead of 0 minimizes the identification of small, artifactual peaks.)
+
+5) The X, Y, and Z stereotaxic coordinates of the peak where positive Z
+is dorsal to the intercommissural (AC-PC) line, positive X is left of the
+AC-PC line, and positive Y is anterior to the midpoint of the AC-PC line.
+
+6) The 3-D distance in mm to the nearest larger peak (i.e., those listed
+above it) in the list followed by the number of that peak in parentheses.
+
+.SH NOTE
+When the radius > 0, peaks will not be detected on the extreme end slices.
+For example, if radius = 3, there will be no peaks on slices 1-3 or 47-49
+of a 49-slice image. If you want to identify peaks at the extremes, pad
+your input image with more slices.
+There will also be no peaks withing 3 pixels of the edge of any slice.
+
+.SH ALGORITHM
+The algorithm is explained for a positive threshold; for negative peaks
+is a SIGN factor (-1) is included in all steps comparing magnitude.
+
+Define:
+
+a) THRESHOLD = minimum pixel value acceptable for peaks;
+
+b) FRACTION = threshold for fraction of peak amplitude which is required
+to separate peaks;
+
+c) SEPARATION = minimum 3-D distance (mm) required to separate peaks;
+
+d) PeakAmplitude = image pixel value of a particular peak;
+
+e) CUTOFF = the pixel magnitude defining a unique peak;
+
+The algorithm used is:
+
+1) If a non-zero radius for the averaging sphere was entered, a 3-D
+filter is applied to the input image.  Each pixel of the new image represents
+the mean value of all pixels contained in a roughly spherical-shaped region
+centered on the pixel.  The actual pixel-definition of these regions are
+shouwn in the appendix.  Pixels for which the spherical region is not
+completely within the (128,128,49) image array are set to zero (i.e., slices
+1, 2, 3, 47, 48, and 49 plus pixels at the edge of each plane for a region
+radius of 3).
+
+2) If a masking image is used, it is read into an array MASK; if not, all
+elements of MASK are set to 1.
+
+3) All elements of an logical array (USED), with the same
+dimensions as the image, are set false.
+
+4) Identify the maximum pixel value (PeakAmplitude) in the image for
+which USED=false and MASK>=1.  If this value is < THRESHOLD, then stop.
+
+5) Set CUTOFF = FRACTION*PeakAmplitude.
+
+6) Identify and count all image pixels which are connected in 3-D to the
+peak pixel which have magnitudes > CUTOFF.  If any of these pixels is USED,
+then the peak is not unique.
+
+7) Set USED=true for all connected pixels with magnitudes > CUTOFF.
+
+8) If the peak is not unique, go to step 4.
+
+9) Compute the 3-D separation distance between this peak and all
+previously identified peaks (squareroot of the sum of the squares of the
+differences of the x-, y-, and z-coordinates of each pair of peaks).  Multiply
+by 2 to give distance in mm.
+
+10) If the distance from any other peak is <= SEPARATION, go to step 4.
+
+11) Store the peak coordinates and magnitude in an internal list.  If
+100 peaks have been stored, then stop.
+
+12) Write the location of the peak, its magnitude, the number of pixels
+comprising the peak (>CUTOFF), and its distance from the nearest previously
+identified peak to the output file.
+
+13) Go to step 4.
+
+
+.SH Spherical Region Definition
+The averaging regions may have a radius of 0-4 pixels, with diameter and
+total pixels as indicated below:
+
+         Pixel    3D Pixel  Total Pixels   3D Diam
+         Radius   Diameter   in Region      (mm)
+           0          1          1            2
+           1          3          7            6
+           2          5         33           10
+           3          7        147           14
+           4          9        305           18
+
+
+     The shape of the regions for different diameters is the same as of those
+used in AF3D.  3D regions are created by stacking these 2D regions.
+
+.nf
+     Radius=1  Diameter=3  Pixels=7
+
+                      X
+             X      X X X
+                      X
+
+            (1)      (5)
+
+     Radius = 2  Diameter = 5  Pixels = 33
+
+                                   X
+                    X X X        X X X
+             X      X X X      X X X X X
+                    X X X        X X X
+                                   X
+
+            (1)      (9)         (13)
+
+     Radius = 3  Diameter = 7  Pixels = 147
+
+                                        X                X X X
+                     X X X          X X X X X          X X X X X
+          X        X X X X X        X X X X X        X X X X X X X
+        X X X      X X X X X      X X X X X X X      X X X X X X X
+          X        X X X X X        X X X X X        X X X X X X X
+                     X X X          X X X X X          X X X X X
+                                        X                X X X
+
+         (5)         (21)             (29)               (37)
+
+
+     Radius = 4  Diameter = 9  Pixels = 305
+
+                                              X                  X X X
+                       X X X X X          X X X X X            X X X X X
+        X X X X X    X X X X X X X      X X X X X X X        X X X X X X X
+  X     X X X X X    X X X X X X X      X X X X X X X      X X X X X X X X X
+X X X   X X X X X    X X X X X X X    X X X X X X X X X    X X X X X X X X X
+  X     X X X X X    X X X X X X X      X X X X X X X      X X X X X X X X X
+        X X X X X    X X X X X X X      X X X X X X X        X X X X X X X
+                       X X X X X          X X X X X            X X X X X
+                                              X                  X X X
+
+ (5)      (25)           (45)               (49)                 (57)
+
+.SH EXAMPLES
+.nf
+peakid genrep.t88 genrep.pk1 50 0.9 18 3 mask.t88
+peakid genrep.t88 genrep.pk1 50 0.9 18 3
+.fi
+
+This will search the mean difference image genrep.img for all peaks of an amplitude 
+of at least 50 (representing a 5.0% change for images scaled to 1000) which are
+distinct from neighboring peaks by a valley dropping at least 10% from the peak 
+maxima and separated from each other by at least 18 mm in 3-D space. Peak values 
+will represent the mean of all pixels over a 147-pixel spherical volume (3-pixel 
+radius). For the first example, only peaks which are within the mask identified by
+mask.img will be identified.
+
+.SH SEE ALSO
+peakstrip(1), af3d_par
+
+.SH AUTHORS
+Tom O. Videen, Tom Yang

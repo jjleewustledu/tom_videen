@@ -1,0 +1,1490 @@
+head	1.6;
+access;
+symbols;
+locks
+	ty7777:1.6; strict;
+comment	@ * @;
+
+
+1.6
+date	95.11.01.20.28.03;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.11.01.15.40.38;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.10.31.16.31.11;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.10.26.16.12.12;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.10.20.14.44.22;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.19.16.50.12;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+1.6
+log
+@Updated for 4dfp.
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*_________________________________________________________________________________
+ *  Program:		imato4dfp.c
+ *  Date:		16-Oct-95
+ *  Author:		Tom Yang
+ *  Description:	Transform Siemens MRI images into 4DFP format.
+ *			An Analyze header file is created. The headres from
+ *			individual .ima files are separated from the .ima files.
+ *
+ *  Copyright 1994. Washington University, Mallinckrodt Institute of Radiology.
+ *                        All Rights Reserved
+ *
+ *  This software may not be reproduced, copied, or distributed without written
+ *                permission of Washington University.
+ *
+ *       For more information contact Tongzeng (Tom) Yang, Ph.D.
+ *________________________________________________________________________________*/
+
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <lib3_file_transform.h>		 /* Numaris 3 User's Library */
+#include <petutil/ANALYZE.h>			 /* dsr */
+
+#define U_LONG unsigned long
+#define U_SHORT unsigned short
+#define BytesPerPixelShort 2
+#define BytesPerPixelLong 4
+#define U3_isStatusError(s,e) (((s)^(e)) == 0)
+#define MAXSTR 256
+#define PERMS  0666
+#define TRANSVERSE '\000'
+#define CORONAL    '\001'
+#define SAGITTAL   '\002'
+
+static char     rcsid[] = "$Header$";
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	FILE			*hdrfp;				/* file pointer for ANALYZE hdr */
+	FILE			*iffp;				/* file pointer for Interfile Format header */
+	FILE			*imafp;		 		/* file pointer for .ima files */
+	FILE			*imgfp;				/* output 4dfp image  */
+	U3_data_type_t		DataType;
+	U3_header_type_t	HeadType;
+	U3_size_type_t		DataSize;
+	U_SHORT			*DataBuffer;		 /* pixel data buffer */
+	char			ANALYZE_hdr [MAXSTR];	 /* output Analyze header filename */
+	char			ParameterFileName [MAXSTR];
+	char			SequenceFileName [MAXSTR];
+	char			SequenceDescription [MAXSTR];
+	char			ifhdrfile [MAXSTR];		/* output Interfile Format header filename */
+	char			imafile [MAXSTR];		 /* ima file name */
+	char			imafile_header [MAXSTR];	 /* ima header file name */
+	char			imafile_root [MAXSTR];		 /* ima file root */
+	char			institution [MAXSTR];
+	char			model [MAXSTR];
+	char			num [12];
+	char			order [4];
+	char			output_4dfp [MAXSTR];
+	char			*patient_id;
+	char			program_date [12];
+	char			*ptr;
+	char			study_date [12];
+	char			subject_id [MAXSTR];
+	char			version [5];
+	float			*real_image;
+	float			xpix, ypix, zpix;	 /* pixel sizes (mm) */
+	header_t		*HeadBuffer;		 /* header buffer */
+	int			bitsperpix;
+	int			current_image_id;
+	int			end_image_id;
+	int			first_study;
+	int			global_min;		 /* global minimum */
+	int			global_max;		 /* global maximum */
+	int			i, j, n;
+	int			image_index;
+	int			last_study;
+	int			orientation;
+	int			start_image_id;
+	int			study_index;
+	int			time_series_flag;
+	long			Status;			 /* shows an actual status */
+	short			num_slices;		 /* number of slices or frames in MRI */
+	short			xdim, ydim, zdim;	 /* image dimensions */
+
+	long unsigned   NumPixels_ul, NumBytes_ul, NumRows_ul, NumColumns_ul, StartOffset_ul;
+
+	struct dsr      hdr;			 /* header for ANALYZE */
+	char           *root;
+	char			view[6][10];
+
+	int             first, last;
+	short           datum;
+	int				slc;
+
+
+	strcpy (view[1], "View_FEET");
+	strcpy (view[2], "View_HEAD");
+	strcpy (view[3], "View_AtoP");
+	strcpy (view[4], "View_LtoR");
+	strcpy (view[5], "View_PtoA");
+	strcpy (view[6], "View_RtoL");
+
+	/*
+	 * Get command line arguments and initialize filenames:
+	 */
+	if (argc != 8) 
+	{
+
+		fprintf (stderr, 
+			"Usage: mrito4dfp.bin patient_id first_study last_study output start_image_id end_image_id time_series_flag.\n");
+		exit (1);
+	}
+
+	patient_id		= argv [1];
+	first_study		= atoi (argv [2]);
+	last_study		= atoi (argv [3]);
+	strcpy (output_4dfp, argv [4]);
+	strcpy (ANALYZE_hdr, argv [4]);
+	strcpy (ifhdrfile, argv [4]);
+	start_image_id		= atoi (argv [5]);
+	end_image_id		= atoi (argv [6]);
+	time_series_flag	= atoi (argv [7]);
+
+	strcat (output_4dfp, ".4dfp");
+	strcat (ANALYZE_hdr, ".hdr");
+	strcat (ifhdrfile, ".ifh");
+
+	if ((imgfp = fopen (output_4dfp, "a+b")) == 0) 
+	{
+		fprintf (stderr, "Error: Unable to create 4DFP image %s\n", output_4dfp);
+		exit (1);
+	}
+
+	global_max = 0;
+	global_min = 32000;
+
+	/*
+	 * Loop for all images in all studies. 
+	 */
+	num_slices		= 0;
+	for (study_index = first_study; study_index <= last_study; study_index++) 
+	{
+		/*
+		 * Construct .ima file name and .ima header file name.
+		 */
+		current_image_id	= end_image_id;
+		strcpy (imafile_root, patient_id);
+		strcat (imafile_root, "-");
+		sprintf (num, "%d", study_index);
+		strcat (imafile_root, num);
+		strcat (imafile_root, "-");
+
+		strcpy (imafile, imafile_root);
+		sprintf (num, "%d", current_image_id);
+		strcat (imafile, num);
+		strcat (imafile, ".ima");
+
+		while (current_image_id >= start_image_id 
+		&& (imafp = fopen (imafile, "rb")) == (FILE *) NULL) 
+		{
+			current_image_id--;
+
+			strcpy (imafile, imafile_root);
+			sprintf (num, "%d", current_image_id);
+			strcat (imafile, num);
+			strcat (imafile, ".ima");
+		}
+
+		if (current_image_id < start_image_id)
+			continue;
+		fclose (imafp);
+
+		strcpy (imafile, imafile_root);
+		sprintf (num, "%d", current_image_id);
+		strcat (imafile, num);
+		strcpy (imafile_header, imafile);
+		strcat (imafile_header, ".sih");
+		strcat (imafile, ".ima");
+
+		while (current_image_id >= start_image_id && U3Open (&imafp, imafile, "r") == 0)
+		{
+			fprintf (stdout, "imato4dfp: reading %s ", imafile);
+
+			/* 
+			 * Determine header type. 
+			 */
+			if ((Status = U3GetHeaderType (imafp, &HeadType)) != 0) 
+			{
+				fprintf (stderr, "Error: imato4dfp : unknown header type.\n");
+				exit (1);
+			}
+			switch (HeadType) 
+			{
+				case U3_internal_head_type:
+					fprintf (stdout, " (Numaris 3 format ");
+					break;
+
+				case U3_nema_head_type:
+					fprintf (stdout, " (ACR-NEMA format ");
+					break;
+
+				case U3_numaris1_head_type:
+					fprintf (stdout, " (Numaris 1 format ");
+					break;
+
+				case U3_numaris2_head_type:
+					fprintf (stdout, " (Numaris 2 format ");
+					break;
+
+				default:
+					fprintf (stderr, "The data file format is unknown.\n");
+				exit (1);
+			}
+
+			/* 
+			 * Check data type and data size. 
+			 */
+			if ((Status = U3GetDataType (imafp, &DataType, &DataSize)) != 0) 
+			{
+				fprintf (stderr, "Error: imato4dfp : unknown data type.\n");
+				exit (1);
+			}
+
+			/* 
+			 * Make sure it is an image file 
+			 */
+			if (DataType == U3_image_data_type) 
+			{
+				fprintf (stdout, "--image file)\n");
+			} 
+			else 
+			{
+				fprintf (stderr, "Error: imato4dfp : Data file is not an image file.\n");
+				exit (1);
+			}
+
+			/* 
+			 * Allocate memory space for the header buffer 
+			 */
+			if ((HeadBuffer = (header_t *) malloc (sizeof (header_t))) == 0) 
+			{
+				fprintf (stderr, "Error : imato4dfp : unable to allocate memory.\n");
+				exit (1);
+			}
+
+			/* 
+			 * Get the header buffer. 
+			 */
+			if ((Status = U3GetHeader (imafp, HeadBuffer)) != 0) 
+			{
+				free (HeadBuffer);
+				fprintf (stderr, "Error: imato4dfp : unable to get the header.\n");
+				exit (1);
+			}
+
+			/* 
+			 * Open .ima header file to write.
+			 */
+			if ((hdrfp = fopen (imafile_header, "w")) == 0) 
+			{
+				fprintf (stderr, "Error: Unable to create .ima header %s\n", imafile_header);
+				exit (1);
+			}
+
+			/* 
+			 * Get the orientation, image dimensions, and voxel size. 
+			 */
+			orientation = HeadBuffer->G21.Rel1.CM.ViewDirection;
+			if (orientation < View_FEET && orientation > View_RtoL) 
+			{
+				fprintf (stderr, "Error: Incompatible View Direction.\n");
+				exit (1);
+			}
+
+			switch (orientation) 
+			{
+				case View_FEET:						
+				case View_HEAD:					
+					xdim = HeadBuffer->G28.Pre.Columns;
+					ydim = HeadBuffer->G28.Pre.Rows;
+					zdim = num_slices;
+					xpix = HeadBuffer->G28.Pre.PixelSize.Row;
+					ypix = HeadBuffer->G28.Pre.PixelSize.Row;
+					zpix = HeadBuffer->G18.Acq.SliceThickness;
+					break;
+
+				case View_AtoP:
+				case View_PtoA:
+					xdim = HeadBuffer->G28.Pre.Columns;
+					ydim = num_slices;
+					zdim = HeadBuffer->G28.Pre.Rows;
+					xpix = HeadBuffer->G28.Pre.PixelSize.Row;
+					ypix = HeadBuffer->G18.Acq.SliceThickness;
+					zpix = HeadBuffer->G28.Pre.PixelSize.Row;
+					break;
+
+				case View_LtoR:
+				case View_RtoL:
+					xdim = num_slices;
+					ydim = HeadBuffer->G28.Pre.Columns;
+					zdim = HeadBuffer->G28.Pre.Rows;
+					xpix = HeadBuffer->G18.Acq.SliceThickness;
+					ypix = HeadBuffer->G28.Pre.PixelSize.Row;
+					zpix = HeadBuffer->G28.Pre.PixelSize.Row;
+					break;
+
+				default:
+                			fprintf (stderr, "Error: Incompatible View Direction.\n");
+                			exit (1);
+			}
+
+			/* 
+			 * Write the header out.
+			 */
+			if ((fwrite (HeadBuffer, sizeof (header_t), 1, hdrfp)) != 1) 
+			{
+				fprintf (stderr, "Error writing to: %s\n", imafile_header);
+				exit (1);
+			}
+
+			fclose (hdrfp);
+
+			/* 
+			 * Calculate the number of bytes per pixel. 
+			 */
+			NumRows_ul	= HeadBuffer->G28.Pre.Rows;
+			NumColumns_ul	= HeadBuffer->G28.Pre.Columns;
+			NumPixels_ul	= NumRows_ul * NumColumns_ul;
+
+			if (current_image_id == start_image_id)
+			{
+				strcpy (institution, HeadBuffer->G08.Ide.InstitutionID);
+				strcpy (model, HeadBuffer->G08.Ide.ManufacturerModel);
+				strcpy (subject_id, HeadBuffer->G10.Pat.PatientId);
+				sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Year);
+				strcpy (study_date, num);
+				strcat (study_date, ":");
+				sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Month);
+				strcat (study_date, num);
+				strcat (study_date, ":");
+				sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Day);
+				strcat (study_date, num);
+				strcpy (ParameterFileName, HeadBuffer->G19.Acq4.CM.ParameterFileName);
+				strcpy (SequenceFileName, HeadBuffer->G19.Acq4.CM.SequenceFileName);
+				strcpy (SequenceDescription, HeadBuffer->G19.Acq4.CM.SequenceDescription);
+			}
+
+			/* 
+			 * Set the offset to start reading the data. 
+			 */
+			StartOffset_ul = 0;
+
+			/* 
+			 * Allocate memory space according to the data size. 
+			 */
+			switch (DataSize) 
+			{
+				case U3_set_m_short:
+					if ((DataBuffer = (U_SHORT *) malloc (NumPixels_ul 
+					* BytesPerPixelShort)) == 0) 
+					{
+						fprintf (stderr, 
+						"Error: unable to allocate memory space for the data.");
+						exit (1);
+					}
+					break;
+				case U3_set_m_long:
+					fprintf (stderr, "Error: long integer format not acceptable.");
+					exit (1);
+				default:
+					fprintf (stderr, "Error: imato4dfp: Incompatible data type.\n");
+				exit (1);
+			}
+
+			/* 
+			 * Read the pixel data into the buffer 
+			 */
+			if ((Status = U3ReadPixData (imafp, StartOffset_ul,
+			NumPixels_ul, &DataSize, DataBuffer)) != 0) 
+			{
+				free (HeadBuffer);
+				free (DataBuffer);
+				fprintf (stderr, "Error: unable to read the pixel data.\n");
+				exit (1);
+			}
+
+			/* 
+			 * Check if the registration is the following:
+			 * Patient position 1: HEAD FIRST
+			 * Patient position 2: SUPINE
+			 * View direction: CRANIAL
+			 */
+			if (strcmp (HeadBuffer->G51.Txt.PatientPosition, "H-SP-CR") != 0)
+			{
+				fprintf (stderr, 
+				"WARNING: display orientation and labeling may not be correct.");
+			}
+
+			bitsperpix = HeadBuffer->G28.Pre.BitsAllocated;
+			memset (order, 0, 4); 
+			strncpy (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.X, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Y, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Z, 1);
+			free (HeadBuffer);
+
+			if (NULL == (real_image = (float *) malloc (NumPixels_ul * sizeof (float)))) 
+			{
+				fprintf (stderr, "Error: could not malloc memory for *real_image\n");
+				exit (1);
+			}
+
+			if (strncmp (order, "RAH", 3) == 0)  		/* View_HEAD */
+			{
+				for (n = 0; n < NumPixels_ul; n++)
+				{
+					datum		= DataBuffer [n];
+					real_image [n]	= datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+				}
+			}
+
+			free (DataBuffer);
+			Status = U3Close (imafp);
+
+			/*
+			 * Write the slice pixel data.
+			 */
+			if ((fwrite (real_image, sizeof (float), NumPixels_ul, imgfp)) !=  NumPixels_ul) 
+			{
+				fprintf (stderr, "Error writing to: %s\n", output_4dfp);
+				exit (1);
+			}
+
+			/* 
+			 * Free allocated memories.
+			 */
+			free (real_image);
+
+			/* 
+			 * Make preparations for the second loop.
+			 */
+			current_image_id--;
+			num_slices++;
+
+			strcpy (imafile, imafile_root);
+			sprintf (num, "%d", current_image_id);
+			strcat (imafile, num);
+			strcpy (imafile_header, imafile);
+			strcat (imafile_header, ".sih");
+			strcat (imafile, ".ima");
+
+			if ((imafp = fopen (imafile, "rb")) == (FILE *) NULL) 
+				break;
+			fclose (imafp);
+		}
+	}
+
+	fclose (imgfp);
+
+	/*
+	 * Create Analyze hdr file.
+	 */
+	if ((hdrfp = fopen (ANALYZE_hdr, "w")) == 0) 
+	{
+		fprintf (stderr, "Error: Unable to create ANALYZE header %s\n", ANALYZE_hdr);
+		exit (1);
+	}
+
+	strncpy (hdr.hk.db_name, imafile, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	hdr.hk.extents = 16384;			 /* recommended by developers  */
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.dime.dim [0] = 4;			 /* 4 dimensions  */
+	hdr.dime.dim [1] = xdim;
+	hdr.dime.dim [2] = ydim;
+	hdr.dime.dim [3] = num_slices;
+	hdr.dime.dim [4] = 1;			 /* one volume */
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 4;			 /* 16 bit signed integer  */
+	hdr.dime.bitpix = bitsperpix;
+	hdr.dime.pixdim [1] = xpix;
+	hdr.dime.pixdim [2] = ypix;
+	hdr.dime.pixdim [3] = zpix;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+	strncpy (hdr.hist.descrip, imafile, 79);
+	strcpy (hdr.hist.originator, "imato4dfp");
+	strncpy (hdr.hist.patient_id, patient_id, 4);
+	hdr.hist.orient = TRANSVERSE;
+
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, hdrfp)) != 1)
+	{
+		printf ("Error writing to: %s\n", ANALYZE_hdr);
+		exit (1);
+	}
+
+	fclose (hdrfp);
+
+	/*
+	 * Create Interfile header.
+	 */
+	if ((iffp = fopen (ifhdrfile, "w")) == 0) 
+	{
+		fprintf (stderr, "Unable to create Interfile Format header %s\n", ifhdrfile);
+		exit (1);
+	}
+
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	strncpy (version, ptr, 4);
+	ptr = strstr (ptr, " ");
+	ptr++;
+	strncpy (program_date, ptr, 10);
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+
+	fprintf (iffp, "INTERFILE :=\n");
+	fprintf (iffp, "version of keys	:= 3.3\n");
+	fprintf (iffp, "image modality	:= mri\n");
+	fprintf (iffp, "originating system	:= %s", model);
+	fprintf (iffp, "conversion program	:= imato4dfp\n");
+	fprintf (iffp, "program version	:= %s\n", version);
+	fprintf (iffp, "program date	:= %s\n", program_date);
+	fprintf (iffp, "original institution	:= %s\n", institution);
+	fprintf (iffp, "name of data file	:= %s\n", output_4dfp);
+	fprintf (iffp, "patient ID := %s\n", subject_id);
+	fprintf (iffp, "study date	:= %s\n", study_date);
+
+	fprintf (iffp, "first study	:= %d\n", first_study);
+	fprintf (iffp, "last study	:= %d\n", last_study);
+	fprintf (iffp, "start image id	:= %d\n", start_image_id);
+	fprintf (iffp, "end image id	:= %d\n", end_image_id);
+	fprintf (iffp, "number format	:= signed integer\n");
+	fprintf (iffp, "number of bytes per pixel	:= %d\n", bitsperpix / 8);
+	fprintf (iffp, "number of dimensions	:= 3\n");
+	fprintf (iffp, "matrix size [1]	:= %d\n", xdim);
+	fprintf (iffp, "matrix size [2]	:= %d\n", ydim);
+	fprintf (iffp, "matrix size [3]	:= %d\n", num_slices);
+	fprintf (iffp, "scaling factor (mm/pixel) [1]	:= %f\n", xpix);
+	fprintf (iffp, "scaling factor (mm/pixel) [2]	:= %f\n", ypix);
+	fprintf (iffp, "scaling factor (mm/pixel) [3]	:= %f\n", zpix);
+	fprintf (iffp, "matrix initial element [1]	:= right\n");
+	fprintf (iffp, "matrix initial element [2]	:= posterior\n");
+	fprintf (iffp, "matrix initial element [3]	:= inferior\n");
+	fprintf (iffp, "mri parameter file name	:= %s\n", ParameterFileName);
+	fprintf (iffp, "mri sequence file name	:= %s\n", SequenceFileName);
+	fprintf (iffp, "mri sequence description	:= %s\n", SequenceDescription);
+
+	fclose (iffp);
+
+	fprintf (stdout, "\nimato4dfp completed successfully.  %s created.\n", output_4dfp);
+
+	exit (0);
+}
+@
+
+
+1.5
+log
+@Interfile works.
+@
+text
+@d1 2
+a2 14
+/*$Id: imato4dfp.c,v 1.4 1995/10/31 16:31:11 ty7777 Exp ty7777 $*/
+/*$Log: imato4dfp.c,v $
+ * Revision 1.4  1995/10/31  16:31:11  ty7777
+ * Before further changes.
+ *
+ * Revision 1.3  1995/10/26  16:12:12  ty7777
+ * Before making further changes.
+ *
+ * Revision 1.2  1995/10/20  14:44:22  ty7777
+ * Header works.
+ *
+ * Revision 1.1  1995/10/19  16:50:12  ty7777
+ * Initial revision
+ **/
+d11 8
+d38 1
+a38 1
+static char     rcsid[] = "$Header: /data/petsun4/src/imato4dfp/RCS/imato4dfp.c,v 1.4 1995/10/31 16:31:11 ty7777 Exp ty7777 $";
+d71 1
+a87 1
+	short			**img;
+a145 1
+	current_image_id	= end_image_id;
+d147 1
+a147 1
+	for (study_index = last_study; study_index >= first_study; study_index--) 
+d152 1
+a161 2
+		strcpy (imafile_header, imafile);
+		strcat (imafile_header, ".sih");
+d164 12
+a175 1
+		if ((imafp = fopen (imafile, "rb")) == (FILE *) NULL) 
+d179 7
+d188 1
+a188 1
+			fprintf (stdout, "mrito4dfp: reading %s ", imafile);
+d195 1
+a195 1
+				fprintf ("\nerror: mri2analyze : unknown header type.\n");
+d217 1
+a217 1
+					fprintf (stderr, "\nThe data file format is unknown.\n");
+a404 14
+			if (NULL == (img = (short **) malloc ((short) (ydim * sizeof (short *))))) 
+			{
+				fprintf (stderr, "Error: could not malloc memory for **img\n");
+				exit (1);
+			}
+			for (j = 0; j < ydim; j++) 
+			{
+				if (NULL == (img [j] = (short *) malloc ((short) (xdim * sizeof (short))))) 
+				{
+					fprintf (stderr, "Error: could not malloc memory for *img\n");
+					exit (1);
+				}
+			}
+
+d410 1
+d412 6
+d420 1
+a420 2
+				n	= 0;
+				for (j = ydim - 1; j >= 0; j--) 
+d422 6
+a427 10
+					for (i = 0; i < xdim; i++) 
+					{
+						datum		= DataBuffer [n];
+						img [j][i]	= datum;
+						if (datum > global_max)
+							global_max = datum;
+						if (datum < global_min)
+							global_min = datum;
+						n++;
+					}
+a430 1
+			free (HeadBuffer);
+d437 1
+a437 1
+			for (j = 0; j < ydim; j++)  
+d439 2
+a440 5
+				if ((fwrite (img [j], sizeof (short), xdim, imgfp)) != xdim) 
+				{
+					fprintf (stderr, "Error writing to: %s\n", output_4dfp);
+					exit (1);
+				}
+d446 1
+a446 5
+			for (j = 0; j < ydim; j++) 
+			{
+				free (img [j]);
+			}
+			free (img);
+d552 4
+@
+
+
+1.4
+log
+@Before further changes.
+@
+text
+@d1 1
+a1 1
+/*$Id: imato4dfp.c,v 1.3 1995/10/26 16:12:12 ty7777 Exp ty7777 $*/
+d3 3
+d42 1
+a42 1
+static char     rcsid[] = "$Header: /data/petsun4/src/imato4dfp/RCS/imato4dfp.c,v 1.3 1995/10/26 16:12:12 ty7777 Exp ty7777 $";
+d48 4
+a51 3
+	FILE			*FileInp_p;		 /* input file pointer */
+	FILE			*fd_hdr;			/* file for ANALYZE hdr */
+	FILE			*fd_img;			 /* output ANALYZE image  */
+d57 9
+a65 3
+	char			InFile [MAXSTR];		 /* input file name */
+	char			InFile_hdr [MAXSTR];		 /* input header file name */
+	char			InFile_root [MAXSTR];		 /* input file root */
+d70 5
+d89 1
+a96 1
+	FILE           *fd_if;			 /* file for Interfile Format header */
+a98 2
+	char           *ptr;
+	char            IF_hdr[MAXSTR];			 /* output Interfile Format header filename */
+a99 9
+	char            version[5];
+	char            program_date[12];
+	char            study_date[12];
+	char			institution[MAXSTR];
+	char			model[MAXSTR];
+	char			subject_id[MAXSTR];
+	char			ParameterFileName[MAXSTR];
+	char			SequenceFileName[MAXSTR];
+	char			SequenceDescription[MAXSTR];
+a111 10
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	strncpy (version, ptr, 4);
+	ptr = strstr (ptr, " ");
+	ptr++;
+	strncpy (program_date, ptr, 10);
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+d116 1
+a116 1
+	if (argc != 7) 
+d120 1
+a120 1
+	"Usage: mrito4dfp.bin patient_id first_study last_study output start_image_id end_image_id.\n");
+d124 4
+a127 4
+	patient_id	= argv [1];
+	first_study	= atoi (argv [2]);
+	last_study	= atoi (argv [3]);
+	strcat (output_4dfp, argv [4]);
+d129 4
+a132 2
+	start_image_id	= atoi (argv [5]);
+	end_image_id	= atoi (argv [6]);
+d136 1
+d138 1
+a138 1
+	if ((fd_img = fopen (output_4dfp, "a+b")) == 0) 
+d154 5
+a158 2
+		strcpy (InFile_root, patient_id);
+		strcat (InFile_root, "-");
+d160 2
+a161 2
+		strcat (InFile_root, num);
+		strcat (InFile_root, "-");
+d163 1
+a163 1
+		strcpy (InFile, InFile_root);
+d165 4
+a168 4
+		strcat (InFile, num);
+		strcpy (InFile_hdr, InFile);
+		strcat (InFile_hdr, ".sih");
+		strcat (InFile, ".ima");
+d170 5
+a174 1
+		while (current_image_id >= start_image_id && U3Open (&FileInp_p, InFile, "r") == 0)
+d176 1
+a176 1
+			fprintf (stdout, "mrito4dfp: reading %s ", InFile);
+d181 1
+a181 1
+			if ((Status = U3GetHeaderType (FileInp_p, &HeadType)) != 0) 
+d212 1
+a212 1
+			if ((Status = U3GetDataType (FileInp_p, &DataType, &DataSize)) != 0) 
+d243 1
+a243 1
+			if ((Status = U3GetHeader (FileInp_p, HeadBuffer)) != 0) 
+d251 1
+a251 1
+			 * Write the header out.
+d253 1
+a253 1
+			if ((fd_hdr = fopen (InFile_hdr, "w")) == 0) 
+d255 1
+a255 1
+				fprintf (stderr, "Error: Unable to create .ima header %s\n", InFile_hdr);
+d309 1
+a309 1
+			if ((fwrite (HeadBuffer, sizeof (header_t), 1, fd_hdr)) != 1) 
+d311 1
+a311 1
+				fprintf (stderr, "Error writing to: %s\n", InFile_hdr);
+d315 1
+a315 1
+			fclose (fd_hdr);
+d324 18
+d372 1
+a372 1
+			if ((Status = U3ReadPixData (FileInp_p, StartOffset_ul,
+d433 1
+a433 1
+			Status = U3Close (FileInp_p);
+d440 1
+a440 1
+				if ((fwrite (img [j], sizeof (short), xdim, fd_img)) != xdim) 
+a446 8
+/*
+			if ((fwrite (DataBuffer, NumPixels_ul * BytesPerPixelShort, 1, fd_img)) != 1) 
+			{
+				fprintf (stderr, "Error writing to: %s\n", output_4dfp);
+				exit (1);
+			}
+*/
+
+d462 1
+a462 1
+			strcpy (InFile, InFile_root);
+d464 8
+a471 4
+			strcat (InFile, num);
+			strcpy (InFile_hdr, InFile);
+			strcat (InFile_hdr, ".sih");
+			strcat (InFile, ".ima");
+d475 1
+a475 1
+	fclose (fd_img);
+d480 1
+a480 1
+	if ((fd_hdr = fopen (ANALYZE_hdr, "w")) == 0) 
+d486 1
+a486 1
+	strncpy (hdr.hk.db_name, InFile, 17);
+d515 1
+a515 1
+	strncpy (hdr.hist.descrip, InFile, 79);
+d520 2
+a521 1
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+d526 1
+a526 2
+	printf ("imato4dfp completed successfully.  %s created.\n", output_4dfp);
+	close (fd_hdr);
+d528 51
+a578 1
+	fclose (fd_hdr);
+@
+
+
+1.3
+log
+@Before making further changes.
+@
+text
+@d1 1
+a1 1
+/*$Id: imato4dfp.c,v 1.2 1995/10/20 14:44:22 ty7777 Exp ty7777 $*/
+d3 3
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /data/petsun4/src/imato4dfp/RCS/imato4dfp.c,v 1.2 1995/10/20 14:44:22 ty7777 Exp ty7777 $";
+d58 1
+a58 1
+	char			*output_4dfp;
+d133 2
+a134 1
+	output_4dfp	= argv [4];
+a138 1
+	strcpy (ANALYZE_hdr, argv [4]);
+@
+
+
+1.2
+log
+@Header works.
+@
+text
+@d1 1
+a1 1
+/*$Id: imato4dfp.c,v 1.1 1995/10/19 16:50:12 ty7777 Exp ty7777 $*/
+d3 3
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /data/petsun4/src/imato4dfp/RCS/imato4dfp.c,v 1.1 1995/10/19 16:50:12 ty7777 Exp ty7777 $";
+d54 1
+d57 1
+d59 1
+d63 3
+d68 1
+d72 3
+a75 1
+	int             i, j, k, n;
+a92 1
+	char			order[4];
+a93 2
+	int				bitsperpix;
+	int             orientation;
+a95 2
+	int             global_max;		 /* global maximum */
+	int             global_min;		 /* global minimum */
+a97 4
+	short        ***img;			 /* output Analyze image */
+	short           num_slices;		 /* number of slices or frames in MRI */
+	short           xdim, ydim, zdim;	 /* image dimensions */
+	float           xpix, ypix, zpix;	 /* pixel sizes (mm) */
+d150 3
+a152 2
+	current_image_id	= start_image_id;
+	for (study_index = first_study; study_index <= last_study; study_index++) 
+d167 1
+a167 1
+		while (current_image_id <= end_image_id && U3Open (&FileInp_p, InFile, "r") == 0)
+d252 50
+d356 54
+d413 10
+d428 1
+d433 5
+a437 3
+			free (HeadBuffer);
+			free (DataBuffer);
+			Status = U3Close (FileInp_p);
+d442 2
+a443 1
+			current_image_id++;
+d456 3
+d465 42
+d508 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d33 1
+a33 1
+static char     rcsid[] = "$Header: /data/petsun4/src/imato4dfp/RCS/mri2analyze.c,v 1.4 1995/10/02 14:54:58 tom Exp $";
+a34 4
+/*  ----------------------------
+ *  Function:   mri2analyze
+ *  ----------------------------
+ */
+d36 2
+a37 2
+	int             argc;
+	char           *argv[];
+d39 23
+d63 1
+a63 8
+	FILE           *FileInp_p;		 /* input file pointer */
+	char            InFile[60];		 /* input file name */
+	long            Status;			 /* shows an actual status */
+	U3_header_type_t HeadType;
+	U3_data_type_t  DataType;
+	U3_size_type_t  DataSize;
+	header_t       *HeadBuffer;		 /* header buffer */
+	U_SHORT        *DataBuffer;		 /* pixel data buffer */
+a65 2
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* output ANALYZE image  */
+a69 2
+	char            ANALYZE_hdr[MAXSTR];	 /* output Analyze header filename */
+	char            ANALYZE_img[MAXSTR];	 /* output Analyze image filename */
+a71 1
+	char            num[12];
+a89 1
+	int             i, j, k, n;
+d113 5
+a117 4
+/*
+ *  Get command line arguments and initialize filenames:
+ *  ---------------------------------------------------
+ */
+d119 2
+a120 2
+	if (argc != 5) {
+		printf ("Usage: mri2analyze <input_root> <first#> <last#> <output_root>\n");
+d123 10
+a132 7
+	root = argv[1];
+	first = atoi (argv[2]);
+	last = atoi (argv[3]);
+	num_slices = last - first + 1;
+	strcpy (ANALYZE_img, argv[4]);
+	strcat (ANALYZE_img, ".img");
+	strcpy (ANALYZE_hdr, argv[4]);
+a133 2
+	strcpy (IF_hdr, argv[4]);
+	strcat (IF_hdr, ".ifh");
+d135 3
+a137 2
+	if ((fd_hdr = fopen (ANALYZE_hdr, "w")) == 0) {
+		printf ("Unable to create ANALYZE header %s\n", ANALYZE_hdr);
+d140 1
+a140 8
+	if ((fd_img = fopen (ANALYZE_img, "w")) == 0) {
+		printf ("Unable to create ANALYZE image %s\n", ANALYZE_img);
+		exit (1);
+	}
+	if ((fd_if = fopen (IF_hdr, "w")) == 0) {
+		printf ("Unable to create Interfile Format header %s\n", IF_hdr);
+		exit (1);
+	}
+d144 11
+a154 1
+/*	Loop for all input images */
+d156 2
+a157 3
+	for (slc = first; slc <= last; slc++) {
+		strcpy (InFile, root);
+		sprintf (num, "%d", slc);
+d159 2
+d163 3
+a165 1
+/* open file and check for success */
+d167 13
+a179 14
+		Status = U3Open (&FileInp_p, InFile, "r");
+		if (Status == 0) {
+			printf ("mri2analyze : reading %s ", InFile);
+		} else if (U3_isStatusError (Status, U3_NO_PERMISSION)) {
+			printf ("\nerror: mri2analyze : inadequate permission on data file %s\n", InFile);
+			exit (1);
+		} else if (U3_isStatusError (Status, U3_INVLD_FILE_PATH)) {
+			printf ("\nerror: mri2analyze : invalid file path for %s\n", InFile);
+			exit (1);
+		} else if (U3_isStatusError (Status, U3_UNKNOWN_HEADER)) {
+			printf ("\nerror: mri2analyze : file %s is not a valid image file\n", InFile);
+			exit (1);
+		} else
+			exit (1);
+d181 3
+a183 1
+/* determine header type */
+d185 3
+a187 8
+		if ((Status = U3GetHeaderType (FileInp_p, &HeadType)) != 0) {
+			printf ("\nerror: mri2analyze : unknown header type.\n");
+			exit (1);
+		}
+		switch (HeadType) {
+		case U3_internal_head_type:
+			printf (" (Numaris 3 format");
+			break;
+d189 3
+a191 3
+		case U3_nema_head_type:
+			printf (" (ACR-NEMA format");
+			break;
+d193 4
+a196 3
+		case U3_numaris1_head_type:
+			printf (" (Numaris 1 format");
+			break;
+d198 8
+a205 3
+		case U3_numaris2_head_type:
+			printf (" (Numaris 2 format");
+			break;
+d207 12
+a218 4
+		default:
+			printf ("\nThe data file format is unknown.\n");
+			exit (1);
+		}
+d220 8
+a227 1
+/* check data type and data size */
+d229 9
+a237 5
+		if ((Status = U3GetDataType (FileInp_p, &DataType, &DataSize)) != 0) {
+			printf ("\nerror: mri2analyze : unknown data type.\n");
+			exit (1);
+		}
+/* make sure it is an Image file */
+d239 6
+a244 36
+		if (DataType == U3_image_data_type) {
+			printf ("--image file)\n");
+		} else {
+			printf ("\nerror: mri2analyze : Data file is not an image file.\n");
+			exit (1);
+		}
+
+
+/* allocate memory space for the header buffer */
+
+		if ((HeadBuffer = (header_t *) malloc (sizeof (header_t))) == 0) {
+			printf ("\nerror : mri2analyze : unable to allocate memory.\n");
+			exit (1);
+		}
+/* get the header buffer */
+
+		if ((Status = U3GetHeader (FileInp_p, HeadBuffer)) != 0) {
+			free (HeadBuffer);
+			printf ("\nerror: mri2analyze : unable to get the header.\n");
+			exit (1);
+		}
+/* allocate memory space for the  data buffer */
+
+		/* calculate the number of bytes per pixel */
+		NumRows_ul = HeadBuffer->G28.Pre.Rows;
+		NumColumns_ul = HeadBuffer->G28.Pre.Columns;
+		NumPixels_ul = NumRows_ul * NumColumns_ul;
+
+		/* set the offset to start reading the data */
+		StartOffset_ul = 0;
+
+		/* allocate memory space according to the data size */
+		switch (DataSize) {
+		case U3_set_m_short:
+			if ((DataBuffer = (U_SHORT *) malloc (NumPixels_ul * BytesPerPixelShort)) == 0) {
+				printf ("\nerror : unable to allocate memory space for the data.");
+a246 1
+			break;
+d248 3
+a250 45
+		case U3_set_m_long:
+			printf ("\nerror : long integer format not acceptable.");
+			exit (1);
+
+		default:
+			printf ("\nerror: mri2analyze : Incompatible data type.\n");
+			exit (1);
+		}
+
+/* read the pixel data into the buffer */
+
+		if ((Status = U3ReadPixData (FileInp_p, StartOffset_ul,
+					     NumPixels_ul, &DataSize, DataBuffer)) != 0) {
+			free (HeadBuffer);
+			free (DataBuffer);
+			printf ("\nerror: unable to read the pixel data.\n");
+			exit (1);
+		}
+
+/*
+ *	Get image header information and orientation
+ */
+		if (slc == first) {
+			strcpy (institution, HeadBuffer->G08.Ide.InstitutionID);
+			strcpy (model, HeadBuffer->G08.Ide.ManufacturerModel);
+			strcpy (subject_id, HeadBuffer->G10.Pat.PatientId);
+			sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Year);
+			strcpy (study_date, num);
+			strcat (study_date, ":");
+			sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Month);
+			strcat (study_date, num);
+			strcat (study_date, ":");
+			sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Day);
+			strcat (study_date, num);
+			strcpy (ParameterFileName, HeadBuffer->G19.Acq4.CM.ParameterFileName);
+			strcpy (SequenceFileName, HeadBuffer->G19.Acq4.CM.SequenceFileName);
+			strcpy (SequenceDescription, HeadBuffer->G19.Acq4.CM.SequenceDescription);
+			bitsperpix = HeadBuffer->G28.Pre.BitsAllocated;
+			strncpy (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.X, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Y, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Z, 1);
+
+			orientation = HeadBuffer->G21.Rel1.CM.ViewDirection;
+			if (orientation < 1 && orientation > 6) {
+				printf ("\nerror: mri2analyze: Incompatible View Direction.\n");
+a252 1
+			printf ("%s  (%s)\n", view[orientation], order);
+d254 1
+a254 1
+			switch (orientation) {
+d256 6
+a261 9
+			case 1:						/* View_FEET */
+			case 2:						/* View_HEAD */
+				xdim = HeadBuffer->G28.Pre.Columns;
+				ydim = HeadBuffer->G28.Pre.Rows;
+				zdim = num_slices;
+				xpix = HeadBuffer->G28.Pre.PixelSize.Row;
+				ypix = HeadBuffer->G28.Pre.PixelSize.Row;
+				zpix = HeadBuffer->G18.Acq.SliceThickness;
+				break;
+d263 4
+a266 9
+			case 3:						/* View_AtoP */
+			case 5:						/* View_PtoA */
+				xdim = HeadBuffer->G28.Pre.Columns;
+				ydim = num_slices;
+				zdim = HeadBuffer->G28.Pre.Rows;
+				xpix = HeadBuffer->G28.Pre.PixelSize.Row;
+				ypix = HeadBuffer->G18.Acq.SliceThickness;
+				zpix = HeadBuffer->G28.Pre.PixelSize.Row;
+				break;
+d268 11
+a278 30
+			case 4:						/* View_LtoR */
+			case 6:						/* View_RtoL */
+				xdim = num_slices;
+				ydim = HeadBuffer->G28.Pre.Columns;
+				zdim = HeadBuffer->G28.Pre.Rows;
+				xpix = HeadBuffer->G18.Acq.SliceThickness;
+				ypix = HeadBuffer->G28.Pre.PixelSize.Row;
+				zpix = HeadBuffer->G28.Pre.PixelSize.Row;
+				break;
+
+			default:
+                printf ("\nerror: mri2analyze: Incompatible View Direction.\n");
+                exit (1);
+			}
+
+			printf ("x = %d (%f mm)  y = %d (%f mm)  z = %d (%f mm)\n",
+				xdim, xpix, ydim, ypix, zdim, zpix);
+
+			if (NULL == (img = (short ***) malloc ((short) (zdim * sizeof (short **))))) {
+				printf ("\nCould not malloc memory for ***img\n");
+				exit (1);
+			}
+			for (i = 0; i < zdim; i++) {
+				if (NULL == (img[i] = (short **) malloc ((short) (ydim * sizeof (short *))))) {
+					printf ("\nCould not malloc memory for **img\n");
+					exit (1);
+				}
+				for (j = 0; j < ydim; j++) {
+					if (NULL == (img[i][j] = (short *) malloc ((short) (xdim * sizeof (short))))) {
+						printf ("\nCould not malloc memory for *img\n");
+d281 7
+a287 1
+				}
+a288 1
+		}
+d290 10
+a299 13
+		if (strncmp (order, "LAF", 3) == 0) {	/* View_FEET */
+			n = 0;
+			k = slc - first;
+			for (j = ydim-1; j >= 0; j--) {
+				for (i = xdim-1; i >= 0; i--) {
+					datum = DataBuffer[n];
+					img[k][j][i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+d302 7
+a308 13
+		} else if (strncmp (order, "RAH", 3) == 0) {		/* View_HEAD */
+			n = 0;
+			k = slc - first + 1;	/* subtract 1 from zdim in loop */
+			for (j = ydim-1; j >= 0; j--) {
+				for (i = 0; i < xdim; i++) {
+					datum = DataBuffer[n];
+					img[zdim - k][j][i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+d311 6
+a316 14
+        } else if (strncmp (order, "RHA", 3) == 0) {     /* View_AtoP */
+			n = 0;
+			j = slc - first + 1;	/* subtract 1 from ydim in loop */
+			for (k = zdim-1; k >= 0; k--) {
+				for (i = 0; i < xdim; i++) {
+					datum = DataBuffer[n];
+					img[k][ydim - j][i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+			}
+d318 4
+a321 14
+        } else if (strncmp (order, "LHP", 3) == 0) {     /* View_PtoA */
+			n = 0;
+			j = slc - first;
+			for (k = zdim-1; k >= 0; k--) {
+				for (i = xdim-1; i >= 0; i--) {
+					datum = DataBuffer[n];
+					img[k][j][i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+			}
+d323 6
+a328 33
+        } else if (strncmp (order, "AHR", 3) == 0) {     /* View_LtoR */
+			n = 0;
+			i = slc - first;
+			for (k = zdim-1; k >= 0; k--) {
+				for (j = ydim-1; j >= 0; j--) {
+					datum = DataBuffer[n];
+					img[k][j][i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+			}
+
+        } else if (strncmp (order, "PHL", 3) == 0) {     /* View_RtoL */
+			n = 0;
+			i = slc - first + 1;	/* subtract 1 from xdim in loop */
+			for (k = zdim-1; k >= 0; k--) {
+				for (j = 0; j <= ydim; j++) {
+					datum = DataBuffer[n];
+					img[k][j][xdim - i] = datum;
+					if (datum > global_max)
+						global_max = datum;
+					if (datum < global_min)
+						global_min = datum;
+					n++;
+				}
+			}
+
+		} else {
+            printf ("\nerror: mri2analyze: Incompatible Order:  %s\n", order);
+            exit (1);
+a329 4
+
+		free (HeadBuffer);
+		free (DataBuffer);
+		Status = U3Close (FileInp_p);
+d332 1
+a332 16
+/*
+ * Write to output file
+ */
+ 
+    for (k = 0; k < zdim ; k++) {
+        for (j = 0; j < ydim; j++)  {
+			if ((fwrite (img[k][j], sizeof (short), xdim, fd_img)) != xdim) {
+				printf ("Error writing to: %s\n", ANALYZE_img);
+				exit (1);
+			}
+        }
+    }
+ 
+/*
+ * Create Analyze hdr file
+ */
+d334 3
+a336 36
+	strncpy (hdr.hk.db_name, InFile, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	hdr.hk.extents = 16384;			 /* recommended by developers  */
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.dime.dim[0] = 4;			 /* 4 dimensions  */
+	hdr.dime.dim[1] = xdim;
+	hdr.dime.dim[2] = ydim;
+	hdr.dime.dim[3] = zdim;
+	hdr.dime.dim[4] = 1;			 /* one volume */
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 4;			 /* 16 bit signed integer  */
+	hdr.dime.bitpix = bitsperpix;
+	hdr.dime.pixdim[1] = xpix;
+	hdr.dime.pixdim[2] = ypix;
+	hdr.dime.pixdim[3] = zpix;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = global_max;
+	hdr.dime.glmin = global_min;
+	strncpy (hdr.hist.descrip, InFile, 79);
+	strcpy (hdr.hist.originator, "mri2analy");
+	strncpy (hdr.hist.patient_id, version, 4);
+	hdr.hist.orient = TRANSVERSE;
+
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		printf ("Error writing to: %s\n", ANALYZE_hdr);
+d340 1
+a340 39
+/*
+ * Create Interfile Format header file
+ */
+
+	fprintf (fd_if, "INTERFILE :=\n");
+	fprintf (fd_if, "version of keys	:= 3.3\n");
+	fprintf (fd_if, "image modality	:= mri\n");
+	fprintf (fd_if, "originating system	:= %s\n", model);
+	fprintf (fd_if, "conversion program	:= mri2analyze\n");
+	fprintf (fd_if, "program version	:= %s\n", version);
+	fprintf (fd_if, "program date	:= %s\n", program_date);
+	fprintf (fd_if, "original institution	:= %s\n", institution);
+	fprintf (fd_if, "name of data file	:= %s\n", ANALYZE_img);
+    fprintf (fd_if, "patient ID := %s\n", subject_id);
+	fprintf (fd_if, "study date	:= %s\n", study_date);
+
+	fprintf (fd_if, "number format	:= signed integer\n");
+	fprintf (fd_if, "number of bytes per pixel	:= %d\n", bitsperpix/8);
+	fprintf (fd_if, "number of dimensions	:= 3\n");
+	fprintf (fd_if, "matrix size [1]	:= %d\n", xdim);
+	fprintf (fd_if, "matrix size [2]	:= %d\n", ydim);
+	fprintf (fd_if, "matrix size [3]	:= %d\n", zdim);
+	fprintf (fd_if, "scaling factor (mm/pixel) [1]	:= %f\n", xpix);
+	fprintf (fd_if, "scaling factor (mm/pixel) [2]	:= %f\n", ypix);
+	fprintf (fd_if, "scaling factor (mm/pixel) [3]	:= %f\n", zpix);
+	fprintf (fd_if, "matrix initial element [1]	:= right\n");
+	fprintf (fd_if, "matrix initial element [2]	:= posterior\n");
+	fprintf (fd_if, "matrix initial element [3]	:= inferior\n");
+	fprintf (fd_if, "mri parameter file name	:= %s\n", ParameterFileName);
+	fprintf (fd_if, "mri sequence file name	:= %s\n", SequenceFileName);
+	fprintf (fd_if, "mri sequence description	:= %s\n", SequenceDescription);
+
+/* free all buffers and exit */
+
+	printf ("\nmri2analyze completed successfully.  %s created.\n", ANALYZE_img);
+	close (fd_hdr);
+	close (fd_img);
+	close (fd_if);
+	exit (0);
+@

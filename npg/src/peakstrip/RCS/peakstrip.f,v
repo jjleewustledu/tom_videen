@@ -1,0 +1,368 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.4
+date	2004.02.17.15.06.13;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.01.06.22.36.41;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@C $Log $
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C  Program:      PEAKSTRIP.FTN
+C  Author:       Tom O. Videen
+C  Date:         Jan-97
+C  Written For:  Generate list of image peaks
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM PEAKSTRIP
+C
+C  Common block variables
+C
+      INTEGER*2   IMG (128, 128, 75) ! image array
+      INTEGER*2   MASK (128, 128, 75)! masking array
+      LOGICAL*1   INC (128, 128, 75) ! elements included in this peak
+      LOGICAL*1   USED (128, 128, 75)! elements included in other peaks
+      INTEGER*4   XLOC (310, 0:4)    ! locations of pixels for 2D section
+      INTEGER*4   YLOC (310, 0:4)    !    of a local region
+      INTEGER*4   NPIX (0:4)         ! number of pixels in region for 2D section
+      INTEGER*4   NSUM               ! total pixels within 3D region
+C
+C Variables associated with calling C functions
+C
+      INTEGER*4    ZORIGIN 
+      INTEGER*4    NUMSLICES	 ! number of slices obtained by calling getimagetype
+      INTEGER*4    getimagetype 
+      external     getimagetype  !$pragma C (getimagetype)
+      external     getimage		 !$pragma C (getimage)
+C
+C  logical units
+C
+      INTEGER*4   OUTLU         ! lu for output file
+      INTEGER*4   USEROUT       ! lu for user output
+      INTEGER*4   TABLE         ! lu for list of regional pixel locations
+C
+      INTEGER*4   SLICE         ! slice number
+      INTEGER*4   NSLICES       ! no. of slices
+      INTEGER*4   PETTNUM       ! PETT no.
+      INTEGER*4   THRESH        ! threshold
+      INTEGER*4   SIGN          ! sign of threshold
+      INTEGER*4   MAX           ! absolute of min or max value
+      INTEGER*4   CUTOFF        ! temporary maximum (always positive)
+      INTEGER*4   SUM           ! sum of pixels > CUTOFF
+      INTEGER*4   REGRADIUS     ! region radius (0,1,2,3, or 4)
+      INTEGER*4   RADIUS        ! local for reading radius from region table
+      INTEGER*4   ZL            ! local for reading Z-loc  from region table
+      INTEGER*4   LEN
+C
+      INTEGER*4   X1,Y1,Z1      ! local peak (I,J,SLICE)
+      INTEGER*4   X(100)        ! list of x for local max
+      INTEGER*4   Y(100)        ! list of y for local max
+      INTEGER*4   Z(100)        ! list of slice for local max
+      INTEGER*4   TOT           ! number of regions in list
+      INTEGER*4   NMIN          ! number of peak nearest to current one
+      INTEGER*4   I,J,K,N       ! local indices and temporary values
+      INTEGER*4   MASK_EXIST    ! 1, mask image exist; 0, mask image does not exist.
+C
+      REAL*4      FRAC          ! fraction of peak to distinguish
+      REAL*4      XR,YR,ZR      ! stereotaxic conversion of XYZ
+      REAL*4      DISTANCE      ! vector distance between 2 peaks (in mm)
+      REAL*4      SEPARATION    ! minimum distance between 2 peaks (in mm)
+      REAL*4      DMIN          ! minimum distance for current peak
+C
+      CHARACTER*256 FNAME       ! file name for image
+      CHARACTER*256 MNAME       ! file name for mask
+      CHARACTER*256 PEAKNAME    ! file name for peak file
+      CHARACTER*256 TBLNAME     ! file name for table file
+      CHARACTER*256 RCSHEADER
+      CHARACTER*256 STR         ! string used for reading in command line arguments
+C
+      INTEGER*4   ERR           ! error reading image file
+      LOGICAL*1   UNIQUE        ! peak is unique
+C
+      COMMON /PEAKPARM/ IMG, MASK, INC, USED, XLOC, YLOC, NPIX, NSUM
+C
+      RCSHEADER = '$Header: /home/npggw/tom/src/peakstrip/RCS/peakstrip.f,v 1.1 1997/01/06 22:36:41 tom Exp tom $'
+C
+      DATA USEROUT, TABLE, OUTLU  /6, 7, 8/
+C
+      WRITE (USEROUT, *) 'peakstrip - image peak identifier {Jan-97}'
+      WRITE (USEROUT, *) 'Copyright 1997, Washington University.'
+      WRITE (USEROUT, *) 'All rights reserved. Unauthorized reproduction prohibited.'
+      WRITE (USEROUT, *) 
+C
+C  Initializations
+C
+      DISTANCE = 0.
+      RADIUS = 0
+      NMIN = 0
+      TOT = 0
+      DO 10 I=1,100
+        X(I) = 0
+        Y(I) = 0
+        Z(I) = 0
+10    CONTINUE
+      DO 40 SLICE = 1, 75
+        DO 30 J = 1, 128
+          DO 20 I = 1, 128
+            USED (I, J, SLICE) = .FALSE.
+            MASK (I, J, SLICE) = 1
+20        CONTINUE
+30      CONTINUE
+40    CONTINUE
+C
+C
+8010  FORMAT (I6)
+8020  FORMAT (F80.4)
+8030  FORMAT (F80.0)
+
+      CALL GETARG (1, FNAME)
+      CALL GETARG (2, PEAKNAME)
+      CALL GETARG (3, STR)
+      READ (STR, 8010) THRESH
+      CALL GETARG (4, STR)
+      READ (STR, 8020) FRAC
+      CALL GETARG (5, STR)
+      READ (STR, 8030) SEPARATION
+      CALL GETARG (6, STR)
+      READ (STR, 8010) REGRADIUS
+      CALL GETARG (7, TBLNAME)
+      CALL GETARG (8, STR)
+      READ (STR, 8010) MASK_EXIST
+      CALL GETARG (9, MNAME)
+
+      LEN = INANYR(FNAME, ' ')
+C
+C  Check these parameters
+C
+C  Set SIGN
+C
+      SIGN = 1
+      IF (THRESH .GT. 0) THEN
+        SIGN = 1
+      ELSE IF (THRESH .LT. 0) THEN
+        SIGN = -1
+      ELSE
+        WRITE (USEROUT, *) '*** Threshold cannot be 0!'
+        STOP
+      END IF
+C
+      IF (REGRADIUS .LT. 0 .OR. REGRADIUS .GT. 4) THEN
+        WRITE (USEROUT, *) '*** Region radius must be 0, 1, 2, 3, or 4'
+        STOP
+      END IF
+C
+      OPEN (OUTLU, FILE = PEAKNAME, STATUS = 'OLD', ERR = 61)
+      CLOSE (OUTLU, STATUS = 'DELETE')    
+61    OPEN (OUTLU, FILE = PEAKNAME, STATUS = 'NEW', ERR = 62)
+      GO TO 71
+62    WRITE (USEROUT, *) '*** Error: opening output file ', PEAKNAME
+      STOP
+
+71    OPEN (TABLE, FILE = TBLNAME, STATUS = 'OLD', ERR = 72)
+      GO TO 81
+72    WRITE (USEROUT, *) '*** Error: opening timage.tbl file ', TBLNAME
+      STOP
+81    CONTINUE
+C  ---------------------------------------------------------------
+C  Get the locations defining the region used for averaging:
+C    Read all z-locations for each radius until the proper radius is read.
+C    NPIX(ZL) will be no. of pixels at each Z location.
+C    NSUM will be total no. of pixels in 3D region.
+C
+8080  FORMAT (3I6)
+8090  FORMAT (30((24I3)/))
+      READ (TABLE, *, END = 70)     ! first line is a header
+      DO 60 I = 0, REGRADIUS
+        NSUM = 0
+        DO 50 J = 0, I
+          READ (TABLE, 8080, ERR = 70, END = 70) RADIUS, ZL, NPIX (ZL)
+          READ (TABLE, 8090, ERR = 70, END = 70)
+     &      (XLOC (K, ZL), YLOC (K, ZL), K = 1, NPIX (ZL))
+          IF (J .EQ. 0) THEN
+            NSUM = NSUM + NPIX (ZL)
+          ELSE
+            NSUM = NSUM + 2 * NPIX (ZL)
+          END IF
+50      CONTINUE
+60    CONTINUE
+      WRITE(USEROUT,*) NSUM,' pixels per region for radius ',RADIUS
+C
+C  Error logging for input list read errors
+C
+      GO TO 80
+70    WRITE (USEROUT, *) 'Error reading region table, TIMAGE.TBL'
+      STOP
+80    CONTINUE
+C
+C  ---------------------------------------------------------------
+C  Get the total number of the slices in image and the zorigin
+C
+      PETTNUM = getimagetype (FNAME, NUMSLICES, ZORIGIN)
+      IF (PETTNUM .EQ. -1) THEN
+		WRITE (STDOUT, *) 'Wrong image type for ', FNAME
+		STOP
+      ENDIF
+C
+C  ---------------------------------------------------------------
+C  Read the masking image, if defined
+C
+      IF (MASK_EXIST .GT. 0) THEN
+        DO 85 SLICE = 1, NUMSLICES
+        	CALL getimage (MASK(1,1,SLICE), MNAME, %VAL(SLICE), NSLICES, ERR)
+	  		IF (NUMSLICES .NE. NSLICES) THEN
+	    		WRITE (USEROUT, *) 'Image and Mask have different numbers of slices.'
+				STOP
+	  		ENDIF
+85      CONTINUE
+      END IF
+C
+C  ---------------------------------------------------------------
+C  Read the entire image and perform regional averaging, if required
+C
+      IF (REGRADIUS .EQ. 0) THEN
+        DO 90 SLICE = 1, NUMSLICES
+        	CALL getimage (IMG(1,1,SLICE), FNAME, %VAL(SLICE), NSLICES, ERR)
+90      CONTINUE
+      ELSE
+        CALL PEAKAVG (REGRADIUS, FNAME, ERR, NUMSLICES)
+        IF (ERR .GT. 0) THEN
+          WRITE (USEROUT, *) '*** Error in PEAKAVG'
+          STOP
+        END IF
+      END IF
+C
+C  Write important parameters to user and output file
+C
+      WRITE (USEROUT, 8100) FNAME, MNAME, REGRADIUS, NSUM
+      WRITE (USEROUT, 8110) THRESH, FRAC, SEPARATION
+8100  FORMAT (1X, 2A20, 'Averaging Radius = ', I2, ' pixels (vol = ', I3, ')')
+8110  FORMAT (1X, 'Threshold = ', I6,' Separation Fraction = ', F5.2,
+     &  '  Separation Distance = ', F5.1, ' mm')
+C
+C GENRP1MD            GENP1MK             Averaging Radius = 3 pixels (vol=147)
+C Threshold = 25  Separation Fraction = 0.90  Separation Distance = 18.0 mm
+C
+C  BEGIN PEAK IDENTIFICATION LOOP
+C---------------------------------------------------------
+C  Find max pixel which is not USED and not MASKed
+C
+100   MAX = 0
+      DO 130 SLICE = 1, NUMSLICES
+        DO 120 J = 1, 128
+          DO 110 I = 1, 128
+            IF (.NOT. USED (I, J, SLICE) .AND. MASK (I, J, SLICE) .GT. 0) THEN
+              N = SIGN * IMG (I, J, SLICE)
+              IF (N .GT. MAX) THEN
+                MAX = N
+                X1 = I
+                Y1 = J
+                Z1 = SLICE
+              END IF
+            END IF
+110       CONTINUE
+120     CONTINUE
+130   CONTINUE
+C
+C  Compare with threshold for peaks
+C
+      WRITE(USEROUT,*) MAX, SIGN*THRESH
+      IF (MAX.LT.SIGN*THRESH) GO TO 900
+C
+C  Set CUTOFF for this peak
+C
+      CUTOFF = NINT(FRAC*FLOAT(MAX))
+      WRITE(USEROUT,*) 'Max = ',SIGN*MAX,'  Cutoff = ',SIGN*CUTOFF
+C
+C  Is this PEAK unique?
+C
+      SUM = 0
+      CALL PEAK3DCK (X1, Y1, Z1, SIGN, CUTOFF, SUM, UNIQUE, NUMSLICES)
+      IF (UNIQUE) THEN
+        IF (SIGN.GT.0) THEN
+          WRITE(USEROUT,*) SUM,' pixels > ',CUTOFF
+        ELSE
+          WRITE(USEROUT,*) SUM,' pixels < ',SIGN*CUTOFF
+        END IF
+      ELSE
+        GO TO 100
+      END IF
+C
+C  Is it at least SEPARATION mm from all existing peaks?
+C
+      DMIN = 0.
+      NMIN = 1
+      IF (TOT.GT.0) THEN
+        DO 200 K=1,TOT
+          DISTANCE = SQRT(FLOAT((X1-X(K))**2 + (Y1-Y(K))**2 +
+     &      (Z1-Z(K))**2))*2.0
+          IF (DISTANCE.LT.SEPARATION) THEN
+            GO TO 100
+          ELSE IF (K.EQ.1) THEN
+            DMIN = DISTANCE
+            NMIN = K
+          ELSE IF (DISTANCE.LT.DMIN) THEN
+            DMIN = DISTANCE
+            NMIN = K
+          END IF
+200     CONTINUE
+      END IF
+C  If so, add it to the list of true peaks
+C
+      TOT = TOT + 1
+      X(TOT) = X1
+      Y(TOT) = Y1
+      Z(TOT) = Z1
+      ZR = (ZORIGIN - FLOAT (Z1)) * 2.0
+      XR = (FLOAT (X1) - 64.5) * 2.0
+      YR = (64.5 - FLOAT (Y1)) * 2.0
+C
+C  Write peak to output file
+C
+8200  FORMAT(1X,4I6,5X,A)
+      WRITE (USEROUT, 8200) IMG (X1, Y1, Z1), X1, Y1, Z1, FNAME(1:LEN)
+      WRITE (OUTLU, 8200)   IMG (X1, Y1, Z1), X1, Y1, Z1, FNAME(1:LEN)
+C
+C  Have 100 peaks been identified?
+C
+      IF (TOT.EQ.100) THEN
+        WRITE(USEROUT,*) '*** TOT = ',TOT
+        GO TO 900
+      END IF
+C
+      GO TO 100
+C---------------------------------------------------------
+900   CLOSE (TABLE) 
+      CLOSE (OUTLU) 
+      STOP
+      END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d76 1
+a76 1
+      RCSHEADER = '$Header: /home/npggw/tom/src/peakstrip/RCS/peakstrip.f,v 2.0 1996/10/16 22:41:52 tom Exp $'
+@

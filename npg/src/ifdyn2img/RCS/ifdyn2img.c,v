@@ -1,0 +1,641 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2006.04.18.18.27.22;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2006.04.12.14.16.08;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2006.04.11.20.34.47;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2006.04.11.18.16.57;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2006.04.11.16.16.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@correct orientation
+@
+text
+@/* $Log: ifdyn2img.c,v $
+ * Revision 1.4  2006/04/12  14:16:08  tom
+ * correct orientation
+ *
+ * Revision 1.3  2006/04/11  20:34:47  tom
+ * fix times
+ *
+ * Revision 1.2  2006/04/11  18:16:57  tom
+ * byte-swap image before conversion
+ *
+ * Revision 1.1  2006/04/11  16:16:02  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			dyn2img.c
+ *	Date:			Apr 2006
+ *	Author:			Tom Videen
+ *	Description:	Create an ECAT 7 image from dynamic Interfile image file.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ifdyn2img/RCS/ifdyn2img.c,v 1.4 2006/04/12 14:16:08 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <image.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+#include <libimage.h>
+
+/*	----------------------------
+ *	Function:	dyn2img
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	ImageFile      *file;
+	Index           indx;
+	FILE           *ifh;			 /* Interfile header */
+	FILE           *ifi;			 /* Interfile image */
+	char           *hname;			 /* input header filename */
+	char           *iname;			 /* input image filename */
+	char           *ecatimg;		 /* output PET image filename */
+
+	char            str[256];
+	char           *ptr;
+	float           size[3];
+	int             dim[4];
+	long            dim1, dim2, dim3;
+	int             xorient;		 /* left-right */
+	int             yorient;		 /* anterior-posterior */
+	int             zorient;		 /* superior-inferior */
+	int             orient;			 /* 0-7 */
+	int             nfrms;
+	int             ngroup = 0;
+	int             ntype = 0;
+	int             nbytes = 0;
+	float           scale = 1;
+	float           duration = 1;
+	float           pause = 0;
+	float          *fdelay;
+	float          *ftime;
+	float          *scaler;
+	float          *counts;
+	float           start;
+	float           val;
+	int             i, j, k, n;
+
+	float        ***img;
+	float          *frow;
+	short          *srow;
+
+	if (argc != 4) {
+		(void) printf ("Usage: dyn2img ifhname ifiname ecatimg\n");
+		return (ERROR);
+	}
+	hname = argv[1];
+	iname = argv[2];
+	ecatimg = argv[3];
+
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ * Read Interfile header
+ */
+
+	if ((ifh = fopen (hname, "r")) == 0) {
+		(void) printf ("ERROR [dyn2img]: opening %s\n", hname);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), ifh) == NULL) {
+		(void) printf ("ERROR [dyn2img]: reading %s\n", hname);
+		return (ERROR);
+	}
+	if (strstr (str, "INTERFILE") == NULL) {
+		(void) printf ("ERROR [dyn2img]: %s is not an Interfile header\n", hname);
+		return (ERROR);
+	}
+	while (fgets (str, sizeof (str), ifh) != NULL) {
+		ptr = strstr (str, ":=");
+		if (ptr != NULL) {
+			ptr += 2;
+			if (strstr (str, "number format") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				if (strstr (ptr, "signed integer") != NULL)
+					ntype = 4;
+				else if
+					(strstr (ptr, "float") != NULL)
+					ntype = 16;
+				else {
+					(void) printf ("ERROR [dyn2img]: image format not signed integer or float\n");
+					return (ERROR);
+				}
+				continue;
+			}
+			if (strstr (str, "frame group number") != NULL) {
+				(void) sscanf (ptr, "%d", &ngroup);
+				continue;
+			}
+			if (strstr (str, "image duration (sec)") != NULL) {
+				(void) sscanf (ptr, "%f", &duration);
+				ftime[ngroup] = duration;
+				continue;
+			}
+			if (strstr (str, "pause between frame groups (sec)") != NULL) {
+				(void) sscanf (ptr, "%f", &pause);
+				fdelay[ngroup] = pause;
+				continue;
+			}
+			if (strstr (str, "data rescale slope") != NULL) {
+				(void) sscanf (ptr, "%f", &scale);
+				scaler[ngroup] = scale;
+				continue;
+			}
+			if (ngroup < 1) {
+				if (strstr (str, "number of bytes per pixel") != NULL) {
+					(void) sscanf (ptr, "%d", &nbytes);
+					continue;
+				}
+				if (strstr (str, "matrix size [1]") != NULL) {
+					(void) sscanf (ptr, "%d", &dim[0]);
+					continue;
+				}
+				if (strstr (str, "matrix size [2]") != NULL) {
+					(void) sscanf (ptr, "%d", &dim[1]);
+					continue;
+				}
+				if (strstr (str, "matrix size [3]") != NULL) {
+					(void) sscanf (ptr, "%d", &dim[2]);
+					continue;
+				}
+				if (strstr (str, "total number of images") != NULL) {
+					(void) sscanf (ptr, "%d", &nfrms);
+					dim[3] = nfrms;
+					fdelay = (float *) calloc (nfrms, sizeof (float));
+					ftime = (float *) calloc (nfrms, sizeof (float));
+					scaler = (float *) calloc (nfrms, sizeof (float));
+					counts = (float *) calloc (nfrms, sizeof (float));
+					if (fdelay == NULL || ftime == NULL)
+						return (ERROR);
+					continue;
+				}
+				if (strstr (str, "scaling factor (mm/pixel) [1]") != NULL) {
+					(void) sscanf (ptr, "%f", &size[0]);
+					continue;
+				}
+				if (strstr (str, "scaling factor (mm/pixel) [2]") != NULL) {
+					(void) sscanf (ptr, "%f", &size[1]);
+					continue;
+				}
+				if (strstr (str, "scaling factor (mm/pixel) [3]") != NULL) {
+					(void) sscanf (ptr, "%f", &size[2]);
+					continue;
+				}
+				if (strstr (str, "matrix initial element [1]") != NULL) {
+					while (*ptr == ' ')
+						ptr++;
+					if (strstr (ptr, "left") != NULL)
+						xorient = 0;
+					else if (strstr (ptr, "right") != NULL)
+						xorient = 1;
+					else {
+						fprintf (stderr, "ERROR [dyn2img]: unexpected orientation[3] %s\n", ptr);
+						return (ERROR);
+					}
+					continue;
+				}
+				if (strstr (str, "matrix initial element [2]") != NULL) {
+					while (*ptr == ' ')
+						ptr++;
+					if (strstr (ptr, "anterior") != NULL)
+						yorient = 0;
+					else if (strstr (ptr, "posterior") != NULL)
+						yorient = 1;
+					else {
+						fprintf (stderr, "ERROR [dyn2img]: unexpected orientation[1] %s\n", ptr);
+						return (ERROR);
+					}
+					continue;
+				}
+				if (strstr (str, "matrix initial element [3]") != NULL) {
+					while (*ptr == ' ')
+						ptr++;
+					if (strstr (ptr, "superior") != NULL)
+						zorient = 0;
+					else if (strstr (ptr, "inferior") != NULL)
+						zorient = 1;
+					else {
+						fprintf (stderr, "ERROR [dyn2img]: unexpected orientation[2] %s\n", ptr);
+						return (ERROR);
+					}
+					continue;
+				}
+			}
+		}
+	}
+	(void) fclose (ifh);
+	orient = xorient + yorient * 2 + zorient * 4;
+	fprintf (stdout, "Orientation: %1d %1d %1d %1d\n", xorient, yorient, zorient, orient);
+	switch (orient) {
+	case 0:
+		fprintf (stdout, "left ant sup\n");
+		break;
+	case 1:
+		fprintf (stdout, "right ant sup\n");
+		break;
+	case 2:
+		fprintf (stdout, "left post sup\n");
+		break;
+	case 3:
+		fprintf (stdout, "right post sup\n");
+		break;
+	case 4:
+		fprintf (stdout, "left ant inf\n");
+		break;
+	case 5:
+		fprintf (stdout, "right ant inf\n");
+		break;
+	case 6:
+		fprintf (stdout, "left post inf\n");
+		break;
+	case 7:
+		fprintf (stdout, "right post inf\n");
+		break;
+	}
+/*
+ *	Create ECAT file
+ */
+
+	file = make_imgfile (ecatimg);
+	if (make_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [dyn2img]: make_mh for %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (make_sh (file) == ERROR) {
+		fprintf (stderr, "ERROR [dyn2img]: make_sh for %s\n", ecatimg);
+		return (ERROR);
+	}
+	file->mh->file_format = MATRIX_REV7;
+	file->mh->filetype = PetVolume;
+	file->mh->scanner_type = 0;
+	file->mh->start_time = 0;
+	for (i = 0; i < 8; i++)
+		file->mh->isotope[i] = ' ';
+	for (i = 0; i < 32; i++)
+		file->mh->radiopharmaceutical[i] = ' ';
+	file->mh->bed_elevation = 0;
+	file->mh->wobble_speed = 0;
+	file->mh->calibration_factor = 1;
+	file->mh->sw_revision = (char *) calloc (32, sizeof (char));
+	file->mh->filetime = (char *) calloc (32, sizeof (char));
+	file->mh->nplane = dim[2];
+	file->mh->nframe = dim[3];
+	file->mh->ngate = 1;
+	file->mh->nbed = 1;
+	file->mh->init_bed_pos = 0;
+	for (i = 0; i < 16; i++)
+		file->mh->bed_off[i] = 0;
+	file->mh->slicesep = 0.1 * size[2];
+
+	file->sh->number_format = SHORT_DATA;
+	file->sh->ndim = 3;
+	file->sh->dim1 = dim[0];
+	file->sh->dim2 = dim[1];
+	file->sh->dim3 = dim[2];
+	file->sh->sample_size_1 = 0.1 * size[0];
+	file->sh->sample_size_2 = 0.1 * size[1];
+	file->sh->sample_size_3 = 0.1 * size[2];
+
+	if (make_mh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [dyn2img]: make_mh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+	(void) fill_mh7 (file);
+	if (make_sh7 (file) == ERROR) {
+		fprintf (stderr, "ERROR [dyn2img]: make_sh7 for %s\n", ecatimg);
+		return (ERROR);
+	}
+	(void) strncpy (file->m7->mh->original_file_name, hname, 31);
+	file->m7->sh->x_pixel_size = size[0];
+	file->m7->sh->y_pixel_size = size[1];
+	file->m7->sh->z_pixel_size = size[2];
+	file->m7->mh->plane_separation = size[2];
+	file->sh->decay_corr = 1.0;
+	file->m7->sh->decay_corr_fctr = 1.0;
+	file->mh->nplane = dim[2];
+	file->mh->orientation = 0;
+	file->sh->dim3 = dim[2];
+
+	(void) strcpy (file->name, ecatimg);
+	(void) strcpy (file->mode, "w");
+	indx.frm = 1;
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [dyn2img]: opening %s\n", ecatimg);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [dyn2img]: writing %s\n", ecatimg);
+		return (ERROR);
+	}
+/*
+ *	Read image data
+ */
+
+	if ((ifi = fopen (iname, "r")) == 0) {
+		(void) printf ("ERROR [dyn2img]: opening %s\n", iname);
+		return (ERROR);
+	}
+	dim1 = dim[0];
+	dim2 = dim[1];
+	dim3 = dim[2];
+	if (NULL == (srow = (short *) calloc (dim1, sizeof (short)))) {
+		(void) fprintf (stderr, "ERROR [dyn2img]: calloc srow\n");
+		return (ERROR);
+	}
+	if (NULL == (frow = (float *) calloc (dim1, sizeof (float)))) {
+		(void) fprintf (stderr, "ERROR [dyn2img]: calloc frow\n");
+		return (ERROR);
+	}
+	if ((img = f3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		(void) fprintf (stderr, "ERROR [dyn2img]: malloc img\n");
+		return (ERROR);
+	}
+	start = 0;
+	for (n = 0; n < nfrms; n++) {
+		for (i = 1; i <= dim3; i++) {
+			for (j = 1; j <= dim2; j++) {
+				if (ntype == 4) {
+					if ((fread (srow, sizeof (short), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [dyn2img]: reading: %s\n", iname);
+						return (ERROR);
+					}
+					for (k = 1; k <= dim1; k++) {
+						val = scaler[n] * (float) srow[k];
+						counts[n] += val;
+						switch (orient) {
+						case 0:
+							img[i][j][k] = val;
+							break;
+						case 1:
+							img[i][j][dim1 + 1 - k] = val;
+							break;
+						case 2:
+							img[i][dim2 + 1 - j][k] = val;
+							break;
+						case 3:
+							img[i][dim2 + 1 - j][dim1 + 1 - k] = val;
+							break;
+						case 4:
+							img[dim3 + 1 - i][j][k] = val;
+							break;
+						case 5:
+							img[dim3 + 1 - i][j][dim1 + 1 - k] = val;
+							break;
+						case 6:
+							img[dim3 + 1 - i][dim2 + 1 - j][k] = val;
+							break;
+						case 7:
+							img[dim3 + 1 - i][dim2 + 1 - j][dim1 + 1 - k] = val;
+							break;
+						}
+					}
+				} else {
+					if ((fread (frow, sizeof (float), dim1, ifi)) != dim1) {
+						(void) fprintf (stderr, "ERROR [dyn2img]: reading: %s\n", iname);
+						return (ERROR);
+					}
+					for (k = 1; k <= dim1; k++) {
+						val = scaler[n] * frow[k];
+						counts[n] += val;
+						switch (orient) {
+						case 0:
+							img[i][j][k] = val;
+							break;
+						case 1:
+							img[i][j][dim1 + 1 - k] = val;
+							break;
+						case 2:
+							img[i][dim2 + 1 - j][k] = val;
+							break;
+						case 3:
+							img[i][dim2 + 1 - j][dim1 + 1 - k] = val;
+							break;
+						case 4:
+							img[dim3 + 1 - i][j][k] = val;
+							break;
+						case 5:
+							img[dim3 + 1 - i][j][dim1 + 1 - k] = val;
+							break;
+						case 6:
+							img[dim3 + 1 - i][dim2 + 1 - j][k] = val;
+							break;
+						case 7:
+							img[dim3 + 1 - i][dim2 + 1 - j][dim1 + 1 - k] = val;
+							break;
+						}
+					}
+				}
+			}
+		}
+		file->sh->start_time = start * 1000;
+		file->sh->duration = ftime[n] * 1000;
+		indx.frm = n + 1;
+		if (writetensor (file, &indx, img) == ERROR) {
+			fprintf (stderr, "ERROR [dyn2img]: writing %s\n", ecatimg);
+			return (ERROR);
+		}
+		start = start + ftime[n] + fdelay[n];
+	}
+
+	(void) fclose (ifi);
+	(void) fprintf (stdout, "Frm    Start   Time    Scaler        Counts\n");
+	(void) fprintf (stdout, "---    -----   ----    ------        ------\n");
+	start = 0;
+	for (n = 0; n < nfrms; n++) {
+		(void) fprintf (stdout, "%3d %8.2f %7.3f  %f  %11.0f\n",
+				n + 1, start, ftime[n], scaler[n], counts[n]);
+		start = start + ftime[n] + fdelay[n];
+	}
+/*
+ *	Free & Exit
+ */
+
+	fprintf (stdout, "Converted: %s to %s\n", hname, ecatimg);
+	free_f3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+	free (srow);
+	free (frow);
+	free_imgfile (file);
+	return (OK);
+}
+@
+
+
+1.4
+log
+@correct orientation
+@
+text
+@d2 3
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ifdyn2img/RCS/ifdyn2img.c,v 1.3 2006/04/11 20:34:47 tom Exp tom $";
+a52 3
+	char           *orient1;
+	char           *orient2;
+	char           *orient3;
+d57 4
+d73 1
+a92 6
+	orient1 = (char *) calloc (20, sizeof (char));
+	orient2 = (char *) calloc (20, sizeof (char));
+	orient3 = (char *) calloc (20, sizeof (char));
+	if (orient1 == NULL || orient2 == NULL || orient3 == NULL)
+		return (ERROR);
+
+d189 8
+a196 1
+					(void) strcpy (orient1, ptr);
+d202 8
+a209 1
+					(void) strcpy (orient2, ptr);
+d215 8
+a222 1
+					(void) strcpy (orient3, ptr);
+d229 27
+a255 4
+
+	if (strstr (orient1, "anterior") == NULL) {
+		fprintf (stderr, "ERROR [dyn2img]: unexpected orientation %s\n", orient1);
+		return (ERROR);
+a256 9
+	if (strstr (orient2, "superior") == NULL) {
+		fprintf (stderr, "ERROR [dyn2img]: unexpected orientation %s\n", orient2);
+		return (ERROR);
+	}
+	if (strstr (orient3, "left") == NULL) {
+		fprintf (stderr, "ERROR [dyn2img]: unexpected orientation %s\n", orient3);
+		return (ERROR);
+	}
+
+d310 1
+a310 1
+	(void) strncpy (file->m7->mh->original_file_name, hname,31);
+d365 28
+a392 2
+						img[i][j][k] = scaler[n] * (float) srow[k];
+						counts[n] += img[i][j][k];
+d400 28
+a427 2
+						img[i][j][k] = scaler[n] * frow[k];
+						counts[n] += img[i][j][k];
+a431 1
+
+d434 1
+a434 1
+		indx.frm = n+1;
+d441 1
+a442 2
+
+	start = 0;
+d445 2
+a446 1
+	for (i = 0; i < dim[3]; i++) {
+d448 2
+a449 2
+			i + 1, start, ftime[i], scaler[i], counts[i]);
+		start = start + ftime[i] + fdelay[i];
+@
+
+
+1.3
+log
+@fix times
+@
+text
+@d2 3
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ifdyn2img/RCS/ifdyn2img.c,v 1.2 2006/04/11 18:16:57 tom Exp tom $";
+d323 2
+a324 2
+		for (i = dim3; i >= 1; i--) {
+			for (j = dim2; j >= 1; j--) {
+d330 3
+a332 3
+					for (k = 0; k < dim1; k++) {
+						img[i][j][dim1 - k] = scaler[n] * (float) srow[k];
+						counts[n] += img[i][j][dim1 - k];
+d339 3
+a341 3
+					for (k = 0; k < dim1; k++) {
+						img[i][j][dim1 - k] = scaler[n] * frow[k];
+						counts[n] += img[i][j][dim1 - k];
+@
+
+
+1.2
+log
+@byte-swap image before conversion
+@
+text
+@d2 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ifdyn2img/RCS/ifdyn2img.c,v 1.1 2006/04/11 16:16:02 tom Exp tom $";
+d273 1
+d344 2
+a345 2
+		file->sh->start_time = start;
+		file->sh->duration = ftime[n];
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dyn2img/RCS/ifdyn2img.c,v 2.1 2004/04/12 19:04:22 tom Exp $";
+d363 1
+a363 1
+	fprintf (stdout, "Converted: %s to %s\n", iname, ecatimg);
+@

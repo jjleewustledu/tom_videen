@@ -1,0 +1,210 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2007.04.19.15.44.06;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* $Log$ */
+/*	=========================================================================
+ *	Module:			maskco.c
+ *	Author:			Tom Videen
+ *	Description:	Mask an image using a CO image.
+ *					Pixels >= threshold (CBV) in mask image will be set to 0 in output.
+ *					Absolute threshold is reduced by 0.0001.
+ *	=================================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: maskco.c,v 2.22 2006/05/09 14:11:54 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <imgutil.h>
+#include <libimage.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	HEADER_DATA     hdr;			 /* hdr structure */
+	FILE           *recfp = NULL;		 /* rec file pointer (NULL) */
+	char           *cofname;		 /* CO image */
+	char           *hdrname;		 /* CO hdr */
+	char           *imgname;		 /* image to mask */
+	char           *outname;		 /* output */
+	float           threshold;		 /* mask all pixels >= this value */
+	long            npixels = 0;
+	long            dim1, dim2, dim3;	 /* dimensions of tensors */
+	long            i, j, pln;
+	float           sx;
+	float        ***comask;			 /* mask image tensor */
+	float        ***image;			 /* input image tensor */
+
+/*	Get command line arguments	*/
+
+	cofname = argv[1];
+	hdrname = argv[2];
+	imgname = argv[3];
+	outname = argv[4];
+	threshold = atof (argv[5]);
+	fprintf (stdout, "Threshold = %f ml/100g\n", threshold);
+
+/*	Read CO image	*/
+
+	file = make_imgfile (cofname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: opening %s\n", cofname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: reading MainHeader from %s\n", cofname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [maskco]: cannot find %s frame 1-%d\n", cofname, -indx.frm);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: cannot find %s frame %d\n", cofname, indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: reading file subheader in %s\n", cofname);
+		return (ERROR);
+	}
+	dim1 = (long) file->sh->dim1;
+	dim2 = (long) file->sh->dim2;
+	dim3 = (long) file->sh->dim3;
+	if ((comask = readtensor (file, &indx)) == NULL) {
+		fprintf (stderr, "ERROR [maskco]: reading %s\n", cofname);
+		return (ERROR);
+	}
+	close_imgfile (file);
+
+/*	CBV processing	*/
+
+	if (readhdr (hdrname, &hdr, recfp) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: hdr file not found:   %s\n", hdrname);
+		return (ERROR);
+	}
+	if (hdr.ntype != 3) {
+		fprintf (stderr, "ERROR [maskco]: hdr is wrong type:   %d\n", hdr.ntype);
+		return (ERROR);
+	}
+	sx = hdr.bvfactor1;
+	fprintf (stdout, "CBV factor = %f\n", sx);
+	for (pln = 1; pln <= dim3; pln++) {
+		for (j = 1; j <= dim2; j++) {
+			for (i = 1; i <= dim1; i++) {
+				comask[pln][j][i] = sx * comask[pln][j][i];
+			}
+		}
+	}
+
+/*	Read image to mask	*/
+
+	file = make_imgfile (imgname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: opening %s\n", imgname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: reading MainHeader from %s\n", imgname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	indx.pln = 1;
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [maskco]: cannot find %s frame 1-%d\n", imgname, -indx.frm);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: cannot find %s frame %d\n", imgname, indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: reading file subheader in %s\n", imgname);
+		return (ERROR);
+	}
+	if (dim1 != (long) file->sh->dim1) {
+		fprintf (stderr, "ERROR [maskco]: image and mask have different dimensions\n");
+		return (ERROR);
+	}
+	if (dim2 != (long) file->sh->dim2) {
+		fprintf (stderr, "ERROR [maskco]: image and mask have different dimensions\n");
+		return (ERROR);
+	}
+	if (dim3 != (long) file->sh->dim3) {
+		fprintf (stderr, "ERROR [maskco]: image and mask have different dimensions\n");
+		return (ERROR);
+	}
+	if ((image = readtensor (file, &indx)) == NULL) {
+		fprintf (stderr, "ERROR [maskco]: reading %s\n", imgname);
+		return (ERROR);
+	}
+/*	Mask the image */
+
+	for (pln = 1; pln <= dim3; pln++) {
+		for (j = 1; j <= dim2; j++) {
+			for (i = 1; i <= dim1; i++) {
+				if (comask[pln][j][i] > threshold)
+					image[pln][j][i] = 0;
+				else
+					npixels++;
+			}
+		}
+	}
+
+/*	Write the masked image */
+
+	fprintf (stdout, "Pixels in mask = %ld\n", npixels);
+	fprintf (stdout, "Writing CO mask: %s\n", outname);
+	close_imgfile (file);
+	(void) strcpy (file->name, outname);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: opening %s\n", outname);
+		return (ERROR);
+	}
+	if (put_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: writing %s\n", outname);
+		return (ERROR);
+	}
+	if (writetensor (file, &indx, image) == ERROR) {
+		fprintf (stderr, "ERROR [maskco]: writing %s\n", outname);
+		return (ERROR);
+	}
+	free_imgfile (file);
+	return (OK);
+}
+@

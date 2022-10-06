@@ -1,0 +1,190 @@
+#!/bin/csh
+#   Name:   Align_oo2ho
+#   Author: Tom Videen
+#   Date:   Feb 2002
+#   Intent: COSS Processing Script
+#   		Coregister OO to HO
+#	Requires:
+#		p5000ho1_g3.v (img)
+#		p5000oo1_g3.v (img)
+#	May use:
+#		p5000tr1.v (img)
+#	Creates:
+#		p5000ho1_lat.v or p5000tr1_lat.v
+#		p5000lat.v
+#		p5000mask.v
+#		p5000oo1_to_ho1.air
+#		rp5000oo1_g3.v
+#		p5000oo1_to_ho1.log
+# -------------------------------------------------------------------------
+if ($#argv < 4 || $#argv > 5) then
+	echo "Usage:  Align_oo2ho pid ho oo ext [tr]"
+	echo " e.g.,  Align_oo2ho p5000 ho1 oo1 v"
+	echo "  or,   Align_oo2ho p5000 ho1 oo1 v tr1"
+	exit 1
+endif
+
+set PID   = $1
+set HO    = $2
+set OO    = $3
+set ext   = $4
+set TR    = $5
+
+set VER   = 1.0
+set FIL   = _g3
+set HO1   = $PID$HO$FIL
+set OO1   = $PID$OO$FIL
+set TR1   = $PID$TR
+set OOHO  = $PID${OO}_to_$HO
+set MASK  = ${PID}mask.v
+set AMASK = a$MASK:r
+set THR   = 50
+set DDIR  = `pwd`
+
+# Check existence of files:
+# -------------------------
+if ($TR == "") then
+	set EFILES = "$HO1.$ext $OO1.$ext"
+else
+	set EFILES = "$HO1.$ext $OO1.$ext $TR1.$ext"
+endif
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_oo2ho]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit 1
+
+if ($ext != v) cp $HO1.$ext $HO1.v
+set PLANES = `imghdr $HO1.v | grep slices | cut -f1 -d" "`
+
+unalias rm
+unalias cp
+
+# Setup log file:
+# ---------------
+set LOGFILE = $OOHO.log
+echo "$PID $OO to $HO alignment:  " `whoami` `date` >! $LOGFILE
+echo "Version: " $VER  >> $LOGFILE
+echo ""                >> $LOGFILE
+
+# Create mask from HO1:
+# --------------------
+if ($TR == "") then
+	set lateralview = ${HO1}_lat.v
+	set max = `imghdr $HO1.v | grep Max | cut -f2 -d= | cut -f1 -d.`
+	set min = `echo "$max / 100" | bc`
+	set thr = 10
+	cp $HO1.v $MASK
+else
+
+# Create mask from transmission:
+# -----------------------------
+	set lateralview = ${TR1}_lat.v
+	set min = 700
+	set max = 1300
+	set thr = 40
+	gauss2d $TR1.$ext ${TR1}_2dg5.v 0.5
+	cp ${TR1}_2dg5.v $MASK
+endif
+
+maskslc $MASK $MASK 1to1
+maskslc $MASK $MASK ${PLANES}to$PLANES
+sumlateral $MASK $MASK $min $max
+maskpct $MASK $MASK.tmp $thr
+maskimg $MASK $MASK.tmp $lateralview 1
+rm $MASK.tmp
+set max = `imghdr $lateralview | grep Max | cut -f2 -d= | cut -f1 -d.`
+while ($max > 32767) 
+	scaleimage $lateralview 0.1
+	set max = `imghdr $lateralview | grep Max | cut -f2 -d= | cut -f1 -d.`
+end
+echo $max
+
+prompt1:
+echo "============================================================"
+echo "Use vidi to edit lateral projection of mask"
+echo "   Image 1: $lateralview"
+echo "   Edit & remove nose and tissues below base of cranium."
+echo "   Save as ${PID}lat.img"
+echo "   Press RETURN to continue (CTRL-C to quit)"
+set data = `line`
+ 
+if (! -e ${PID}lat.ifh) then
+	echo "ERROR: Save as ${PID}lat.img"
+	goto prompt1
+endif
+if2analyze ${PID}lat
+analyze2img ${PID}lat ${PID}lat.v
+if ($TR == "") then
+	masklateral $HO1.v ${PID}lat.v $MASK 10
+else
+	masklateral ${TR1}_2dg5.v ${PID}lat.v $MASK 10
+	maskimg $MASK $MASK $MASK 700
+endif
+maskslc $MASK $MASK 1to1
+if ($status != 0) exit 1
+
+# Convert images to Analyze format:
+# --------------------------------
+img2analyze $MASK $AMASK
+img2analyze $HO1.v a$HO1
+img2analyze $OO1.$ext a$OO1
+setanamin $AMASK 0
+setanamin a$HO1 0
+setanamin a$OO1 0
+
+# Align OO to HO, then reslice OO:
+# --------------------------------
+echo "Aligning:  $OO1 to $HO1"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK -x 1 -v"
+echo alignlinear a$HO1 a$OO1 $OOHO.air $PRM >> $LOGFILE
+
+alignlinear a$HO1 a$OO1 $OOHO.air $PRM >! log
+set ERROR = `grep HESSIAN log`
+if (`echo $ERROR | wc -w` != 0) then
+    echo $ERROR
+    echo "Alignment failed and will require manual processing"
+    exit 1
+endif
+tail -6 log | head -3 >> $LOGFILE
+tail -1 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file"
+	echo $ERROR >> $LOGFILE
+	exit 1
+endif
+imgreslice a$OO1 $OOHO
+analyze2img ra$OO1 r$OO1.v
+if (! -e null.air) alignlinear a$HO1 a$HO1 null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 $OOHO.air null.air $MASK >> $LOGFILE
+tail -2 $LOGFILE
+
+echo "============================================================"
+echo "Use vidi to check alignment of $OO vs. $HO"
+echo "   Image 1: r$OO1.v   (PET Rainbow)"
+echo "   Image 2: $HO1.v    (Hot Metal)"
+echo "   Compare composite transverse, sagittal, and coronal views."
+echo "   Press RETURN to cleanup and finish (CTRL-C to quit)"
+set data = `line`
+
+# Clean up
+# --------
+rm a$OO1.*
+rm a$HO1.*
+rm ra$OO1.*
+rm a$MASK:r.???
+rm ${PID}lat.???
+rm null.air
+rm log
+cvl
+
+echo "Complete [Align_oo2ho] ====================================="
+echo
+echo ">>> OO-to-HO AIR file:  $OOHO.air"
+

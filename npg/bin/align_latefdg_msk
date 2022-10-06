@@ -1,0 +1,113 @@
+#!/bin/csh
+#	Module:	align_latefdg_msk
+#   Date:	Sep 2006
+#   Author:	Tom Videen
+#	Use:	Align all frames of a late dynamic fdg image 
+#	History:
+#		Modified 14-May-2006 to set output header using input header values (analyze2img)
+
+if ($#argv != 5) then
+	echo "Usage:  align_latefdg_msk img msk firstfrm lastfrm cutoff"
+	echo " e.g.,  align_latefdg_msk p6000fdg1 p6000msk 2 16 0.3"
+	exit 1
+endif
+
+set FDG   = $1
+set MSK   = $2
+set FRM1  = $3
+set FRM2  = $4
+set CUTOFF = $5
+
+set SPEC = `echo $FDG | nawk '{FS="[0123456789]+";print $1}'`
+set PID  = `echo $FDG | nawk '{FS="[a-z]*";print $2}'`
+set ROOT = $SPEC$PID
+set OUT  = ${ROOT}fm
+set AMSK = a$MSK
+set GF   = `echo "$CUTOFF * 10; quit" | bc -l | cut -f1 -d.`
+set FIL  = _g$GF
+
+# Check for existence of first and last frames, mask
+# -------------------------------------------------------
+if (! -e $FDG.v) then
+	echo "ERROR [align_latefdg_msk]: cannot find $FDG.v"
+	exit 1
+endif
+imghdr $FDG.v $FRM1 > & ! align_$PID.tmp
+set CHK1 = `head -1 align_$PID.tmp | cut -c1-5`
+imghdr $FDG.v $FRM2 > & ! align_$PID.tmp
+set CHK2 = `head -1 align_$PID.tmp | cut -c1-5`
+unalias rm
+rm align_$PID.tmp
+if ($CHK1 == ERROR) then
+	echo "ERROR [align_latefdg_msk]: cannot find frame $FRM1 in $FDG.v"
+	exit 1
+else if ($CHK2 == ERROR) then
+	echo "ERROR [align_latefdg_msk]: cannot find frame $FRM2 in $FDG.v"
+	exit 1
+endif
+
+if (! -e $MSK.v) then
+	echo "ERROR [align_latefdg_msk]: cannot find $MSK.v"
+	exit 1
+endif
+
+# Get filtered single frame images
+# -------------------------------------------------------
+set i = $FRM1
+while ($i <= $FRM2)
+	set IMG  = $OUT$i
+	set FIMG = $OUT$i$FIL
+	separate_dynframes $FDG.v $OUT v $i,$i
+	gauss $IMG.v $FIMG.v $CUTOFF
+	img2analyze $IMG.v a$IMG
+	img2analyze $FIMG.v a$FIMG
+	rm a$IMG.ifh a$FIMG.ifh $IMG.v.rec $FIMG.v.rec
+	@ i++
+end
+img2analyze $MSK.v $AMSK
+
+# Set up for alignment
+# -------------------------------------------------------
+set STD = $OUT$FRM1
+set REF = a$STD$FIL
+set TLOG = $OUT.tmp
+set NULLAIR = ${ROOT}_null.air
+set ALOG = ${FDG}_align.log
+set CLOG = ${FDG}_align.fit
+set PRM = "-m 6 -t1 1 -p1 1 -t2 1 -p2 1 -e1 $AMSK -e2 $AMSK -x 3 -v"
+
+echo `date` >! $ALOG
+echo `date` >! $CLOG
+echo $PRM >> $CLOG
+
+setanamin $REF 0
+alignlinear $REF $REF $NULLAIR -m 6 -p1 1 -p2 0 -t1 1 -e1 $AMSK 
+
+analyze2img a$STD r$STD.v $FDG.v $FRM1
+analyze2img a$STD$FIL r$STD$FIL.v $FDG.v $FRM1
+
+set i = $FRM1
+while ($i < $FRM2)
+	@ i++
+	set IMG = $OUT$i
+	set FIMG = $IMG$FIL
+	set AIR = ${ROOT}f${FRM1}_f$i
+	setanamin a$FIMG 0
+    alignlinear $REF a$FIMG $AIR.air $PRM >! $TLOG
+    tail -1 $TLOG >> $CLOG
+    airdif $AIR.air $NULLAIR $MSK.v | grep Mean >> $ALOG
+    tail -1 $TLOG
+    tail -1 $ALOG
+	rm $TLOG
+	imgreslice a$IMG $AIR
+	imgreslice a$FIMG $AIR
+	analyze2img ra$IMG r$IMG.v $FDG.v $i
+	analyze2img ra$FIMG r$FIMG.v $FDG.v $i
+end
+
+merge_dynframes r$OUT ${FRM1}to$FRM2 .v r$FDG.v
+rm $OUT*.i a$OUT* ra$OUT* $AMSK* *${OUT}*.rec
+echo "Clean up with:  rm *${OUT}*.v"
+cat $CLOG
+echo "plot_aligndyn $ALOG"
+

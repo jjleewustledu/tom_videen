@@ -1,0 +1,197 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2004.09.30.13.29.40;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/* ===============================================================================
+ *	Module:			fixsino6.c
+ *	Date:			Sept 2004
+ *	Author:			Tom Videen
+ *	Description:	Correct detector block dropouts in an ECAT 6 sinogram.
+ *					When a block is 0, fill with mean of surrounding.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fixsino6/RCS/fixsino6.c,v 1.8 2004/02/16 15:04:17 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <image.h>
+#include <libimage.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file1;
+	Index           indx;
+	short          *matrix;
+	short          *trans;
+	float           val, mval;
+	float           xx1, xx2, yy1, yy2;
+	char           *fname;
+	int             i, j, k;
+	long            a1, a2, b1, b2;
+	long            ax1, ax2, bx1, bx2, cx;
+	long            adx1, adx2, bdx1, bdx2, cdx;
+	long            mdx, pdx;
+	long            pln, sizepln;
+	long            num;
+	long   dim1, dim2, dim3;
+
+	fname = argv[1];
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+	file1 = make_imgfile (fname);
+	(void) strcpy (file1->mode, "r+");
+	if (open_imgfile (file1) == ERROR) {
+		fprintf (stdout, "ERROR [fixsino6]: opening %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file1) == ERROR) {
+		fprintf (stdout, "ERROR [fixsino6]: reading MainHeader %s\n", fname);
+		return (ERROR);
+	}
+	if (file1->mh->file_format != MATRIX_REV6) {
+		fprintf (stdout, "ERROR [fixsino6]: not Matrix 6 %s\n", fname);
+		return (ERROR);
+	}
+	if (existimgfrm (file1, &indx) == ERROR) {
+		fprintf (stdout, "ERROR [fixsino6]: finding %s frame %d\n", fname, indx.frm);
+		return (ERROR);
+	}
+	if (get_ss6 (file1, &indx) == ERROR) {
+		fprintf (stdout, "ERROR [fixsino6]: reading subheader %s\n", fname);
+		return (ERROR);
+	}
+	if (use_ss6 (file1, &indx) == ERROR) {
+		fprintf (stdout, "ERROR [fixsino6]: using subheader %s\n", fname);
+		return (ERROR);
+	}
+	dim1 = (long) file1->sh->dim1;
+	dim2 = (long) file1->sh->dim2;
+	dim3 = (long) file1->sh->dim3;
+	sizepln = dim1 * dim2;
+
+	trans = (short *) calloc (dim1 * dim2 * dim3, sizeof (short));
+	for (pln = 1; pln <= dim3; pln++) {
+		k = (pln - 1) * sizepln;
+		indx.pln = pln;
+		if ((matrix = rdscan6 (file1, indx)) == NULL) {
+			fprintf (stdout, "ERROR [fixsino6]: reading plane %d of %s\n",
+				 (int) pln, fname);
+			return (ERROR);
+		}
+		for (i = 0; i < sizepln; i++)
+			trans[k + i] = matrix[i];
+		free (matrix);
+	}
+
+/*	For each element which is less the half the mean of the elements
+	one block above and below it, set the element equal to that mean */
+
+	for (pln = 0; pln < dim3; pln++) {
+		num = 0;
+		pdx = pln * sizepln;
+		for (j = 0; j < dim2; j++) {
+			if (j > 7)
+				a1 = j - 8;
+			else
+				a1 = dim1 + 8 - j;
+			if (j > 15)
+				a2 = j - 16;
+			else
+				a2 = dim1 + 16 - j;
+
+			if (j < dim1 - 8)
+				b1 = j + 8;
+			else
+				b1 = j - dim1 + 8;
+			if (j < dim1 - 16)
+				b2 = j + 16;
+			else
+				b2 = j - dim1 + 16;
+
+			ax1 = pdx + a1 * dim1;
+			ax2 = pdx + a2 * dim1;
+			bx1 = pdx + b1 * dim1;
+			bx2 = pdx + b2 * dim1;
+			cx = j * dim1;
+			for (i = 0; i < dim1; i++) {
+				adx1 = ax1 + i;
+				adx2 = ax2 + i;
+				bdx1 = bx1 + i;
+				bdx2 = bx2 + i;
+				cdx = cx + i;
+				mdx = pdx + cdx;
+				val = (float) trans[mdx];
+				xx1 = (float) trans[adx1];
+				xx2 = (float) trans[adx2];
+				yy1 = (float) trans[bdx1];
+				yy2 = (float) trans[bdx2];
+				if (val > 0)
+					matrix[cdx] = trans[mdx];
+				else {
+					mval = 0.25 * (xx1 + xx2 + yy1 + yy2);
+					matrix[cdx] = (short) mval;
+					num = num+1;
+				}
+			}
+		}
+		for (j = 0; j < dim2; j++) {
+			for (i = 0; i < dim1; i++) {
+				cdx = j * dim1 + i;
+				mdx = pdx + cdx;
+				trans[mdx] = matrix[cdx];
+			}
+		}
+		if (num > 0)
+			fprintf (stdout, "pln %2d: %5d corrected\n",(int) pln, (int) num);
+	}
+
+/*	Write the new sinogram */
+
+	matrix = (short *) calloc (dim1 * dim2, sizeof (short));
+	for (pln = 1; pln <= dim3; pln++) {
+		k = (pln - 1) * sizepln;
+		indx.pln = pln;
+		for (i = 0; i < sizepln; i++)
+			matrix[i] = trans[k + i];
+		if (wrscan6 (file1, indx, matrix) != OK) {
+			fprintf (stdout, "ERROR [fixsino6]: writingplane %d of %s\n", (int) pln, fname);
+			return (ERROR);
+		}
+	}
+	close_imgfile (file1);
+	free_imgfile (file1);
+	free (trans);
+	return (OK);
+}
+
+@

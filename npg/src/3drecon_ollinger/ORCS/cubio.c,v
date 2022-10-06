@@ -1,0 +1,983 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.01.19.22.40.20;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial checking in, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+/*-----------------------------------------------------------------
+
+Routines for handling image cubes.
+
+Perpetrator: J.M Ollinger
+
+Date: March 13, 1993
+
+------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <math.h>
+#include <unistd.h>
+#include <string.h>
+#include "cube.h"
+
+#define MAX_FILES 10
+#define MAXNAME 120
+
+static char rcsid [] = "$Header$";
+
+static struct cube_internal_header *rawhdr[MAX_FILES]=
+		{NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
+
+FILE	*fd_list[MAX_FILES] =
+		{NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
+
+char	mode_list[MAX_FILES][4]; /* Access modes of opened files. */
+	
+char	file_list[MAX_FILES][MAXNAME];
+int	fn;
+
+/*****************************************/
+struct cube_header *GetCubeHeader(filnam,z)
+/*****************************************/
+
+char	*filnam;
+int	z;	/* Plane number. */
+
+{
+
+FILE	*fd;
+
+struct cube_header *hdr;
+
+int	i,len,j,joff,pos;
+
+/* Assume int and float are same length and convert with union. */
+union	int2long {
+	int integer;
+	float real;
+	} un;
+
+union	int2char {
+	int  intbuf[30];
+	char charbuf[120];
+	} unc;
+
+int	stat,cube_hdr[CUBE_HDR_LEN],*rawbuf;
+
+if((fd =getfd(filnam,"r")) == NULL) {
+    /*fprintf(stderr,"Could not open %s in GetCubeHeader.\n",filnam);*/
+    return(NULL);
+    }
+
+if(NULL==(hdr=(struct cube_header *)malloc(sizeof(struct cube_header)))) {
+    printf("Could not malloc memory for hdr in \"GetCubeHeader\".\n");
+    return(NULL);
+    }
+
+if(rawhdr[fn] == NULL) {
+    if(NULL==(rawhdr[fn]=(struct cube_internal_header *)
+		malloc(sizeof(struct cube_internal_header)))) {
+        printf("Could not malloc memory for rawhdr in \"GetCubeHeader\".\n");
+        return(NULL);
+        }
+    if((stat=fseek(fd,(long)-CUBE_HDR_LEN*sizeof(int),SEEK_END))!=NULL) {
+        /*fprintf(stderr,"Could not seek in GetCubeHeader.\n");*/
+        return(NULL);
+        }
+    if((stat=fread(cube_hdr,sizeof(int),CUBE_HDR_LEN,fd))!=CUBE_HDR_LEN) {
+        /*fprintf(stderr,"Could not read header in GetCubeHeader.\n");*/
+        return(NULL);
+        }
+    else {
+#ifdef dec /* Convert to Dec ordering. */
+        decsun_int(cube_hdr,CUBE_HDR_LEN);
+#endif
+        rawhdr[fn]->xdim    = cube_hdr[0];
+        rawhdr[fn]->ydim    = cube_hdr[1];
+        rawhdr[fn]->zdim    = cube_hdr[2];
+        rawhdr[fn]->zmax    = cube_hdr[3];
+        un.integer   = cube_hdr[4];
+        rawhdr[fn]->ctr_offset  = un.real;
+        un.integer   = cube_hdr[5];
+        rawhdr[fn]->ang_inc = un.real;
+        un.integer   = cube_hdr[6];
+        rawhdr[fn]->detector_ctr = un.real;
+	rawhdr[fn]->type = cube_hdr[7];
+        un.integer   = cube_hdr[8];
+        rawhdr[fn]->duration = un.real;
+	/* cube_hdr[9] contains position of the raw header in the file. */
+        }
+    if((rawhdr[fn]->pln = (struct cube_plane *)
+    	    malloc((unsigned)rawhdr[fn]->zmax*sizeof(struct cube_plane))) == NULL) {
+        fprintf(stderr,"Could not allocate more memory, cube write failed.\n");
+        return(NULL);
+        }
+    
+    len = rawhdr[fn]->zmax*sizeof(struct cube_plane);
+    if(NULL==(rawbuf=(int *)malloc(len))) {
+        printf("Could not malloc memory for hdr in \"GetCubeHeader\".\n");
+        return(NULL);
+        }
+    if(cube_hdr[9] > 1) { /* Check for old files. */
+        if((stat=fseek(fd,(long)cube_hdr[9],SEEK_SET))!=NULL) {
+            fprintf(stderr,"Could not seek in GetCubeHeader.\n");
+            return(NULL);
+            }
+	}
+    else {
+        if((stat=fseek(fd,(long)-(len+CUBE_HDR_LEN*sizeof(int)),SEEK_END))!=NULL) {
+            fprintf(stderr,"Could not seek in GetCubeHeader.\n");
+            return(NULL);
+            }
+	}
+    if((stat=fread(rawbuf,sizeof(char),len,fd))!=len) {
+        fprintf(stderr,"Could not read raw header in GetCubeHeader.\n");
+        return(NULL);
+        }
+#ifdef dec /* Convert to Dec ordering. */
+    decsun_int(rawbuf,len/4);
+#endif
+    for(i=0,joff=0;i<rawhdr[fn]->zmax;i++,joff+=sizeof(struct cube_plane)/4) {
+        un.integer   	= rawbuf[joff];
+        rawhdr[fn]->pln[i].time = un.real;
+        un.integer   	= rawbuf[joff+1];
+        rawhdr[fn]->pln[i].position = un.real;
+        un.integer   	= rawbuf[joff+7];
+        rawhdr[fn]->pln[i].bias = un.real;
+        un.integer   	= rawbuf[joff+8];
+        rawhdr[fn]->pln[i].scl	= un.real;
+      	for(j=0;j<LEN_ID/4;j++)
+            unc.intbuf[j] = rawbuf[joff+j+9];
+	for(j=0;j<LEN_ID;j++)
+	   rawhdr[fn]->pln[i].id[j] = unc.charbuf[j];
+        }
+    }
+
+hdr->xdim = rawhdr[fn]->xdim;
+hdr->ydim = rawhdr[fn]->ydim;
+hdr->type = rawhdr[fn]->type;
+hdr->zdim = rawhdr[fn]->zdim;
+hdr->ctr_offset = rawhdr[fn]->ctr_offset;
+hdr->ang_inc = rawhdr[fn]->ang_inc;
+hdr->detector_ctr = rawhdr[fn]->detector_ctr;
+hdr->duration = rawhdr[fn]->duration;
+hdr->time = rawhdr[fn]->pln[z].time;
+hdr->position = rawhdr[fn]->pln[z].position;
+strcpy(hdr->id,rawhdr[fn]->pln[z].id);
+
+/* Make sure it isn't a garbage header. */
+if  ((hdr->xdim < 1) || (hdr->ydim < 1) || (hdr->zdim < 1) ||
+    (hdr->type != BYTE && hdr->type != SHORT && hdr->type != FLOAT)) {
+    /* Invalid header. */
+    free(hdr);
+    return(NULL); 
+    }
+else
+    return(hdr);
+
+}
+
+
+/***************************/
+int PutCubeHeader(filnam,hdr)
+/***************************/
+
+char	*filnam;
+struct  cube_header *hdr;
+
+{
+
+FILE	*fd;
+
+int	i,j,joff,position,len,rawhdr_pos,lenbuf,
+	stat,cube_hdr[CUBE_HDR_LEN];
+
+static int *rawbuf;
+
+static  int first=TRUE,zmax_rawbuf;
+
+/* Assume int and float are same length and convert with union. */
+union	int2long {
+	int integer;
+	float real;
+	} un;
+
+union	int2char {
+	int  intbuf[30];
+	char charbuf[120];
+	} unc;
+
+if((fd =getfd(filnam,"r+")) == NULL) {
+    fprintf(stderr,"Could not open %s in PutCubeHeader.\n",filnam);
+    return(NULL);
+    }
+for(i=0;i<CUBE_HDR_LEN;i++)
+    cube_hdr[i] = 0;
+
+len = rawhdr[fn]->zmax*sizeof(struct cube_plane);
+lenbuf = len/(int)sizeof(int) + 1;
+if(rawhdr[fn]->zmax > zmax_rawbuf) {
+    zmax_rawbuf = rawhdr[fn]->zmax;
+    if(first == TRUE) {
+        first = FALSE;
+        if(NULL==(rawbuf=(int *)malloc(lenbuf*sizeof(int)))) {
+            printf("Could not malloc memory for \"PutCubeHeader\".\n");
+            return(NULL);
+            }
+	}
+    else {
+        if(NULL==(rawbuf=(int *)
+		realloc((void *)rawbuf,(size_t)lenbuf*sizeof(int)))) {
+            printf("Could not realloc memory \"PutCubeHeader\".\n");
+            return(NULL);
+            }
+	}
+    for(i=0;i<lenbuf;i++)
+        rawbuf[i] = 0;
+    }
+
+rawhdr[fn]->ctr_offset = hdr->ctr_offset;
+rawhdr[fn]->ang_inc = hdr->ang_inc;
+rawhdr[fn]->detector_ctr = hdr->detector_ctr;
+rawhdr[fn]->duration = hdr->duration;
+for(i=0,joff=0;i<rawhdr[fn]->zmax;i++,joff+=sizeof(struct cube_plane)/4) {
+    un.real   = rawhdr[fn]->pln[i].time;
+    rawbuf[joff] = un.integer;
+    un.real   = rawhdr[fn]->pln[i].position;
+    rawbuf[joff+1] = un.integer;
+    un.real   = rawhdr[fn]->pln[i].bias;
+    rawbuf[joff+7] = un.integer;
+    un.real   = rawhdr[fn]->pln[i].scl;
+    rawbuf[joff+8] = un.integer;
+    for(j=0;j<LEN_ID;j++)
+        unc.charbuf[j] = rawhdr[fn]->pln[i].id[j];
+    for(j=0;j<LEN_ID/4;j++)
+         rawbuf[joff+j+9] = unc.intbuf[j];
+    }
+if(rawhdr[fn]->type == BYTE)
+    position = rawhdr[fn]->xdim*rawhdr[fn]->ydim*rawhdr[fn]->zdim*sizeof(char);
+else if(rawhdr[fn]->type == SHORT)
+    position = rawhdr[fn]->xdim*rawhdr[fn]->ydim*rawhdr[fn]->zdim*sizeof(short);
+else if(rawhdr[fn]->type == FLOAT)
+    position = rawhdr[fn]->xdim*rawhdr[fn]->ydim*rawhdr[fn]->zdim*sizeof(float);
+else {
+    fprintf(stderr,"Invalid data type in PutCubeHeader.\n");
+    return(ERROR);
+    }
+if((stat=fseek(fd,(long)0,SEEK_END)) != NULL) {
+    fprintf(stderr,"Could not seek in PutCubeHeader.\n");
+    return(ERROR);
+    }
+rawhdr_pos = ftell(fd);
+#ifdef dec /* Convert to Sun ordering. */
+   decsun_int(rawbuf,lenbuf);
+#endif
+if((stat=fwrite(rawbuf,sizeof(char),len,fd))!=len) {
+    fprintf(stderr,"Could not write raw header in PutCubeHeader.\n");
+    return(ERROR);
+    }
+
+cube_hdr[0] = rawhdr[fn]->xdim;
+cube_hdr[1] = rawhdr[fn]->ydim;
+cube_hdr[2] = rawhdr[fn]->zdim;
+cube_hdr[3] = rawhdr[fn]->zmax;
+un.real   = rawhdr[fn]->ctr_offset;
+cube_hdr[4] = un.integer;
+un.real   = rawhdr[fn]->ang_inc;
+cube_hdr[5] = un.integer;
+un.real   =  rawhdr[fn]->detector_ctr;
+cube_hdr[6] = un.integer;
+cube_hdr[7] = rawhdr[fn]->type;
+un.real   =  rawhdr[fn]->duration;
+cube_hdr[8] = un.integer;
+cube_hdr[9] = rawhdr_pos;
+#ifdef dec /* Convert to Sun ordering. */
+   decsun_int(cube_hdr,CUBE_HDR_LEN);
+#endif
+if((stat=fwrite(cube_hdr,sizeof(int),CUBE_HDR_LEN,fd))!=CUBE_HDR_LEN) {
+    fprintf(stderr,"Could not write header in PutCubeHeader.\n");
+    return(ERROR);
+    }
+
+return(OK);
+
+}
+
+
+/*******************************/
+float *GetCubePlane(filnam,hdr,z)
+/*******************************/
+
+char	*filnam;
+struct  cube_header *hdr;
+int	z;  			/* Integer specifiying z-position 0-N-1.	*/
+
+{
+
+FILE	*fd;
+
+int	i,stat,len,position;
+
+float	max,min,*img;
+
+static  unsigned char 	*byte_buf  = NULL;
+static  unsigned short	*short_buf = NULL;
+static  int byte_buflen=0,short_buflen=0;
+
+struct cube_header *tmphdr;
+
+if((fd =getfd(filnam,"r")) == NULL) {
+    fprintf(stderr,"Could not open %s in GetCubePlane.\n",filnam);
+    return(NULL);
+    }
+
+if(rawhdr[fn] == NULL) {
+    /* Get internal header and external header. */
+    if((tmphdr = GetCubeHeader(filnam,z)) == NULL) {
+        fprintf(stderr,"Could not get header for %s.\n",filnam);
+        return(NULL);
+        }
+    }
+
+/* Assume rawhdr has already been read. */
+hdr->type = rawhdr[fn]->type;
+hdr->xdim = rawhdr[fn]->xdim;
+hdr->ydim = rawhdr[fn]->ydim;
+hdr->zdim = rawhdr[fn]->zdim;
+strcpy(hdr->id,rawhdr[fn]->pln[z].id);
+hdr->time = rawhdr[fn]->pln[z].time;
+hdr->position = rawhdr[fn]->pln[z].position;
+len = hdr->xdim*hdr->ydim;
+
+if((img=(float *)malloc(len*sizeof(float))) == NULL) {
+    fprintf(stderr,"Could not malloc memory for img in GetCubePlane.\n");
+    return(NULL);
+    }
+
+/* Rescale data to fit in numerical format. */
+if(hdr->type == BYTE) {
+    /* Seek to correct position in file. */
+    position = hdr->xdim*hdr->ydim*z*sizeof(unsigned char);
+    if((stat=fseek(fd,(long)position,SEEK_SET)) != NULL) {
+        fprintf(stderr,"Could not seek to z-position %d in GetCubePlane.\n",z);
+        exit(ERROR);
+        }
+    if(byte_buf == NULL) {
+	if((byte_buf=(unsigned char *)malloc(len)) == NULL) {
+	    fprintf(stderr,"Could not malloc for byte_buf in GetCubePlane.\n");
+	    return(NULL);
+	    }
+        byte_buflen = len;
+	}
+    else if(byte_buflen < len) {
+	if((byte_buf=(unsigned char *)
+			realloc((void *)byte_buf,len)) == NULL) {
+	    fprintf(stderr,"Could not malloc for byte_buf in GetCubePlane.\n");
+	    return(NULL);
+	    }
+        byte_buflen = len;
+	}
+    if((stat=fread(byte_buf,sizeof(unsigned char),len,fd))!=len) {
+        fprintf(stderr,"Could not read image in GetCubePlane\n");
+        exit(-1);
+        }
+    for(i=0;i<len;i++)
+	img[i] = (float)byte_buf[i]*rawhdr[fn]->pln[z].scl - rawhdr[fn]->pln[z].bias;
+    }
+else if(hdr->type == SHORT) {
+    /* Seek to correct position in file. */
+    position = hdr->xdim*hdr->ydim*z*sizeof(short);
+    if((stat=fseek(fd,(long)position,SEEK_SET)) != NULL) {
+        fprintf(stderr,"Could not seek to z-position %d in GetCubePlane.\n",z);
+        exit(ERROR);
+        }
+    if(short_buf == NULL) {
+	if((short_buf=(unsigned short *)malloc(len*sizeof(short))) == NULL) {
+	    fprintf(stderr,"Could not malloc for short_buf in GetCubePlane.\n");
+	    return(NULL);
+	    }
+        short_buflen = len;
+	}
+    else if(short_buflen < len) {
+	if((short_buf=(unsigned short *)realloc(short_buf,len*sizeof(short))) == NULL) {
+	    fprintf(stderr,"Could not malloc for short_buf in GetCubePlane.\n");
+	    return(NULL);
+	    }
+        short_buflen = len;
+	}
+    if((stat=fread(short_buf,sizeof(unsigned short),len,fd))!=len) {
+        fprintf(stderr,"Could not read image in GetCubePlane\n");
+        exit(-1);
+        }
+#ifdef dec /* Assume DEC byte ordering and convert to Sun ordering. */
+    decsun_short(short_buf,len);
+#endif
+    for(i=0;i<len;i++)
+	img[i] = (float)short_buf[i]*rawhdr[fn]->pln[z].scl - 
+						rawhdr[fn]->pln[z].bias;
+    }
+else if(hdr->type == FLOAT) {
+    /* Seek to correct position in file. */
+    position = hdr->xdim*hdr->ydim*z*sizeof(float);
+    if((stat=fseek(fd,(long)position,SEEK_SET)) != NULL) {
+        fprintf(stderr,"Could not seek to z-position %d in GetCubePlane.\n",z);
+        exit(ERROR);
+        }
+    if((stat=fread(img,sizeof(float),len,fd))!=len) {
+        fprintf(stderr,"Could not read image in GetCubePlane\n");
+        exit(-1);
+        }
+#ifdef dec /* Assume DEC byte ordering and convert to Sun ordering. */
+    decsun_int(img,len);
+#endif
+    }
+else {
+    fprintf(stderr,"Invalid data type specifed to GetCubePlane.\n");
+    return(NULL);
+    }
+
+return(img);
+
+}
+
+
+/********************************/
+int PutCubePlane(filnam,hdr,z,img)
+/********************************/
+
+char	*filnam;
+struct  cube_header *hdr;
+int	z;  			/* Integer specifiying z-position 0-N-1.  */
+float	*img;
+
+{
+
+FILE	*fd;
+
+int	i,stat,position,new=FALSE,len;
+
+float	max=-1.e30,min=1.e30;
+
+static  unsigned char 	*byte_buf  = NULL;
+static  unsigned short	*short_buf = NULL;
+static  float 		*float_buf = NULL;
+static  int byte_buflen=0,short_buflen=0,float_buflen=0;
+
+struct cube_header *hdr0; /* Dummy header to ensure rawhdr read. */
+
+if((fd =getfd(filnam,"r+")) == NULL) {
+    fprintf(stderr,"Could not open %s in PutCubePlane\n",filnam);
+    return(NULL);
+    }
+
+if(rawhdr[fn] == NULL) {
+    /* New file, create internal header. */
+    if((rawhdr[fn]=MakeInternalHeader(hdr)) == NULL) {
+    	fprintf(stderr,"Could not make rawhdr in PutCubePlane.\n");
+	return(ERROR);
+	}
+    }
+/*else {
+    if((hdr0=GetCubeHeader(filnam,0)) == NULL) {*/
+  	/* Assume header does not exist, make a new one. */
+/*        if((rawhdr[fn]=MakeInternalHeader(hdr)) == NULL) {
+            fprintf(stderr,"Could not make rawhdr in PutCubePlane.\n");
+    	    return(ERROR);
+	    }
+	}
+    }*/
+
+if(z >= rawhdr[fn]->zmax) {
+    /* Allocate more space for header. */
+    rawhdr[fn]->zmax = Z_INC*(z/Z_INC + 1);
+    if((rawhdr[fn]->pln = (struct cube_plane *)
+		realloc(rawhdr[fn]->pln,rawhdr[fn]->zmax*sizeof(struct cube_plane))) == NULL) {
+	fprintf(stderr,"Could not allocate more memory, cube write failed.\n");
+	return(ERROR);
+	}
+    }
+
+if(hdr->type != rawhdr[fn]->type) {
+    fprintf(stderr,"Data type clash in PutCubePlane.  All planes must be same type!\n");
+    return(ERROR);
+    }
+
+len = rawhdr[fn]->xdim*rawhdr[fn]->ydim;
+if(z > rawhdr[fn]->zdim-1)
+    rawhdr[fn]->zdim = z+1;
+strcpy(rawhdr[fn]->pln[z].id,hdr->id);
+rawhdr[fn]->pln[z].time = hdr->time;
+rawhdr[fn]->pln[z].position = hdr->position;
+
+/* Rescale data to fit in numerical format. */
+if(hdr->type == BYTE) {
+    /* Seek to correct position in file. */
+    position = rawhdr[fn]->xdim*rawhdr[fn]->ydim*z*sizeof(char);
+    if((stat=fseek(fd,(long)position,SEEK_SET)) != NULL) {
+        fprintf(stderr,"Could not seek to z-position %d in PutCubePlane.\n",z);
+        exit(ERROR);
+        }
+    for(i=0;i<len;i++) {
+	if(img[i] > max)
+	    max = img[i];
+   	if(img[i] < min)
+	    min = img[i];
+	}
+    rawhdr[fn]->pln[z].bias = -min;
+    rawhdr[fn]->pln[z].scl  = (max - min)/BYTE_MAX;
+    if(max == min)
+	rawhdr[fn]->pln[z].scl = 1.;
+    if(byte_buf == NULL) {
+	if((byte_buf=(unsigned char *)malloc(len)) == NULL) {
+	    fprintf(stderr,"Could not malloc for byte_buf in PutCubePlane.\n");
+	    return(ERROR);
+	    }
+        byte_buflen = len;
+	}
+    else if(byte_buflen < len) {
+	if((byte_buf=(unsigned char *)realloc(byte_buf,len)) == NULL) {
+	    fprintf(stderr,"Could not malloc for byte_buf in PutCubePlane.\n");
+	    return(ERROR);
+	    }
+        byte_buflen = len;
+	}
+    for(i=0;i<len;i++)
+	byte_buf[i] = (unsigned char)((img[i] - min)/rawhdr[fn]->pln[z].scl);
+    if((stat=fwrite(byte_buf,sizeof(unsigned char),len,fd))!=len) {
+        fprintf(stderr,"Could not write image in PutCubePlane\n");
+        return(ERROR);
+        }
+    }
+else if(rawhdr[fn]->type == SHORT) {
+    /* Seek to correct position in file. */
+    position = rawhdr[fn]->xdim*rawhdr[fn]->ydim*z*sizeof(short);
+    if((stat=fseek(fd,(long)position,SEEK_SET)) != NULL) {
+        fprintf(stderr,"Could not seek to z-position %d in PutCubePlane.\n",z);
+        exit(ERROR);
+        }
+    max = -1e-30;
+    min =  1e-30;
+    for(i=0;i<len;i++) {
+	if(img[i] > max)
+	    max = img[i];
+   	if(img[i] < min)
+	    min = img[i];
+	}
+    rawhdr[fn]->pln[z].bias = -min;
+    rawhdr[fn]->pln[z].scl    = (max - min)/SHORT_MAX;
+    if(short_buf == NULL) {
+	if((short_buf=(unsigned short *)malloc(len*sizeof(unsigned short))) == NULL) {
+	    fprintf(stderr,"Could not malloc for short_buf in PutCubePlane.\n");
+	    return(ERROR);
+	    }
+        short_buflen = len;
+	}
+    else if(short_buflen < len) {
+	if((short_buf=(unsigned short *)realloc(short_buf,len*sizeof(short))) == NULL) {
+	    fprintf(stderr,"Could not malloc for short_buf in PutCubePlane.\n");
+	    return(ERROR);
+	    }
+        short_buflen = len;
+	}
+    for(i=0;i<len;i++)
+	short_buf[i] = (unsigned short)((img[i] - min)/rawhdr[fn]->pln[z].scl);
+#ifdef dec /* Assume DEC byte ordering and convert to Sun ordering. */
+        decsun_short(short_buf,len);
+#endif
+    if((stat=fwrite(short_buf,sizeof(unsigned short),len,fd))!=len) {
+        fprintf(stderr,"Could not write image in PutCubePlane\n");
+        return(ERROR);
+        }
+    }
+else if(rawhdr[fn]->type == FLOAT) {
+    /* Seek to correct position in file. */
+    position = rawhdr[fn]->xdim*rawhdr[fn]->ydim*z*sizeof(float);
+    if((stat=fseek(fd,(long)position,SEEK_SET)) != NULL) {
+        fprintf(stderr,"Could not seek to z-position %d in PutCubePlane.\n",z);
+        exit(ERROR);
+        }
+#ifdef dec /* Assume DEC byte ordering and convert to Sun ordering. */
+    if(float_buf == NULL) {
+	if((float_buf=(float *)malloc(len*sizeof(float))) == NULL) {
+	    fprintf(stderr,"Could not malloc for float_buf in PutCubePlane.\n");
+	    return(ERROR);
+	    }
+        float_buflen = len;
+	}
+    else if(float_buflen < len) {
+	if((float_buf=(float *)realloc(float_buf,len*sizeof(float))) == NULL) {
+	    fprintf(stderr,"Could not realloc for float_buf in PutCubePlane.\n");
+	    return(ERROR);
+	    }
+        float_buflen = len;
+	}
+    for(i=0;i<len;i++)
+	float_buf[i] = img[i];
+    decsun_int(float_buf,len);
+#else
+    float_buf = img;
+#endif
+    rawhdr[fn]->pln[z].bias = 0.;
+    rawhdr[fn]->pln[z].scl = 0.;
+    if((stat=fwrite(float_buf,sizeof(float),len,fd))!=len) {
+        fprintf(stderr,"Could not write image in PutCubePlane\n");
+        return(ERROR);
+        }
+    }
+else {
+    fprintf(stderr,"Invalid data type specifed to PutCubePlane.\n");
+    return(NULL);
+    }
+
+return(OK);
+
+}
+
+/*****************************************************/
+struct cube_header *MakeCubeHeader(xdim,ydim,zdim,type)
+/*****************************************************/
+
+int	xdim,ydim,zdim,
+	type; 		/* Data type: Float, SHORT or BYTE.	*/
+
+{
+
+struct cube_header *hdr;
+
+if(NULL==(hdr=(struct cube_header *)malloc(sizeof(struct cube_header)))) {
+    printf("Could not malloc memory for hdr in \"MakeCubeHeader\".\n");
+    return(NULL);
+    }
+
+hdr->xdim = xdim;
+hdr->ydim = ydim;
+hdr->zdim = zdim;
+hdr->ctr_offset = 0.;
+hdr->ang_inc = 0.;
+hdr->detector_ctr = 0.;
+hdr->type = type;
+hdr->duration = 0.;
+hdr->id[0] = NULL;
+
+return(hdr);
+
+}
+
+/******************/
+decsun_int(buf,len)
+/******************/
+
+/* Purpose: Convert DEC format 32-bit integers to IEEE format. */
+
+int     buf[],  /* Input buffer of long integers. */
+        len;    /* Length of input buffer. */
+
+{
+
+int     i;
+
+for(i=0;i<len;i++) {
+        buf[i] = (buf[i]<<24) | ((buf[i]<<8)&0xff0000) |
+                 ((buf[i]>>8)&0xff00) | ((buf[i]>>24)&0xff);
+}
+
+return;
+
+}
+
+/********************/
+decsun_short(buf,len)
+/********************/
+
+/*
+Purpose: Convert DEC format 16-bit integers contained
+         to IEEE format.
+*/
+
+short   buf[];  /* Input buffer of word-length integers. */
+int     len;    /* Length of input buffer. */
+
+{
+
+int     i;
+
+for(i=0;i<len;i++)
+        buf[i] = (buf[i]<<8) | ((buf[i]>>8)&0xff);
+
+return;
+
+}
+
+/**********************/
+FILE *getfd(filnam,mode)
+/**********************/
+
+char	*filnam;
+char	*mode;		/* Access mode, "r", or "w". */
+
+{
+
+int	i;
+
+struct  cube_header *hdr0;
+ 
+FILE	*ftest;
+
+if(!strstr(filnam,".cub")) {
+    fprintf(stderr,"Invalid cube file name.\n");
+    return(NULL);
+    }
+for(fn=0;fn<MAX_FILES;fn++) {
+    if(!strcmp(filnam,file_list[fn])) {
+	if(!strcmp(mode,mode_list[fn]))
+	    return(fd_list[fn]);
+	else {
+	    /* File opened with wrong read/write mode. */
+	    fflush(fd_list[fn]);
+	    fclose(fd_list[fn]);
+	    fd_list[fn] = fopen(file_list[fn],mode);
+	    strcpy(mode_list[fn],mode);
+	    return(fd_list[fn]);
+	    }
+	}
+    }
+
+/* File not open, assign it available slot. */
+for(fn=0;fn<MAX_FILES;fn++) {
+    if(fd_list[fn] == NULL) 
+	break;
+    }
+if(fn == MAX_FILES) {
+    fprintf(stderr,"Maximum number of open files exceeded in getfd\n");
+    return(NULL);
+    }
+
+if(!strcmp(mode,"r+")) {
+    if((ftest=fopen(filnam,"r")) != NULL) /* File exists. */
+        fclose(ftest);
+    else
+        mode = "w";
+    }
+
+if((fd_list[fn]=fopen(filnam,mode)) != NULL) {
+    strcpy(file_list[fn],filnam);
+    strcpy(mode_list[fn],mode);
+    rawhdr[fn] = NULL; /* Ensure pointer is NULL for subsequent tests. */
+    return(fd_list[fn]);
+    }
+else 
+    return(NULL);
+
+}
+
+/*******************/
+int CloseCube(filnam)
+/*******************/
+
+char	*filnam;
+
+{
+
+int	i;
+
+for(i=0;i<MAX_FILES;i++) {
+    if(!strcmp(filnam,file_list[i])) {
+	fclose(fd_list[i]);
+	fd_list[i] = NULL;
+	file_list[i][0] = NULL;
+	free(rawhdr[i]);
+	rawhdr[i] = NULL;
+	return(OK);
+	}
+    }
+}
+
+
+/**************************************************/
+int PutCubePlaneZero(outfil,image,xdim,ydim,type,id)
+/**************************************************/
+
+char	*outfil;
+float	*image;		/* Image with dimensions xdim, ydim. */
+int	xdim,ydim,
+	type;		/* Data type, FLOAT, SHORT, or BYTE. */
+char	*id;
+
+{
+
+struct cube_header *tmphdr;
+
+int	stat;
+
+FILE	*fd;
+
+if((fd =getfd(outfil,"r+")) == NULL) {
+    fprintf(stderr,"Could not open %s in PutCubePlaneZero\n",outfil);
+    return(ERROR);
+    }
+
+tmphdr = MakeCubeHeader(xdim,ydim,1,type);
+strcpy(tmphdr->id,id);
+
+if((stat=PutCubePlane(outfil,tmphdr,0,image)) != OK) {
+    fprintf(stderr,"Error writing to %s in PutCubePlaneZero\n",outfil);
+    return(ERROR);
+    }
+
+if((stat=PutCubeHeader(outfil,tmphdr)) != OK) {
+    fprintf(stderr,"Error writing header to %s in PutCubePlaneZero\n",outfil);
+    return(ERROR);
+    }
+
+CloseCube(outfil);
+
+}
+
+
+
+/********************************/
+float *GetCubePlaneZero(infil,hdr)
+/********************************/
+
+char	*infil;
+struct cube_header *hdr;
+
+{
+
+FILE	*fd;
+
+float	*image;
+
+if((fd =getfd(infil,"r")) == NULL) {
+    fprintf(stderr,"Could not open %s in GetCubePlaneZero\n",infil);
+    return(NULL);
+    }
+
+if((hdr = GetCubeHeader(infil,0)) == NULL) {
+    fprintf(stderr,"Could not get header for %s.\n",infil);
+    return(NULL);
+    }
+
+if((image=GetCubePlane(infil,hdr,0)) == NULL) {
+    fprintf(stderr,"Error writing to %s in GetCubePlaneZero\n",infil);
+    return(NULL);
+    }
+
+CloseCube(infil);
+
+return(image);
+
+}
+
+/**************************************************/
+struct cube_internal_header *MakeInternalHeader(hdr)
+/**************************************************/
+
+struct cube_header *hdr;
+
+{
+
+struct cube_internal_header *tmprawhdr;
+
+if(NULL==(tmprawhdr=(struct cube_internal_header *)
+         malloc(sizeof(struct cube_internal_header)))) {
+    printf("Could not malloc memory for tmprawhdr in \"MakeInternalHeader\".\n");
+    return(NULL);
+    }
+tmprawhdr->zmax = Z_INC;
+if((tmprawhdr->pln = (struct cube_plane *)malloc
+	((unsigned)tmprawhdr->zmax*sizeof(struct cube_plane))) == NULL) {
+    fprintf(stderr,"Could not allocate memory for tmprawhdr.\n");
+    return(NULL);
+    }
+
+tmprawhdr->xdim = hdr->xdim;
+tmprawhdr->ydim = hdr->ydim;
+tmprawhdr->zdim = hdr->zdim;
+tmprawhdr->type = hdr->type;
+tmprawhdr->ctr_offset = hdr->ctr_offset;
+tmprawhdr->ang_inc = hdr->ang_inc;
+tmprawhdr->detector_ctr = hdr->detector_ctr;
+
+return(tmprawhdr);
+
+}
+
+
+/***********************************/
+int AppendCubePlane(outfil,hdr,z,img)
+/***********************************/
+
+char	*outfil;
+struct  cube_header *hdr;
+int	z;  			/* Integer specifiying z-position 0-N-1.  */
+float	*img;
+
+{
+
+FILE	*fd;
+
+struct cube_header *tmphdr;
+
+int	stat;
+
+/* Get header, failure is OK, since header will be created in PutCubePlane.
+   This call will read internal header if it exists. */
+tmphdr=GetCubeHeader(outfil,0);
+
+/* Write plane to cube. */
+if((stat=PutCubePlane(outfil,hdr,z,img)) != OK) {
+    fprintf(stderr,"Error writing header to %s in AppendCubePlane\n",outfil);
+    return(ERROR);
+    }
+
+if((stat=PutCubeHeader(outfil,hdr)) != OK) {
+    fprintf(stderr,"Error writing header to %s in AppendCubePlane\n",outfil);
+    return(ERROR);
+    }
+
+CloseCube(outfil);
+
+return(OK);
+
+}
+
+/****************************/
+int CopyCubeHeader(hdr,outhdr)
+/****************************/
+
+struct cube_header *hdr,*outhdr;
+
+{
+
+outhdr->ctr_offset = hdr->ctr_offset;
+outhdr->ang_inc = hdr->ang_inc;
+outhdr->detector_ctr = hdr->detector_ctr;
+outhdr->duration = hdr->duration;
+strcpy(outhdr->id,hdr->id);
+outhdr->time = hdr->time;
+outhdr->position = hdr->position;
+
+}
+@

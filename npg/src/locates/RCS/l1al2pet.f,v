@@ -1,0 +1,527 @@
+head	2.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.5
+date	2004.02.16.19.39.57;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	2002.11.27.20.14.04;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	98.06.18.16.31.38;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.10.23.21.35.08;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.10.23.21.33.30;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.06.30.17.01.42;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.06.30.16.53.59;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.01.28.22.12.01;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+2.5
+log
+@Feb 2004
+@
+text
+@C$Log: l1al2pet.f,v $
+c Revision 2.3  2002/11/27  20:14:04  tom
+c *** empty log message ***
+c
+c Revision 2.2  1998/06/18  16:31:38  tom
+c *** empty log message ***
+c
+c Revision 2.1  1996/10/23  21:35:08  tom
+c scanner == 11
+c
+c Revision 2.0  1996/10/23  21:33:30  tom
+c Solaris
+c
+c Revision 1.3  1995/06/30  17:01:42  tom
+c *** empty log message ***
+c
+c Revision 1.2  1995/06/30  16:53:59  tom
+c added 953B
+c
+c Revision 1.1  1994/01/28  22:12:01  ty7777
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   L1AL2PET.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         05-May-87
+C  Written for:  LOCATES.FTN
+C
+C  Revised version of LOCATE.FTN by Joel S. Perlmutter (9/22/85)
+C
+C  Intent:
+C     This subroutine converts atlas region coordinates to
+C     PET region coordinates.
+C
+C  Common Blocks from LOCATES.INC:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **PETDATA   - tomograph parameters;         (read only)
+C     **REGION   - region analysis parameters     (write)
+C     **SXRDATA  - skull xray parameters          (read only)
+C     **ATLDATA  - atlas region parameters        (read only)
+C
+C  Uses Subroutines:
+C     L1AL2PT  - computes PET region coordinates;
+C     L1ATLAS  - get or save atlas files;
+C     L1RSAVE  - save region files;
+C
+C  TERMINAL.LIB
+C     TCONTROL
+C     GETINT
+C     YESNO
+C
+C  Called by:  LOCATES
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE L1AL2PET
+C
+      INCLUDE 'locates.inc'
+C
+      INTEGER*4    NT,SCANNER,AVEVEN,BVEVEN,AVODD,BVODD,I,J
+      REAL         XTEMP(100),YTEMP(100),ZTEMP(100),DEGX,DEGY,DEGZ
+      CHARACTER*1  BELL
+      CHARACTER*20 BLANK
+      CHARACTER*80 Q
+      CHARACTER*80 RCSHEADER
+      LOGICAL*1    ANS,FIXEDLOC,ERROR
+C
+      RCSHEADER = '$Id: l1al2pet.f,v 2.3 2002/11/27 20:14:04 tom Exp tom $'
+C
+      BELL = CHAR(7)
+      BLANK = ' '
+C
+      CALL TCONTROL(1,0,0)
+      CALL TCONTROL(2,0,0)
+      WRITE(USEROUT,*) 'ATLAS-to-PET Conversion'
+      WRITE(USEROUT,*) '-----------------------'
+C
+C  Get Atlas parameters
+C
+      IF (ATLAS .EQ. BLANK) THEN
+        CALL L1ATLAS
+      ELSE
+        WRITE (USEROUT, *)
+        WRITE (USEROUT, *) 'Current atlas is ', ATLAS
+        Q = 'Get new atlas values'
+        ANS = .FALSE.
+        CALL YESNO (Q, ANS)
+        IF (ANS) CALL L1ATLAS
+      END IF
+C
+      DO 100 I=1,NATLREGS
+        REGNAME(I) = ATLNAME(I)
+        CALL L1AL2PT(I,RLATLAS(I),APATLAS(I),ZATLAS(I),RLPET(I),APPET(I),SLICE(I))
+100   CONTINUE
+C
+C  Create homologous right hemisphere regions
+C
+      WRITE(USEROUT,*)
+      Q = 'Create homologous right hemisphere regions'
+      ANS = .FALSE.
+      CALL YESNO(Q,ANS)
+      IF (ANS) THEN
+        NT = 0
+        DO 200 I=1,NATLREGS
+          NT = NT+1
+          XTEMP(NT) = RLPET(I)
+          YTEMP(NT) = APPET(I)
+          ZTEMP(NT) = SLICE(I)
+          REGNAME(NT) = ATLNAME(I)(1:8)//'-L'
+          IF (RLATLAS(I).NE.0.0) THEN
+            NT = NT+1
+            CALL L1AL2PT(I,-RLATLAS(I),APATLAS(I),ZATLAS(I),XTEMP(NT),YTEMP(NT),ZTEMP(NT))
+            REGNAME(NT) = ATLNAME(I)(1:8)//'-R'
+          END IF
+200     CONTINUE
+C
+C  Interleave left and right regions in a single list
+C
+        DO 300 I=1,NT
+          RLPET(I) = XTEMP(I)
+          APPET(I) = YTEMP(I)
+          SLICE(I) = ZTEMP(I)
+300     CONTINUE
+        NREGS = NT
+      ELSE
+        NREGS = NATLREGS
+      END IF
+C
+C  This section allows use of regional data files
+C
+      SCANNER = 11
+      Q = 'Save coordinates in a file'
+      ANS = .TRUE.
+      CALL YESNO (Q, ANS)
+      IF (ANS) THEN
+        RORIENT = 'TRANSVERSE'
+350     Q = 'Scanner No. (6 = PETT VI, 10 = ECAT 953B, 11 = EXACT HR)'
+        CALL GETINT (Q, SCANNER, 6, 11)
+        IF (SCANNER .EQ. 6) THEN
+          RSCANNER = 'PETT 6'
+		ELSE IF (SCANNER .EQ. 10) THEN
+          RSCANNER = 'ECAT 953B'
+		ELSE IF (SCANNER .EQ. 11) THEN
+          RSCANNER = 'EXACT HR'
+        ELSE
+          GO TO 350
+        END IF
+        RSLICES = NSLICES
+C
+C  Fix region location or region size
+C
+        AVEVEN = 6
+        BVEVEN = 6
+        AVODD = 5
+        BVODD = 5
+        WRITE(USEROUT,*)
+        WRITE(USEROUT,*) 'If region SIZE is fixed, the region ',
+     2    'center will always be centered on a     '
+        WRITE(USEROUT,*) '   pixel when the number of boundary ',
+     2    'pixels is ODD and always centered on'
+        WRITE(USEROUT,*) '   a pixel edge when the number of ',
+     2    'boundary pixels is EVEN.'
+        WRITE(USEROUT,*) '   If size is fixed, location may vary ',
+     2    'up to 0.5 pixel from atlas values.'
+        WRITE(USEROUT,*)
+        WRITE(USEROUT,*) 'If the region LOCATION is fixed, ',
+     2    'the number of boundary pixels will be '
+        WRITE(USEROUT,*) '   ODD when the location is closest to a ',
+     2    'pixel center and EVEN when the'
+        WRITE(USEROUT,*) '   location is closest to a pixel edge.'
+        WRITE(USEROUT,*) '   If location is fixed, size may vary ',
+     2    'between regions.'
+        WRITE(USEROUT,*)
+        Q = 'Keep LOCATION FIXED and let size vary'
+        FIXEDLOC = .TRUE.
+        CALL YESNO(Q,FIXEDLOC)
+C
+        IF (FIXEDLOC) THEN
+          Q = 'R-L width of a region centered on a pixel (MUST BE ODD)'
+400       CALL GETINT(Q,AVODD,1,127)
+          IF (MOD(AVODD,2).EQ.0) THEN
+            WRITE(USEROUT,*) '*** ERROR: must be an odd number',BELL
+            GO TO 400
+          END IF
+          Q= 'A-P height of a region centered on a pixel (MUST BE ODD)'
+410       CALL GETINT(Q,BVODD,1,127)
+          IF (MOD(BVODD,2).EQ.0) THEN
+            WRITE(USEROUT,*) '*** ERROR: must be an odd number',BELL
+            GO TO 410
+          END IF
+          Q = 'R-L width of a region centered on a pixel edge '//
+     2      '(MUST BE EVEN)'
+420       CALL GETINT(Q,AVEVEN,2,128)
+          IF (MOD(AVEVEN,2).NE.0) THEN
+            WRITE(USEROUT,*) '*** ERROR: must be an even number',BELL
+            GO TO 420
+          END IF
+          Q = 'A-P height of a region centered on a pixel edge '//
+     2      '(MUST BE EVEN)'
+430       CALL GETINT(Q,BVEVEN,2,128)
+          IF (MOD(BVEVEN,2).NE.0) THEN
+            WRITE(USEROUT,*) '*** ERROR: must be an even number',BELL
+            GO TO 430
+          END IF
+C
+C  If the region center is within 0.25 of an integral value,
+C  it will have an odd number of pixels for its width.
+C
+          DO 500 I=1,NREGS
+            IF (ABS(RLPET(I)-FLOAT(NINT(RLPET(I)))).LT.0.25) THEN
+              AVAL(I) = AVODD
+            ELSE
+              AVAL(I) = AVEVEN
+            END IF
+            IF (ABS(APPET(I)-FLOAT(NINT(APPET(I)))).LT.0.25) THEN
+              BVAL(I) = BVODD
+            ELSE
+              BVAL(I) = BVEVEN
+            END IF
+            REGTYPE(I) = 'R'
+500       CONTINUE
+C
+        ELSE
+          Q = 'Use 5 x 5 pixels for region size'
+          ANS = .TRUE.
+          CALL YESNO(Q,ANS)
+          IF (ANS) THEN
+            AVODD = 5
+            BVODD = 5
+          ELSE
+            Q = 'R-L dimension (in pixels)'
+            CALL GETINT(Q,AVODD,1,100)
+            Q = 'A-P dimension (in pixels)'
+            CALL GETINT(Q,BVODD,1,100)
+          END IF
+          DO 600 I=1,NREGS
+            AVAL(I) = AVODD
+            BVAL(I) = BVODD
+            REGTYPE(I) = 'R'
+600       CONTINUE
+          IF (MOD(AVODD,2).NE.0) THEN
+            DO 610 I=1,NREGS
+              RLPET(I) = FLOAT(NINT(RLPET(I)))
+610         CONTINUE
+          ELSE
+            DO 620 I=1,NREGS
+              RLPET(I) = FLOAT(NINT(RLPET(I)+0.5))-0.5
+620         CONTINUE
+          END IF
+          IF (MOD(BVODD,2).NE.0) THEN
+            DO 630 I=1,NREGS
+              APPET(I) = FLOAT(NINT(APPET(I)))
+630         CONTINUE
+          ELSE
+            DO 640 I=1,NREGS
+              APPET(I) = FLOAT(NINT(APPET(I)+0.5))-0.5
+640         CONTINUE
+          END IF
+        END IF
+660     CALL L1RSAVE(ERROR)
+        IF (ERROR) THEN
+          WRITE(USEROUT,*) '*** Regions NOT saved',BELL
+          Q = 'Save regions in a disk file'
+          ANS = .TRUE.
+          CALL YESNO(Q,ANS)
+          IF (ANS) GO TO 660
+        END IF
+      END IF
+C
+C  Write the results to the terminal/printer
+C
+8100  FORMAT(1X,'SXR Values:')
+8140  FORMAT(1X,'Scan #   AC-PC   Angle X   Angle Y  Angle Z   ',
+     2          'Ztot   delta Z  delta AP  Origin: Z   AP')
+8160  FORMAT(1X,A5,3X,7(F7.3,2X),I11,F8.2,/)
+8180  FORMAT(1X,'Regions made using atlas file: ',A20,/)
+8200  FORMAT(1X,16X,'ATLAS COORDINATES',13X,'PET COORDINATES')
+8220  FORMAT(1X,' Region',8X,'RL',7X,'AP',7X,'Z',10X,'RL',7X,'AP',5X,'Slice')
+8240  FORMAT(1X,A10,3(2X,F7.2),2X,3(2X,F7.2))
+C
+      DEGX = ANGX*180.0/3.1416
+      DEGY = ANGY*180.0/3.1416
+      DEGZ = ANGZ*180.0/3.1416
+C
+      WRITE(USEROUT,8100)
+      WRITE(USEROUT,8140)
+      WRITE(USEROUT,8160) SCAN,APXRAY,DEGX,DEGY,DEGZ,ZXRAY,DZ,DAP,REFSLICE,APCTR
+      WRITE(USEROUT,8180) ATLAS
+      WRITE(USEROUT,8200)
+      WRITE(USEROUT,8220)
+C
+      J = 0
+      DO 700 I=1,NATLREGS
+        J = J+1
+        WRITE(USEROUT,8240) REGNAME(J),RLATLAS(I),APATLAS(I),
+     2    ZATLAS(I),RLPET(J),APPET(J),SLICE(J)
+        IF (REGNAME(J+1)(10:10).EQ.'R') THEN
+          J = J+1
+          WRITE(USEROUT,8240) REGNAME(J),-RLATLAS(I),APATLAS(I),
+     2      ZATLAS(I),RLPET(J),APPET(J),SLICE(J)
+        END IF
+700   CONTINUE
+C
+      Q = 'Continue'
+      ANS = .TRUE.
+      CALL YESNO(Q,ANS)
+C
+      RETURN
+      END
+@
+
+
+2.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d70 1
+a70 1
+      RCSHEADER = '$Id: l1al2pet.f,v 2.2 1998/06/18 16:31:38 tom Exp tom $'
+@
+
+
+2.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d67 1
+a67 1
+      RCSHEADER = '$Id: l1al2pet.f,v 2.1 1996/10/23 21:35:08 tom Exp tom $'
+d276 1
+a276 1
+8200  FORMAT(1X,16X'ATLAS COORDINATES',13X,'PET COORDINATES')
+@
+
+
+2.1
+log
+@scanner == 11
+@
+text
+@d2 3
+d57 1
+a57 2
+      REAL         XTEMP(100),YTEMP(100),
+     2             ZTEMP(100),DEGX,DEGY,DEGZ
+d64 1
+a64 1
+      RCSHEADER = '$Id: l1al2pet.f,v 2.0 1996/10/23 21:33:30 tom Exp tom $'
+d89 1
+a89 2
+        CALL L1AL2PT(I,RLATLAS(I),APATLAS(I),ZATLAS(I),
+     2    RLPET(I),APPET(I),SLICE(I))
+d108 1
+a108 2
+            CALL L1AL2PT(I,-RLATLAS(I),APATLAS(I),ZATLAS(I),
+     2        XTEMP(NT),YTEMP(NT),ZTEMP(NT))
+a268 1
+8120  FORMAT(1X,63X,'Center of PET')
+d270 2
+a271 2
+     2          'Ztot   delta Z  delta AP  Slice ',I,'(pix)')
+8160  FORMAT(1X,A5,3X,7(F7.3,2X),3X,F7.3,/)
+d274 1
+a274 2
+8220  FORMAT(1X,' Region',8X,'RL',7X,'AP',7X,'Z',10X,'RL',7X,'AP',
+     2  5X,'Slice')
+d282 2
+a283 4
+      WRITE(USEROUT,8120)
+      WRITE(USEROUT,8140) REFSLICE
+      WRITE(USEROUT,8160) SCAN,APXRAY,DEGX,DEGY,DEGZ,ZXRAY,DZ,DAP,
+     2   APCTR
+@
+
+
+2.0
+log
+@Solaris
+@
+text
+@d2 3
+d62 1
+a62 1
+      RCSHEADER = '$Id: l1al2pet.f,v 1.3 1995/06/30 17:01:42 tom Exp tom $'
+d127 1
+a127 1
+      SCANNER = 6
+d134 1
+a134 1
+        CALL GETINT (Q, SCANNER, 6, 10)
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@a0 1
+C$Id: l1al2pet.f,v 1.2 1995/06/30 16:53:59 tom Exp tom $
+d2 3
+a10 1
+C
+a47 4
+C
+C
+C
+C
+d59 1
+a59 1
+      RCSHEADER = '$Id: l1al2pet.f,v 1.2 1995/06/30 16:53:59 tom Exp tom $'
+d130 1
+a130 1
+350     Q = 'Scanner No. (6 = PETT VI, 7 = SP I, 8 = SP IIH, 10 = ECAT 953B)'
+a133 4
+        ELSE IF (SCANNER .EQ. 7) THEN
+          RSCANNER = 'SUPER PETT I'
+        ELSE IF (SCANNER .EQ.8) THEN
+          RSCANNER = 'SUPER PETT II'
+d136 2
+@
+
+
+1.2
+log
+@added 953B
+@
+text
+@d1 1
+a1 1
+C$Id: l1al2pet.f,v 1.1 1994/01/28 22:12:01 ty7777 Exp tom $
+d3 3
+d62 1
+a62 1
+      RCSHEADER = '$Id: l1al2pet.f,v 1.1 1994/01/28 22:12:01 ty7777 Exp tom $'
+d133 1
+a133 2
+350     Q = 'Scanner No. (6 = PETT VI, 7 = Super PETT I, 8 = Super PETT IIH, 10 =
+ECAT)'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d59 1
+a59 1
+      RCSHEADER = '$Id$'
+d130 3
+a132 2
+        Q = 'Scanner No. (6 = PETT VI, 7 = Super PETT I, 8 = Super PETT IIH)'
+        CALL GETINT (Q, SCANNER, 6, 8)
+d137 4
+d142 1
+a142 1
+          RSCANNER = 'SUPER PETT II'
+@

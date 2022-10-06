@@ -1,0 +1,139 @@
+#!/bin/csh
+#	Name:	mriconvert_fix
+#	Date:	May 2008
+#	Author:	Tom Videen
+#	Use: Fix images created with MRIConvert 
+#		Windows source:  http://lcni.uoregon.edu/~jolinda/MRIConvert
+#	1) Swap byte order in image files (PC->Sun)
+#	2) Create Interfile header
+#	3) Create Analyze header using Interfile header
+
+set argc = $#argv
+if ($argc < 2) then
+	echo "Usage: mriconvert_fix input output [orientation a/c/s]"
+	exit
+endif
+
+# Define file names
+
+set old = $1:r
+set new = $2:r
+set tmp = tmp$$
+
+set oldhdr = $old.hdr
+set oldimg = $old.img
+set newimg = $new.img
+set tmpimg = $tmp.img
+
+if (! -e $oldhdr) then
+	echo "ERROR: missing $oldhdr"
+	exit
+else if (! -e $oldimg) then
+	echo "ERROR: missing $oldimg"
+	exit
+endif
+if (-e $tmpimg) echo "Replacing $tmpimg"
+if (-e $tmp.ifh) echo "Replacing $tmp.ifh"
+if (-e $newimg) echo "Replacing $newimg"
+if (-e $new.hdr) echo "Replacing $new.hdr"
+if (-e $new.ifh) echo "Replacing $new.ifh"
+
+set orient = 'a'
+if ($argc == 3) then
+	if ($3 == 'a' || $3 == 'A' || $3 == 't' || $3 == 'T') then
+		set orient = 'a'
+	else if ($3 == 'c' || $3 == 'C') then
+		set orient = 'c'
+	else if ($3 == 's' || $3 == 'S') then
+		set orient = 's'
+	else 
+		echo "ERROR: unrecognized orientation: $3"
+		exit
+	endif
+endif
+
+# Swap byte order
+
+set n = `wc -c $oldimg | cut -f2 -d' '`
+set bs = 256
+set num = `echo $n / $bs | bc`
+echo $n $num
+dd if=$oldimg of=$tmpimg ibs=$bs obs=$bs count=$n conv="swab"
+
+# Get old Analyze header info
+
+set bits = `scanheader $oldhdr | grep bits/pixel | cut -f2 -d=`
+set xdim = `scanheader $oldhdr | grep x_dim | cut -f2 -d=`
+set ydim = `scanheader $oldhdr | grep y_dim | cut -f2 -d=`
+set zdim = `scanheader $oldhdr | grep z_dim | cut -f2 -d=`
+set xsiz = `scanheader $oldhdr | grep x_size | cut -f2 -d= | cut -f1 -de`
+set xfac = `scanheader $oldhdr | grep x_size | cut -f2 -d= | cut -f2 -de`
+if ($xfac == -01) then
+	set xpix = `echo $xsiz / 10 | bc -l | cut -c1-7`
+	set xpix = 0$xpix
+else if ($xfac == +01) then
+	set xpix = `echo $xsiz \* 10 | bc -l | cut -c1-7`
+else
+	set xpix = $xsiz
+endif
+set ysiz = `scanheader $oldhdr | grep y_size | cut -f2 -d= | cut -f1 -de`
+set yfac = `scanheader $oldhdr | grep x_size | cut -f2 -d= | cut -f2 -de`
+if ($yfac == -01) then
+	set ypix = `echo $ysiz / 10 | bc -l | cut -c1-7`
+	set ypix = 0$ypix
+else if ($yfac == +01) then
+	set ypix = `echo $ysiz \* 10 | bc -l | cut -c1-7`
+else
+	set ypix = $ysiz
+endif
+set zsiz = `scanheader $oldhdr | grep z_size | cut -f2 -d= | cut -f1 -de`
+set zfac = `scanheader $oldhdr | grep z_size | cut -f2 -d= | cut -f2 -de`
+if ($zfac == -01) then
+	set zpix = `echo $zsiz / 10 | bc -l | cut -c1-7`
+	set zpix = 0$zpix
+else if ($zfac == +01) then
+	set zpix = `echo $zsiz \* 10 | bc -l | cut -c1-7`
+else
+	set zpix = $zsiz
+endif
+set bps = `echo $bits / 8 | bc`
+echo $bps $xdim $ydim $zdim $xpix $ypix $zpix $xfac $yfac $zfac
+
+# Create tmp Interfile header
+
+echo "INTERFILE :="										>! $tmp.ifh
+echo "version of keys               := 3.3"				>> $tmp.ifh
+echo "image modality                := mri"				>> $tmp.ifh
+echo "program name                  := mriconvert_fix"	>> $tmp.ifh
+echo "program version               := 1.0"				>> $tmp.ifh
+echo "name of data file             := $tmpimg"			>> $tmp.ifh
+echo "number format                 := signed integer"	>> $tmp.ifh
+echo "number of bytes per pixel     := $bps"			>> $tmp.ifh
+echo "number of dimensions          := 3"				>> $tmp.ifh
+echo "matrix size [1]               := $xdim"			>> $tmp.ifh
+echo "matrix size [2]               := $ydim"			>> $tmp.ifh
+echo "matrix size [3]               := $zdim"			>> $tmp.ifh
+echo "scaling factor (mm/pixel) [1] := $xpix"			>> $tmp.ifh
+echo "scaling factor (mm/pixel) [2] := $ypix"			>> $tmp.ifh
+echo "scaling factor (mm/pixel) [3] := $zpix"			>> $tmp.ifh
+if ($orient == 'c') then
+	echo "matrix initial element [1]    := right"		>> $tmp.ifh
+	echo "matrix initial element [2]    := inferior"	>> $tmp.ifh
+	echo "matrix initial element [3]    := posterior"	>> $tmp.ifh
+else if ($orient == 's') then
+	echo "matrix initial element [1]    := posterior"	>> $tmp.ifh
+	echo "matrix initial element [2]    := inferior"	>> $tmp.ifh
+	echo "matrix initial element [3]    := right"		>> $tmp.ifh
+else
+	echo "matrix initial element [1]    := right"		>> $tmp.ifh
+	echo "matrix initial element [2]    := posterior"	>> $tmp.ifh
+	echo "matrix initial element [3]    := inferior"	>> $tmp.ifh
+endif
+
+# Reorient to standard Analyze axial orientation with hdr file
+
+reorient_ifh $tmp $new
+chmod 660 $new.*
+chmod 660 $old.*
+rm $tmp.*
+

@@ -1,0 +1,89 @@
+;; Read decay-corrected counts into img.data
+;; img.h.sh7.decay_corr_fctr = factor by which data were decay-corrected
+
+FUNCTION GETECAT7FRM, img, msg
+   
+   COMMON IMAGE_UTILS
+   
+   fname = img.fname
+   IF (strlen(fname) EQ 0) THEN BEGIN
+      msg =  'No file entered'
+      RETURN, -1
+   ENDIF 
+
+   str=''
+   dim = lonarr(3)
+   ffrm = img.ff
+   img.p  = 1
+   img.fp = 1
+   img.f  = ffrm
+   img.ff = ffrm
+   img.lf = ffrm
+   frames = 1
+
+   mh7 = {M7header}
+   sh7 = {Subheader7_img}
+   M7header_init, mh7, sh7
+   IF (img.data NE ptr_new()) THEN ptr_free, img.data
+   
+   cmd = '/usr/local/npg/bin/dynimage_frm ' + fname + string(ffrm)
+   spawn,cmd,unit=lun
+   k = 0
+   str = ''
+   readf,lun,k,str,format='(I0,A)'
+   IF (k EQ -1) THEN BEGIN 
+      msg = 'Read Error: ' + str
+      RETURN, -1
+   ENDIF
+   
+   readf,lun,dim,format='(3I0)'
+   img.lp = dim[2]
+   planes = dim[2]
+
+   readu,lun,mh7
+   readu,lun,sh7
+   
+   dptr = ptr_new(fltarr(dim[0],dim[1],planes,frames),/allocate)
+   readu,lun,*dptr
+   img.start[ffrm] = sh7.frame_start_time
+   img.len[ffrm] = sh7.frame_duration
+   img.min = sh7.image_min
+   img.max = sh7.image_max
+   close,lun
+   free_lun,lun
+   
+   sh7.data_type = 2            ; float
+   img.h.mh7 = mh7
+   img.h.sh7 = sh7
+   
+   CASE sh7.data_type OF
+      1: img.ntype = type(0B)
+      2: img.ntype = type(0)
+      5: img.ntype = type(0.0)
+      6: img.ntype = type(0)
+   ENDCASE
+   img.itype = MATRIX_REV7
+   img.order = 1
+   img.dim[0] = dim[0]
+   img.dim[1] = dim[1]
+   img.dim[2] = dim[2]
+   img.dim[3] = 1
+   img.pdim[0] = 10*sh7.x_pixel_size
+   img.pdim[1] = 10*sh7.y_pixel_size
+   img.pdim[2] = 10*sh7.z_pixel_size
+   img.org[0] = 0.5 * float(dim[0]+1)
+   img.org[1] = 0.5 * float(dim[1]+1)
+   comment = mh7.study_description
+   a = strpos(comment,'z0:')
+   IF (a GE 0) THEN BEGIN
+      str = strmid(comment, a+4,3)
+      img.org[2] = float(str)
+   ENDIF ELSE img.org[2] = 0
+   img.org[3] = 0
+   img.scale =  1.0
+   img.gcal = 1.0
+   img.ical = 1.0
+   FOR k=0,8 DO img.mcal[k] = 0.0
+   img.data = dptr
+   RETURN, 0
+END

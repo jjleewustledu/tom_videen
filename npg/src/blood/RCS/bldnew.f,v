@@ -1,0 +1,482 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.16.38.58;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2002.12.16.20.21.58;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2001.06.06.17.59.32;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.05.10.16.13.20;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.12.17.21.34.24;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.10.13.19.07.24;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.10.12.16.17.30;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@bldnew.f initial checking in.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@C$Header: /home/npggw/tom/src/blood/RCS/bldnew.f,v 1.6 2002/12/16 20:21:58 tom Exp tom $
+C$Log: bldnew.f,v $
+c Revision 1.6  2002/12/16  20:21:58  tom
+c change FORMAT I to I3
+c
+CRevision 1.5  2001/06/06 17:59:32  tom
+Cadd ntypes 7-9 for steady-state and steady-inhalation oxygen methods
+C
+c Revision 1.4  1995/05/10  16:13:20  tom
+c default count time differs for different scanners
+c
+c Revision 1.3  1993/12/17  21:34:24  tom
+c changed max NCURVES to 50
+c
+c Revision 1.2  1992/10/13  19:07:24  ty7777
+c blood working version.
+c
+c Revision 1.1  1992/10/12  16:17:30  ty7777
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   bldnew.f
+C  Author:       Tom O. Videen
+C  Date:         03-Oct-86
+C
+C  History:
+C     Revised 26-Feb-87 by TOV to change header spacing on DTA file;
+C     Revised 19-Aug-87 by TOV so that SAVE=FALSE really deletes the
+C        DTA file instead of saving one with 0 records.
+C			Revised 17-Dec-93 TOV changing max NCURVES from 9 to 50.
+C
+C  Intent:
+C     This subroutine is called for entering new blood curves.
+C
+C     The program computes the counts per second for each blood sample
+C     corrected for decay from the time of sampling, the volume of the
+C     sample used in the well counter, and the position of the sample
+C     in the well counter.
+C     The user enters syringe dry & wet weights, times drawn & counted,
+C     and the counts per n seconds, as well as pertinent data concerning
+C     the PET scan.
+C
+C     If SAVE=FALSE then no .DTA file will be written, but corrected
+C     counts will be displayed.   The allocated DTA file will be deleted
+C     when the subroutine exits.
+C
+C  Uses BLOOD Subroutines:
+C     BLDPARM  - gets scan parameters for each blood curve;
+C     BLDLIST  - writes scan parameters to terminal;
+C     BLDENTER - gets values of each point in blood curve and
+C        computes corrected counts;
+C     BLDCURVE - writes blood curve values to the terminal;
+C     BLDSAVE  - writes blood curve values to a disk (.DTA) file;
+C     BLDALTER - alter a point in a blood curve;
+C     BLDADDPT - add a point to a blood curve;
+C     BLDDELPT - delete a point from a blood curve;
+C     BLDSHIFT - shift times of a blood curve;
+C
+C  Uses TERMINAL.LIB
+C     GETINT
+C     GTSTRING
+C     YESNO
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+      SUBROUTINE BLDNEW
+
+      INCLUDE 'blood.inc'
+
+      INTEGER*4    NCURVES,ICURVE,I,M
+      CHARACTER*1  CH
+      CHARACTER*80 HEAD,Q,CHARSET
+      CHARACTER*256 RCSHEADER    ! RCS header information
+
+      LOGICAL*1    ANS,DONE,A
+
+C  Initializations
+
+      RCSHEADER = "$Header: /home/npggw/tom/src/blood/RCS/bldnew.f,v 1.6 2002/12/16 20:21:58 tom Exp tom $"
+      HEAD = ' '
+      NCURVES = 1
+      ISOTOPE = 1
+      SCANTYPE = 1
+      DO 10 I=1,6
+        SCANNUM(I) = 1
+10    CONTINUE
+
+C  If counts are saved, write the header, the column headings,
+C  and the number of blood curves to the .DTA file
+
+      SAVE = .TRUE.
+      Q = 'Save corrected counts in a .DTA file'
+      CALL YESNO(Q,SAVE)
+      IF (SAVE) THEN
+        Q = 'Header'
+        CALL GTSTRING(Q,HEAD)
+        WRITE(DTAFILE,8701) HEAD
+        WRITE(DTAFILE,8702)
+        WRITE(DTAFILE,8703)
+        Q = 'Number of Blood Curves Obtained'
+        CALL GETINT(Q,NCURVES,1,50)
+        WRITE(DTAFILE,8704) NCURVES
+      ELSE
+        CLOSE(DTAFILE,STATUS='DELETE')
+      END IF
+
+8701  FORMAT ('@@01@@ ', A69)
+8702  FORMAT (5X, '  Corrected     Syringe Weight      Sample Time    Measured   Per')
+8703  FORMAT (5X, 'Sec   Counts     Dry      Wet      Drawn  Counted    Counts   Sec')
+8704  FORMAT (I3)
+
+C  Select option for varying well count times
+
+      VARYTIME = .FALSE.
+      IF (SCANNER.EQ.3) THEN
+         Q = 'Were well counter periods other than 12 seconds used'
+      ELSE
+         Q = 'Were well counter periods other than 10 seconds used'
+      ENDIF
+      CALL YESNO(Q,VARYTIME)
+
+C  LOOP for each blood curve
+
+      N = 200
+      DO 500 ICURVE = 1, NCURVES
+        DO 100 I = 1, N
+          DRYWEIGHT (I) = 0.0
+          WETWEIGHT (I) = 0.0
+          TIMEDRAW (I) = 0.0
+          TIMESECS (I) = 0.0
+          TIMECNT (I) = 0.0
+          COUNTIME (I) = FLOAT(DEFTIME)
+          COUNTS (I) = 0
+          CORCNTS (I) = 0.0
+100     CONTINUE
+
+150     CALL BLDPARM (ICURVE)
+        CALL BLDLIST
+        ANS = .FALSE.
+        Q = 'Redo these values'
+        CALL YESNO(Q,ANS)
+        IF (ANS) GO TO 150
+
+        N = 1
+        WRITE(USEROUT,*)
+        WRITE(USEROUT,*)'  BLOOD POINT ENTRY'
+200     DONE = .FALSE.
+        CALL BLDENTER(DONE)
+300     CALL BLDCURVE(DONE)
+        IF (.NOT.DONE) THEN
+          ANS = .FALSE.
+          Q = 'Redo these values'
+          CALL YESNO(Q,ANS)
+          IF (.NOT.ANS .AND. SAVE) N = N+1
+          GO TO 200
+        END IF
+
+C   N-1 is index to last data point entered
+
+        IF (.NOT.SAVE) STOP
+        ANS = .FALSE.
+        IF (SCANTYPE.EQ.1 .AND. HEMATOCRIT.NE.0.0 .AND. N.GT.2) THEN
+          WRITE(USEROUT,*) 'The last point should be the well counts for plasma.'
+          IF (TIMEDRAW(N-1) .NE. TIMEDRAW(N-2)) THEN
+            WRITE(USEROUT,*) 'WARNING: The last 2 points should be whole-blood & plasma counts'
+            WRITE(USEROUT,*) '         sample at the same time!'
+          END IF
+          WRITE(USEROUT,*)
+        END IF
+
+        Q ='End, Resume, Change a point, Add a point, or Delete a point (E,R,C,A,D)'
+        CHARSET = 'ERCADercad'
+        CH = 'R'
+        CALL GETCHAR(Q,CH,CHARSET)
+        IF (CH.EQ.'R' .OR. CH.EQ.'r') THEN
+          Q = 'Continue from point #'
+          CALL GETINT(Q,N,1,N)
+          GO TO 200
+        ELSE IF (CH.EQ.'C' .OR. CH.EQ.'c') THEN
+          Q = 'Change point #'
+          M = N-1
+          CALL GETINT(Q,M,1,N-1)
+          CALL BLDALTER(M)
+          GO TO 300
+        ELSE IF (CH.EQ.'A' .OR. CH.EQ.'a') THEN
+          Q = 'Add a point BEFORE point #'
+          M = N
+          CALL GETINT(Q,M,1,N)
+          CALL BLDADDPT(M)
+          GO TO 300
+        ELSE IF (CH.EQ.'D' .OR. CH.EQ.'d') THEN
+          Q = 'Delete point #'
+          M = N-1
+          CALL GETINT(Q,M,1,M)
+          CALL BLDDELPT(M)
+          GO TO 300
+        END IF
+
+C    Points sampled from plasma should have densities adjusted 
+
+        IF ((SCANTYPE.EQ.1 .OR. SCANTYPE.EQ.7) .AND. HEMATOCRIT.NE.0.0) THEN
+          CORCNTS(N-1) = CORCNTS(N-1)*PLASMADN/BLOODDEN
+        ELSE IF (SCANTYPE.EQ.8) THEN
+          DO 400 I=1,N-1
+            CORCNTS(I) = CORCNTS(I)*PLASMADN/BLOODDEN
+400       CONTINUE
+        ENDIF
+
+        Q = 'Shift the points in this curve'
+        A = .FALSE.
+        CALL YESNO(Q,A)
+        IF (A) CALL BLDSHIFT
+        CALL BLDSAVE(ICURVE)
+        SCANNUM(SCANTYPE) = SCANNUM(SCANTYPE) + 1
+500   CONTINUE
+
+      RETURN
+      END
+@
+
+
+1.6
+log
+@change FORMAT I to I3
+@
+text
+@d1 1
+a1 1
+C$Header: /home/tom/src/blood/RCS/bldnew.f,v 1.5 2001/06/06 17:59:32 tom Exp tom $
+d3 3
+d80 1
+a80 1
+      RCSHEADER = "$Header: /home/tom/src/blood/RCS/bldnew.f,v 1.5 2001/06/06 17:59:32 tom Exp tom $"
+@
+
+
+1.5
+log
+@add ntypes 7-9 for steady-state and steady-inhalation oxygen methods
+@
+text
+@d1 1
+a1 1
+C$Header: /home/npggw/tom/src/blood/RCS/bldnew.f,v 1.4 1995/05/10 16:13:20 tom Exp tom $
+d3 3
+d77 1
+a77 1
+      RCSHEADER = "$Header: /home/npggw/tom/src/blood/RCS/bldnew.f,v 1.4 1995/05/10 16:13:20 tom Exp tom $"
+d108 1
+a108 1
+8704  FORMAT (I)
+@
+
+
+1.4
+log
+@default count time differs for different scanners
+@
+text
+@d1 1
+a1 1
+C$Header: /home/npggw/tom/src/blood/RCS/bldnew.f,v 1.3 1993/12/17 21:34:24 tom Exp tom $
+d3 3
+a14 1
+C
+a17 1
+C
+a21 1
+C
+d60 1
+a60 1
+C
+d62 1
+a62 1
+C
+d64 1
+a64 1
+C
+d66 1
+a66 1
+      CHARACTER*1  BELL,CH
+d71 1
+a71 1
+C
+d73 2
+a74 3
+C
+      RCSHEADER = "$Header$"
+      BELL = CHAR(7)
+d82 1
+a82 1
+C
+d85 1
+a85 1
+C
+d101 1
+a101 1
+C
+d103 2
+a104 4
+8702  FORMAT (7X, 'Corrected     Syringe Weight', 6X,
+     2   'Sample Time    Measured   Per')
+8703  FORMAT (5X, 'Sec   Counts     Dry      Wet', 6X,
+     2   'Drawn  Counted    Counts   Sec')
+d106 1
+a106 1
+C
+d108 1
+a108 1
+C
+d116 1
+a116 1
+C
+d118 1
+a118 1
+C
+d131 1
+a131 1
+C
+d138 1
+a138 1
+C
+d152 3
+a154 1
+C
+d158 4
+a161 6
+          WRITE(USEROUT,*) 'The last point should be the well ',
+     2      'counts for plasma.'
+          IF (TIMEDRAW(N-1).NE.TIMEDRAW(N-2)) THEN
+            WRITE(USEROUT,*) '*** WARNING: THE LAST TWO POINTS ',
+     2        'SHOULD BE WHOLE BLOOD & PLASMA COUNTS'
+            WRITE(USEROUT,*) '             TAKEN AT THE SAME TIME',BELL
+d165 2
+a166 3
+C
+        Q ='End, Resume, Change a point, Add a point, '//
+     2     'or Delete a point (E,R,C,A,D)'
+d193 4
+a196 1
+        IF (SCANTYPE.EQ.1 .AND. HEMATOCRIT.NE.0.0) THEN
+d198 6
+a203 1
+        END IF
+d211 1
+a211 1
+C
+@
+
+
+1.3
+log
+@changed max NCURVES to 50
+@
+text
+@d1 1
+a1 1
+C$Header: /home/petsun2/tom/src/blood/RCS/bldnew.f,v 1.2 1992/10/13 19:07:24 ty7777 Exp tom $
+d3 3
+a54 1
+C     TCONTROL
+a62 1
+C
+d68 2
+d74 1
+d113 5
+a117 1
+      Q = 'Were well counter periods other than 10 seconds used'
+d130 1
+a130 1
+          COUNTIME (I) = 10.0
+@
+
+
+1.2
+log
+@blood working version.
+@
+text
+@d1 1
+a1 1
+C$Header: /home/petsun4/ty7777/src/blood/source/RCS/bldnew.f,v 1.1 1992/10/12 16:17:30 ty7777 Exp $
+d3 3
+d22 1
+d93 1
+a93 1
+        CALL GETINT(Q,NCURVES,1,9)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+C$Header$
+C$Log$
+d9 1
+a9 1
+C  Subroutine:   BLDNEW.FTN
+d95 2
+a96 2
+8701  FORMAT('@@01@@ ',A69)
+8702  FORMAT(7X,'Corrected     Syringe Weight',6X,
+d98 1
+a98 1
+8703  FORMAT(5X,'Sec   Counts     Dry      Wet',6X,
+d100 1
+a100 1
+8704  FORMAT(I)
+d111 10
+a120 10
+      DO 500 ICURVE=1,NCURVES
+        DO 100 I=1,N
+          DRYWEIGHT(I) = 0.
+          WETWEIGHT(I) = 0.
+          TIMEDRAW(I) = 0.
+          TIMESECS(I) = 0.
+          TIMECNT(I) = 0.
+          COUNTIME(I) = 10.
+          COUNTS(I) = 0
+          CORCNTS(I) = 0.
+d123 1
+a123 1
+150     CALL BLDPARM(ICURVE)
+@

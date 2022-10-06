@@ -1,0 +1,392 @@
+head	2.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.2
+date	2004.02.20.16.15.35;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	99.12.17.16.06.32;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.05.10.21.59.01;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.11.10.18.48.08;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.10.03.16.17.13;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Separated this function from atlas_transform;
+@
+
+
+2.2
+log
+@Feb 2004
+@
+text
+@/* $Log: matrix_transform.c,v $
+ * Revision 2.1  1999/12/17  16:06:32  tom
+ * lint cleaning
+ *
+ * Revision 2.0  1996/05/10  21:59:01  tom
+ * new libimage
+ * indexing from 1 on images and atlas
+ *
+ * Revision 1.2  1995/11/10  18:48:08  tom
+ * remove petutil parent directory from include statements
+ *
+ * Revision 1.1  1994/10/03  16:17:13  tom
+ * Initial revision
+ *
+ */
+/*	========================================================================
+ *	Module:			matrix_transform.c
+ *	Date:			Sep 1994
+ *	Author:			Tom Videen
+ *	Description:	Create the transformation matrix from PET -> Atlas.
+ *
+ *  Input:
+ *      sxr 	-   sxr file structure;
+ *		atlas	-	brain atlas structure;
+ *		center	-	reference point in PET image which has a known displacement from the atlas;
+ *		angle	-	transformation angles PET -> atlas;
+ *		scale	-	scalers for PET -> atlas;
+ *
+ *  Output:
+ *		map		-	matrix to transform Atlas to PET coordinate system
+ *
+ *	Algorithm:
+ *	1)  Compute the translation matrix to array origin:
+ *		The atlas image is shifted an additional 1.8 cm anteriorly as its origin is not
+ *		at the center of the brain:
+ *		(17.2 / 2) - 7.0 = 1.8 cm  (based on horizontal section +1 or -1 in Tal 1988)
+ *	2)  Compute the translation matrix to PET origin.
+ *	3)  Compute rotation matrix about the matrix origin.
+ *	4)  Compute scaling matrix  (Atlas dim --> PET dim).
+ *	5)  Compute scaling matrix  (PET dim --> atlas dim).
+ *	6)  Concatenate matrices and return.
+ *
+ *	History:
+ *		Sep 1994	separated module from atlas_transform in t88mean
+ *	========================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/matrix_transform.c,v 2.1 1999/12/17 16:06:32 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <math.h>
+#include <nrutil.h>
+#include <imgutil.h>			 /* SXR_DATA */
+#include <matrixlib.h>			 /* matrix_mult */
+#include <atlas.h>				 /* BRAIN_ATLAS */
+
+/*	-----------------------
+ *	Function matrix_transform
+ *	-----------------------
+ */
+
+int             matrix_transform (sxr, atlas, center, angle, scale, map)
+	SXR_DATA        sxr;
+	BRAIN_ATLAS     atlas;
+	float           center[3];
+	float           angle[3];
+	float           scale[3];
+	float         **map;		 /* conversion matrix Atlas -> PET */
+
+{
+	float         **ta;			 /* translation matrix:  Atlas origin -> array origin */
+	float         **tp;			 /* translation matrix:  array origin -> PET origin */
+	float         **rx, **ry, **rz;		 /* rotation matrices:  Atlas -> PET	 */
+	float         **sa;			 /* scaling matrix:	PET -> Atlas	 */
+	float         **sp;			 /* scaling matrix:	Atlas -> output array	 */
+	float         **ma, **mb, **mc, **md, **me;	/* intermediate matrix products */
+	int             i, j;
+
+/*
+ *	Initializations
+ */
+
+	ta = matrix (1, 4, 1, 4);
+	tp = matrix (1, 4, 1, 4);
+	rx = matrix (1, 4, 1, 4);
+	ry = matrix (1, 4, 1, 4);
+	rz = matrix (1, 4, 1, 4);
+	sa = matrix (1, 4, 1, 4);
+	sp = matrix (1, 4, 1, 4);
+	ma = matrix (1, 4, 1, 4);
+	mb = matrix (1, 4, 1, 4);
+	mc = matrix (1, 4, 1, 4);
+	md = matrix (1, 4, 1, 4);
+	if ((me = matrix (1, 4, 1, 4)) == NULL) {
+		fprintf (stderr, "ERROR [matrix_transform]: Cannot malloc memory for matrix\n");
+		return (ERROR);
+	}
+	for (i = 1; i <= 4; ++i) {
+		for (j = 1; j <= 4; ++j) {
+			ta[i][j] = 0;
+			tp[i][j] = 0;
+			sa[i][j] = 0;
+			sp[i][j] = 0;
+			rx[i][j] = 0;
+			ry[i][j] = 0;
+			rz[i][j] = 0;
+		}
+		ta[i][i] = 1;
+		tp[i][i] = 1;
+		sa[i][i] = 1;
+		sp[i][i] = 1;
+		rx[i][i] = 1;
+		ry[i][i] = 1;
+		rz[i][i] = 1;
+	}
+
+/*
+ *	COMPUTE the transformation matrix MAP
+ *	-------------------------------------
+ *
+ *	Translation to matrix origin:  (Atlas image origin x0,y0,z0 --> matrix origin 0,0,0)
+ *	The atlas image is shifted an additional 1.8 cm anteriorly as its origin is not
+ *	at the center of the brain:
+ *		(17.2 / 2) - 7.0 = 1.8 cm  (based on horizontal section +1 or -1 in Tal 1988)
+ */
+
+	ta[1][4] = -atlas.x0;
+	ta[2][4] = -atlas.y0 - (1.8 / atlas.pixel_size);
+	ta[3][4] = -atlas.z0;
+
+/*
+ *	Translation to PET origin:
+ */
+
+	tp[1][4] = center[0];
+	tp[2][4] = center[1];
+	tp[3][4] = center[2];
+
+/*
+ *	Rotation: rotate about matrix origin
+ */
+
+	rx[2][2] = cos (angle[0]);
+	rx[2][3] = sin (angle[0]);
+	rx[3][2] = -sin (angle[0]);
+	rx[3][3] = cos (angle[0]);
+
+	ry[1][1] = cos (angle[1]);
+	ry[1][3] = -sin (angle[1]);
+	ry[3][1] = sin (angle[1]);
+	ry[3][3] = cos (angle[1]);
+
+	rz[1][1] = cos (angle[2]);
+	rz[1][2] = sin (angle[2]);
+	rz[2][1] = -sin (angle[2]);
+	rz[2][2] = cos (angle[2]);
+
+/*
+ *	Scaling:  (Atlas dim --> PET dim)
+ */
+
+	sa[1][1] = scale[0];
+	sa[2][2] = scale[1];
+	sa[3][3] = scale[2];
+
+/*
+ *	Scaling:  (PET dim --> atlas dim)
+ */
+
+	sp[1][1] = atlas.pixel_size / sxr.pixel_size;
+	sp[2][2] = atlas.pixel_size / sxr.pixel_size;
+	sp[3][3] = atlas.slice_separation / sxr.slice_separation;
+
+/*
+ *	Concatenate matrices:
+ */
+
+	matrix_mult (sa, ta, ma, 4, 4, 4);
+	matrix_mult (rx, ma, mb, 4, 4, 4);
+	matrix_mult (ry, mb, mc, 4, 4, 4);
+	matrix_mult (rz, mc, md, 4, 4, 4);
+	matrix_mult (sp, md, me, 4, 4, 4);
+	matrix_mult (tp, me, map, 4, 4, 4);
+
+	free_matrix (ta, 1, 4, 1, 4);
+	free_matrix (tp, 1, 4, 1, 4);
+	free_matrix (rx, 1, 4, 1, 4);
+	free_matrix (ry, 1, 4, 1, 4);
+	free_matrix (rz, 1, 4, 1, 4);
+	free_matrix (sa, 1, 4, 1, 4);
+	free_matrix (sp, 1, 4, 1, 4);
+	free_matrix (ma, 1, 4, 1, 4);
+	free_matrix (mb, 1, 4, 1, 4);
+	free_matrix (mc, 1, 4, 1, 4);
+	free_matrix (md, 1, 4, 1, 4);
+	free_matrix (me, 1, 4, 1, 4);
+	return (OK);
+}
+@
+
+
+2.1
+log
+@lint cleaning
+@
+text
+@d2 3
+d18 1
+a18 1
+ *	Date:			22-Sep-94
+d44 1
+a44 1
+ *		22-Sep-94	separated module from atlas_transform in t88mean
+d47 1
+d49 1
+a49 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/matrix_transform.c,v 2.0 1996/05/10 21:59:01 tom Exp tom $";
+@
+
+
+2.0
+log
+@new libimage
+indexing from 1 on images and atlas
+@
+text
+@d2 4
+d44 4
+a49 1
+#include <nr.h>
+d51 2
+a52 2
+#include <imgutil.h>				 /* SXR_DATA */
+#include <matrixlib.h>				 /* matrix_mult */
+a54 4
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/matrix_transform.c,v 1.2 1995/11/10 18:48:08 tom Exp tom $";
+#endif
+
+@
+
+
+1.2
+log
+@remove petutil parent directory from include statements
+@
+text
+@d2 3
+d21 1
+a21 1
+ *	
+d35 1
+a35 1
+ *	
+a39 1
+
+d42 5
+a46 2
+#include <petutil.h>	/* SXR_OUTPUT */
+#include "atlas.h"		/* BRAIN_ATLAS, MATRIX, MATDIM */
+d48 3
+a50 2
+extern          matrix_mult ();	/* matrix multiplication */
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/t88mean/RCS/matrix_transform.c,v 1.1 1994/10/03 16:17:13 tom Exp tom $";
+d57 2
+a58 3
+void 
+matrix_transform (sxr, atlas, center, angle, scale, map)
+	SXR_OUTPUT      sxr;
+d63 1
+a63 1
+	MATRIX          map;	/* conversion matrix Atlas -> PET */
+d66 7
+a72 7
+	MATRIX          ta;	/* translation matrix:  Atlas origin -> array origin	*/
+	MATRIX          tp;	/* translation matrix:  array origin -> PET	origin	*/
+	MATRIX          rx, ry, rz;	/* rotation matrices:  Atlas -> PET	*/
+	MATRIX          sa;	/* scaling matrix:	PET -> Atlas	*/
+	MATRIX          sp;	/* scaling matrix:	Atlas -> output array	*/
+	MATRIX          ma, mb, mc, md, me;	/* intermediate matrix products */
+	int             i, j, k;
+d78 17
+a94 2
+	for (i = 0; i < MATDIM; ++i) {
+		for (j = 0; j < MATDIM; ++j) {
+d122 3
+a124 3
+	ta[0][3] = -atlas.x0;
+	ta[1][3] = -atlas.y0 - (1.8 / atlas.pixel_size);
+	ta[2][3] = -atlas.z0;
+d130 3
+a132 3
+	tp[0][3] = center[0];
+	tp[1][3] = center[1];
+	tp[2][3] = center[2];
+a137 3
+	rx[1][1] = cos (angle[0]);
+	rx[1][2] = sin (angle[0]);
+	rx[2][1] = -sin (angle[0]);
+d139 3
+d143 4
+a146 4
+	ry[0][0] = cos (angle[1]);
+	ry[0][2] = -sin (angle[1]);
+	ry[2][0] = sin (angle[1]);
+	ry[2][2] = cos (angle[1]);
+a147 3
+	rz[0][0] = cos (angle[2]);
+	rz[0][1] = sin (angle[2]);
+	rz[1][0] = -sin (angle[2]);
+d149 3
+d157 3
+a159 3
+	sa[0][0] = scale[0];
+	sa[1][1] = scale[1];
+	sa[2][2] = scale[2];
+a164 1
+	sp[0][0] = atlas.pixel_size / sxr.pixel_size;
+d166 2
+a167 1
+	sp[2][2] = atlas.slice_separation / sxr.slice_separation;
+d173 20
+a192 6
+	matrix_mult (sa, ta, ma, MATDIM, MATDIM, MATDIM);
+	matrix_mult (rx, ma, mb, MATDIM, MATDIM, MATDIM);
+	matrix_mult (ry, mb, mc, MATDIM, MATDIM, MATDIM);
+	matrix_mult (rz, mc, md, MATDIM, MATDIM, MATDIM);
+	matrix_mult (sp, md, me, MATDIM, MATDIM, MATDIM);
+	matrix_mult (tp, me, map, MATDIM, MATDIM, MATDIM);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$
+d40 1
+a40 1
+#include <petutil/petutil.h>	/* SXR_OUTPUT */
+d44 1
+a44 1
+static char     rcsid[] = "$Header$";
+@

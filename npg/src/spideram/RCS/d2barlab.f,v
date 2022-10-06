@@ -1,0 +1,1020 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.03.05.18.49.14;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.04.29.15.20.35;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   D2BARLAB.FTN
+C     Author:       Tom O. Videen
+C     Date:         27-May-87
+C     Intent:
+C     .   This routine labels a color bar.
+C     History:
+C     .   Modified 05-Mar-99 by TOV to allow processing for CVO2
+C     .      (PROCESS may be 0-7)
+C     .   Modified 28-Apr-98 by TOV to allow processing for CMRGlucose
+C     .      (PROCESS may be 0-6)
+C     .   Modified 06-Oct-87 by TOV to allow processing for tissue activity
+C     .      either with or without decay correction; (PROCESS may be 0-5)
+C     .   Modified by TOV 30-Dec-87:
+C     .     1) Use SCANNAME(1) as file name.
+C     .     2) Change label for rows of 7 when scaling to individual slice
+C     .        maximum (SEPSCALE added to common block).
+C     .   Modified 15-Sep-88 by TOV:
+C     .      1) Incorporate % diff scaling into SCALER and eliminate factor
+C     .         of 0.1 used formerly for percent difference images.
+C     .      2) Add 'DIFF' to all labels when there is a subtrahend image.
+C     .      3) Add '% DIFF' to all labels when there is a divisor image.
+C     .   Modified 25-Sep-91 by Tom Yang for cleaning text area before
+C     .     drawing text when porting to X Windows in Sun Workstation
+C     .     environment.
+C     .   Modified by TOV 26-Sep-91 for XSPIDERAM.
+C     
+C     Common Blocks from SPIDERAM.INC:
+C     .   **IMAGEDAT - image arrays                   (read only)
+C     .   **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .   **DISPLAY  - display parameters             (read only)
+C     .   **SCALES   - scaling parameters             (read only)
+C     .   **FILES     - scan file list                (read only)
+C     
+C     Variables Passed:
+C     .   LENGTH,WIDTH = length and width of the color bar;
+C     
+C     Internal Variables:
+C     .   XST,YST = location to write to on the Ramtek;
+C     .   SCAN = for horizontal labels;
+C     .   DOWN = for vertical labels;
+C     .   XSIZE,YSIZE = character size written in the color bar scale;
+C     .   PLANE = planes in which to write the scale;
+C     .   X,Y,Y1,Y2,Y3 = coordinates used to write color bar scale;
+C     .   TEXT,STR = strings written to the color bar scale;
+C     .   RTOPP,RMID,RBOT = scale labels at top, middle, and bottom
+C     .      of scale for real numbered scale;
+C     .   RMAX = maximum of RTOPP and RBOT;
+C     
+C     Uses:
+C     .   RAMWRITE - writes text on the Ramtek;
+C     .   INANYR
+C     
+C     Called by:  D2BAR
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: d2barlab.f,v 1.6 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE D2BARLAB (LENGTH, WIDTH)
+
+      INTEGER*4     LENGTH, WIDTH, XST, YST, XSIZE, YSIZE, SCAN, PLANE,
+     &     X, Y, Y1, Y2, Y3, L, L1, DOWN, TXTYSIZE
+      REAL*4        RTOPP, RMID, RBOT, RMAX
+      CHARACTER*1   TEXT (100)
+      CHARACTER*14  BLANK
+      CHARACTER*100 STR
+      LOGICAL*1     SUB, DIVISOR
+
+      EQUIVALENCE (STR, TEXT)
+
+      INCLUDE 'spideram.inc'
+      DATA SCAN, DOWN, XSIZE, YSIZE, TXTYSIZE /0, 4, 1, 2, 24/
+
+      BLANK = '             ~'
+      XST   = XBAR
+      YST   = YBAR
+      RBOT  = 0.0
+      RMID  = 0.0
+      RTOPP = 0.0
+      PLANE = 2**12 - 1
+
+      SUB       = .FALSE.
+      DIVISOR   = .FALSE.
+      IF (COMPARE) THEN
+         IF (FILE (2) .NE. 0) SUB     = .TRUE.
+         IF (FILE (3) .NE. 0) DIVISOR = .TRUE.
+      END IF
+
+ 8100 FORMAT (I5)
+ 8201 FORMAT (F6.1)
+ 8202 FORMAT (F6.2)
+ 8203 FORMAT (F6.3)
+
+C     Get values to write (RTOPP, RMID, and RBOT)
+
+      IF (ABSSCALE) THEN
+         IF (ABSRANGE) THEN
+            RTOPP = ABSMAX
+         ELSE
+            RTOPP = FLOAT (DMAX) * SCALER (1)
+         END IF
+         RMID = RTOPP / 2.0
+         RBOT = 0.0
+      ELSE
+         IF (SCALEPOS .EQ. 0) THEN
+            IF (ABSRANGE) THEN
+               RTOPP = RELMAX
+            ELSE
+               RTOPP = MAX (FLOAT(DMAX), ABS(DMIN)) * SCALER (1)
+            END IF
+            RMID = 0.0
+            RBOT = -RTOPP
+         ELSE IF (SCALEPOS .EQ. 1) THEN
+            IF (ABSRANGE) THEN
+               RTOPP = RELMAX
+            ELSE
+               RTOPP = FLOAT (DMAX) * SCALER (1)
+               RMID  = RTOPP / 2.0
+            END IF
+            RBOT  = 0.0
+         ELSE IF (SCALEPOS .EQ. - 1) THEN
+            IF (ABSRANGE) THEN
+               RBOT = -ABS (RELMAX)
+            ELSE
+               RBOT = FLOAT (DMIN) * SCALER (1)
+            END IF
+            RMID  = RBOT / 2.0
+            RTOPP = 0.0
+         END IF
+      END IF
+      RMAX = AMAX1 (ABS (RTOPP), ABS(RBOT))
+
+C     Write label for a horizontal color bar (rows of 7 images)
+
+      IF (MAG.EQ.2 .OR. MAG.EQ.3) THEN
+         X = XST + LENGTH + 15
+         IF (.NOT. SEPSCALE) THEN
+            STR = 'MAX =          ~'
+            IF (ABS (RMAX) .GE. 100.0) THEN
+               WRITE (STR (7:80), 8100) NINT (RMAX)
+            ELSE IF (ABS (RMAX) .GE. 10.0) THEN
+               WRITE (STR (7:80), 8201) RMAX
+            ELSE IF (ABS (RMAX) .GE. 1.0) THEN
+               WRITE (STR (7:80), 8202) RMAX
+            ELSE
+               WRITE (STR (7:80), 8203) RMAX
+            END IF
+            L = INANYR (STR, ' ')
+            STR (L + 1:L + 1)       = '~'
+         ELSE
+            STR = '               ~'
+         END IF
+         CALL RAMWRITE (X,YST,XSIZE,YSIZE,SCAN,PLANE,RMD,TEXT,FONT1C)
+
+C     Scan Name for rows of 7
+
+         X  = 40
+         STR = SCANNAME (1)
+         STR (9:9) = '~'
+         CALL RAMWRITE (X,YST,XSIZE,YSIZE,SCAN,PLANE,RMD,TEXT,FONT1C)
+
+C     Annotation for rows of 7
+
+         IF (ANNOTATE) THEN
+            X = XST + LENGTH + 190
+            IF (PROCESS .EQ. 0) THEN
+               IF (DIVISOR) THEN
+                  STR = '% DIFF CNTS~'
+               ELSE IF (SUB) THEN
+                  STR = 'PETT DIFF  ~'
+               ELSE
+                  STR = 'PETT COUNTS~'
+               END IF
+            ELSE IF (PROCESS .EQ. 1) THEN
+               IF (NTYPE (1) .EQ. 2 .OR. NTYPE (1) .EQ. 4) THEN
+                  IF (DIVISOR) THEN
+                     STR  = '% DIFF CBF ~'
+                  ELSE IF (SUB) THEN
+                     STR  = 'CBF DIFF   ~'
+                  ELSE
+                     STR  = 'CBF        ~'
+                  END IF
+               ELSE IF (NTYPE (1) .EQ. 3) THEN
+                  IF (DIVISOR) THEN
+                     STR  = '% DIFF CBV ~'
+                  ELSE IF (SUB) THEN
+                     STR  = 'CBV DIFF   ~'
+                  ELSE
+                     STR  = 'CBV        ~'
+                  END IF
+               ELSE
+                  RETURN
+               END IF
+            ELSE IF (PROCESS .EQ. 2) THEN
+               IF (DIVISOR) THEN
+                  STR = '% DIFF OEF ~'
+               ELSE IF (SUB) THEN
+                  STR = 'OEF DIFF   ~'
+               ELSE
+                  STR = 'OEF        ~'
+               END IF
+            ELSE IF (PROCESS .EQ. 3) THEN
+               IF (DIVISOR) THEN
+                  STR = '%DIFF CMRO2~'
+               ELSE IF (SUB) THEN
+                  STR = 'CMRO2 DIFF ~'
+               ELSE
+                  STR = 'CMRO2      ~'
+               END IF
+            ELSE IF (PROCESS .EQ. 4 .OR. PROCESS .EQ. 5) THEN
+               IF (DIVISOR) THEN
+                  STR = '% DIFF CPS ~'
+               ELSE IF (SUB) THEN
+                  STR = 'CPS/ML DIFF~'
+               ELSE
+                  STR = 'CPS/ML     ~'
+               END IF
+            ELSE IF (PROCESS .EQ. 6) THEN
+               IF (DIVISOR) THEN
+                  STR = '%DIFF CMRGLU~'
+               ELSE IF (SUB) THEN
+                  STR = 'CMRGLU DIFF ~'
+               ELSE
+                  STR = 'CMRGLU      ~'
+               END IF
+            ELSE
+               RETURN
+            END IF
+            CALL RAMWRITE (X,YST,XSIZE,YSIZE,SCAN,PLANE,RMD,TEXT,FONT1C)
+         END IF
+         RETURN
+
+C     Write 3 scales labels for a vertical color bar
+
+      ELSE
+         X = XST + WIDTH + 5
+         Y1 = YST
+         Y2 = YST + (LENGTH - 9 * YSIZE) / 2
+         Y3 = YST +  LENGTH - 9 * YSIZE
+      END IF
+      STR = '12345678'
+      CALL RAMCLEAR (X,Y1,SCAN,TEXT,8,FONT1C)
+      CALL RAMCLEAR (X,Y2,SCAN,TEXT,8,FONT1C)
+      CALL RAMCLEAR (X,Y3,SCAN,TEXT,8,FONT1C)
+
+
+C     Label at top of scale
+
+      STR       = ' '
+      IF (ABS (RMAX) .GE. 100.0) THEN
+         WRITE (STR, 8100) NINT (RTOPP)
+      ELSE IF (ABS (RMAX) .GE. 10.0) THEN
+         WRITE (STR, 8201) RTOPP
+      ELSE IF (ABS (RMAX) .GE. 1.0) THEN
+         WRITE (STR, 8202) RTOPP
+      ELSE
+         WRITE (STR, 8203) RTOPP
+      END IF
+      L1 = INANYL (STR, ' ')
+      L = INANYR (STR, ' ')
+      STR (L + 1:L + 1) = '~'
+      CALL RAMWRITE (X,Y1,XSIZE,YSIZE,SCAN,PLANE,RMD,STR(L1:L),FONT1C)
+
+C     Label at middle of scale
+
+      STR = ' '
+      IF (ABS (RMAX) .GE. 100.0) THEN
+         WRITE (STR, 8100) NINT (RMID)
+      ELSE IF (ABS (RMAX) .GE. 10.0) THEN
+         WRITE (STR, 8201) RMID
+      ELSE IF (ABS (RMAX) .GE. 1.0) THEN
+         WRITE (STR, 8202) RMID
+      ELSE
+         WRITE (STR, 8203) RMID
+      END IF
+      L1 = INANYL (STR, ' ')
+      L = INANYR (STR, ' ')
+      STR (L + 1:L + 1) = '~'
+      CALL RAMWRITE (X,Y2,XSIZE,YSIZE,SCAN,PLANE,RMD,STR(L1:L),FONT1C)
+
+C     Label at bottom of scale
+
+      STR = ' '
+      IF (ABS(RMAX) .GE. 100.0) THEN
+         WRITE (STR, 8100) NINT (RBOT)
+      ELSE IF (ABS (RMAX) .GE. 10.0) THEN
+         WRITE (STR, 8201) RBOT
+      ELSE IF (ABS (RMAX) .GE. 1.0) THEN
+         WRITE (STR, 8202) RBOT
+      ELSE
+         WRITE (STR, 8203) RBOT
+      END IF
+      L1 = INANYL (STR, ' ')
+      L = INANYR (STR, ' ')
+      STR (L + 1:L + 1) = '~'
+      CALL RAMWRITE (X,Y3,XSIZE,YSIZE,SCAN,PLANE,RMD,STR(L1:L),FONT1C)
+
+C     Label to the left of the color bar
+
+      IF (PROCESS .EQ. 0) THEN
+         IF (MAG.EQ.1 .OR. MAG.EQ.7) THEN
+            IF (DIVISOR) THEN
+               STR = '% DIFF PETT COUNTS~'
+            ELSE IF (SUB) THEN
+               STR = 'PETT COUNTS DIFF~'
+            ELSE
+               STR = 'PETT COUNTS~'
+            END IF
+         ELSE
+            IF (DIVISOR) THEN
+               STR = '% DIFF CNTS~'
+            ELSE IF (SUB) THEN
+               STR = 'PETT DIFF~'
+            ELSE
+               STR = 'PETT CNTS~'
+            END IF
+         END IF
+      ELSE IF (PROCESS .EQ. 1) THEN
+         IF (NTYPE (1) .EQ. 2 .OR. NTYPE (1) .EQ. 4) THEN
+            IF (DIVISOR) THEN
+               STR = '% DIFF CBF~'
+            ELSE IF (SUB) THEN
+               STR = 'CBF DIFF~'
+            ELSE
+               STR = 'CBF~'
+            END IF
+         ELSE IF (NTYPE (1) .EQ. 3) THEN
+            IF (DIVISOR) THEN
+               STR = '% DIFF CBV~'
+            ELSE IF (SUB) THEN
+               STR = 'CBV DIFF~'
+            ELSE
+               STR = 'CBV~'
+            END IF
+         ELSE
+            RETURN
+         END IF
+      ELSE IF (PROCESS .EQ. 2) THEN
+         IF (DIVISOR) THEN
+            STR = '% DIFF OEF~'
+         ELSE IF (SUB) THEN
+            STR = 'OEF DIFF~'
+         ELSE
+            STR = 'OEF~'
+         END IF
+      ELSE IF (PROCESS .EQ. 3) THEN
+         IF (DIVISOR) THEN
+            STR = '% DIFF CMRO2~'
+         ELSE IF (SUB) THEN
+            STR = 'CMRO2 DIFF~'
+         ELSE
+            STR = 'CMRO2~'
+         END IF
+      ELSE IF (PROCESS .EQ. 4 .OR. PROCESS .EQ. 5) THEN
+         IF (MAG.EQ.1 .OR. MAG.EQ.7) THEN
+            IF (DIVISOR) THEN
+               STR = '% DIFF ACTIVITY~'
+            ELSE IF (SUB) THEN
+               STR = 'ACTIVITY DIFF~'
+            ELSE
+               STR = 'TISSUE ACTIVITY~'
+            END IF
+         ELSE
+            IF (DIVISOR) THEN
+               STR = '% DIFF ACTIV~'
+            ELSE IF (SUB) THEN
+               STR = 'ACTIV DIFF~'
+            ELSE
+               STR = 'ACTIVITY~'
+            END IF
+         END IF
+      ELSE IF (PROCESS .EQ. 6) THEN
+         IF (DIVISOR) THEN
+            STR = '% DIFF CMRGLU~'
+         ELSE IF (SUB) THEN
+            STR = 'CMRGLU DIFF~'
+         ELSE
+            STR = 'CMRGLU~'
+         END IF
+      ELSE IF (PROCESS .EQ. 7) THEN
+         IF (DIVISOR) THEN
+            STR = '% DIFF CVO2~'
+         ELSE IF (SUB) THEN
+            STR = 'CVO2 DIFF~'
+         ELSE
+            STR = 'CVO2~'
+         END IF
+      ELSE
+         RETURN
+      END IF
+      L = IANYL (STR, '~')
+      IF (L .GT. 0) THEN
+         X = XST - 15
+         Y = YST + (LENGTH - L * TXTYSIZE) / 2
+         CALL RAMWRITE (X,Y,XSIZE,YSIZE,DOWN,PLANE,RMD,TEXT,FONT1C)
+      END IF
+
+C     Label below the color bar
+
+      IF (MAG.EQ.1 .OR. MAG.EQ.7) THEN
+         IF (DIVISOR) THEN
+            STR = BLANK
+         ELSE IF (PROCESS .EQ. 0) THEN
+            STR = BLANK
+         ELSE IF (PROCESS .EQ. 1) THEN
+            IF (NTYPE (1) .EQ. 2 .OR. NTYPE (1) .EQ. 4) THEN
+               STR = 'ML/(MIN*100G)~'
+            ELSE IF (NTYPE(1) .EQ. 3) THEN
+               STR = 'ML/100G~'
+            ELSE
+               STR = BLANK
+            END IF
+         ELSE IF (PROCESS .EQ. 2) THEN
+            STR = BLANK
+         ELSE IF (PROCESS .EQ. 3) THEN
+            STR = 'ML/(MIN*100G)~'
+         ELSE IF (PROCESS .EQ. 4 .OR. PROCESS .EQ. 5) THEN
+            STR = 'CPS/ML~'
+         ELSE IF (PROCESS .EQ. 6) THEN
+            STR = 'MG/(MIN*100G)~'
+         ELSE IF (PROCESS .EQ. 7) THEN
+            STR = BLANK
+         ELSE
+            STR = BLANK
+         END IF
+         L = IANYL (STR, '~')
+         IF (L .GT. 0) THEN
+            X= XST + (WIDTH - L * XSIZE * 7) / 2
+            Y = YST + LENGTH + 15
+            CALL RAMWRITE (X,Y,XSIZE,YSIZE,SCAN,PLANE,RMD,TEXT,FONT1C)
+         END IF
+      END IF
+
+      RETURN
+      END
+@
+
+
+1.6
+log
+@format changes plus fixes for g77
+@
+text
+@d58 1
+a58 1
+C     rcsheader = "$Id: d2barlab.f,v 1.5 1999/03/05 18:49:14 tom Exp tom $"
+@
+
+
+1.5
+log
+@add CVO2
+@
+text
+@d2 55
+a56 64
+C
+C  Subroutine:   D2BARLAB.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         27-May-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This routine labels a color bar.
+C
+C  History:
+C     Modified 05-Mar-99 by TOV to allow processing for CVO2
+C        (PROCESS may be 0-7)
+C     Modified 28-Apr-98 by TOV to allow processing for CMRGlucose
+C        (PROCESS may be 0-6)
+C     Modified 06-Oct-87 by TOV to allow processing for tissue activity
+C        either with or without decay correction; (PROCESS may be 0-5)
+C     Modified by TOV 30-Dec-87:
+C       1) Use SCANNAME(1) as file name.
+C       2) Change label for rows of 7 when scaling to individual slice
+C          maximum (SEPSCALE added to common block).
+C     Modified 15-Sep-88 by TOV:
+C        1) Incorporate % diff scaling into SCALER and eliminate factor
+C           of 0.1 used formerly for percent difference images.
+C        2) Add 'DIFF' to all labels when there is a subtrahend image.
+C        3) Add '% DIFF' to all labels when there is a divisor image.
+C     Modified 25-Sep-91 by Tom Yang for cleaning text area before
+C       drawing text when porting to X Windows in Sun Workstation
+C       environment.
+C     Modified by TOV 26-Sep-91 for XSPIDERAM.
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (read only)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (read only)
+C     **SCALES   - scaling parameters             (read only)
+C     **FILES     - scan file list                (read only)
+C
+C  Variables Passed:
+C     LENGTH,WIDTH = length and width of the color bar;
+C
+C  Internal Variables:
+C     XST,YST = location to write to on the Ramtek;
+C     SCAN = for horizontal labels;
+C     DOWN = for vertical labels;
+C     XSIZE,YSIZE = character size written in the color bar scale;
+C     PLANE = planes in which to write the scale;
+C     X,Y,Y1,Y2,Y3 = coordinates used to write color bar scale;
+C     TEXT,STR = strings written to the color bar scale;
+C     RTOPP,RMID,RBOT = scale labels at top, middle, and bottom
+C        of scale for real numbered scale;
+C     RMAX = maximum of RTOPP and RBOT;
+C
+C  Uses:
+C
+C  RAMUTY.LIB
+C     RAMWRITE - writes text on the Ramtek;
+C
+C  FORTRAN runtime library
+C     ENCODE
+C     INANYR
+C
+C  Called by:  D2BAR
+C
+d58 2
+a59 1
+C
+d61 1
+a61 1
+C
+d63 1
+a63 1
+     &              X, Y, Y1, Y2, Y3, L, L1, DOWN, TXTYSIZE
+d69 1
+a69 2
+      character*256 rcsheader
+C
+d71 1
+a71 1
+C
+d74 1
+a74 2
+      rcsheader = "$Id: d2barlab.f,v 1.4 1998/04/29 15:20:35 tom Exp tom $"
+C
+d82 1
+a82 1
+C
+d86 2
+a87 2
+        IF (FILE (2) .NE. 0) SUB     = .TRUE.
+        IF (FILE (3) .NE. 0) DIVISOR = .TRUE.
+d89 8
+a96 8
+C
+8100  FORMAT (I5)
+8201  FORMAT (F6.1)
+8202  FORMAT (F6.2)
+8203  FORMAT (F6.3)
+C
+C  Get values to write (RTOPP, RMID, and RBOT)
+C
+d98 7
+a104 7
+        IF (ABSRANGE) THEN
+          RTOPP = ABSMAX
+        ELSE
+          RTOPP = FLOAT (DMAX) * SCALER (1)
+        END IF
+        RMID = RTOPP / 2.0
+        RBOT = 0.0
+d106 3
+a108 66
+        IF (SCALEPOS .EQ. 0) THEN
+          IF (ABSRANGE) THEN
+            RTOPP = RELMAX
+          ELSE
+            RTOPP = FLOAT (MAX0 (DMAX, IABS (DMIN))) * SCALER (1)
+          END IF
+          RMID = 0.0
+          RBOT = -RTOPP
+        ELSE IF (SCALEPOS .EQ. 1) THEN
+          IF (ABSRANGE) THEN
+            RTOPP = RELMAX
+          ELSE
+            RTOPP = FLOAT (DMAX) * SCALER (1)
+            RMID  = RTOPP / 2.0
+          END IF
+          RBOT  = 0.0
+        ELSE IF (SCALEPOS .EQ. - 1) THEN
+          IF (ABSRANGE) THEN
+            RBOT = -ABS (RELMAX)
+          ELSE
+            RBOT = FLOAT (DMIN) * SCALER (1)
+          END IF
+          RMID  = RBOT / 2.0
+          RTOPP = 0.0
+        END IF
+      END IF
+      RMAX = AMAX1 (ABS (RTOPP), ABS(RBOT))
+C
+C  Write label for a horizontal color bar (rows of 7 images)
+C
+      IF (MAG.EQ.2 .OR. MAG.EQ.3) THEN
+        X = XST + LENGTH + 15
+        IF (.NOT. SEPSCALE) THEN
+          STR = 'MAX =          ~'
+          IF (ABS (RMAX) .GE. 100.0) THEN
+            WRITE (STR (7:80), 8100) NINT (RMAX)
+          ELSE IF (ABS (RMAX) .GE. 10.0) THEN
+            WRITE (STR (7:80), 8201) RMAX
+          ELSE IF (ABS (RMAX) .GE. 1.0) THEN
+            WRITE (STR (7:80), 8202) RMAX
+          ELSE
+            WRITE (STR (7:80), 8203) RMAX
+          END IF
+          L = INANYR (STR, ' ')
+          STR (L + 1:L + 1)       = '~'
+        ELSE
+          STR = '               ~'
+        END IF
+        CALL RAMWRITE (X,YST,XSIZE,YSIZE,SCAN,PLANE,RMD,TEXT,FONT1C)
+C
+C  Scan Name for rows of 7
+C
+        X  = 40
+        STR = SCANNAME (1)
+        STR (9:9) = '~'
+        CALL RAMWRITE (X,YST,XSIZE,YSIZE,SCAN,PLANE,RMD,TEXT,FONT1C)
+C
+C  Annotation for rows of 7
+C
+        IF (ANNOTATE) THEN
+          X = XST + LENGTH + 190
+          IF (PROCESS .EQ. 0) THEN
+            IF (DIVISOR) THEN
+              STR = '% DIFF CNTS~'
+            ELSE IF (SUB) THEN
+              STR = 'PETT DIFF  ~'
+d110 1
+a110 1
+              STR = 'PETT COUNTS~'
+d112 5
+a116 17
+          ELSE IF (PROCESS .EQ. 1) THEN
+            IF (NTYPE (1) .EQ. 2 .OR. NTYPE (1) .EQ. 4) THEN
+              IF (DIVISOR) THEN
+                STR  = '% DIFF CBF ~'
+              ELSE IF (SUB) THEN
+                STR  = 'CBF DIFF   ~'
+              ELSE
+                STR  = 'CBF        ~'
+              END IF
+            ELSE IF (NTYPE (1) .EQ. 3) THEN
+              IF (DIVISOR) THEN
+                STR  = '% DIFF CBV ~'
+              ELSE IF (SUB) THEN
+                STR  = 'CBV DIFF   ~'
+              ELSE
+                STR  = 'CBV        ~'
+              END IF
+d118 2
+a119 1
+              RETURN
+d121 4
+a124 5
+          ELSE IF (PROCESS .EQ. 2) THEN
+            IF (DIVISOR) THEN
+              STR = '% DIFF OEF ~'
+            ELSE IF (SUB) THEN
+              STR = 'OEF DIFF   ~'
+d126 1
+a126 1
+              STR = 'OEF        ~'
+d128 18
+a145 5
+          ELSE IF (PROCESS .EQ. 3) THEN
+            IF (DIVISOR) THEN
+              STR = '%DIFF CMRO2~'
+            ELSE IF (SUB) THEN
+              STR = 'CMRO2 DIFF ~'
+d147 1
+a147 1
+              STR = 'CMRO2      ~'
+d149 78
+a226 5
+          ELSE IF (PROCESS .EQ. 4 .OR. PROCESS .EQ. 5) THEN
+            IF (DIVISOR) THEN
+              STR = '% DIFF CPS ~'
+            ELSE IF (SUB) THEN
+              STR = 'CPS/ML DIFF~'
+d228 1
+a228 1
+              STR = 'CPS/ML     ~'
+d230 6
+a235 17
+          ELSE IF (PROCESS .EQ. 6) THEN
+            IF (DIVISOR) THEN
+              STR = '%DIFF CMRGLU~'
+            ELSE IF (SUB) THEN
+              STR = 'CMRGLU DIFF ~'
+            ELSE
+              STR = 'CMRGLU      ~'
+            END IF
+          ELSE
+            RETURN
+          END IF
+          CALL RAMWRITE (X,YST,XSIZE,YSIZE,SCAN,PLANE,RMD,TEXT,FONT1C)
+        END IF
+        RETURN
+C
+C  Write 3 scales labels for a vertical color bar
+C
+d237 4
+a240 4
+        X = XST + WIDTH + 5
+        Y1 = YST
+        Y2 = YST + (LENGTH - 9 * YSIZE) / 2
+        Y3 = YST +  LENGTH - 9 * YSIZE
+d246 4
+a249 4
+C
+C
+C  Label at top of scale
+C
+d252 1
+a252 1
+        WRITE (STR, 8100) NINT (RTOPP)
+d254 1
+a254 1
+        WRITE (STR, 8201) RTOPP
+d256 1
+a256 1
+        WRITE (STR, 8202) RTOPP
+d258 1
+a258 1
+        WRITE (STR, 8203) RTOPP
+d264 3
+a266 3
+C
+C  Label at middle of scale
+C
+d269 1
+a269 1
+        WRITE (STR, 8100) NINT (RMID)
+d271 1
+a271 1
+        WRITE (STR, 8201) RMID
+d273 1
+a273 1
+        WRITE (STR, 8202) RMID
+d275 1
+a275 1
+        WRITE (STR, 8203) RMID
+d281 3
+a283 3
+C
+C  Label at bottom of scale
+C
+d286 1
+a286 1
+        WRITE (STR, 8100) NINT (RBOT)
+d288 1
+a288 1
+        WRITE (STR, 8201) RBOT
+d290 1
+a290 1
+        WRITE (STR, 8202) RBOT
+d292 1
+a292 1
+        WRITE (STR, 8203) RBOT
+d298 3
+a300 3
+C
+C  Label to the left of the color bar
+C
+d302 17
+a318 17
+        IF (MAG.EQ.1 .OR. MAG.EQ.7) THEN
+          IF (DIVISOR) THEN
+            STR = '% DIFF PETT COUNTS~'
+          ELSE IF (SUB) THEN
+            STR = 'PETT COUNTS DIFF~'
+          ELSE
+            STR = 'PETT COUNTS~'
+          END IF
+        ELSE
+          IF (DIVISOR) THEN
+            STR = '% DIFF CNTS~'
+          ELSE IF (SUB) THEN
+            STR = 'PETT DIFF~'
+          ELSE
+            STR = 'PETT CNTS~'
+          END IF
+        END IF
+d320 19
+a338 19
+        IF (NTYPE (1) .EQ. 2 .OR. NTYPE (1) .EQ. 4) THEN
+          IF (DIVISOR) THEN
+            STR = '% DIFF CBF~'
+          ELSE IF (SUB) THEN
+            STR = 'CBF DIFF~'
+          ELSE
+            STR = 'CBF~'
+          END IF
+        ELSE IF (NTYPE (1) .EQ. 3) THEN
+          IF (DIVISOR) THEN
+            STR = '% DIFF CBV~'
+          ELSE IF (SUB) THEN
+            STR = 'CBV DIFF~'
+          ELSE
+            STR = 'CBV~'
+          END IF
+        ELSE
+          RETURN
+        END IF
+d340 7
+a346 7
+        IF (DIVISOR) THEN
+          STR = '% DIFF OEF~'
+        ELSE IF (SUB) THEN
+          STR = 'OEF DIFF~'
+        ELSE
+          STR = 'OEF~'
+        END IF
+d348 7
+a354 7
+        IF (DIVISOR) THEN
+          STR = '% DIFF CMRO2~'
+        ELSE IF (SUB) THEN
+          STR = 'CMRO2 DIFF~'
+        ELSE
+          STR = 'CMRO2~'
+        END IF
+d356 17
+a372 17
+        IF (MAG.EQ.1 .OR. MAG.EQ.7) THEN
+          IF (DIVISOR) THEN
+            STR = '% DIFF ACTIVITY~'
+          ELSE IF (SUB) THEN
+            STR = 'ACTIVITY DIFF~'
+          ELSE
+            STR = 'TISSUE ACTIVITY~'
+          END IF
+        ELSE
+          IF (DIVISOR) THEN
+            STR = '% DIFF ACTIV~'
+          ELSE IF (SUB) THEN
+            STR = 'ACTIV DIFF~'
+          ELSE
+            STR = 'ACTIVITY~'
+          END IF
+        END IF
+d374 7
+a380 7
+        IF (DIVISOR) THEN
+          STR = '% DIFF CMRGLU~'
+        ELSE IF (SUB) THEN
+          STR = 'CMRGLU DIFF~'
+        ELSE
+          STR = 'CMRGLU~'
+        END IF
+d382 7
+a388 7
+        IF (DIVISOR) THEN
+          STR = '% DIFF CVO2~'
+        ELSE IF (SUB) THEN
+          STR = 'CVO2 DIFF~'
+        ELSE
+          STR = 'CVO2~'
+        END IF
+d390 1
+a390 1
+        RETURN
+d394 3
+a396 4
+        X = XST - 15
+C        Y = YST + (LENGTH - L * YSIZE * 9) / 2
+        Y = YST + (LENGTH - L * TXTYSIZE) / 2
+        CALL RAMWRITE (X,Y,XSIZE,YSIZE,DOWN,PLANE,RMD,TEXT,FONT1C)
+d398 3
+a400 3
+C
+C  Label below the color bar
+C
+d402 15
+a416 6
+        IF (DIVISOR) THEN
+          STR = BLANK
+        ELSE IF (PROCESS .EQ. 0) THEN
+          STR = BLANK
+        ELSE IF (PROCESS .EQ. 1) THEN
+          IF (NTYPE (1) .EQ. 2 .OR. NTYPE (1) .EQ. 4) THEN
+d418 5
+a422 3
+          ELSE IF (NTYPE(1) .EQ. 3) THEN
+            STR = 'ML/100G~'
+          ELSE
+d424 9
+a432 20
+          END IF
+        ELSE IF (PROCESS .EQ. 2) THEN
+          STR = BLANK
+        ELSE IF (PROCESS .EQ. 3) THEN
+          STR = 'ML/(MIN*100G)~'
+        ELSE IF (PROCESS .EQ. 4 .OR. PROCESS .EQ. 5) THEN
+          STR = 'CPS/ML~'
+        ELSE IF (PROCESS .EQ. 6) THEN
+          STR = 'MG/(MIN*100G)~'
+        ELSE IF (PROCESS .EQ. 7) THEN
+          STR = BLANK
+        ELSE
+          STR = BLANK
+        END IF
+        L = IANYL (STR, '~')
+        IF (L .GT. 0) THEN
+          X= XST + (WIDTH - L * XSIZE * 7) / 2
+          Y = YST + LENGTH + 15
+          CALL RAMWRITE (X,Y,XSIZE,YSIZE,SCAN,PLANE,RMD,TEXT,FONT1C)
+        END IF
+d434 1
+a434 1
+C
+@
+
+
+1.4
+log
+@allow processing for CMRGlucose
+@
+text
+@d13 2
+d83 1
+a83 1
+      rcsheader = "$Id: d2barlab.f,v 1.3 1993/10/04 21:55:32 tom Exp tom $"
+d391 8
+d433 2
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d13 2
+d81 1
+a81 1
+      rcsheader = "$Id$"
+d227 8
+d381 8
+d421 2
+@
+
+
+1.2
+log
+@04/23/92 by Tom Yang
+@
+text
+@d73 1
+d79 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

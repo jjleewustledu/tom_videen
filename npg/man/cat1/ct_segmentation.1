@@ -1,0 +1,198 @@
+
+
+
+User Commands                                  CT_SEGMENTATION(1)
+
+
+
+     The following procedure will segment a CT image to  a  brain
+     tissue  image  suitable for partial volume correction of PET
+     images.  I have listed both the full syntax for each command
+     as  well  as  shortcuts  using C shell variables. The syntax
+     statement always precedes  the  shell  shortcut  and  syntax
+     lines begin with '%'.
+
+        set PID = p5000
+
+     1) Convert to Hounsfield units: (vidi) (p5000ct_n)
+          a) Check all planes; If not in Hounsfield units, convert and reload:
+               % anasub filename subtrahend
+                 anasub ${PID}ct_n 1020
+
+     3) Edit p5000ct_n.img: (vidi) (p5000ct_n -> p5000seg1)
+          1) Locate pineal calcification and replace with brain intensity:
+               (Max=100; Fill=60; Replace Only If >= 60)
+          b) Using vidi, fill ventricular calcification & choroid plexus (Max=50; Fill=18).
+             (brain_min(10) <= 18 <= brain/csf(20) both before and after normalization)
+             It can speed some of the later steps if the eyes are removed now (Fill=-2000).
+          c) Pick a pixel within the brain (for segment_ct1 and segment_ct2).
+               set BRAIN = '250 250 10'
+          d) Save edited image as p5000seg1.img
+
+     3) Auto-segmentation to isolate brain from bone: (p5000seg1 -> p5000seg2)
+          % segment_ct1 pid x_brain y_brain z_brain
+            segment_ct1 $PID $BRAIN
+            (e.g., segment_ct1 p5000 250 250 10)
+
+     4) Edit p5000seg2.img: (vidi) (p5000seg2 -> p5000seg3)
+          a) Isolate brainstem if there is connecting tissue (Fill=-2000).
+          b) Sever optic nerve to isolate the eyeballs (Fill=-2000).
+          c) Locate approximate plane of anterior commissure (z_ac).
+               set ZAC = 32
+          d) Save as p5000seg3.img
+
+     5) Auto-segmentation to isolate brain: (p5000seg3 -> p5000seg4)
+          % segment_ct2 pid x_brain y_brain z_brain z_ac
+            segment_ct2 $PID $BRAIN $ZAC
+            (e.g., segment_ct2 p5000 250 250 10 32)
+
+     6) Edit p5000seg4.img: (vidi) (p5000seg4 -> p5000brain_n)
+          a) Remove any remaining external tissue.
+          b) Save as p5000brain_n.img
+               % if2analyze filename
+                 if2analyze ${PID}brain_n
+
+     7) Edit p5000brain_n.img: (vidi) (p5000brain_n -> p5000vent_n)
+          a) Identify point(s) in ventricles (unlimited number permitted)
+               set BRAIN_CSF = 20
+               set VENT1 = '240 260 19'
+               set VENT2 = '191 248 35'
+
+
+
+Neuroimaging Lab     Last change: 08-Apr-99                     1
+
+
+
+
+
+
+User Commands                                  CT_SEGMENTATION(1)
+
+
+
+               set VENT3 = '264 299 31'
+               % maskout in out absmin brain_thresh setval $VENT1 $VENT2 $VENT3
+                 maskout ${PID}brain_n ${PID}seg_vent -100 $BRAIN_CSF -2000 $VENT1 $VENT2 $VENT3
+          b) Check p5000seg_vent.img (Max=1) (still using p5000ct_n.img as a reference)
+          c) Repeat (a)-(b) adding points until all ventricles are included.
+          d) Set all pixels in ventricles to 1 and all others to 0.
+               % maskand in out absmin brain_thresh setval
+                 maskand ${PID}seg_vent ${PID}seg_vent -100 $BRAIN_CSF 1
+               % maskand in out absmin 0 0
+                 maskand ${PID}seg_vent ${PID}seg_vent -2000 0 0
+          e) Cleanup ventricles (Fill=0) removing:
+               choroidal fissure
+               quadrigeminal cistern
+               ambient cistern
+               interpeduncular fossa
+          f) Save as p5000vent_n.img
+
+     8) For ICH patients: Load p5000brain_n.img (vidi) (p5000brain_n -> p5000clot_n)
+          a) Trace VOIs for 'clot' and 'brain' VOI in tissue surrounding clot.
+          b) Write VOIs to p5000brain.voi
+          c) Determine threshold for clot segmentation using:
+               % voihistos imagefile voifile
+                 voihistos ${PID}brain_n.img ${PID}brain.voi
+                 set BRAIN_CLOT = 60
+          d) Identify pixel(s) in clot and segment it:
+                 set CLOT  = '310 280 23'
+                 set CLOT2 = '310 280 23'
+               % maskout in out clot_thresh maxval setval x1 y1 z1 [x2 y2 z2]
+                 maskout ${PID}brain_n ${PID}seg_clot $BRAIN_CLOT 500 0 $CLOT $CLOT2
+          e) Load p5000clot_n.img (still using p5000ct_n.img as a reference)
+          f) Repeat (d)-(e) until all of clot is included.
+          g) Cleanup clot if necessary.
+          h) Save as p5000clot_n.img
+
+     9) Auto-segmentation to define final tissue boundaries: (p5000brain_n -> p5000tis_n)
+          % segment_ct3 pid brain_n vent_n tis_n clot_n
+            segment_ct3 $PID brain_n vent_n tis_n clot_n
+            (e.g., segment_ct3 p5000 brain_n vent_n tis_n clot_n)
+
+     10) View p5000tis_n.img (Max=2, %Cutoff=1, PET Rainbow)
+        superimposed on p5000ct_n.img (Max~60, Linear Gray)
+          a) Check for accurate segmentation on all slices.
+          b) Use Fill=0 to remove tissue.
+          c) Use Fill=1 to add tissue (Replace Only If = 0).
+             Pixels which may have been removed which should be filled
+             include edema and old infarcts.
+             (Ventricles and clot should have values of -1 in this image).
+          d) Save as p5000tis_n.img
+
+
+SEE ALSO
+     ct2analyze(1),   cttilt(1),   ctheader(1),   dcm_ct2analyze,
+
+
+
+Neuroimaging Lab     Last change: 08-Apr-99                     2
+
+
+
+
+
+
+User Commands                                  CT_SEGMENTATION(1)
+
+
+
+     dcm_ctheader,     maskand(1),    maskout(1),    expandor(1),
+     maskor(1), maskelevlines(1)
+
+
+AUTHOR
+     Tom Videen, March 1999.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Neuroimaging Lab     Last change: 08-Apr-99                     3
+
+
+

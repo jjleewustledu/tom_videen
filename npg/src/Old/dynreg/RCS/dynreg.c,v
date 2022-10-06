@@ -1,0 +1,454 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	93.11.02.18.15.47;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.10.27.15.46.32;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.10.27.14.41.07;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.26.23.01.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.10.26.22.48.33;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.10.26.18.56.40;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial version
+@
+
+
+1.6
+log
+@Added ROI names and pixels/ROI at the end of the tissue activity file
+@
+text
+@/* $Log: dynreg.c,v $
+ * Revision 1.5  1993/10/27  15:46:32  tom
+ * Fixed bug in scanf
+ *
+ * Revision 1.4  1993/10/27  14:41:07  tom
+ * Write region names to output
+ *
+ * Revision 1.3  1993/10/26  23:01:32  tom
+ * Added Halflife to output file header
+ *
+ * Revision 1.2  1993/10/26  22:48:33  tom
+ * Write to tissue activity file
+ *
+ * Revision 1.1  1993/10/26  18:56:40  tom
+ * Initial revision
+ *
+ */
+/*	===============================================================================
+ *	Module:				dynreg.c
+ *	Date:					27-Oct-93
+ *	Author:				Tom Videen
+ *	Description:	Compute ROI values for all frames of a dynamic ECAT image
+ *	===============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <math.h>
+#include <petutil/matrix.h>
+#include <petutil/petutil.h>
+
+#define DIM  128       /* x- and y-dimension of PET-array */
+#define MAXSLICES 49
+#define MAX_REGIONS 100
+
+static char rcsid []= "$Id: dynreg.c,v 1.5 1993/10/27 15:46:32 tom Exp tom $";
+
+char list [] = "*;*;*;*"; 			/* any frame plane gate bed */
+
+/*	----------------------------
+ *	Function:			dynreg
+ *	----------------------------
+ */	
+main (argc, argv)
+	int	argc;
+	char	*argv[];
+{
+	Image_subheader		**subheader;
+	Main_header				*main_header;
+	MatrixFile				*fptr;
+  HEADER_DATA 			*hdr;       	/* hdr structure */
+
+	BOOLEAN	encoded_flag;
+	BOOLEAN	wobbled;
+	BOOLEAN	old_nrm;
+	BOOLEAN	scatter_corrected;
+	FILE		*fp;
+	FILE		*actfp;						/* actfile pointer */
+	char		*imgfile;
+	char		*regfile;
+	char		*actfile;
+	char		*piefile;
+	int			fd;
+	int			i, j, k, m;				/* array indices */
+	float		scaler;						/* scale individual PET images */
+	float		pixel_size;
+	float		plane_separation;
+	float		default_pixel_size;
+	float		default_plane_separation;
+	int			scanner;					/* 6 = PETT VI;  10 = 953B */
+	int			nframes;					/* number of frames in image file */
+	int			regnum;						/* region number 0-99 */
+	short		nx;
+	short		ny;
+	short		nslices;
+	struct	Matval	matval;
+	float		image [MAXSLICES][DIM][DIM];			/* PET image */
+  int   	numregs;
+  char  	regname[MAX_REGIONS][11];
+	char		line[MAXLINE];
+	char		ch;
+	char		*version;
+
+  float		slice[MAX_REGIONS];	/* ROI definitions */
+  float		xctr[MAX_REGIONS];
+  float		yctr[MAX_REGIONS];
+  int  		xdim[MAX_REGIONS];
+  int  		ydim[MAX_REGIONS];
+	float		start;
+	float		duration;
+	float		val;								/* regional value for each frame */
+	float		sumreg_rect();
+	float		halflife;
+	float		pieslope;
+	float		lambda;
+	float		factor;
+	float		getpie();
+
+	matval.frame	= 1;				/* default values for matval */
+	matval.plane	= 1;
+	matval.gate		= 1;
+	matval.data		= 0;
+	matval.bed		= 0;
+
+/*
+ *	Get command line arguments and initialize filenames:
+ *	---------------------------------------------------
+ */
+
+	if (argc != 5) {
+		printf ("Usage: dynreg imagefile regfile activity_file piefile\n");
+		exit(FAIL);
+	}
+	piefile = (char *) malloc (256 * sizeof (char));
+	imgfile	= argv [1];
+	regfile = argv [2];
+	actfile = argv [3];
+	piefile = argv [4];
+	version = &rcsid[14];
+
+/*
+ *	Memory allocation
+ */
+
+	main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+	subheader		= (Image_subheader **) malloc (MAXSLICES * sizeof (caddr_t));
+  hdr = (HEADER_DATA *) malloc (sizeof (HEADER_DATA));
+
+/*
+ *	Get image type
+ */
+
+	fd = open (imgfile, O_RDONLY, 0);
+	if (fd == -1) {
+		fprintf (stderr, "Error opening %s\n", imgfile);
+		exit (FAIL);
+	}
+	scanner = getimage_type (fd, imgfile, &encoded_flag, &nslices);
+	close (fd);
+
+	if (scanner != ECAT_SCANNER) {
+		fprintf (stderr, "Error:  dynreg runs on ECAT files only!\n");
+		exit (FAIL);
+	}
+
+	actfp = fopen (actfile, "w");
+	if (actfp == NULL) {
+		fprintf (stderr, "Error creating %s\n", actfile);
+		exit (FAIL);
+	}
+
+/*
+ *	Get image properties
+ */
+
+	fptr = OpenEcat (imgfile, &nslices, &nx, &ny, &pixel_size, &plane_separation, matval);
+	if (fptr  == (MatrixFile *) NULL) {
+		fprintf (stderr, "Error: cannot open %s as an ECAT image file\n", imgfile);
+		exit (FAIL);
+	}
+	matrix_close (fptr);
+	if (getrealimg (imgfile, scanner, matval, nx, ny, nslices, image, 
+		main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", imgfile);
+		exit (FAIL);
+	}
+	halflife = main_header->isotope_halflife;
+	nframes =main_header->num_frames;
+	printf ("Frames = %d  Slices = %d\n", nframes, nslices);
+
+	if (main_header->wobble_speed > 0)
+		wobbled = TRUE;
+	else
+		wobbled = FALSE;
+
+	if (main_header->scan_start_year == 0 ||
+			main_header->scan_start_month == 0 ||
+			main_header->scan_start_day == 0) {
+		fprintf (stderr, "Error: cannot read date from file header\n");
+		exit;
+	}
+
+	if (main_header->scan_start_year < 1993 ||
+			(main_header->scan_start_year == 1993 &&
+				(main_header->scan_start_month < 4 ||
+					(main_header->scan_start_month == 4 && main_header->scan_start_day < 12))))
+		old_nrm = TRUE;
+	else
+		old_nrm = FALSE;
+
+	if (subheader[0]->filter_params[4] > 0 && subheader[0]->filter_params[5] > 0)
+		scatter_corrected = TRUE;
+	else
+		scatter_corrected = FALSE;
+
+/*
+ *	Get region file
+ */
+
+	if (getreg (regfile, &numregs, regname, slice, xctr, yctr, xdim, ydim) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", regfile);
+    exit (FAIL);
+  }
+
+/*
+ *	Get halflife
+ */
+
+	printf ("Halflife = %f\n", halflife);
+	printf ("Use this halflife? <y or n>  ");
+	scanf ("%s", line);
+	while (line[0] != 'y' && line[0] != 'Y') {
+		printf("Enter halflife?  ");
+		scanf("%f", &halflife);
+		printf ("Halflife = %f\n", halflife);
+		printf ("Use this halflife? <y or n>  ");
+		scanf ("%s", line);
+	}
+
+/*
+ *	Get pieslope
+ */
+
+	pieslope = getpie (piefile, wobbled, old_nrm, scatter_corrected);
+
+/*
+ *	Read all frames of image and compute all regions
+ */
+
+	fprintf (stdout, "%s %s   Pie Factor = %f  Halflife = %f  %.6s\n", imgfile, 
+		regfile, pieslope, halflife, version);
+	fprintf (actfp, "%s %s   Pie Factor = %f  Halflife = %f  %.6s\n", imgfile, 
+		regfile, pieslope, halflife, version);
+
+	fprintf (stdout, "%4d%4d        ", nframes, numregs + 2);
+	fprintf (actfp, "%4d%4d        ", nframes, numregs + 2);
+
+	for (regnum = 0; regnum < numregs; ++regnum) {
+		fprintf (stdout, "%-12.10s", regname[regnum]);
+		fprintf (actfp, "%-12.10s", regname[regnum]);
+	}
+	fprintf (stdout, "\n");
+	fprintf (actfp, "\n");
+
+	for (i = 1; i <= nframes; ++i) {
+		matval.frame = i;
+		if (getrealimg (imgfile, scanner, matval, nx, ny, nslices, image, 
+			main_header, subheader) == FAIL) {
+			fprintf (stderr, "Error reading %s\n", imgfile);
+			exit (FAIL);
+		}
+
+		start = subheader[0]->frame_start_time / 1000;
+		duration = subheader[0]->frame_duration / 1000;
+		fprintf (stdout, "%7.1f %6.1f ", start, duration);
+		fprintf (actfp, "%7.1f %6.1f ", start, duration);
+
+		if (halflife > 0) {
+			lambda = log(2.) / halflife;
+			factor = exp (start * lambda) * lambda * duration / (1. - exp (-lambda * duration));
+		} else
+			factor = 1.;
+		factor = pieslope * 60. * factor;
+
+		for (regnum = 0; regnum < numregs; ++regnum) {
+			val = sumreg_rect (image, nx, ny, nslices, regnum, slice, xctr, yctr, xdim, ydim);
+			fprintf (stdout, "%11.2f ", factor * val);
+			fprintf (actfp, "%11.2f ", factor * val);
+		}
+		fprintf (stdout, "\n");
+		fprintf (actfp, "\n");
+	}
+
+/*
+ *	Add list of region names and number of pixels/ROI
+ */
+
+	for (regnum = 0; regnum < numregs; ++regnum) {
+		fprintf (actfp, "%s\n", regname[regnum]);
+	}
+	for (regnum = 0; regnum < numregs; ++regnum) {
+		fprintf (actfp, "%d\n", xdim[regnum] * ydim[regnum]);
+	}
+
+/*
+ *	Free memory
+ *	-----------
+ */
+
+	fclose (actfp);
+	for (i = 0; i < MAXSLICES; i++)
+		free (subheader [i]);
+	free (subheader);
+	free (main_header);
+}
+@
+
+
+1.5
+log
+@Fixed bug in scanf
+@
+text
+@d2 3
+d38 1
+a38 1
+static char rcsid []= "$Id: dynreg.c,v 1.4 1993/10/27 14:41:07 tom Exp tom $";
+d274 11
+@
+
+
+1.4
+log
+@Write region names to output
+@
+text
+@d2 3
+d35 1
+a35 1
+static char rcsid []= "$Id: dynreg.c,v 1.3 1993/10/26 23:01:32 tom Exp tom $";
+d79 1
+d210 2
+a211 2
+	scanf ("%c", &ch);
+	while (ch != 'y' && ch != 'Y') {
+d216 1
+a216 1
+		scanf ("%c", &ch);
+@
+
+
+1.3
+log
+@Added Halflife to output file header
+@
+text
+@d2 3
+d14 1
+a14 1
+ *	Date:					26-Oct-93
+d32 1
+a32 1
+static char rcsid []= "$Id: dynreg.c,v 1.2 1993/10/26 22:48:33 tom Exp tom $";
+d77 1
+d114 1
+d206 1
+a206 1
+	scanf ("%1s", &ch);
+d212 1
+a212 1
+		scanf ("%1s", &ch);
+d225 14
+a238 6
+	fprintf (stdout, "%s %s   Pie Factor = %f  Halflife = %f\n", imgfile, 
+		regfile, pieslope, halflife);
+	fprintf (actfp, "%s %s   Pie Factor = %f  Halflife = %f\n", imgfile, 
+		regfile, pieslope, halflife);
+	fprintf (stdout, "%d  %d    %s\n", nframes, numregs + 2, rcsid);
+	fprintf (actfp, "%d  %d    %s\n", nframes, numregs + 2, rcsid);
+@
+
+
+1.2
+log
+@Write to tissue activity file
+@
+text
+@d2 3
+d29 1
+a29 1
+static char rcsid []= "$Id: dynreg.c,v 1.1 1993/10/26 18:56:40 tom Exp tom $";
+d220 4
+a223 2
+	fprintf (stdout, "%s %s   Pie Factor = %f\n", imgfile, regfile, pieslope);
+	fprintf (actfp, "%s %s   Pie Factor = %f\n", imgfile, regfile, pieslope);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$
+d26 1
+a26 1
+extern float getpie();
+a27 2
+static char rcsid []= "$Id$";
+
+a37 1
+
+d85 1
+a211 1
+	printf ("Pie Factor = %f\n", pieslope);
+d217 4
+a220 4
+	fprintf (stdout, "%s %s %s %s\n", imgfile, regfile, actfile, piefile);
+	fprintf (actfp, "%s %s %s %s\n", imgfile, regfile, actfile, piefile);
+	fprintf (stdout, "%d  %d  %s\n", nframes, numregs + 2, rcsid);
+	fprintf (actfp, "%d  %d  %s\n", nframes, numregs + 2, rcsid);
+@

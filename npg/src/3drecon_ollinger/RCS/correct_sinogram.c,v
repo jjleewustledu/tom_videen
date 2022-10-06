@@ -1,0 +1,642 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*------------------------------------------------------------------
+
+Program: correct_sinogram
+
+Purpose: Use scatter estimate to correct data.
+
+Date: August 14, 1997
+
+By: John Ollinger
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <math.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include <imagio.h>
+#include <petutil.h>
+#include <cti_proto.h>
+
+#include <matrix.h>
+#include <scatter.h>
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/correct_sinogram.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+/****************/
+void scatcor_rev6(
+/****************/
+
+float	**scatter,
+ScatterTable *sc,
+MainHeader *mh,
+int	scale_tails,
+char	*emisbody,
+char	*emisfile,
+char	*nrmfil,
+char	*geofil,
+float	version,
+float	scale_factor)
+
+{
+
+int     i,j,plane,ring1,ring2,outfrm=1,stat,pad,ioff,joff,
+        gate=1,data=0,bed=0,idir,ipln,iscat,iang,rings[2];
+
+float   *scatpln,*sino,sumtot=0,sumscat=0,sclcnts,cntsum=0.,
+	scl,sclsum=0.,**norm,*geo,avgsd,rnums[2],frings[2];
+
+SubHeader  *sh;
+
+NormData *nrm;
+
+struct ringinfo *rng;
+
+char	corrfil[MAXNAME],recfile[MAXNAME];
+
+FILE	*fp;
+
+sprintf(corrfil,"%s_corr.scn",emisbody);
+if((sh = (SubHeader *)getsbhdr(emisfile,1,1,gate,data,bed)) == NULL) {
+    printf("Error reading scan subheader, plane 1.\n");
+    exit(ERROR);
+    }
+if(mh->sw_revision == NULL)
+    mh->sw_revision = (char *)malloc(32);
+sprintf(mh->sw_revision,"f3d sv%3.2f",version);
+
+/* Store info defining sampling into a structure. */
+rng = (struct ringinfo *)malloc(sizeof(struct ringinfo));
+rng->xdim = NUMRAY;
+rng->ydim = NUMANG;
+rng->nringpair = LEN_RING_LIST*LEN_RING_LIST;
+rng->minring = 100000;
+rng->maxring = 0;
+rng->nring = 0;
+for(idir=0,ipln=0;idir<sc->num_dir_rings;idir++) {
+    for(iscat=0;iscat<sc->num_scat_rings;iscat++,ipln++) {
+	ring1 = sc->dir_ring_list[idir];
+	ring2 = sc->scat_ring_list[iscat];
+        rng->ringdef[ipln].ring1 = ring1;
+	rng->ringdef[ipln].ring2 = ring2;
+        rng->ringdef[ipln].ringdiff = ring2 - ring1;
+        if(ring1 < rng->minring)
+            rng->minring = ring1;
+        if(ring1 > rng->maxring)
+            rng->maxring = ring1;
+        for(j=0;j<rng->nring;j++) {
+            if(ring1 == rng->rings[j])
+            break;
+            }
+        if(j == rng->nring || rng->nring == 0) {
+            rng->rings[rng->nring] = ring1;
+            ++rng->nring;
+            }
+        }
+    }
+
+/* Now loop through all the planes in the sinogram. */
+cntsum = 0.; sumtot=0.; sumscat=0.; avgsd=0.;
+for(plane=1;plane<=mh->nplane;plane++) {
+    if((sh = (SubHeader *)getsbhdr(emisfile,plane,sc->frame,gate,data,bed)) == NULL) {
+        printf("Error reading scan subheader.\n");
+        exit(ERROR);
+        }
+    if((sino=rdimg(emisfile,plane,sc->frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",emisfile,plane);
+        exit(ERROR);
+        }
+#ifdef CHOP
+    /* Chop out central bins sinograms. */
+    pad = (sh->dim1 - NUMRAY)/2;
+    for(i=0,ioff=pad,joff=0;i<NUMANG;i++,ioff+=sh->dim1,joff+=NUMRAY) {
+        for(j=0;j<NUMRAY;j++)
+            sino[j+joff] = sino[j+ioff];
+        }
+    sh->dim1 = NUMRAY;
+#endif
+    if((nrm=read_norm(nrmfil,plane)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",nrmfil,plane);
+        exit(ERROR);
+        }
+    if((geo=rdimg(geofil,plane,1,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",geofil,plane);
+        exit(ERROR);
+        }
+    norm = inflate_norm(nrm,geo);
+
+    /* Get interpolated scatter sinogram. */
+    scatpln = scat_interp(scatter,rng,plane,sc->scanner_type);
+
+    /* Denormalize the scatter estimate. */
+	for(i=0;i<LENSIN;i++) {
+	    if(norm[1][i] > 0)
+	        scatpln[i] *= nrm->scat_plane_eff/norm[1][i];
+	    }
+
+    ringnum(plane,rings,sc->scanner_type);
+    frings[0] = rings[0]; frings[1] = rings[1];
+    rnums[0] = rings[0] + (sc->mainplane1 - 1); 
+    rnums[1] = rings[1] + (sc->mainplane1 - 1);
+    /* Get scale factor that forces scatter in tails to match. */
+    if(scale_tails == HI_COUNT) {
+        scl = scatscl(plane,scatpln,sino,NUMANG,sc->scanner_type,sh->dim1,
+				sc->numang,sc->tran_sup,&sclcnts,frings);
+        sclsum += scl;
+        cntsum += sclcnts;
+	avgsd += scl/(float)sqrt((double)sclcnts);
+	}
+    else if(scale_tails == LOW_COUNT) {
+        scl = scatscl_lowcount(sc,rng,emisfile,plane,scatter,&sclcnts,nrmfil,geofil);
+        sclsum += scl;
+        cntsum += sclcnts;
+	avgsd += scl/(float)sqrt((double)sclcnts);
+	}
+    else if(scale_tails == NO_SCALE) {
+	scl = 1.;
+        cntsum += 0;
+	avgsd += 0.;
+	}
+    else {
+	printf("******** Invalid value for scale_tails option, assuming \"none\".  ********\n");
+	scl = 1.;
+        cntsum += 0;
+	}
+
+    pad = (sh->dim1 - sc->numray)/2;
+    for(iang=0,ioff=0,joff=pad;iang<NUMANG;
+			iang++,ioff+=sc->numray,joff+=sh->dim1) {
+	for(j=0;j<pad;j++)
+	    sino[j+joff-pad] = 0.;
+	for(j=sh->dim1-1;j>sh->dim1-pad-1;j--)
+	    sino[j+joff-pad] = 0.;
+	for(j=0;j<sc->numray;j++) {
+	    sumtot += sino[j+ioff];
+	    sino[j+joff] = nrm->true_plane_eff*norm[0][j+ioff]*
+					(sino[j+ioff] - scl*scatpln[j+ioff]);
+            /* Calculate statistics for scatter fraction. */
+            sumscat += scl*scatpln[j+ioff];
+	    }
+	}
+    for(i=0;i<sh->dim1*sh->dim2;i++)
+	sino[i] /= sh->deadtime_corr;
+
+    mh->nframe = 1;
+    mh->nplane = NUM_RINGPAIR;
+    if(ERROR==wrimg(corrfil,sino,mh,sh,plane,outfrm,gate,data,bed)) {
+        fprintf(stderr,"Error writing to %s\n",corrfil);
+        exit(ERROR);
+        }
+    free(sino);
+    free(sh);
+    free(norm[0]);
+    free(norm[1]);
+    free(norm);
+    free(nrm);
+    free(scatpln);
+    free(geo);
+    }
+
+printf("Scatter corrected data written to %s\n",corrfil);
+printf("Scatter fraction: %6.2f%%\n",100.*sumscat/sumtot);
+printf("Average scale factor derived from scatter outside the subject: %f\n",
+	sclsum/(float)mh->nplane);
+if(scale_tails != NO_SCALE) {
+    printf("Scatter estimates scaled by nulling error in tails.\n");
+    printf("Average standard deviation of scale factors: %6.2f %%\n",100.*avgsd/mh->nplane);
+    }
+
+/* Save statistics in .rec file. */
+sprintf(recfile,"%s.rec",emisbody);
+fp = fopen(recfile,"a");
+fprintf(fp,"Scatter correction parameters: \n");
+fprintf(fp,"imgdim: %d, numang: %d, num_psi: %d, num_psi_att: %d, \
+num_iter: %d\nenergy_thresh: %6.0f, emis_cutoff: %6.2f,\n\
+tran_cutoff: %6.2f, ext_tran_up: %6.2f, ext_tran_dwn: %6.2f\n\
+ext_emis_up: %6.2f, ext_emis_dwn: %6.2f\n",
+sc->imgdim,sc->numang,sc->num_psi,sc->num_psi_att,sc->num_iter,
+sc->energy_thresh,sc->emis_cutoff,sc->tran_cutoff,
+sc->ext_tran_up,sc->ext_tran_dwn,sc->ext_emis_up,sc->ext_emis_dwn);
+fprintf(fp,"Scatter fraction: %6.2f%%\n",100.*sumscat/sumtot);
+if(scale_tails != NO_SCALE) {
+    fprintf(fp,"Mean scale factor derived from scatter outside subject: %f\n",
+        sclsum/(float)mh->nplane);
+    fprintf(fp,"Average standard deviation of scale factor: %6.2f %%\n",100.*avgsd/mh->nplane);
+    if(scale_tails == HI_COUNT)
+        fprintf(fp,"Scale factor calculated separately for each plane.\n");
+    else if(scale_tails == LOW_COUNT)
+        fprintf(fp,"Scale factor calculated for equivalent septa-extended planes.\n");
+    }
+else
+    fprintf(fp,"Scatter estimates were not scaled.\n");
+fprintf(fp,"endrec\n");
+fclose(fp);
+
+}
+
+/****************/
+void scatcor_rev7(
+/****************/
+
+float	**scatter,
+ScatterTable *sc,
+MainHeader *mh,
+int	scale_tails,
+char	*emisbody,
+char	*emisfile,
+char	*nrmfil,
+char	*geofil,
+float	version,
+float	scale_factor,
+int	scatter_only,
+int	norm_only)
+
+{
+
+int     i,j,plane,outfrm=1,stat,pad,ioff,joff,
+        gate=1,data=0,bed=0,iang;
+
+
+float   *scatpln,*sino,*sino_clip,sumtot=0,sumscat=0,sclcnts,cntsum=0., 
+	packing_scl,scl,sclsum=0.,**norm,*geo,avgsd,*maxminscl,outscl,
+	*rings;
+
+Scan3D_subheader7  *sh;
+Main_header7	*mh7;
+SubHeader	*shi;
+
+NormData *nrm;
+
+struct ringinfo *rng;
+
+char	corrfil[MAXNAME],recfile[MAXNAME];
+
+FILE	*fp;
+
+sprintf(corrfil,"%s_corr.S",emisbody);
+mh7 = mh_to_mh7(mh);
+if((sh = (Scan3D_subheader7 *)getsbhdr7(emisfile,1,gate,data,bed)) == NULL) {
+    printf("Error reading scan subheader, plane 1.\n");
+    exit(ERROR);
+    }
+if((shi = (SubHeader *)getsbhdr(emisfile,1,1,gate,data,bed)) == NULL) {
+    printf("Error reading scan subheader, plane 1.\n");
+    exit(ERROR);
+    }
+maxminscl = scan3D_max(emisfile,mh7,sh,1,gate,data,bed);
+outscl = 1./maxminscl[2];
+if(mh->sw_revision == NULL)
+    mh->sw_revision = (char *)malloc(32);
+sprintf(mh->sw_revision,"f3d sv%3.2f",version);
+
+/* Now loop through all the planes in the sinogram. */
+cntsum = 0.; sumtot=0.; sumscat=0.; avgsd=0.;
+for(plane=1;plane<=mh->nplane;plane++) {
+    if((sino=rdimg(emisfile,plane,sc->frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",emisfile,plane);
+        exit(ERROR);
+        }
+    if((nrm=read_norm(nrmfil,plane)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",nrmfil,plane);
+        exit(ERROR);
+        }
+    if((geo=rdimg(geofil,plane,1,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",geofil,plane);
+        exit(ERROR);
+        }
+#ifdef CHOP
+    /* Chop out central bins sinograms. */
+    sino_clip = (float *)malloc(LENSIN*sizeof(float));
+    pad = (sh->num_r_elements - NUMRAY)/2;
+    for(i=0,ioff=pad,joff=0;i<NUMANG;i++,ioff+=sh->num_r_elements,joff+=NUMRAY) {
+        for(j=0;j<NUMRAY;j++)
+            sino_clip[j+joff] = sino[j+ioff];
+    }
+#endif
+    norm = inflate_norm(nrm,geo);
+
+    rings = ringnum_rev7(plane);
+    /* Force ring numbers to match definition in tran_sup. */
+
+    /* Get interpolated scatter sinogram. */
+    scatpln = scat_interp_rev7(rings,sc->ring_tab,scatter,sc->numpln);
+
+    packing_scl = packing_scale_961(plane); /* Get cross/direct scale factor. */
+
+    /* Denormalize the scatter estimate. */
+	for(i=0;i<LENSIN;i++) {
+	    if(norm[1][i] > 0)
+	        scatpln[i] *= packing_scl*nrm->scat_plane_eff/norm[1][i];
+	    }
+
+    /* Get scale factor that forces scatter in tails to match. */
+    rings[0] = rings[0] + (sc->mainplane1 - 1); 
+    rings[1] = rings[1] + (sc->mainplane1 - 1);
+    if(scale_factor > 0.) {
+        scl = scale_factor;
+        sclsum = mh->nplane*scale_factor;
+        }
+    else {
+        if(scale_tails == HI_COUNT) {
+            scl = scatscl(plane,scatpln,sino_clip,NUMANG,sc->scanner_type,NUMRAY,
+				sc->numang,sc->tran_sup,&sclcnts,rings);
+            sclsum += scl;
+            cntsum += sclcnts;
+	    avgsd += scl/(float)sqrt((double)sclcnts);
+	    }
+        else if(scale_tails == LOW_COUNT) {
+            scl = scatscl_lowcount(sc,rng,emisfile,plane,scatter,&sclcnts,nrmfil,geofil);
+            sclsum += scl;
+            cntsum += sclcnts;
+	    avgsd += scl/(float)sqrt((double)sclcnts);
+	    }
+        else if(scale_tails == NO_SCALE) {
+	    scl = 1.;
+            sclsum = mh->nplane;
+	    }
+        else {
+	    printf("******** Invalid value for scale_tails option, assuming \"none\".  ********\n");
+	    scl = 1.;
+            sclsum = mh->nplane;
+	    }
+        }
+
+    pad = (sh->num_r_elements - NUMRAY)/2;
+    for(iang=0,ioff=0,joff=pad;iang<NUMANG;
+			iang++,ioff+=sc->numray,joff+=sh->num_r_elements) {
+	for(j=-pad;j<0;j++)
+	    sino[j+joff] = 0.;
+	for(j=NUMRAY;j<NUMRAY+pad-1;j++)
+	    sino[j+joff] = 0.;
+	for(j=0;j<sc->numray;j++) {
+	    sumtot += sino[j+joff];
+            if(scatter_only == FALSE) {
+                if(norm_only == FALSE) {
+	            sino[j+joff] = nrm->true_plane_eff*norm[0][j+ioff]*
+					(sino[j+joff] - scl*scatpln[j+ioff]);
+                    /* Calculate statistics for scatter fraction. */
+                    sumscat += scl*nrm->true_plane_eff*scatpln[j+ioff];
+                    }
+                else {
+	            sino[j+joff] = nrm->true_plane_eff*norm[0][j+ioff]*
+								sino[j+joff];
+                    }
+	        }
+            else {
+                sino[j+joff] = scl*nrm->true_plane_eff*scatpln[j+ioff];
+                }
+	    }
+	}
+    for(i=0;i<sh->num_r_elements*sh->num_angles;i++)
+	sino[i] /= sh->loss_correction_fctr;
+
+    mh7->num_frames = 1;
+    mh7->file_type = Short3dSinogram;
+    if((stat=wrimg7(corrfil,sino,mh7,(void *)sh,outscl,plane,outfrm,gate,data,bed))==ERROR) {
+        fprintf(stderr,"Error writing to %s\n",corrfil);
+        exit(ERROR);
+        }
+/***    for(i=0;i<LENSIN;i++)
+        sino[i] = scl*scatpln[i];
+    wrimg_easy("scat_denorm.ifs",sino,plane,INTERFILE, SHORT_DATA,3,
+                sc->numray,sc->numang,mh->nplane,sc->pixsiz,sc->pixsiz,
+                SLCTHK,NULL);***/
+    free(sino);
+    free(norm[0]);
+    free(norm[1]);
+    free(norm);
+    free(nrm);
+    free(scatpln);
+    free(geo);
+    free(rings);
+    }
+free(maxminscl);
+
+printf("Scatter corrected data written to %s\n",corrfil);
+printf("Scatter fraction: %6.2f%%\n",100.*sumscat/sumtot);
+printf("Average scale factor derived from scatter outside the subject: %f\n",
+	sclsum/(float)mh->nplane);
+if(scale_tails != NO_SCALE) {
+    printf("Scatter estimates scaled by nulling error in tails.\n");
+    printf("Average standard deviation of scale factors: %6.2f %%\n",100.*avgsd/mh->nplane);
+    }
+
+/* Save statistics in .rec file. */
+sprintf(recfile,"%s.rec",emisbody);
+fp = fopen(recfile,"a");
+fprintf(fp,"Scatter correction parameters: \n");
+fprintf(fp,"imgdim: %d, numang: %d, num_psi: %d, num_psi_att: %d, \
+num_iter: %d\nenergy_thresh: %6.0f, emis_cutoff: %6.2f,\n\
+tran_cutoff: %6.2f, ext_tran_up: %6.2f, ext_tran_dwn: %6.2f\n\
+ext_emis_up: %6.2f, ext_emis_dwn: %6.2f\n",
+sc->imgdim,sc->numang,sc->num_psi,sc->num_psi_att,sc->num_iter,
+sc->energy_thresh,sc->emis_cutoff,sc->tran_cutoff,
+sc->ext_tran_up,sc->ext_tran_dwn,sc->ext_emis_up,sc->ext_emis_dwn);
+fprintf(fp,"Scatter fraction: %6.2f%%\n",100.*sumscat/sumtot);
+if(scale_tails != NO_SCALE) {
+    fprintf(fp,"Mean scale factor derived from scatter outside subject: %f\n",
+        sclsum/(float)mh->nplane);
+    fprintf(fp,"Average standard deviation of scale factor: %6.2f %%\n",100.*avgsd/mh->nplane);
+    if(scale_tails == HI_COUNT)
+        fprintf(fp,"Scale factor calculated separately for each plane.\n");
+    else if(scale_tails == LOW_COUNT)
+        fprintf(fp,"Scale factor calculated for equivalent septa-extended planes.\n");
+    }
+else
+    fprintf(fp,"Scatter estimates were not scaled.\n");
+fprintf(fp,"endrec\n");
+fclose(fp);
+free(sh);
+free(shi);
+
+}
+
+
+/*********************************************/
+float *scat_interp_rev7(
+/*********************************************/
+
+float	*rings,
+int 	**ring_tab,
+float	**scatter,
+int	numrings)
+
+{
+
+int	i,i1,i2,ring_diff,j1,j2,isino,jsino,r1,r2,
+ring_list[LEN_RING_LIST] = RING_LIST;
+
+float	*sino,alpha,x,xmin;
+
+sino = (float *)malloc(LENSIN*sizeof(float));
+ring_diff = rings[1] - rings[0];
+/* Find nearest sinogram. */
+xmin = 10000;
+for(i=0;i<LEN_RING_LIST;i++) {
+    x = fabs(ring_list[i]-rings[0]);
+    r2 = ring_list[i] + ring_diff;
+    if(x < xmin && r2 > 0 && r2 <= numrings) {
+        xmin = x;
+	i1 = i;
+        }
+    }
+r1 = ring_list[i1];
+r2 = r1 + ring_diff;
+for(i=0;i<LEN_RING_LIST;i++) {
+    if(r2 == ring_list[i])
+        i2 = i;
+    }
+
+if(ring_diff < 0) {
+    /* Check to see if this is an end sinogram, use nearest neighbor. */
+    if((r2+ring_diff) < 0) {
+        if(ring_tab[i1][i2] >= 0)
+	    isino  = ring_tab[i1][i2];
+        else {
+	    fprintf(stderr,"Nonexistent sinogram in scat_inter_rev7\n");
+            return(NULL);
+            }
+        for(i=0;i<LENSIN;i++)
+            sino[i] = scatter[isino][i];
+        return(sino);
+        }
+    }
+else if(ring_diff > 0) {
+    /* Check to see if this is an end sinogram, use nearest neighbor. */
+    if((r2+ring_diff) > NUM_RINGS-1) {
+        if(ring_tab[i1][i2] >= 0)
+	    isino  = ring_tab[i1][i2];
+        else {
+	    fprintf(stderr,"Nonexistent sinogram in scat_inter_rev7\n");
+            return(NULL);
+            }
+        for(i=0;i<LENSIN;i++)
+            sino[i] = scatter[isino][i];
+        return(sino);
+        }
+    }
+else { /* ring_diff = 0 */
+    if(ring_tab[i1][i2] >= 0)
+        isino  = ring_tab[i1][i2];
+    else {
+	fprintf(stderr,"Nonexistent sinogram in scat_inter_rev7\n");
+        return(NULL);
+        }
+    for(i=0;i<LENSIN;i++)
+        sino[i] = scatter[isino][i];
+    return(sino);
+    }
+
+/*Interpolate between nearest sinograms. */
+if(xmin > 0.) {
+    for(i=0;i<LEN_RING_LIST;i++) {
+        if((r1+ring_diff) == ring_list[i])
+            j1 = i;
+        if(r2+ring_diff == ring_list[i])
+            j2 = i;
+        }
+    }
+else {
+    if(ring_tab[i1][i2] >= 0)
+        isino  = ring_tab[i1][i2];
+    else {
+	fprintf(stderr,"Nonexistent sinogram in scat_inter_rev7\n");
+        return(NULL);
+        }
+    for(i=0;i<LENSIN;i++)
+        sino[i] = scatter[isino][i];
+    return(sino);
+    }
+
+if(ring_tab[i1][i2] >= 0)
+   isino  = ring_tab[i1][i2];
+else {
+    fprintf(stderr,"Nonexistent sinogram in scat_inter_rev7\n");
+    return(NULL);
+    }
+if(ring_tab[j1][j2] >= 0)
+   jsino  = ring_tab[j1][j2];
+else {
+    fprintf(stderr,"Nonexistent sinogram in scat_inter_rev7\n");
+    return(NULL);
+    }
+alpha = xmin/ring_diff;
+for(i=0;i<LENSIN;i++)
+    sino[i] = (1-alpha)*scatter[isino][i] + alpha*scatter[jsino][i];
+
+return(sino);
+
+}
+
+/********************************/
+float packing_scale_961(int plane)
+/********************************/
+
+/* Assumes a span of 7 and max acceptance of 24 */
+
+{
+
+int	ones[6]     = {1,47,85,124,149,174};
+int     num_ones[6] = {1, 3, 4,  4,  4,  2};
+int     twos[10]     = {2,46,50,83,89,122,128,147,153,172};
+int     num_twos[10] = {1, 1, 2, 2, 2,  2,  2,  2,  2,  2};
+int     threes[8]     = {52,82,91,121,130,146,155,171};
+int     num_threes[8] = { 1, 1, 1,  1,  1,  1,  1,  1};
+
+int 	i,j;
+
+/* Test for unit scale factor. */
+for(i=0;i<6;i++) {
+    for(j=0;j<num_ones[i];j++) {
+        if(plane == ones[i]+j)
+            return(1.);
+        }
+    }
+/* Test for scale factor of two. */
+for(i=0;i<6;i++) {
+    for(j=0;j<num_twos[i];j++) {
+        if(plane == twos[i]+j)
+            return(2.);
+        }
+    }
+/* Test for scale factor of three. */
+for(i=0;i<6;i++) {
+    for(j=0;j<num_threes[i];j++) {
+        if(plane == threes[i]+j)
+            return(3.);
+        }
+    }
+if(plane%2 == 0) 
+    return(4.);   /* Must be cross-plane in center of FOV. */
+else
+    return(3.);   /* Must be direct-plane in center of FOV. */
+
+}
+@

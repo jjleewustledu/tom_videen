@@ -1,0 +1,293 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.4
+date	99.03.24.18.50.32;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.02.04.18.32.04;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.04.29.17.19.28;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.01.30.20.33.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@write frame no if planes=1
+@
+text
+@PRO VIDI_VIEWALL, uv, i, inc
+   ;; uv = the info structure for this display
+   ;; i = image to scale and display
+   ;; inc = slice increment in display
+   
+   COMMON IMAGE_UTILS
+   COMMON VIDI
+   
+   IF NOT ptr_valid(uv.img[i].data) THEN BEGIN
+      widget_control, uv.wid.msg, set_value='No data'
+      RETURN
+   ENDIF
+   
+   ;; Determine slice size and type to display
+
+   CASE orient OF
+      0: BEGIN
+         xsize0 = uv.img[i].dim[0]
+         ysize0 = uv.img[i].dim[1]
+         planes = uv.img[i].dim[2]
+         stype = 0
+      END
+      1: BEGIN
+         xsize0 = uv.img[i].dim[0]
+         fact = (uv.img[i].pdim[2])/(uv.img[i].pdim[0])
+         ysize0 = fact * uv.img[i].dim[2]
+         planes = uv.img[i].dim[1]
+         stype = 1
+      END
+      2: BEGIN
+         xsize0 = uv.img[i].dim[1]
+         fact = (uv.img[i].pdim[2])/(uv.img[i].pdim[1])
+         ysize0 = fact * uv.img[i].dim[2]
+         planes = uv.img[i].dim[0]
+         stype = 1
+      END
+   ENDCASE
+   
+   frames = uv.img[i].dim[3]
+   IF (frames EQ 0) THEN frames = 1
+   CASE fmode OF 
+      0:  tot = planes
+      1:  tot = frames
+      2:  tot = frames*planes
+   ENDCASE       
+   tot = tot/inc
+   
+   ;; Determine size of individual images and total size of screen
+   
+   scrnsize = get_screen_size()
+   sx = long(scrnsize[0])
+   sy = long(scrnsize[1])
+   
+   scl = 1L
+   rx = long(xsize0/scl)
+   ry = long(ysize0/scl)
+   nscrn = (sx/rx)*(sy/ry)
+   WHILE (tot GT nscrn) DO BEGIN
+      scl = scl+1
+      rx = long(xsize0/scl)
+      ry = long(ysize0/scl)
+      nscrn = (sx/rx)*(sy/ry)
+   ENDWHILE 
+   xsize = long(rx)
+   ysize = long(ry)
+   IF (xsize0 MOD xsize OR ysize0 MOD ysize) THEN integer_mult = 0 ELSE integer_mult = 0
+   ncol = long(sx/rx)
+   nrow = long(nscrn/ncol)
+   WHILE ((nrow-1)*ncol GE tot) DO nrow = nrow-1
+   xscrn = ncol*rx
+   yscrn = nrow*ry
+   
+   ;; Determine scaling
+   
+   IF (dsp[i].type EQ 1) THEN BEGIN ; Manual scaling
+      mini = dsp[i].min
+      maxi = dsp[i].max
+   ENDIF ELSE BEGIN             ; Auto scaling
+      IF (dsp[i].range EQ 0) THEN BEGIN
+         mini = 0
+         maxi = max(*uv.img[i].data)
+      ENDIF ELSE IF (dsp[i].range EQ 1) THEN BEGIN
+         mini = 0
+         maxi = -min(*uv.img[i].data)
+      ENDIF ELSE BEGIN
+         mini = min(*uv.img[i].data)
+         maxi = max(*uv.img[i].data)
+         IF (-mini GT maxi) THEN maxi = -mini
+      ENDELSE
+   ENDELSE
+   dsp[i].amin = mini
+   dsp[i].amax = maxi
+   nc = dsp[i].nc
+   
+   ;; Scale and Display each slice
+   
+   widget_control, uv.wid.max[i],set_value=dsp[i].amax
+
+   viewbase = widget_base(TITLE='Slices '+ strcompress(string(i+1)), $
+                          group_leader=uv.wid.base)
+   win = widget_draw(viewbase, xsize=xscrn, ysize=yscrn)
+   !p.background = 0
+   widget_control, viewbase, /realize, xoffset=0, yoffset=0
+   widget_control, win, get_value=windowIndex
+   wset, windowIndex
+   xmanager, "VIDIVIEW"+strcompress(string(i+1),/remove_all), viewbase
+   
+   col = 1
+   WHILE col LT !d.table_size DO col = col + col
+   
+   loc = 0
+   FOR f=0, frames-1 DO BEGIN
+      FOR k=0, planes-1, inc DO BEGIN
+         CASE orient OF
+            0: image = reform((*uv.img[i].data)[*,*,k,f])
+            1: image = reform((*uv.img[i].data)[*,k,*,f])
+            2: image = reform((*uv.img[i].data)[k,*,*,f])
+         ENDCASE
+         IF (stype EQ 0 AND integer_mult) THEN BEGIN
+            IF (dsp[i].range EQ 1) THEN $
+               temp1 = bytscl(rebin(-(image), xsize, ysize), MIN=mini, MAX=maxi, TOP=(nc-1)) $
+            ELSE temp1 = bytscl(rebin(image, xsize, ysize),  MIN=mini, MAX=maxi, TOP=(nc-1))
+         ENDIF ELSE BEGIN 
+            IF (dsp[i].range EQ 1) THEN $
+               temp1 = bytscl(congrid(-(image), xsize, ysize, /INTERP), $
+                              MIN=mini, MAX=maxi, TOP=(nc-1)) $
+            ELSE temp1 = bytscl(congrid(image, xsize, ysize, /INTERP), $
+                                MIN=mini, MAX=maxi, TOP=(nc-1))
+         ENDELSE
+         temp1 = temp1 + dsp[i].bot
+         tv, temp1, loc
+         yloc = loc/ncol
+         xloc = (loc-yloc*ncol) MOD ncol
+         xl = (xloc+1)*xsize-30
+         yl = yscrn-(yloc+1)*ysize+10
+         IF (planes EQ 1) THEN val = strtrim(string(f+1),2) $
+         ELSE val = strtrim(string(k+1),2)
+         xyouts,xl,yl,val,charsize=1.2, charthick=1,/device,color=col
+         loc = loc+1
+      ENDFOR 
+   ENDFOR 
+   
+END
+@
+
+
+1.3
+log
+@scale image size to fit all slices on screen
+display slice number
+use user-specified slice increment
+@
+text
+@d136 2
+a137 1
+         val = strtrim(string(k+1),2)
+@
+
+
+1.2
+log
+@add CMRGlu
+@
+text
+@d1 1
+a1 2
+PRO VIDI_VIEWALL, uv, i
+   ;; Scale and display image i
+d3 2
+d14 1
+a14 1
+   ;; Determine slice size and type
+d18 2
+a19 2
+         xsize = uv.img[i].dim[0]
+         ysize = uv.img[i].dim[1]
+d24 1
+a24 1
+         xsize = uv.img[i].dim[0]
+d26 1
+a26 1
+         ysize = fact * uv.img[i].dim[2]
+d31 1
+a31 1
+         xsize = uv.img[i].dim[1]
+d33 1
+a33 1
+         ysize = fact * uv.img[i].dim[2]
+a40 5
+   scrnsize = get_screen_size()
+   sx = scrnsize[0]
+   sy = scrnsize[1]
+   nx = long(sx)/long(xsize)
+   
+d42 3
+a44 19
+      0: BEGIN 
+         ny = long(planes/nx)
+         IF ((planes MOD nx) NE 0) THEN ny = ny+1
+         ny0 = long(sy)/long(ysize)
+         sxsize = nx*long(xsize)
+      ENDCASE 
+      1: BEGIN 
+         ny = long(frames/nx)
+         IF ((frames MOD nx) NE 0) THEN ny = ny+1
+         ny0 = long(sy)/long(ysize)
+         sxsize = nx*long(xsize)
+      ENDCASE 
+      2: BEGIN 
+         tot = long(frames)*planes
+         ny = tot/nx
+         IF ((tot MOD nx) NE 0) THEN ny = ny+1
+         ny0 = long(sy)/long(ysize)
+         sxsize = nx*long(xsize)
+      ENDCASE 
+d46 1
+d48 1
+a48 13
+   first = fp
+   IF (ny GT ny0) THEN BEGIN
+      ny = ny0
+      viewall1 = widget_base(group_leader=uv.wid.base)
+      text = cw_field(viewall1, title='First Slice', value=first, xsize=4, $
+                      /INTEGER, /RETURN_EVENTS)
+      widget_control, viewall1, /realize
+      ev = WIDGET_EVENT(viewall1)
+      WIDGET_CONTROL, viewall1, /DESTROY
+      first = ev.value
+      last = (first + nx*ny0 -1) < planes
+   ENDIF
+   sysize = ny*long(ysize)
+d50 23
+d95 1
+a95 1
+   ;; Display each slice
+d101 1
+a101 1
+   win = widget_draw(viewbase, xsize=sxsize, ysize=sysize)
+d108 3
+d113 1
+a113 1
+      FOR k=first-1, planes-1 DO BEGIN
+d119 1
+a119 1
+         IF (stype EQ 0) THEN BEGIN
+d132 6
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d6 1
+@

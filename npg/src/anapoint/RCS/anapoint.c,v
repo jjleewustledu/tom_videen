@@ -1,0 +1,225 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	2005.08.16.16.51.38;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2004.09.23.18.08.41;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@optional variable for width of point
+@
+text
+@/*	===============================================================================
+ *	Module:			anapoint.c
+ *	Date:			Sep 2004
+ *	Author:			Tom Videen
+ *	Description:	Fill 2 points
+ *	===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anapoint/RCS/anapoint.c,v 1.1 2004/09/23 18:08:41 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <libnrimg.h>
+#include <image.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+#include <ANALYZE.h>				 /* dsr */
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* header for Analyze */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* file for Analyze image */
+	char           *hdrfile;
+	char           *imgfile;
+	char           *outhdr;
+	char           *outimg;
+	int             dim[3];
+	int             x1, x2, y1, y2, z1, z2;
+	int             width;
+	int             x, y, z, n;
+	int             i, j, k;
+	short        ***img;
+	short          *row;
+
+	if (argc != 12) {
+		fprintf (stderr, "Usage:  anapoint hdr image x1 y1 z1 x2 y2 z2 outhdr outimg width\n");
+		return (ERROR);
+	}
+	hdrfile = argv[1];
+	imgfile = argv[2];
+	x1 = atoi (argv[3]);
+	y1 = atoi (argv[4]);
+	z1 = atoi (argv[5]);
+	x2 = atoi (argv[6]);
+	y2 = atoi (argv[7]);
+	z2 = atoi (argv[8]);
+	outhdr = argv[9];
+	outimg = argv[10];
+	width = atoi (argv[11]);
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fd_hdr = fopen (hdrfile, "r")) == 0) {
+		fprintf (stderr, "ERROR [anapoint]: opening %s\n", hdrfile);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anapoint]: reading: %s\n", hdrfile);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [anapoint]: reading %s\n", hdrfile);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4 && hdr.dime.datatype != 16) {
+		fprintf (stderr, "ERROR [anapoint]: reading %s\n", hdrfile);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anapoint]: reading %s\n", hdrfile);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim[0] = hdr.dime.dim[1];
+	dim[1] = hdr.dime.dim[2];
+	dim[2] = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+
+/*
+ *	Read the img and flip X, Y & Z from Analyze convention
+ */
+
+	if ((fd_img = fopen (imgfile, "r")) == 0) {
+		fprintf (stderr, "ERROR [anapoint]: opening %s\n", imgfile);
+		return (ERROR);
+	}
+	if ((img = s3tensor (1, dim[2], 1, dim[1], 1, dim[0])) == NULL) {
+		fprintf (stderr, "ERROR [anapoint]: malloc img\n");
+		return (ERROR);
+	}
+	if ((row = (short *) calloc (dim[0], sizeof (short))) == NULL) {
+		fprintf (stderr, "ERROR [anapoint]: malloc row\n");
+		return (ERROR);
+	}
+	for (k = dim[2]; k > 0; k--) {
+		for (j = dim[1]; j > 0; j--) {
+			(void) fread (row, sizeof (short), dim[0], fd_img);
+			for (i = 1; i <= dim[0]; i++) {
+				n = dim[0] - i;
+				img[k][j][i] = row[n];
+			}
+		}
+	}
+	(void) fclose (fd_img);
+
+	for (z = 1; z <= dim[2]; z++)
+		for (y = 1; y <= dim[1]; y++)
+			for (x = 1; x <= dim[0]; x++)
+				img[z][y][x] = 0;
+
+	for (k = -width; k <= width; k++) {
+		for (j = -width; j <= width; j++) {
+			img[z1][y1 + k][x1 + j] = 10000;
+			img[z2][y2 + k][x2 + j] = 10000;
+		}
+	}
+
+	if ((fd_img = fopen (outimg, "w")) == 0) {
+		fprintf (stderr, "ERROR [anapoint]: opening %s\n", outimg);
+		return (ERROR);
+	}
+	for (k = dim[2]; k > 0; k--) {
+		for (j = dim[1]; j > 0; j--) {
+			for (i = 1; i <= dim[0]; i++) {
+				n = dim[0] - i;
+				row[n] = img[k][j][i];
+			}
+			(void) fwrite (row, sizeof (short), dim[0], fd_img);
+		}
+	}
+	(void) fclose (fd_img);
+	free (row);
+
+	if ((fd_hdr = fopen (outhdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [anapoint]: opening %s\n", outhdr);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anapoint]: writing %s\n", outhdr);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	free_s3tensor (img, 1, dim[2], 1, dim[1], 1, dim[0]);
+	return (0);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d5 1
+a5 1
+ *	Description:	Fill 2 pixels
+d9 1
+a9 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anapoint/RCS/anapoint.c,v 1.2 2004/09/23 15:45:21 tom Exp $";
+d32 1
+d38 2
+a39 2
+	if (argc != 11) {
+		fprintf (stderr, "Usage:  anapoint hdr image x1 y1 z1 x2 y2 z2 outhdr outimg\n");
+d52 1
+a101 1
+
+a116 2
+	img[z1][y1][x1] = 10000;
+	img[z2][y2][x2] = 10000;
+d118 11
+a128 4
+    if ((fd_img = fopen (outimg, "w")) == 0) {
+        fprintf (stderr, "ERROR [anapoint]: opening %s\n", outimg);
+        return (ERROR);
+    }
+d138 1
+a138 1
+    (void) fclose (fd_img);
+d141 9
+a149 9
+    if ((fd_hdr = fopen (outhdr, "w")) == 0) {
+        fprintf (stderr, "ERROR [anapoint]: opening %s\n", outhdr);
+        return (ERROR);
+    }
+    if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+        fprintf (stderr, "ERROR [anapoint]: writing %s\n", outhdr);
+        return (ERROR);
+    }
+    (void) fclose (fd_hdr);
+@

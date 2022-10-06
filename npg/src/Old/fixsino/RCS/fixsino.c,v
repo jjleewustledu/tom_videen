@@ -1,0 +1,2164 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	2002.11.26.21.41.51;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	99.03.24.17.10.50;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.04.06.17.00.56;	author ty7777;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.04.06.16.08.28;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.03.15.20.51.09;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.03.14.17.14.44;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.03.10.16.42.32;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.03.09.22.25.21;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.03.09.21.16.13;	author ty7777;	state Exp;
+branches
+	1.2.1.1;
+next	1.1;
+
+1.1
+date	95.03.09.20.44.57;	author ty7777;	state Exp;
+branches;
+next	;
+
+1.2.1.1
+date	95.03.14.17.13.55;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, version with perfect fix.
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@/*$Id: fixsino.c,v 1.9 1999/03/24 17:10:50 tom Exp tom $*/
+/*$Log: fixsino.c,v $
+ * Revision 1.9  1999/03/24  17:10:50  tom
+ * tov alter
+ *
+ * Revision 1.8  1995/04/06  17:00:56  ty7777
+ * Modified the documentation.
+ *
+ * Revision 1.7  1995/04/06  16:08:28  ty7777
+ * Added the program header.
+ *
+ * Revision 1.6  1995/03/15  20:51:09  ty7777
+ * Added function fixbyte ().
+ *
+ * Revision 1.5  1995/03/14  17:14:44  ty7777
+ * Final release, working version.
+ *
+ * Revision 1.4  1995/03/10  16:42:32  ty7777
+ * Allow 2,221 specification.
+ *
+ * Revision 1.3  1995/03/09  22:25:21  ty7777
+ * Use get_next... ().
+ *
+ * Revision 1.2  1995/03/09  21:16:13  ty7777
+ * Added abs to cutoff checking.
+ *
+ * Revision 1.1  1995/03/09  20:44:57  ty7777
+ * Initial revision
+ **/
+
+/*_________________________________________________________________
+  Description:	This program changes the  bytes  in  sinograms  to
+		remove artifacts caused by disk-to-tape write errors.
+
+  Algorithm:	Find the specified matrix
+		Read the specified matrix
+		Sort matrix array
+		Generate histogram data
+		Ask user for cutoff value
+		Any pixel value with absolute greater or equal to cutoff needs to be fixed
+		If 1 element then
+			set its value equal to plane total - current value
+		else if > 1 element then
+			set their values equal to the mean of their 8 neighbors
+			if some of the neighbors have pixel values greater than the
+			cutoff, they will not be used in the conputation of average
+		endif
+		Update the specified matrix
+
+  Note:		The header file matrix.h that is used here is different from the one
+		in /usr/local/include/petutil/matrix.h. matrix.h the program uses is
+		the same as the one used by 3D reconstruction programs.
+
+  History:	Created by Tom Yang on 03/10/95.
+  _________________________________________________________________*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/file.h>
+#include <nrutil.h>
+#include "matrix.h"
+
+#define NUM_MAXS 100
+#define ROUND(x)	((x) > 0 ? ((x) + 0.5) : ((x) - 0.5))	/* rounding float/double to int */
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fixsino/RCS/fixsino.c,v 1.9 1999/03/24 17:10:50 tom Exp tom $";
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	static int      fixsino ();
+
+	char           *file;
+	char           *matrixSpecifier;
+	char           *histo;
+	int             index;
+
+	if (argc < 3) {
+		fprintf (stdout, "usage: fixsino sinogram_file_name matrix\n");
+		fprintf (stdout, "       where matrix = frame,plane,gate,data_type,bed\n");
+		fprintf (stdout, "e.g.   fixsino p2498ho8.scn 2,221,1,0,0\n");
+		return -1;
+	}
+
+/*
+ * Get the command line arguments.
+ */
+	file = argv[1];
+	if ((index = abs ((int) &file[0] - strpbrk (file, ","))) == abs ((int) &file[0]))
+		matrixSpecifier = argv[2];
+	else {
+		matrixSpecifier = &file[index + 1];
+		file[index] = '\0';
+	}
+	if (argc == 3)
+		histo = argv[2];
+	else
+		histo = argv[3];
+	return (fixsino (file, matrixSpecifier, histo));
+}
+
+static int      fixsino (file, selector, histo)
+	char           *file;
+	char           *selector;
+	char           *histo;
+{
+	MatrixData     *matrix_read ();
+	MatrixFile     *matrix_open ();
+	static int      fixbyte ();
+	int             mat_numcod ();
+	struct MatDir  *matrix_find ();
+
+	MatrixData     *mData;
+	MatrixFile     *fp;
+	Scan_subheader  scan;
+	char            buff[512];
+	float          *fbuffer;
+	int             array_size;
+	int             cutoff;
+	int             i;
+	int             i0 = 0;
+	int            *ibuffer;
+	int             integral;
+	int             j;
+	int             k;
+	int             l;
+	int             matnum;
+	int             mode;
+	int             nvalues;
+	int             status;
+	int             total_fixed;
+	int             validMatrices[2][5];
+	int            *values;
+	int            *value_dist;
+	short int      *buffer = 0;
+	struct Matval   matval;
+	struct MatDir  *matdir;
+	unsigned long   dimension;
+	unsigned long  *index_array;
+
+	if (histo && strcmp (histo, "-h") == 0)
+		mode = MAT_READ_ONLY;
+	else
+		mode = MAT_READ_WRITE;
+
+/*
+ * Find the specified matrix
+ */
+	fp = matrix_open (file, mode, SCAN_DATA);
+	if (fp == NULL) {
+		printf ("fixsino:ERROR...could not open file %s for reading\n", file);
+		fflush (stdout);
+		return (1);
+	}
+	decode_selector (selector, validMatrices);
+	matnum = mat_numcod (validMatrices[0][0], validMatrices[0][1], validMatrices[0][2],
+			     validMatrices[0][3], validMatrices[0][4]);
+	matdir = matrix_find (matnum, fp);
+
+/*
+ * Read the specified matrix
+ */
+	mat_numdoc (matdir->matnum, &matval);
+	if ((mData = matrix_read (fp, matdir->matnum)) == NULL) {
+		fprintf (stderr,
+		    "fixsino:ERROR... couldn't read scan subheader %3d %3d %3d %1d %3d  for %s\n",
+			 matval.frame, matval.plane, matval.gate, matval.data, matval.bed, file);
+		return 1;
+	}
+	bcopy (mData->shptr, &scan, sizeof (Scan_subheader));
+	if (scan.data_type < BYTE_TYPE || scan.data_type > M68K_I4) {
+		fprintf (stderr,
+		    "fixsino:ERROR...unable to process data type of %d for %3d %3d %3d %1d %3d\n",
+		scan.data_type, matval.frame, matval.plane, matval.gate, matval.data, matval.bed);
+		return 1;
+	}
+
+/*
+ * Sort the matrix array
+ */
+	dimension = scan.dimension_1 * scan.dimension_2;
+	buffer = (short int *) mData->data_ptr;
+	ibuffer = ivector (1, dimension);
+	fbuffer = vector (1, dimension);
+	index_array = lvector (1, dimension);
+
+	for (j = 0; j < dimension; j++) {
+		fbuffer[j + 1] = buffer[j];
+		ibuffer[j + 1] = buffer[j];
+	}
+	indexx (dimension, fbuffer, index_array);
+	free_vector (fbuffer, 1, dimension);
+
+/*
+ * Conpute sinogram data
+ */
+	array_size = NUM_MAXS;
+	values = (int *) malloc (sizeof (int) * array_size);
+	value_dist = (int *) malloc (sizeof (int) * array_size);
+	nvalues = 0;
+
+	j = 0;
+	while (j < dimension) {
+		k = ibuffer[index_array[j + 1]];
+		l = 0;
+
+		do {
+			l++;
+			j++;
+		} while (j < dimension && ibuffer[index_array[j + 1]] == k);
+		values[nvalues] = k;
+		value_dist[nvalues] = l;
+		nvalues++;
+		if (nvalues > array_size && j < dimension) {
+			array_size += NUM_MAXS;
+			values = (int *) realloc (values, sizeof (int) * array_size);
+			value_dist = (int *) realloc (value_dist, sizeof (int) * array_size);
+		}
+	}
+
+/*
+ * Generate histogram data
+ */
+	fprintf (stdout, "     		     Histogram File\n");
+	fprintf (stdout, "		Total distinct values = %d\n", nvalues);
+	for (i = 0; i < nvalues; i++)
+		fprintf (stdout,
+			 "			%d	%d\n", values[i], value_dist[i]);
+
+	if (histo && strcmp (histo, "-h") == 0) {
+		free (matdir);
+		free_matrix_data (mData);
+		matrix_close (fp);
+		free_lvector (index_array, 1, dimension);
+		free (values);
+		free (value_dist);
+		return (0);
+	}
+
+/*
+ * Get the cutoff value from screen.
+ */
+	fprintf (stdout, "Please specify the cutoff value ( > 0):\n");
+	gets (buff);
+	cutoff = atoi (buff);
+	if (cutoff <= 0)
+		cutoff = ibuffer[index_array[dimension]];
+
+/*
+ * Compute the total number of bytes that should be fixed.
+ */
+	total_fixed = 0;
+	for (l = 1; l <= dimension; l++) {
+		if (abs (ibuffer[index_array[l]]) >= cutoff)
+			total_fixed++;
+	}
+
+/*
+ * Fix the bad bytes.
+ */
+	if (total_fixed >= 1)
+		fprintf (stdout, "Index     Original     Assigned\n");
+
+	if (total_fixed > 1) {
+
+	/*
+	 * Search from the end.
+	 */
+		for (l = dimension; l > 0 && abs (ibuffer[index_array[l]]) >= cutoff; l--) {
+			fixbyte (ibuffer, index_array, scan.dimension_1, scan.dimension_2,
+				 cutoff, l, buffer);
+		}
+
+	/*
+	 * Search from the begining.
+	 */
+		for (l = 1; l < dimension && abs (ibuffer[index_array[l]]) >= cutoff; l++) {
+			fixbyte (ibuffer, index_array, scan.dimension_1, scan.dimension_2,
+				 cutoff, l, buffer);
+		}
+	} else if (total_fixed == 1) {
+		for (integral = 0, j = 0; j < dimension; j++) {
+			integral += buffer[j];
+		}
+
+		if (abs (ibuffer[index_array[dimension]]) >= cutoff)
+			i0 = dimension;
+		else if (abs (ibuffer[index_array[1]]) >= cutoff)
+			i0 = 1;
+
+		switch (fp->mhptr->coin_samp_mode) {
+		case 0:			 /* test trues only */
+			switch (matval.data) {
+			case 0:		 /* emission trues */
+			case 4:		 /* transmission trues */
+				if (integral != scan.prompts - scan.delayed) {
+					i = integral - (scan.prompts - scan.delayed);
+					fprintf (stdout, "%d     %d     	%d\n",
+						 index_array[i0] - 1,
+						 ibuffer[index_array[i0]],
+						 ibuffer[index_array[i0]] - i);
+					buffer[index_array[i0] - 1] -= i;
+				}
+				break;
+			default:		 /* all other modes are not configurable */
+				fprintf (stderr,
+				     "fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+					 fp->mhptr->coin_samp_mode, matval.data);
+				fflush (stdout);
+				break;
+			}
+			break;
+		case 1:			 /* test prompts and delayeds */
+			switch (matval.data) {
+			case 0:		 /* emission prompts */
+			case 4:		 /* transmission prompts */
+				if (integral != scan.prompts) {
+					i = integral - scan.prompts;
+					fprintf (stdout, "%d     %d     	%d\n",
+						 index_array[i0] - 1,
+						 ibuffer[index_array[i0]],
+						 ibuffer[index_array[i0]] - i);
+					buffer[index_array[i0] - 1] -= i;
+				}
+				break;
+			case 1:		 /* emission delayeds */
+			case 5:		 /* transmission delayeds */
+				if (integral != scan.delayed) {
+					i = integral - scan.delayed;
+					fprintf (stdout, "%d     %d     	%d\n",
+						 index_array[i0] - 1,
+						 ibuffer[index_array[i0]],
+						 ibuffer[index_array[i0]] - i);
+					buffer[index_array[i0] - 1] -= i;
+				}
+				break;
+			default:		 /* all other modes are not configurable */
+				printf ("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+					fp->mhptr->coin_samp_mode, matval.data);
+				fflush (stdout);
+				break;
+			}
+			break;
+		case 2:			 /* test prompts, delayeds, and multiples */
+			switch (matval.data) {
+			case 0:		 /* emission prompts */
+			case 4:		 /* transmission prompts */
+				if (integral != scan.prompts) {
+					i = integral - scan.prompts;
+					fprintf (stdout, "%d     %d     	%d\n",
+						 index_array[i0] - 1,
+						 ibuffer[index_array[i0]],
+						 ibuffer[index_array[i0]] - i);
+					buffer[index_array[i0] - 1] -= i;
+				}
+				break;
+			case 1:		 /* emission delayeds */
+			case 5:		 /* transmission delayeds */
+				if (integral != scan.delayed) {
+					i = integral - scan.delayed;
+					fprintf (stdout, "%d     %d     	%d\n",
+						 index_array[i0] - 1,
+						 ibuffer[index_array[i0]],
+						 ibuffer[index_array[i0]] - i);
+					buffer[index_array[i0] - 1] -= i;
+				}
+				break;
+			case 2:		 /* emission multiples */
+			case 6:		 /* transmission multiples */
+				if (integral != scan.multiples) {
+					i = integral - scan.multiples;
+					fprintf (stdout, "%d     %d     	%d\n",
+						 index_array[i0] - 1,
+						 ibuffer[index_array[i0]],
+						 ibuffer[index_array[i0]] - i);
+					buffer[index_array[i0] - 1] -= i;
+				}
+				break;
+			default:		 /* no other modes should exist */
+				printf ("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+					fp->mhptr->coin_samp_mode, matval.data);
+				fflush (stdout);
+				break;
+			}
+			break;
+		}
+	}
+
+/*
+ * Update the specified matrix
+ */
+	mData->data_ptr = (caddr_t) buffer;
+	status = matrix_write (fp, matdir->matnum, mData);
+
+	free (matdir);
+	free_matrix_data (mData);
+	matrix_close (fp);
+	free_ivector (ibuffer, 1, dimension);
+	free_lvector (index_array, 1, dimension);
+	free (values);
+	free (value_dist);
+
+	if (status == ERROR)
+		return 1;
+	return (0);
+}
+
+static int      fixbyte (ibuffer, index_array, dimension_1, dimension_2, cutoff, l, buffer)
+	int            *ibuffer;
+	unsigned long  *index_array;
+	int             dimension_1;
+	int             dimension_2;
+	int             cutoff;
+	int             l;
+	short int      *buffer;
+{
+	float           average;
+	int             i;
+	int             i0;
+	int             j;
+	int             j0;
+	int             k;
+
+	i0 = (index_array[l] - 1) / dimension_1;
+	j0 = (index_array[l] - 1) % dimension_1;
+	k = 0;
+	average = 0.0;
+
+	for (i = i0 - 1; i <= i0 + 1; i++) {
+		for (j = j0 - 1; j <= j0 + 1; j++) {
+			if ((i != i0 || j != j0)
+			    && i >= 0 && i < dimension_1
+			    && j >= 0 && j < dimension_2
+			    && ibuffer[i * dimension_1 + j + 1] < cutoff) {
+				k++;
+				average += ibuffer[i * dimension_1 + j + 1];
+			}
+		}
+	}
+
+	if (k > 0)
+		i = ROUND (average / k);
+	else
+		i = 0;
+	fprintf (stdout, "%d     %d     	%d\n",
+		 index_array[l] - 1, ibuffer[index_array[l]], i);
+	buffer[index_array[l] - 1] = i;
+
+	return (0);
+}
+@
+
+
+1.9
+log
+@tov alter
+@
+text
+@d1 1
+a1 1
+/*$Id: fixsino.c,v 1.8 1995/04/06 17:00:56 ty7777 Exp tom $*/
+d3 3
+d58 2
+d61 1
+a62 1
+#include <nrutil.h>
+d67 1
+a67 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fixsino/RCS/fixsino.c,v 1.8 1995/04/06 17:00:56 ty7777 Exp tom $";
+a73 1
+	int             abs ();
+d84 1
+a84 1
+		exit ();
+d101 1
+a101 1
+	exit (fixsino (file, matrixSpecifier, histo));
+a110 1
+	MatrixFile     *matrix_create ();
+a111 1
+	int             abs ();
+a118 1
+	float           average;
+d123 1
+a123 1
+	int             i0;
+a126 1
+	int             j0;
+@
+
+
+1.8
+log
+@Modified the documentation.
+@
+text
+@d1 1
+a1 1
+/*$Id: fixsino.c,v 1.7 1995/04/06 16:08:28 ty7777 Exp ty7777 $*/
+d3 3
+d51 2
+a52 2
+  History:	Created by Tom Yang on 03/10/95. 
+_________________________________________________________________*/
+d57 1
+a57 1
+#include <nrecipes/kr/nrutil.h>
+d62 1
+a62 1
+static char rcsid [] = "$Header: /data/petsun4/src/fixsino/RCS/fixsino.c,v 1.7 1995/04/06 16:08:28 ty7777 Exp ty7777 $";
+d64 3
+a66 3
+main(argc, argv)
+int argc;
+char **argv;
+d68 2
+a69 2
+	static int	fixsino ();
+	int		abs ();
+d71 4
+a74 4
+	char		*file; 
+	char		*matrixSpecifier;
+	char		*histo;
+	int		index;
+d76 1
+a76 2
+	if (argc < 3)
+	{
+a79 1
+
+d83 9
+a91 10
+	/*
+	 * Get the command line arguments.
+	 */
+	file	= argv [1];
+	if ((index = abs ((int) &file [0] - strpbrk (file, ","))) == abs ((int) &file[0]))
+		matrixSpecifier	= argv [2];
+	else
+	{
+		matrixSpecifier	= &file [index + 1];
+		file [index] = '\0';
+d94 1
+a94 1
+		histo	= argv [2];
+d96 1
+a96 1
+		histo	= argv [3];
+d100 4
+a103 4
+static int fixsino (file, selector, histo)
+	char	*file;
+	char	*selector;
+	char	*histo;
+d105 7
+a111 7
+	MatrixData	*matrix_read ();
+	MatrixFile	*matrix_open ();
+	MatrixFile	*matrix_create ();
+	static int	fixbyte ();
+	int		abs ();
+	int		mat_numcod ();
+	struct MatDir	*matrix_find ();
+d113 29
+a141 29
+	MatrixData	*mData;
+	MatrixFile	*fp;
+	Scan_subheader	scan;
+	char		buff [512];
+	float		average;
+	float		*fbuffer;
+	int		array_size;
+	int		cutoff;
+	int		i;
+	int		i0;
+	int		*ibuffer;
+	int		integral; 
+	int		j;
+	int		j0;
+	int		k;
+	int		l;
+	int		matnum;
+	int		mode;
+	int		nvalues;
+	int		status;
+	int		total_fixed;
+	int		validMatrices [2][5];
+	int		*values;
+	int		*value_dist;
+	short int	*buffer = 0;
+	struct		Matval matval;
+	struct MatDir	*matdir;
+	unsigned long	dimension;
+	unsigned long	*index_array;
+d144 1
+a144 1
+		mode	= MAT_READ_ONLY;
+d146 1
+a146 1
+		mode	= MAT_READ_WRITE;
+d148 3
+a150 3
+	/*
+	 * Find the specified matrix
+	 */
+d152 1
+a152 2
+	if (fp == NULL)
+	{
+a156 1
+
+d158 3
+a160 3
+	matnum	= mat_numcod (validMatrices [0][0], validMatrices [0][1], validMatrices [0][2],
+			validMatrices [0][3], validMatrices [0][4]);
+	matdir	= matrix_find (matnum, fp);
+d162 3
+a164 3
+	/*
+	 * Read the specified matrix
+	 */
+d166 4
+a169 6
+	if ((mData = matrix_read (fp, matdir->matnum)) == NULL)
+	{
+		fprintf (stderr, 
+		"fixsino:ERROR... couldn't read scan subheader %3d %3d %3d %1d %3d  for %s\n",
+		matval.frame, matval.plane, matval.gate, matval.data, matval.bed, file);
+
+a171 1
+
+d173 1
+a173 2
+	if (scan.data_type < BYTE_TYPE || scan.data_type > M68K_I4)
+	{
+d175 1
+a175 1
+		"fixsino:ERROR...unable to process data type of %d for %3d %3d %3d %1d %3d\n",
+a176 1
+
+d180 8
+a187 8
+	/*
+	 * Sort the matrix array
+	 */
+	dimension	= scan.dimension_1 * scan.dimension_2;
+	buffer		= (short int *) mData->data_ptr;
+	ibuffer		= ivector (1, dimension);
+	fbuffer		= vector (1, dimension);
+	index_array	= lvector (1, dimension);
+d189 3
+a191 4
+	for (j = 0; j < dimension; j++)
+	{
+		fbuffer	[j + 1]	= buffer [j];
+		ibuffer	[j + 1]	= buffer [j];
+d196 7
+a202 7
+	/*
+	 * Conpute sinogram data
+	 */
+	array_size	= NUM_MAXS;
+	values		= (int *) malloc (sizeof (int) * array_size);
+	value_dist	= (int *) malloc (sizeof (int) * array_size);
+	nvalues		= 0;
+d205 3
+a207 4
+	while (j < dimension)
+	{
+		k	= ibuffer [index_array [j + 1]];
+		l	= 0;
+d209 1
+a209 2
+		do
+		{
+d212 3
+a214 3
+		} while (j < dimension && ibuffer [index_array [j + 1]] == k);
+		values [nvalues]	= k;
+		value_dist [nvalues]	= l;
+d216 4
+a219 5
+		if (nvalues > array_size && j < dimension)
+		{
+			array_size	+= NUM_MAXS;
+			values 		= (int *) realloc (values, sizeof (int) * array_size);  
+			value_dist	= (int *) realloc (value_dist, sizeof (int) * array_size);  
+d223 3
+a225 3
+	/*
+	 * Generate histogram data
+	 */
+d229 2
+a230 2
+		fprintf (stdout, 
+		"			%d	%d\n", values [i], value_dist [i]);
+d232 1
+a232 2
+	if (histo && strcmp (histo, "-h") == 0)
+	{
+a238 1
+
+d242 3
+a244 3
+	/*
+ 	 * Get the cutoff value from screen.
+ 	 */
+d247 1
+a247 1
+	cutoff	= atoi (buff);
+d249 1
+a249 1
+		cutoff	= ibuffer [index_array [dimension]];
+d251 6
+a256 7
+	/*
+ 	 * Compute the total number of bytes that should be fixed.
+ 	 */
+	total_fixed	= 0;
+	for (l = 1; l <= dimension; l++)
+	{
+		if (abs (ibuffer [index_array [l]]) >= cutoff)
+d260 3
+a262 3
+	/*
+ 	 * Fix the bad bytes.
+ 	 */
+d266 8
+a273 9
+	if (total_fixed > 1)
+	{
+		/*
+		 * Search from the end.
+		 */
+		for (l = dimension; l > 0 && abs (ibuffer [index_array [l]]) >= cutoff; l--)
+		{
+			fixbyte (ibuffer, index_array, scan.dimension_1, scan.dimension_2, 
+			cutoff, l, buffer);
+d276 6
+a281 7
+		/*
+		 * Search from the begining.
+		 */
+		for (l = 1; l < dimension && abs (ibuffer [index_array [l]]) >= cutoff; l++)
+		{
+			fixbyte (ibuffer, index_array, scan.dimension_1, scan.dimension_2, 
+			cutoff, l, buffer);
+d283 3
+a285 6
+	} 
+	else if (total_fixed == 1)
+	{
+		for (integral = 0, j = 0; j < dimension; j++)
+		{
+			integral 	+= buffer [j];
+d288 4
+a291 4
+		if (abs (ibuffer [index_array [dimension]]) >= cutoff)
+			i0	= dimension;
+		else if (abs (ibuffer [index_array [1]]) >= cutoff)
+			i0	= 1;
+d293 12
+a304 15
+		switch (fp->mhptr->coin_samp_mode)
+		{
+	    		case 0:	/* test trues only */
+			switch (matval.data)
+			{
+		    		case 0:	/* emission trues */
+		    		case 4:	/* transmission trues */
+				if (integral != scan.prompts - scan.delayed)
+				{
+					i	= integral - (scan.prompts - scan.delayed);
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						ibuffer [index_array [i0]], 
+						ibuffer [index_array [i0]] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+d307 4
+a310 4
+		    		default:	/* all other modes are not configurable */
+				fprintf (stderr, 
+				"fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+				fp->mhptr->coin_samp_mode, matval.data);
+d315 11
+a325 13
+	    		case 1:	/* test prompts and delayeds */
+			switch (matval.data)
+			{
+		    		case 0:	/* emission prompts */
+		    		case 4:	/* transmission prompts */
+				if (integral != scan.prompts)
+				{
+					i	= integral - scan.prompts;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						ibuffer [index_array [i0]], 
+						ibuffer [index_array [i0]] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+d328 9
+a336 10
+		    		case 1:	/* emission delayeds */
+		    		case 5:	/* transmission delayeds */
+				if (integral != scan.delayed)
+				{
+					i	= integral - scan.delayed;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						ibuffer [index_array [i0]], 
+						ibuffer [index_array [i0]] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+d339 2
+a340 2
+		    		default:	/* all other modes are not configurable */
+				printf("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+d342 1
+a342 1
+				fflush(stdout);
+d346 11
+a356 13
+	    		case 2:	/* test prompts, delayeds, and multiples */
+			switch (matval.data)
+			{
+		    		case 0:	/* emission prompts */
+		    		case 4:	/* transmission prompts */
+				if (integral != scan.prompts)
+				{
+					i	= integral - scan.prompts;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						ibuffer [index_array [i0]], 
+						ibuffer [index_array [i0]] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+d359 9
+a367 10
+		    		case 1:	/* emission delayeds */
+		    		case 5:	/* transmission delayeds */
+				if (integral != scan.delayed)
+				{
+					i	= integral - scan.delayed;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						ibuffer [index_array [i0]], 
+						ibuffer [index_array [i0]] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+d370 9
+a378 10
+		    		case 2:	/* emission multiples */
+		    		case 6:	/* transmission multiples */
+				if (integral != scan.multiples)
+				{
+					i	= integral - scan.multiples;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						ibuffer [index_array [i0]], 
+						ibuffer [index_array [i0]] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+d381 2
+a382 2
+	    			default:	/* no other modes should exist */
+				printf("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+d391 5
+a395 5
+	/*
+	 * Update the specified matrix
+ 	 */
+	mData->data_ptr	= (caddr_t) buffer;
+	status	= matrix_write (fp, matdir->matnum, mData);
+d410 8
+a417 8
+static int fixbyte (ibuffer, index_array, dimension_1, dimension_2, cutoff, l, buffer)
+	int		*ibuffer;
+	unsigned long	*index_array;
+	int		dimension_1;
+	int		dimension_2;
+	int		cutoff;
+	int		l;
+	short int	*buffer;
+d419 6
+a424 6
+	float	average;
+	int	i;
+	int	i0;
+	int	j;
+	int	j0;
+	int	k;
+d426 4
+a429 4
+	i0		= (index_array [l] - 1) / dimension_1;
+	j0		= (index_array [l] - 1) % dimension_1;
+	k		= 0;
+	average 	= 0.0;
+d431 6
+a436 9
+	for (i = i0 - 1; i <= i0 + 1; i++)
+	{
+		for (j = j0 - 1; j <= j0 + 1; j++)
+		{
+			if ((i != i0 || j != j0) 
+			&& i >= 0 && i < dimension_1
+			&& j >= 0 && j < dimension_2
+			&& ibuffer [i * dimension_1 + j + 1] < cutoff)
+			{
+d438 1
+a438 1
+				average += ibuffer [i * dimension_1 + j + 1];
+d443 2
+a444 2
+	if ( k > 0)
+		i 	= ROUND (average / k);
+d446 4
+a449 4
+		i 	= 0;
+	fprintf (stdout, "%d     %d     	%d\n", 
+		index_array [l] - 1, ibuffer [index_array [l]], i);
+	buffer [index_array [l] - 1] 	= i;
+@
+
+
+1.7
+log
+@Added the program header.
+@
+text
+@d1 1
+a1 1
+/*$Id: fixsino.c,v 1.6 1995/03/15 20:51:09 ty7777 Exp ty7777 $*/
+d3 3
+d44 4
+d59 1
+a59 1
+static char rcsid [] = "$Header: /data/petsun4/src/test/RCS/fixsino.c,v 1.6 1995/03/15 20:51:09 ty7777 Exp ty7777 $";
+@
+
+
+1.6
+log
+@Added function fixbyte ().
+@
+text
+@d1 1
+a1 1
+/*$Id: fixsino.c,v 1.5 1995/03/14 17:14:44 ty7777 Exp ty7777 $*/
+d3 3
+d22 22
+d52 1
+a52 1
+static char rcsid [] = "$Header: /data/petsun4/src/tmp/RCS/fixsino.c,v 1.5 1995/03/14 17:14:44 ty7777 Exp ty7777 $";
+d74 4
+d140 4
+d157 3
+d180 3
+d197 3
+d227 3
+d413 3
+@
+
+
+1.5
+log
+@Final release, working version.
+@
+text
+@d1 1
+a1 1
+/*$Id: fixsino.c,v 1.4 1995/03/10 16:42:32 ty7777 Exp $*/
+d3 3
+d25 1
+d27 1
+a27 1
+static char rcsid [] = "$Header: /data/petsun4/src/tmp/RCS/fixsino.c,v 1.4 1995/03/10 16:42:32 ty7777 Exp $";
+d33 2
+a34 2
+	extern	fixsino ();
+	int	abs ();
+d36 4
+a39 4
+	char	*file; 
+	char	*matrixSpecifier;
+	char	*histo;
+	int	index;
+d64 1
+a64 1
+fixsino (file, selector, histo)
+d72 1
+a74 1
+	struct MatDir	*get_next_dir_entry ();
+d87 1
+d146 1
+d153 1
+d166 1
+a166 1
+		k	= buffer [index_array [j + 1] - 1];
+d173 1
+a173 1
+		} while (j < dimension && buffer [index_array [j + 1] - 1] == k);
+d210 1
+a210 1
+		cutoff	= buffer [index_array [dimension] - 1];
+d218 1
+a218 1
+		if (abs (buffer [index_array [l] - 1]) >= cutoff)
+d233 1
+a233 1
+		for (l = dimension; l > 0 && abs (buffer [index_array [l] - 1]) >= cutoff; l--)
+d235 2
+a236 26
+			i0		= (index_array [l] - 1) / scan.dimension_1;
+			j0		= (index_array [l] - 1) % scan.dimension_1;
+			k		= 0;
+			average 	= 0.0;
+
+			for (i = i0 - 1; i <= i0 + 1; i++)
+			{
+				for (j = j0 - 1; j <= j0 + 1; j++)
+				{
+					if ((i != i0 || j != j0) 
+					&& i >= 0 && i < scan.dimension_1
+					&& j >= 0 && j < scan.dimension_2)
+					{
+						k++;
+						average += buffer [i * scan.dimension_1 + j];
+					}
+				}
+			}
+
+			if ( k > 0)
+				i 	= (int) (average / k + 0.5);
+			else
+				i 	= 0;
+			fprintf (stdout, "%d     %d     	%d\n", 
+				index_array [l] - 1, buffer [index_array [l] - 1], i);
+			buffer [index_array [l] - 1] 	= i;
+d242 1
+a242 1
+		for (l = 1; l < dimension && abs (buffer [index_array [l] - 1]) >= cutoff; l++)
+d244 2
+a245 26
+			i0		= (index_array [l] - 1) / scan.dimension_1;
+			j0		= (index_array [l] - 1) % scan.dimension_1;
+			k		= 0;
+			average 	= 0.0;
+
+			for (i = i0 - 1; i <= i0 + 1; i++)
+			{
+				for (j = j0 - 1; j <= j0 + 1; j++)
+				{
+					if ((i != i0 || j != j0) 
+					&& i >= 0 && i < scan.dimension_1
+					&& j >= 0 && j < scan.dimension_2)
+					{
+						k++;
+						average += buffer [i * scan.dimension_1 + j];
+					}
+				}
+			}
+
+			if ( k > 0)
+				i 	= (int) (average / k + 0.5);
+			else
+				i 	= 0;
+			fprintf (stdout, "%d     %d     	%d\n", 
+				index_array [l] - 1, buffer [index_array [l] - 1], i);
+			buffer [index_array [l] - 1] 	= i;
+d255 1
+a255 1
+		if (abs (buffer [index_array [dimension] - 1]) >= cutoff)
+d257 1
+a257 1
+		else if (abs (buffer [index_array [1] - 1]) >= cutoff)
+d272 2
+a273 2
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+d295 2
+a296 2
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+d307 2
+a308 2
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+d329 2
+a330 2
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+d341 2
+a342 2
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+d353 2
+a354 2
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+d374 1
+d381 47
+@
+
+
+1.4
+log
+@Allow 2,221 specification.
+@
+text
+@d1 1
+a1 1
+/*$Id: fixsino.c,v 1.3 1995/03/09 22:25:21 ty7777 Exp ty7777 $*/
+d3 3
+d23 1
+a23 1
+static char rcsid [] = "$Header: /data/petsun4/src/tmp/RCS/fixsino.c,v 1.3 1995/03/09 22:25:21 ty7777 Exp ty7777 $";
+d69 1
+d71 1
+a72 2
+	FILE		*fptr;
+	Main_header	mhead;		/* holds file main header */
+a89 2
+	int		*values;
+	int		*value_dist;
+d92 1
+d94 2
+d115 6
+a120 1
+	while ((matdir = get_next_dir_entry (fp)) != NULL)
+d122 1
+a122 9
+		if (!matrix_selector (matdir->matnum, validMatrices))
+		{
+			continue;
+		}
+
+		mat_numdoc (matdir->matnum, &matval);
+		if ((mData = matrix_read (fp, matdir->matnum)) == NULL)
+		{
+			fprintf (stderr, 
+d124 1
+a124 1
+			matval.frame, matval.plane, matval.gate, matval.data, matval.bed, file);
+d126 2
+a127 2
+			continue;
+		}
+d129 4
+a132 4
+		bcopy (mData->shptr, &scan, sizeof (Scan_subheader));
+		if (scan.data_type < BYTE_TYPE || scan.data_type > M68K_I4)
+		{
+			fprintf (stderr,
+d134 1
+a134 1
+			scan.data_type, matval.frame, matval.plane, matval.gate, matval.data, matval.bed);
+d136 2
+a137 2
+			continue;
+		}
+d139 4
+a142 4
+		dimension	= scan.dimension_1 * scan.dimension_2;
+		buffer		= (short int *) mData->data_ptr;
+		fbuffer		= vector (1, dimension);
+		index_array	= lvector (1, dimension);
+d144 19
+a162 1
+		for (j = 0; j < dimension; j++)
+d164 11
+a174 1
+			fbuffer	[j + 1]	= buffer [j];
+d176 1
+a176 2
+		indexx (dimension, fbuffer, index_array);
+		free_vector (fbuffer, 1, dimension);
+d178 5
+a182 4
+		array_size	= NUM_MAXS;
+		values		= (int *) malloc (sizeof (int) * array_size);
+		value_dist	= (int *) malloc (sizeof (int) * array_size);
+		nvalues		= 0;
+d184 8
+a191 5
+		j = 0;
+		while (j < dimension)
+		{
+			k	= buffer [index_array [j + 1] - 1];
+			l	= 0;
+d193 2
+a194 15
+			do
+			{
+				l++;
+				j++;
+			} while (j < dimension && buffer [index_array [j + 1] - 1] == k);
+			values [nvalues]	= k;
+			value_dist [nvalues]	= l;
+			nvalues++;
+			if (nvalues > array_size && j < dimension)
+			{
+				array_size	+= NUM_MAXS;
+				values 		= (int *) realloc (values, sizeof (int) * array_size);  
+				value_dist	= (int *) realloc (value_dist, sizeof (int) * array_size);  
+			}
+		}
+d196 8
+a203 5
+		fprintf (stdout, "     		     Histogram File\n");
+		fprintf (stdout, "		Total distinct values = %d\n", nvalues);
+		for (i = 0; i < nvalues; i++)
+			fprintf (stdout, 
+			"			%d	%d\n", values [i], value_dist [i]);
+d205 9
+a213 8
+		if (histo && strcmp (histo, "-h") == 0)
+		{
+			free (matdir);
+			free_matrix_data (mData);
+			matrix_close (fp);
+			free_lvector (index_array, 1, dimension);
+			free (values);
+			free (value_dist);
+d215 5
+a219 2
+			return (0);
+		}
+d221 2
+d224 2
+a225 13
+	 	 * Get the cutoff value from screen.
+	 	 */
+		fprintf (stdout, "Please specify the cutoff value ( > 0):\n");
+		gets (buff);
+		fprintf (stdout, "buff = %s\n", buff);
+		cutoff	= atoi (buff);
+		if (cutoff <= 0)
+			cutoff	= buffer [index_array [dimension] - 1];
+
+		/*
+	 	 * Fix the bad bytes.
+	 	 */
+		fprintf (stdout, "Index     Original     Assigned\n");
+d252 1
+a252 1
+			index_array [l] - 1, buffer [index_array [l] - 1], i);
+d256 3
+d288 7
+d296 4
+a299 2
+		mData->data_ptr	= (caddr_t) buffer;
+		status	= matrix_write (fp, matdir->matnum, mData);
+d301 107
+a407 6
+		free (matdir);
+		free_matrix_data (mData);
+		matrix_close (fp);
+		free_lvector (index_array, 1, dimension);
+		free (values);
+		free (value_dist);
+d409 2
+a410 6
+		fptr = mat_open (file, "r");	/* Open the file for reading */
+		if (!fptr) return 1;
+		mat_read_main_header (fptr, &mhead);
+		strcpy (mhead.study_description, "Processed by fixsino");
+		mat_write_main_header (fptr, &mhead);
+		mat_close (fptr);
+d412 10
+a421 4
+		if (status == ERROR)
+			return 1;
+		return (0);
+	}
+@
+
+
+1.3
+log
+@Use get_next... ().
+@
+text
+@d1 1
+a1 1
+/*$Id: fixsino.c,v 1.2 1995/03/09 21:16:13 ty7777 Exp ty7777 $*/
+d3 3
+d20 1
+a20 1
+static char rcsid [] = "$Header: /data/petsun4/src/tmp/RCS/fixsino.c,v 1.2 1995/03/09 21:16:13 ty7777 Exp ty7777 $";
+d29 3
+a31 2
+	char	file [256]; 
+	char	matrixSpecifier [64];
+d42 1
+a42 1
+	strcpy (file, argv [1]);
+d44 1
+a44 1
+		strcpy (matrixSpecifier, argv [2]);
+d47 1
+a47 1
+		strcpy (matrixSpecifier, &file [index + 1]);
+d50 5
+a54 1
+	exit (fixsino (file, matrixSpecifier));
+d57 1
+a57 1
+fixsino (file, selector)
+d60 1
+d68 2
+d86 1
+d98 5
+a102 1
+	fp = matrix_open (file, MAT_READ_WRITE, SCAN_DATA);
+d183 12
+d209 1
+a209 1
+		for (l = dimension - 1; l > 0 && abs (buffer [index_array [l] - 1]) >= cutoff; l--)
+a268 113
+		for (integral = 0, j = 0; j < dimension; j++)
+		{
+			integral 	+= buffer [j];
+		}
+
+		switch (fp->mhptr->coin_samp_mode)
+		{
+	    		case 0:	/* test trues only */
+			switch (matval.data)
+			{
+		    		case 0:	/* emission trues */
+		    		case 4:	/* transmission trues */
+				if (integral != scan.prompts - scan.delayed)
+				{
+					i	= integral - (scan.prompts - scan.delayed);
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [dimension] - 1, 
+						buffer [index_array [dimension] - 1], 
+						buffer [index_array [dimension] - 1] - i); 
+					buffer [index_array [dimension] - 1]	-= i;
+				}
+				break;
+		    		default:	/* all other modes are not configurable */
+				fprintf (stderr, 
+				"fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+				fp->mhptr->coin_samp_mode, matval.data);
+				fflush (stdout);
+				break;
+			}
+			break;
+	    		case 1:	/* test prompts and delayeds */
+			switch (matval.data)
+			{
+		    		case 0:	/* emission prompts */
+		    		case 4:	/* transmission prompts */
+				if (integral != scan.prompts)
+				{
+					i	= integral - scan.prompts;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [dimension] - 1, 
+						buffer [index_array [dimension] - 1], 
+						buffer [index_array [dimension] - 1] - i); 
+					buffer [index_array [dimension] - 1]	-= i;
+				}
+				break;
+		    		case 1:	/* emission delayeds */
+		    		case 5:	/* transmission delayeds */
+				if (integral != scan.delayed)
+				{
+					i	= integral - scan.delayed;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [dimension] - 1, 
+						buffer [index_array [dimension] - 1], 
+						buffer [index_array [dimension] - 1] - i); 
+					buffer [index_array [dimension] - 1]	-= i;
+				}
+				break;
+		    		default:	/* all other modes are not configurable */
+				printf("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+					fp->mhptr->coin_samp_mode, matval.data);
+				fflush(stdout);
+				break;
+			}
+			break;
+	    		case 2:	/* test prompts, delayeds, and multiples */
+			switch (matval.data)
+			{
+		    		case 0:	/* emission prompts */
+		    		case 4:	/* transmission prompts */
+				if (integral != scan.prompts)
+				{
+					i	= integral - scan.prompts;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [dimension] - 1, 
+						buffer [index_array [dimension] - 1], 
+						buffer [index_array [dimension] - 1] - i); 
+					buffer [index_array [dimension] - 1]	-= i;
+				}
+				break;
+		    		case 1:	/* emission delayeds */
+		    		case 5:	/* transmission delayeds */
+				if (integral != scan.delayed)
+				{
+					i	= integral - scan.delayed;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [dimension] - 1, 
+						buffer [index_array [dimension] - 1], 
+						buffer [index_array [dimension] - 1] - i); 
+					buffer [index_array [dimension] - 1]	-= i;
+				}
+				break;
+		    		case 2:	/* emission multiples */
+		    		case 6:	/* transmission multiples */
+				if (integral != scan.multiples)
+				{
+					i	= integral - scan.multiples;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [dimension] - 1, 
+						buffer [index_array [dimension] - 1], 
+						buffer [index_array [dimension] - 1] - i); 
+					buffer [index_array [dimension] - 1]	-= i;
+				}
+				break;
+	    			default:	/* no other modes should exist */
+				printf("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+					fp->mhptr->coin_samp_mode, matval.data);
+				fflush (stdout);
+				break;
+			}
+			break;
+		}
+		fflush (stdout);
+
+d278 7
+@
+
+
+1.2
+log
+@Added abs to cutoff checking.
+@
+text
+@d1 1
+a1 1
+/*$Id: fixsino.c,v 1.1 1995/03/09 20:44:57 ty7777 Exp ty7777 $*/
+d3 3
+d17 1
+a17 1
+static char rcsid [] = "$Header: /data/petsun4/src/tmp/RCS/fixsino.c,v 1.1 1995/03/09 20:44:57 ty7777 Exp ty7777 $";
+d57 1
+a57 2
+	int		mat_numcod ();
+	struct MatDir	*matrix_find ();
+d95 6
+a100 3
+	matnum	= mat_numcod (validMatrices [0][0], validMatrices [0][1], validMatrices [0][2],
+			validMatrices [0][3], validMatrices [0][4]);
+	matdir	= matrix_find (matnum, fp);
+d102 4
+a105 4
+	mat_numdoc (matdir->matnum, &matval);
+	if ((mData = matrix_read (fp, matdir->matnum)) == NULL)
+	{
+		fprintf (stderr, 
+d107 1
+a107 3
+		matval.frame, matval.plane, matval.gate, matval.data, matval.bed, file);
+		return 1;
+	}
+d109 2
+a110 9
+	bcopy (mData->shptr, &scan, sizeof (Scan_subheader));
+	if (scan.data_type < BYTE_TYPE || scan.data_type > M68K_I4)
+	{
+		fprintf(stderr,
+			"fixsino:ERROR...unable to process data type of %d for %3d %3d %3d %1d %3d\n",
+			scan.data_type, matval.frame, matval.plane, matval.gate,
+			matval.data, matval.bed);
+		return 1;
+	}
+d112 6
+a117 4
+	dimension	= scan.dimension_1 * scan.dimension_2;
+	buffer		= (short int *) mData->data_ptr;
+	fbuffer		= vector (1, dimension);
+	index_array	= lvector (1, dimension);
+d119 2
+a120 6
+	for (j = 0; j < dimension; j++)
+	{
+		fbuffer	[j + 1]	= buffer [j];
+	}
+	indexx (dimension, fbuffer, index_array);
+	free_vector (fbuffer, 1, dimension);
+d122 4
+a125 4
+	array_size	= NUM_MAXS;
+	values		= (int *) malloc (sizeof (int) * array_size);
+	value_dist	= (int *) malloc (sizeof (int) * array_size);
+	nvalues		= 0;
+d127 1
+a127 7
+	j = 0;
+	while (j < dimension)
+	{
+		k	= buffer [index_array [j + 1] - 1];
+		l	= 0;
+
+		do
+d129 1
+a129 11
+			l++;
+			j++;
+		} while (j < dimension && buffer [index_array [j + 1] - 1] == k);
+		values [nvalues]	= k;
+		value_dist [nvalues]	= l;
+		nvalues++;
+		if (nvalues > array_size && j < dimension)
+		{
+			array_size	+= NUM_MAXS;
+			values 		= (int *) realloc (values, sizeof (int) * array_size);  
+			value_dist	= (int *) realloc (value_dist, sizeof (int) * array_size);  
+d131 2
+a132 1
+	}
+d134 4
+a137 5
+	fprintf (stdout, "     		     Histogram File\n");
+	fprintf (stdout, "		Total distinct values = %d\n", nvalues);
+	for (i = 0; i < nvalues; i++)
+		fprintf (stdout, 
+		"			%d	%d\n", values [i], value_dist [i]);
+d139 5
+a143 9
+	/*
+	 * Get the cutoff value from screen.
+	 */
+	fprintf (stdout, "Please specify the cutoff value ( > 0):\n");
+	gets (buff);
+	fprintf (stdout, "buff = %s\n", buff);
+	cutoff	= atoi (buff);
+	if (cutoff <= 0)
+		cutoff	= buffer [index_array [dimension] - 1];
+d145 1
+a145 14
+	/*
+	 * Fix the bad bytes.
+	 */
+	fprintf (stdout, "Index     Original     Assigned\n");
+	for (l = dimension - 1; l > 0 && abs (buffer [index_array [l] - 1]) >= cutoff; l--)
+	{
+		i0		= (index_array [l] - 1) / scan.dimension_1;
+		j0		= (index_array [l] - 1) % scan.dimension_1;
+		k		= 0;
+		average 	= 0.0;
+
+		for (i = i0 - 1; i <= i0 + 1; i++)
+		{
+			for (j = j0 - 1; j <= j0 + 1; j++)
+d147 11
+a157 7
+				if ((i != i0 || j != j0) 
+				&& i >= 0 && i < scan.dimension_1
+				&& j >= 0 && j < scan.dimension_2)
+				{
+					k++;
+					average += buffer [i * scan.dimension_1 + j];
+				}
+d161 5
+a165 8
+		if ( k > 0)
+			i 	= (int) (average / k + 0.5);
+		else
+			i 	= 0;
+		fprintf (stdout, "%d     %d     	%d\n", 
+		index_array [l] - 1, buffer [index_array [l] - 1], i);
+		buffer [index_array [l] - 1] 	= i;
+	}
+d167 9
+a175 6
+	for (l = 1; l < dimension && abs (buffer [index_array [l] - 1]) >= cutoff; l++)
+	{
+		i0		= (index_array [l] - 1) / scan.dimension_1;
+		j0		= (index_array [l] - 1) % scan.dimension_1;
+		k		= 0;
+		average 	= 0.0;
+d177 5
+a181 1
+		for (i = i0 - 1; i <= i0 + 1; i++)
+d183 6
+a188 1
+			for (j = j0 - 1; j <= j0 + 1; j++)
+d190 1
+a190 3
+				if ((i != i0 || j != j0) 
+				&& i >= 0 && i < scan.dimension_1
+				&& j >= 0 && j < scan.dimension_2)
+d192 7
+a198 2
+					k++;
+					average += buffer [i * scan.dimension_1 + j];
+d201 8
+d211 6
+a216 8
+		if ( k > 0)
+			i 	= (int) (average / k + 0.5);
+		else
+			i 	= 0;
+		fprintf (stdout, "%d     %d     	%d\n", 
+		index_array [l] - 1, buffer [index_array [l] - 1], i);
+		buffer [index_array [l] - 1] 	= i;
+	}
+d218 1
+a218 13
+	for (integral = 0, j = 0; j < dimension; j++)
+	{
+		integral 	+= buffer [j];
+	}
+
+	switch (fp->mhptr->coin_samp_mode)
+	{
+	    case 0:	/* test trues only */
+		switch (matval.data)
+		{
+		    case 0:	/* emission trues */
+		    case 4:	/* transmission trues */
+			if (integral != scan.prompts - scan.delayed)
+d220 10
+a229 6
+				i	= integral - (scan.prompts - scan.delayed);
+				fprintf (stdout, "%d     %d     	%d\n", 
+					index_array [dimension] - 1, 
+					buffer [index_array [dimension] - 1], 
+					buffer [index_array [dimension] - 1] - i); 
+				buffer [index_array [dimension] - 1]	-= i;
+d231 8
+a238 7
+			break;
+		    default:	/* all other modes are
+				 * not configurable */
+			printf ("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+				fp->mhptr->coin_samp_mode, matval.data);
+			fflush (stdout);
+			break;
+d240 2
+a241 4
+		break;
+	    case 1:	/* test prompts and
+			 * delayeds */
+		switch (matval.data)
+d243 1
+a243 30
+		    case 0:	/* emission prompts */
+		    case 4:	/* transmission prompts */
+			if (integral != scan.prompts)
+			{
+				i	= integral - scan.prompts;
+				fprintf (stdout, "%d     %d     	%d\n", 
+					index_array [dimension] - 1, 
+					buffer [index_array [dimension] - 1], 
+					buffer [index_array [dimension] - 1] - i); 
+				buffer [index_array [dimension] - 1]	-= i;
+			}
+			break;
+		    case 1:	/* emission delayeds */
+		    case 5:	/* transmission delayeds */
+			if (integral != scan.delayed)
+			{
+				i	= integral - scan.delayed;
+				fprintf (stdout, "%d     %d     	%d\n", 
+					index_array [dimension] - 1, 
+					buffer [index_array [dimension] - 1], 
+					buffer [index_array [dimension] - 1] - i); 
+				buffer [index_array [dimension] - 1]	-= i;
+			}
+			break;
+		    default:	/* all other modes are
+				 * not configurable */
+			printf("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+				fp->mhptr->coin_samp_mode, matval.data);
+			fflush(stdout);
+			break;
+d245 2
+a246 5
+		break;
+	    case 2:	/* test prompts,
+			 * delayeds, and
+			 * multiples */
+		switch (matval.data)
+d248 2
+a249 3
+		    case 0:	/* emission prompts */
+		    case 4:	/* transmission prompts */
+			if (integral != scan.prompts)
+d251 18
+a268 6
+				i	= integral - scan.prompts;
+				fprintf (stdout, "%d     %d     	%d\n", 
+					index_array [dimension] - 1, 
+					buffer [index_array [dimension] - 1], 
+					buffer [index_array [dimension] - 1] - i); 
+				buffer [index_array [dimension] - 1]	-= i;
+d271 2
+a272 3
+		    case 1:	/* emission delayeds */
+		    case 5:	/* transmission delayeds */
+			if (integral != scan.delayed)
+d274 29
+a302 6
+				i	= integral - scan.delayed;
+				fprintf (stdout, "%d     %d     	%d\n", 
+					index_array [dimension] - 1, 
+					buffer [index_array [dimension] - 1], 
+					buffer [index_array [dimension] - 1] - i); 
+				buffer [index_array [dimension] - 1]	-= i;
+d305 2
+a306 4
+		    case 2:	/* emission multiples */
+		    case 6:	/* transmission
+				 * multiples */
+			if (integral != scan.multiples)
+d308 41
+a348 6
+				i	= integral - scan.multiples;
+				fprintf (stdout, "%d     %d     	%d\n", 
+					index_array [dimension] - 1, 
+					buffer [index_array [dimension] - 1], 
+					buffer [index_array [dimension] - 1] - i); 
+				buffer [index_array [dimension] - 1]	-= i;
+a350 6
+		    default:	/* no other modes should
+				 * exist */
+			printf("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+				fp->mhptr->coin_samp_mode, matval.data);
+			fflush(stdout);
+			break;
+d352 1
+a352 3
+		break;
+	}
+	fflush (stdout);
+d354 2
+a355 3
+	mData->data_ptr	= (caddr_t) buffer;
+	strcpy (fp->mhptr->study_description, "Processed by fixsino");
+	status	= matrix_write (fp, matdir->matnum, mData);
+d357 6
+a362 6
+	free (matdir);
+	free_matrix_data (mData);
+	matrix_close (fp);
+	free_lvector (index_array, 1, dimension);
+	free (values);
+	free (value_dist);
+d364 4
+a367 3
+	if (status == ERROR)
+		return 1;
+	return (0);
+@
+
+
+1.2.1.1
+log
+@Final release.
+@
+text
+@d1 1
+a1 1
+/*$Id: fixsino.c,v 1.4 1995/03/10 16:42:32 ty7777 Exp $*/
+a2 9
+ * Revision 1.4  1995/03/10  16:42:32  ty7777
+ * Allow 2,221 specification.
+ *
+ * Revision 1.3  1995/03/09  22:25:21  ty7777
+ * Use get_next... ().
+ *
+ * Revision 1.2  1995/03/09  21:16:13  ty7777
+ * Added abs to cutoff checking.
+ *
+d14 1
+a14 1
+static char rcsid [] = "$Header: /data/petsun4/src/tmp/RCS/fixsino.c,v 1.4 1995/03/10 16:42:32 ty7777 Exp $";
+d23 2
+a24 3
+	char	*file; 
+	char	*matrixSpecifier;
+	char	*histo;
+d35 1
+a35 1
+	file	= argv [1];
+d37 1
+a37 1
+		matrixSpecifier	= argv [2];
+d40 1
+a40 1
+		matrixSpecifier	= &file [index + 1];
+d43 1
+a43 5
+	if (argc == 3)
+		histo	= argv [2];
+	else
+		histo	= argv [3];
+	exit (fixsino (file, matrixSpecifier, histo));
+d46 1
+a46 1
+fixsino (file, selector, histo)
+a48 1
+	char	*histo;
+a54 1
+	struct MatDir	*get_next_dir_entry ();
+d73 2
+a74 1
+	int		mode;
+a76 1
+	int		total_fixed;
+a77 2
+	int		*values;
+	int		*value_dist;
+d84 1
+a84 5
+	if (histo && strcmp (histo, "-h") == 0)
+		mode	= MAT_READ_ONLY;
+	else
+		mode	= MAT_READ_WRITE;
+	fp = matrix_open (file, mode, SCAN_DATA);
+a102 1
+
+d109 4
+a112 4
+		fprintf (stderr,
+		"fixsino:ERROR...unable to process data type of %d for %3d %3d %3d %1d %3d\n",
+		scan.data_type, matval.frame, matval.plane, matval.gate, matval.data, matval.bed);
+
+a160 12
+	if (histo && strcmp (histo, "-h") == 0)
+	{
+		free (matdir);
+		free_matrix_data (mData);
+		matrix_close (fp);
+		free_lvector (index_array, 1, dimension);
+		free (values);
+		free (value_dist);
+
+		return (0);
+	}
+
+d162 2
+a163 2
+ 	 * Get the cutoff value from screen.
+ 	 */
+d166 1
+d172 4
+a175 4
+ 	 * Compute the total number of bytes that should be fixed.
+ 	 */
+	total_fixed	= 0;
+	for (l = 1; l <= dimension; l++)
+d177 4
+a180 3
+		if (abs (buffer [index_array [l] - 1]) >= cutoff)
+			total_fixed++;
+	}
+d182 1
+a182 12
+	/*
+ 	 * Fix the bad bytes.
+ 	 */
+	if (total_fixed >= 1)
+		fprintf (stdout, "Index     Original     Assigned\n");
+
+	if (total_fixed > 1)
+	{
+		/*
+		 * Search from the end.
+		 */
+		for (l = dimension; l > 0 && abs (buffer [index_array [l] - 1]) >= cutoff; l--)
+d184 1
+a184 6
+			i0		= (index_array [l] - 1) / scan.dimension_1;
+			j0		= (index_array [l] - 1) % scan.dimension_1;
+			k		= 0;
+			average 	= 0.0;
+
+			for (i = i0 - 1; i <= i0 + 1; i++)
+d186 3
+a188 1
+				for (j = j0 - 1; j <= j0 + 1; j++)
+d190 2
+a191 7
+					if ((i != i0 || j != j0) 
+					&& i >= 0 && i < scan.dimension_1
+					&& j >= 0 && j < scan.dimension_2)
+					{
+						k++;
+						average += buffer [i * scan.dimension_1 + j];
+					}
+a193 8
+
+			if ( k > 0)
+				i 	= (int) (average / k + 0.5);
+			else
+				i 	= 0;
+			fprintf (stdout, "%d     %d     	%d\n", 
+				index_array [l] - 1, buffer [index_array [l] - 1], i);
+			buffer [index_array [l] - 1] 	= i;
+d196 17
+a212 4
+		/*
+		 * Search from the begining.
+		 */
+		for (l = 1; l < dimension && abs (buffer [index_array [l] - 1]) >= cutoff; l++)
+d214 1
+a214 6
+			i0		= (index_array [l] - 1) / scan.dimension_1;
+			j0		= (index_array [l] - 1) % scan.dimension_1;
+			k		= 0;
+			average 	= 0.0;
+
+			for (i = i0 - 1; i <= i0 + 1; i++)
+d216 3
+a218 1
+				for (j = j0 - 1; j <= j0 + 1; j++)
+d220 2
+a221 7
+					if ((i != i0 || j != j0) 
+					&& i >= 0 && i < scan.dimension_1
+					&& j >= 0 && j < scan.dimension_2)
+					{
+						k++;
+						average += buffer [i * scan.dimension_1 + j];
+					}
+d224 1
+d226 10
+a235 10
+			if ( k > 0)
+				i 	= (int) (average / k + 0.5);
+			else
+				i 	= 0;
+			fprintf (stdout, "%d     %d     	%d\n", 
+				index_array [l] - 1, buffer [index_array [l] - 1], i);
+			buffer [index_array [l] - 1] 	= i;
+		}
+	} 
+	else if (total_fixed == 1)
+d237 7
+a243 1
+		for (integral = 0, j = 0; j < dimension; j++)
+d245 18
+a262 1
+			integral 	+= buffer [j];
+d264 4
+a267 7
+
+		if (abs (buffer [index_array [dimension] - 1]) >= cutoff)
+			i0	= dimension;
+		else if (abs (buffer [index_array [1] - 1]) >= cutoff)
+			i0	= 1;
+
+		switch (fp->mhptr->coin_samp_mode)
+d269 3
+a271 2
+	    		case 0:	/* test trues only */
+			switch (matval.data)
+d273 23
+a295 15
+		    		case 0:	/* emission trues */
+		    		case 4:	/* transmission trues */
+				if (integral != scan.prompts - scan.delayed)
+				{
+					i	= integral - (scan.prompts - scan.delayed);
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+				}
+				break;
+		    		default:	/* all other modes are not configurable */
+				fprintf (stderr, 
+				"fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+d297 19
+a315 2
+				fflush (stdout);
+				break;
+d318 3
+a320 2
+	    		case 1:	/* test prompts and delayeds */
+			switch (matval.data)
+d322 6
+a327 29
+		    		case 0:	/* emission prompts */
+		    		case 4:	/* transmission prompts */
+				if (integral != scan.prompts)
+				{
+					i	= integral - scan.prompts;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+				}
+				break;
+		    		case 1:	/* emission delayeds */
+		    		case 5:	/* transmission delayeds */
+				if (integral != scan.delayed)
+				{
+					i	= integral - scan.delayed;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+				}
+				break;
+		    		default:	/* all other modes are not configurable */
+				printf("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+					fp->mhptr->coin_samp_mode, matval.data);
+				fflush(stdout);
+				break;
+d330 4
+a333 2
+	    		case 2:	/* test prompts, delayeds, and multiples */
+			switch (matval.data)
+d335 6
+a340 41
+		    		case 0:	/* emission prompts */
+		    		case 4:	/* transmission prompts */
+				if (integral != scan.prompts)
+				{
+					i	= integral - scan.prompts;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+				}
+				break;
+		    		case 1:	/* emission delayeds */
+		    		case 5:	/* transmission delayeds */
+				if (integral != scan.delayed)
+				{
+					i	= integral - scan.delayed;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+				}
+				break;
+		    		case 2:	/* emission multiples */
+		    		case 6:	/* transmission multiples */
+				if (integral != scan.multiples)
+				{
+					i	= integral - scan.multiples;
+					fprintf (stdout, "%d     %d     	%d\n", 
+						index_array [i0] - 1, 
+						buffer [index_array [i0] - 1], 
+						buffer [index_array [i0] - 1] - i); 
+					buffer [index_array [i0] - 1]	-= i;
+				}
+				break;
+	    			default:	/* no other modes should exist */
+				printf("fixsino:ERROR...mode %2d can not have a data type of %2d\n",
+					fp->mhptr->coin_samp_mode, matval.data);
+				fflush (stdout);
+				break;
+d343 6
+d350 1
+d352 1
+d355 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d14 1
+a14 1
+static char rcsid [] = "$Header$";
+d175 1
+a175 1
+	for (l = dimension - 1; l > 0 && buffer [index_array [l] - 1] >= cutoff; l--)
+d205 1
+a205 1
+	for (l = 1; l < dimension && buffer [index_array [l] - 1] >= cutoff; l++)
+@

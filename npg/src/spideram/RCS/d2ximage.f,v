@@ -1,0 +1,355 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   D2XIMAGE.FTN
+C     Author:       Tom O. Videen
+C     Date:         11-Mar-87
+C     Intent:
+C     .  This routine takes one line of a transverse image and creates
+C     .  an appropriate number (SLCLINES) of cross-sectional image lines.
+C     
+C     .  If SMOOTH is false, then all created lines are identical.
+C     .  If SMOOTH is true, then the intermediate lines are interpolated
+C     .    from the previous primary line. (and when N=1 only a single line is created.
+C     
+C     .  At the end of this routine, the array XIMAGE contains the cross-
+C     .  sectional image.  Whereas transverse images are always in IMAGE(n,n,1)
+C     .  and and fill the entire array, coronal/sagittal images in XIMAGE
+C     .  always begin with the top of slice 1 in row 1 and may not fill the entire array.
+C     
+C     .  Also, whereas transverse images are represented in IMAGE the same
+C     .  way whether interpolated or not, coronal/sagittal images are represented
+C     .  differently in XIMAGE depending on interpolation.  For example,
+C     .  a 7-slice PETT 6 image with SLCLINES=5 which is not interpolated will
+C     .  be represented in XIMAGE with 35 rows (5 identical rows per slice).
+C     
+C     .  However, the same image with interpolation will be represented in
+C     .  XIMAGE with 31 rows (6*SLCLINES + 1).  Row 1 corresponds to slice 1
+C     .  and row 31 corresponds to slice 7.  Row 6 corresponds to slice 2, and
+C     .  rows 2-5 contain interpolated values between slice 1 and 2.  Thus,
+C     
+C     .  Thus, regions on interpolated and uninterpolated coronal/sagittal
+C     .  images can have different values! This is not the case with
+C     .  transverse images. The user should be cautious about interpretting
+C     .  region values on interpolated coronal/sagittal images.
+C     
+C     Common Blocks from SPIDERAM.INC:
+C     .  **IMAGEDAT - image arrays                   (write)
+C     .  **DISPLAY  - display parameters
+C     
+C     Variables Passed:
+C     .  N = slice number (from which cross-sectional line is taken);
+C     .  COL = if 0, creating a coronal image by taking values from
+C     .     a single row of the transverse image;
+C     .  ROW = if 0, creating a sagittal image by taking values from
+C     .     a single column of the transverse image;
+C     .     (7, 14, 31, 49)
+C     
+C     Variables:
+C     .  FIRST,LAST = indices to the first and last lines to create in this subroutine;
+C     .  F1,F2 = factors used to interpolate intermediate lines;
+C     .  L = number of lines to create in XIMAGE for each image slice;
+C     
+C     Called by:  D2DISPLA
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: d2ximage.f,v 1.4 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE D2XIMAGE(N,COL,ROW)
+
+      INTEGER*4  N,COL,ROW,L,FIRST,LAST,F1,F2,I,J
+
+      INCLUDE 'spideram.inc'
+
+      L = SLCLINES
+
+C     CASE for no interpolation
+
+      IF (.NOT.SMOOTH .OR. L.EQ.1) THEN
+         FIRST = (N-1)*L + 1
+         LAST  = N*L
+         IF (COL.NE.0) THEN
+            DO 200 J=FIRST,LAST
+               DO 100 I=1,128
+                  XIMAGE(I,J) = IMAGE(COL,I,1)
+ 100           CONTINUE
+ 200        CONTINUE
+         ELSE IF (ROW.NE.0) THEN
+            DO 400 J=FIRST,LAST
+               DO 300 I=1,128
+                  XIMAGE(I,J) = IMAGE(I,ROW,1)
+ 300           CONTINUE
+ 400        CONTINUE
+         END IF
+
+C     CASE for first line with interpolation
+
+      ELSE IF (N.EQ.1) THEN
+         IF (COL.NE.0) THEN
+            DO 500 I=1,128
+               XIMAGE(I,1) = IMAGE(COL,I,1)
+ 500        CONTINUE
+         ELSE IF (ROW.NE.0) THEN
+            DO 600 I=1,128
+               XIMAGE(I,1) = IMAGE(I,ROW,1)
+ 600        CONTINUE
+         END IF
+
+C     CASE for all other lines with interpolation (N > 1)
+C     First get the LAST line (which is interpolated with the FIRST
+C     line for all intermediate values)
+
+      ELSE
+         FIRST = (N-2)*L + 1
+         LAST  = (N-1)*L + 1
+         IF (COL.NE.0) THEN
+            DO 700 I=1,128
+               XIMAGE(I,LAST) = IMAGE(COL,I,1)
+ 700        CONTINUE
+         ELSE IF (ROW.NE.0) THEN
+            DO 800 I=1,128
+               XIMAGE(I,LAST) = IMAGE(I,ROW,1)
+ 800        CONTINUE
+         END IF
+
+C     Then interpolate to create all intermediate lines
+
+         F1 = L
+         F2 = 0
+         DO 1000 J=FIRST+1,LAST-1
+            F1 = F1-1
+            F2 = F2+1
+            DO 900 I=1,128
+               XIMAGE(I,J)= (F1*XIMAGE(I,FIRST) + F2*XIMAGE(I,LAST))/L
+ 900        CONTINUE
+ 1000    CONTINUE
+      END IF
+
+      RETURN
+      END
+@
+
+
+1.4
+log
+@format changes plus fixes for g77
+@
+text
+@d55 1
+a55 1
+C     rcsheader = "$Id: d2ximage.f,v 1.3 1993/10/04 21:55:32 tom Exp tom $"
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d2 52
+a53 59
+C
+C  Subroutine:   D2XIMAGE.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         11-Mar-87
+C  Written For:  SPIDERAM Super PET Image Display Program
+C
+C  Intent:
+C     This routine takes one line of a transverse image and creates
+C     an appropriate number (SLCLINES) of cross-sectional image lines.
+C
+C     If SMOOTH is false, then all created lines are identical.
+C     If SMOOTH is true, then the intermediate lines are interpolated
+C       from the previous primary line. (and when N=1 only a single
+C       line is created.
+C
+C     At the end of this routine, the array XIMAGE contains the cross-
+C     sectional image.  Whereas transverse images are always in IMAGE(n,n,1)
+C     and and fill the entire array, coronal/sagittal images in XIMAGE
+C     always begin with the top of slice 1 in row 1 and may not fill the
+C     entire array .
+C
+C     Also, whereas transverse images are represented in IMAGE the same
+C     way whether interpolated or not, coronal/sagittal images are represented
+C     differently in XIMAGE depending on interpolation.  For example,
+C     a 7-slice PETT 6 image with SLCLINES=5 which is not interpolated will
+C     be represented in XIMAGE with 35 rows (5 identical rows per slice).
+C
+C     However, the same image with interpolation will be represented in
+C     XIMAGE with 31 rows (6*SLCLINES + 1).  Row 1 corresponds to slice 1
+C     and row 31 corresponds to slice 7.  Row 6 corresponds to slice 2, and
+C     rows 2-5 contain interpolated values between slice 1 and 2.  Thus,
+C
+C     Thus, regions on interpolated and uninterpolated coronal/sagittal
+C     images can have different values! This is not the case with
+C     transverse images. The user should be cautious about interpretting
+C     region values on interpolated coronal/sagittal images.
+C
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (write)
+C     **DISPLAY  - display parameters
+C
+C  Variables Passed:
+C     N = slice number (from which cross-sectional line is taken);
+C     COL = if 0, creating a coronal image by taking values from
+C        a single row of the transverse image;
+C     ROW = if 0, creating a sagittal image by taking values from
+C        a single column of the transverse image;
+C        (7, 14, 31, 49)
+C
+C  Variables:
+C     FIRST,LAST = indices to the first and last lines to create
+C        in this subroutine;
+C     F1,F2 = factors used to interpolate intermediate lines;
+C     L = number of lines to create in XIMAGE for each image slice;
+C
+C  Called by:  D2DISPLA
+C
+d55 2
+a56 1
+C
+d58 1
+a58 1
+C
+d60 1
+a60 2
+      character*256 rcsheader
+C
+d62 1
+a62 2
+      rcsheader = "$Id$"
+C
+d64 3
+a66 3
+C
+C  CASE for no interpolation
+C
+d68 18
+a85 18
+        FIRST = (N-1)*L + 1
+        LAST  = N*L
+        IF (COL.NE.0) THEN
+          DO 200 J=FIRST,LAST
+            DO 100 I=1,128
+              XIMAGE(I,J) = IMAGE(COL,I,1)
+100         CONTINUE
+200       CONTINUE
+        ELSE IF (ROW.NE.0) THEN
+          DO 400 J=FIRST,LAST
+            DO 300 I=1,128
+              XIMAGE(I,J) = IMAGE(I,ROW,1)
+300         CONTINUE
+400       CONTINUE
+        END IF
+C
+C  CASE for first line with interpolation
+C
+d87 14
+a100 14
+        IF (COL.NE.0) THEN
+          DO 500 I=1,128
+            XIMAGE(I,1) = IMAGE(COL,I,1)
+500       CONTINUE
+        ELSE IF (ROW.NE.0) THEN
+          DO 600 I=1,128
+            XIMAGE(I,1) = IMAGE(I,ROW,1)
+600       CONTINUE
+        END IF
+C
+C  CASE for all other lines with interpolation (N > 1)
+C  First get the LAST line (which is interpolated with the FIRST
+C    line for all intermediate values)
+C
+d102 23
+a124 23
+        FIRST = (N-2)*L + 1
+        LAST  = (N-1)*L + 1
+        IF (COL.NE.0) THEN
+          DO 700 I=1,128
+            XIMAGE(I,LAST) = IMAGE(COL,I,1)
+700       CONTINUE
+        ELSE IF (ROW.NE.0) THEN
+          DO 800 I=1,128
+            XIMAGE(I,LAST) = IMAGE(I,ROW,1)
+800       CONTINUE
+        END IF
+C
+C  Then interpolate to create all intermediate lines
+C
+        F1 = L
+        F2 = 0
+        DO 1000 J=FIRST+1,LAST-1
+          F1 = F1-1
+          F2 = F2+1
+          DO 900 I=1,128
+            XIMAGE(I,J)= (F1*XIMAGE(I,FIRST) + F2*XIMAGE(I,LAST))/L
+900       CONTINUE
+1000    CONTINUE
+d126 1
+a126 1
+C
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d66 1
+d69 1
+a69 1
+C
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

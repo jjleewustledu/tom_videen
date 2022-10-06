@@ -1,0 +1,164 @@
+#!/bin/csh
+#
+#	Porgram:	af3d_par
+#	Date:		March 16, 1995.
+#	Author:		Tom Yang
+#	Use:		Find peaks in an image.
+
+# Set library path and bin path
+set libpath	= /usr/local/lib/af3d_par
+set binpath 	= ..
+
+# Set default parameters
+set program		= af3d_par
+set argc		= $#argv
+set image_file		= $1
+set prmfile		= $2
+set image_root		= `echo $1 | awk -F. '{print $1}'`
+set output		= ${image_root}
+set sign		= 1
+set hdrpath		= null
+set inputlist		= null
+set region		= ${libpath}/cmrad.dat 
+set header_root		= ${hdrpath}/${image_root}
+set hdrfile		= null
+set average		= 0
+set use_header		= 0
+set now 		= `date`
+set uid 		= `whoami`
+
+if ($argc < 1 || $argc > 5) then
+	echo " Usage:   af3d_par image_root prm [output hdrpath inputlist]" 
+	echo " Examples: af3d_par test prm"
+	echo "           af3d_par test.t88 prm test"
+	echo "           af3d_par test.t88 prm test /home/petsun4/ty7777/hdrs"
+	echo "           af3d_par test.t88 prm test null mylist"
+	exit
+endif
+
+switch ($argc)
+	case 3:
+		set output	= $3
+		breaksw
+	case 4:
+		set output		= $3
+		set hdrpath		= $4
+		set header_root		= ${hdrpath}/${image_root}
+		set use_header		= 1
+		breaksw
+	case 5:
+		set output		= $3
+		set hdrpath		= $4
+		set inputlist		= $5
+		set average		= 1
+		breaksw
+	default:
+		breaksw
+endsw
+
+# Check if the input image file exists.
+if (!(-r ${image_file})) then
+	set image_file	= ${image_root}.t88
+
+	if (!(-r ${image_file})) then
+		set image_file	= ${image_root}.smg
+
+		if (!(-r ${image_file})) then
+			set image_file	= ${image_root}.SMG
+
+			if (!(-r ${image_file})) then
+				set image_file	= ${image_root}.csg
+
+				if (!(-r ${image_file})) then
+					set image_file	= ${image_root}.CSG
+					if (!(-r ${image_file})) then
+						echo " Error: input file (${image_file}) does not exist."
+						exit
+					endif
+				endif
+			endif
+		endif
+	endif
+endif
+
+# Check if the region file exists.
+if (!(-r $region)) then
+	echo " Error: Region file ($region) does not exist."
+	exit
+endif
+
+# Check if the header file exists.
+if ($use_header == "1") then
+	if (${hdrpath} == "null" || ${hdrpath} == "NULL" || (!(-d ${hdrpath}))) then
+		echo " Error: header path (${hdrpath}) does not exist."
+		exit
+	endif
+
+	set hdrfile	= ${header_root}.hdr
+	if (!(-r ${hdrfile})) then
+		set hdrfile	= ${header_root}.HDR
+		if (!(-r ${hdrfile})) then
+			echo " Error: header file (${hdrfile}) does not exist."
+			exit
+		endif
+	endif
+endif
+
+# Check if the input list exists.
+if ($argc == 5) then
+	if (!(-r ${inputlist})) then
+		echo " Error: input list file (${inputlist}) does not exist."
+		exit
+	endif
+endif
+
+# Call af3d_par.bin and generate .3sp file 
+${binpath}/af3d_par.bin ${image_file} ${prmfile} $hdrfile $inputlist $output $sign ${region} $use_header $average $now $uid
+
+if (${average} == 0) then
+	# Add tail to the .3sp file
+	set output_atlas	= ${output}.3sp
+
+	echo "" >> ${output_atlas}
+	echo "${now} ${uid}" >> ${output_atlas}
+	echo "${program} $1 $2 $3 $4 $5" >> ${output_atlas}
+	ident ${binpath}/af3d_par.bin | grep ${program}.c >> ${output_atlas}
+
+	echo "" >> ${output_atlas}
+	echo "prmfile" >> ${output_atlas}
+	cat ${prmfile} >> ${output_atlas}
+	echo "endprm" >> ${output_atlas}
+
+	if (-e ${image_file}.rec) then
+		echo "" >> ${output_atlas}
+		csplit -f /tmp/af3d_par ${image_file}.rec /endimglst/+1
+		cat /tmp/af3d_par00 >> ${output_atlas}
+		echo "endrec" >> ${output_atlas}
+		/bin/rm /tmp/af3d_par??
+	endif
+
+	# Call af3d_par.bin and generate .3sn file
+	@ sign	*= -1 
+	${binpath}/af3d_par.bin ${image_file} ${prmfile} $hdrfile $inputlist $output $sign ${region} $use_header $average $now $uid
+
+	# Add tail to the .3sn file
+	set output_atlas	= ${output}.3sn
+
+	echo "" >> ${output_atlas}
+	echo "${now} ${uid}" >> ${output_atlas}
+	echo "${program} $1 $2 $3 $4 $5" >> ${output_atlas}
+	ident ${binpath}/af3d_par.bin | grep ${program}.c >> ${output_atlas}
+
+	echo "" >> ${output_atlas}
+	echo "prmfile" >> ${output_atlas}
+	cat ${prmfile} >> ${output_atlas}
+	echo "endprm" >> ${output_atlas}
+
+	if (-e ${image_file}.rec) then
+		echo "" >> ${output_atlas}
+		csplit -f /tmp/af3d_par ${image_file}.rec /endimglst/+1
+		cat /tmp/af3d_par00 >> ${output_atlas}
+		echo "endrec" >> ${output_atlas}
+		/bin/rm /tmp/af3d_par??
+	endif
+endif

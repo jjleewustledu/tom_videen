@@ -1,0 +1,584 @@
+head	1.13;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.13
+date	96.02.28.20.52.40;	author tom;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	95.11.10.18.48.06;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	94.12.27.22.59.33;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	94.10.03.16.17.13;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	94.05.18.15.53.30;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	93.10.19.14.04.14;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	93.08.26.17.26.35;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.08.20.20.24.07;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.08.19.22.55.48;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@a corrected hd6mean-atlas version of t88mean
+y
+@
+
+
+1.13
+log
+@*** empty log message ***
+@
+text
+@/* $Log: imgrot.c,v $
+ * Revision 1.12  1995/11/10  18:48:06  tom
+ * remove petutil parent directory from include statements
+ *
+ * Revision 1.11  1994/12/27  22:59:33  tom
+ * free mask
+ *
+ * Revision 1.10  1994/10/03  16:17:13  tom
+ * standard format with indent
+ *
+ * Revision 1.9  1994/05/18  15:53:30  tom
+ * changed $Id: imgrot.c,v 1.12 1995/11/10 18:48:06 tom Exp tom $ to $Header: /home/npggw/tom/src/t88mean/RCS/imgrot.c,v 1.12 1995/11/10 18:48:06 tom Exp tom $
+ * */
+/*	===============================================================================
+ *	Module:			imgrot.c
+ *	Date:			18-Aug-93
+ *	Author:			Tom Videen
+ *
+ *	Description:    Rotate about y and z axes to produce symmetry.
+ *
+ *	Input:
+ *		image[z][y][x] -   image array
+ *		center      -   y-origin, z-origin
+ *		angle       -   x-angle
+ *		sxr         -   sxr structure
+ *		dim         -   dimensions
+ *		mskpct      -   threshold (%) for masking the working region of image
+ *
+ *	Output:
+ *		center      -   x-origin
+ *		angle       -   y-angle, y-angle
+ *
+ *	Algorithm:
+ *	1)  x-angle, y-origin and z-origin are passed into this routine.
+ *	2)  Create the mask.
+ *	3)  x-origin is initialized to x center-of-mass (completing the specification of center).
+ *	4)  param [] is initialized to x-angle, y-origin and z-origin
+ *		with the center coordinates converted from C to FORTRAN-array indices (+1);
+ *	5)  y- and z-angles are adjusted until symmetry is produced about the yz-plane;
+ *		Symmetry is evaluted by minimizing rms difference;
+ *		A parabolic fit is made to 15 points at intervals for
+ *		each parameter and the analytical minimum is used.
+ *	6)  Set transformation parameters to C-array indices and return
+ *		center (in pixels) and angle (in radians).
+ *
+ *	History:	Revision of imgrot.f (Avi Snyder 29-Jun-93)
+ *			26-Aug-93 Modified to change sign of angles on entry and return.
+ *			14-Oct-93	Debugged angle signs.
+ *			17-May-94	Added ifdef for HP compile
+ *	===============================================================================
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <math.h>
+#include <imgutil.h>
+#include <atlas.h>
+
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/imgrot.c,v 1.12 1995/11/10 18:48:06 tom Exp tom $";
+
+#endif
+
+/*	----------------------------
+ *	Function:	imgrot
+ *	----------------------------
+ */
+
+void            imgrot (image, center, angle, sxr, dim, mskpct)
+	float          ***image;
+	float          *center;			 /* param[6-8] */
+	float          *angle;			 /* angles in radians; param[1-3] */
+	long           *dim;
+	float           mskpct;
+	SXR_DATA        sxr;
+
+{
+	extern          center_of_mass ();
+	extern          image_template ();
+
+#ifdef HP
+	extern          alignr ();
+	extern          imgroto ();
+
+#else
+	extern          alignr_ ();
+	extern          imgroto_ ();
+
+#endif
+
+	short          *mask;			 /* mask array */
+	float           param[12];		 /* alignment parameters */
+	float           mmpix[3];		 /* mm per pixel for each dimension */
+	float           fovmm[3];		 /* FOV in mm */
+	float           mean;			 /* mean pixel value within threshold */
+	float           scale;
+	float           t;
+	float           rmsrot;
+	float           err;
+
+	short           nx, ny, nz;
+	int             size;			 /* image array dimension nx*nx*nz */
+	int             npix;			 /* number of pixels in mask */
+	int             i;
+
+/*
+ *	Initializations
+ */
+
+	for (i = 0; i < 12; i++)
+		param[i] = 0;
+	param[3] = -angle[0];
+	nx = (short) dim[0];
+	ny = (short) dim[1];
+	nz = (short) dim[2];
+
+	size = nx * ny * nz;
+	mask = (short *) calloc (size, sizeof (short));
+	fovmm[0] = 200;
+	fovmm[1] = 200;
+	fovmm[2] = 110;
+	mmpix[0] = 10. * sxr.pixel_size;
+	mmpix[1] = 10. * sxr.pixel_size;
+	mmpix[2] = 10. * sxr.slice_separation;
+	printf ("mmpix  %6.3f %6.3f %6.3f\n", mmpix[0], mmpix[1], mmpix[2]);
+
+/*
+ *	Initialize the mask
+ */
+
+	if (mskpct > 1)
+		image_template (image, mask, mskpct, nx, ny, nz, &npix);
+	else {
+		for (i = 0; i < size; ++i)
+			mask[i] = 1;
+	}
+
+/*
+ *	Get the origin for rotation
+ */
+
+	center_of_mass (image, mask, nz, nx, ny, center, &npix, &mean);
+
+	scale = 1000. / mean;
+	param[6] = (center[0] + 1) * mmpix[0];
+	param[7] = (center[1] + 1) * mmpix[1];
+	param[8] = (center[2] + 1) * mmpix[2];
+
+	printf ("Mean: %.3f     Pixels in mask: %d\n", mean, npix);
+	printf ("Image Center (mm):  %.2f  %.2f  %.2f\n", param[6], param[7], param[8]);
+
+/*
+ *	Align the image
+ */
+
+#ifdef HP
+	imgroto (image, mask, &nz, &nx, &ny, fovmm, mmpix, param, &scale, &err);
+#else
+	imgroto_ (image, mask, &nz, &nx, &ny, fovmm, mmpix, param, &scale, &err);
+#endif
+
+/*
+ *	Compute rmsrot and write summary:
+ */
+
+#ifdef HP
+	alignr (image, mask, &nz, &nx, &ny, mmpix, param, &rmsrot);
+#else
+	alignr_ (image, mask, &nz, &nx, &ny, mmpix, param, &rmsrot);
+#endif
+
+	t = sqrt (param[1] * param[1] + param[2] * param[2]);
+	printf ("yz translation    %.3f mm\n", t);
+	printf ("yz angular motion %.3f mm\n", rmsrot);
+	printf ("total adjustment  %.3f mm\n", sqrt (rmsrot * rmsrot + t * t));
+	free (mask);
+
+/*
+ *	Set transformation parameters to C-array indices and return
+ */
+
+	angle[0] = -param[3];
+	angle[1] = param[4];
+	angle[2] = -param[5];
+
+	center[0] = (param[6] / mmpix[0]) - 1;
+	center[1] = (param[7] / mmpix[1]) - 1;
+	center[2] = (param[8] / mmpix[2]) - 1;
+}
+@
+
+
+1.12
+log
+@remove petutil parent directory from include statements
+@
+text
+@d2 3
+d12 1
+a12 1
+ * changed $Id: imgrot.c,v 1.11 1994/12/27 22:59:33 tom Exp tom $ to $Header: /export/home/npggw/tom/src/t88mean/RCS/imgrot.c,v 1.11 1994/12/27 22:59:33 tom Exp tom $
+d20 1
+a20 1
+ *	 
+d22 1
+a22 1
+ *		image[nz][y][x] -   image array
+d26 1
+a26 3
+ *		nx          -   x-dimension
+ *		ny          -   y-dimension
+ *		nz          -   z-dimension
+d28 1
+a28 1
+ *	
+d32 1
+a32 1
+ *	 
+d45 1
+a45 1
+ *	
+a51 1
+
+d56 2
+a57 2
+#include <petutil.h>
+#include "atlas.h"
+d59 2
+a60 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/t88mean/RCS/imgrot.c,v 1.11 1994/12/27 22:59:33 tom Exp tom $";
+d62 2
+d69 5
+a73 8
+void 
+imgrot (image, center, angle, sxr, nx, ny, nz, mskpct)
+	float          *image;
+	float          *center;	/* param[6-8] */
+	float          *angle;	/* angles in radians; param[1-3] */
+	short           nx;
+	short           ny;
+	short           nz;
+d75 1
+a75 1
+	SXR_OUTPUT      sxr;
+d91 5
+a95 5
+	short          *mask;	/* mask array */
+	float           param[12];	/* alignment parameters */
+	float           mmpix[3];	/* mm per pixel for each dimension */
+	float           fovmm[3];	/* FOV in mm */
+	float           mean;	/* mean pixel value within threshold */
+a98 1
+	float           thresht;
+d101 3
+a103 2
+	int             dim;	/* image array dimension nx*nx*nz */
+	int             npix;	/* number of pixels in mask */
+d113 3
+d117 2
+a118 3
+	dim = nx * ny * nz;
+	mask = (short *) calloc (dim, sizeof (short));
+	thresht = 35;
+d134 1
+a134 1
+		for (i = 0; i < dim; ++i)
+@
+
+
+1.11
+log
+@free mask
+@
+text
+@d2 3
+d9 1
+a9 1
+ * changed $Id: imgrot.c,v 1.10 1994/10/03 16:17:13 tom Exp tom $ to $Header: /home/npggw/tom/src/t88mean/RCS/imgrot.c,v 1.10 1994/10/03 16:17:13 tom Exp tom $
+d56 1
+a56 1
+#include <petutil/petutil.h>
+d59 1
+a59 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/imgrot.c,v 1.10 1994/10/03 16:17:13 tom Exp tom $";
+@
+
+
+1.10
+log
+@standard format with indent
+@
+text
+@d2 3
+d6 1
+a6 1
+ * changed $Id$ to $Header$
+d56 1
+a56 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/t88mean/RCS/imgrot.c,v 1.9 1994/05/18 15:53:30 tom Exp tom $";
+d171 1
+@
+
+
+1.9
+log
+@changed $Id$ to $Header$
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d6 3
+a8 14
+ *	Module:				imgrot.c
+ *	Date:					18-Aug-93
+ *	Author:				Tom Videen
+ *	Description:	Rotate about y and z axes to produce symmetry.
+ *			1) x-angle, y-origin and z-origin are passed into this routine.
+ *			2) x-origin is initialized to x center-of-mass.
+ *			3) param [] is initialized to x-angle, y-origin and z-origin
+ *			   with the center coordinates converted from C to FORTRAN-array indices (+1);
+ *			4) y- and z-angles are adjusted until symmetry is produced about the yz-plane;
+ *			5) symmetry is evaluted by minimizing rms difference;
+ *			   an parabolic fit is made to 15 points at intervals for
+ *			   each parameter and the analytical minimum is used.
+ *			6) center (in pixels) and angle (radians) are returned after center
+ *			   values are adjusted to C-array indices (-1).
+d10 29
+d53 1
+a53 1
+static char rcsid []= "$Header: imgrot.c,v 1.1 92/12/30 04:20:54 tom Exp $";
+d56 1
+a56 1
+ *	Function:			imgrot
+d58 1
+a58 1
+ */	
+d60 10
+a69 9
+void imgrot (image, center, angle, sxr, nx, ny, num_slices, mskpct)
+	float		*image;	
+	float		*center;				/* param[6-8] */
+	float		*angle;					/* angles in radians; param[1-3] */
+	short		nx;
+	short		ny;
+	short		num_slices;
+	float		mskpct;
+	SXR_OUTPUT sxr;
+d72 2
+a73 2
+	extern center_of_mass ();
+	extern image_template ();
+d76 3
+a78 2
+	extern alignr ();
+	extern imgroto ();
+d80 3
+a82 2
+	extern alignr_ ();
+	extern imgroto_ ();
+d85 10
+a94 10
+	short		*mask;						/* mask array */
+  float		param[12];				/* alignment parameters */
+  float		mmpix[3];					/* mm per pixel for each dimension */
+  float		fovmm[3];					/* FOV in mm */
+	float		mean;							/* mean pixel value within threshold */
+	float		scale;
+	float		t;
+	float		rmsrot;
+	float		thresht;
+	float		err;
+d96 3
+a98 3
+	int			dim;							/* image array dimension nx*nx*num_slices */
+	int			npix;							/* number of pixels in mask */
+	int			i;
+d105 2
+a106 2
+		param [i] = 0;	
+	param [3] = -angle[0];
+d108 1
+a108 1
+	dim = nx * ny * num_slices;
+d117 1
+a117 1
+  printf ("mmpix  %6.3f %6.3f %6.3f\n", mmpix[0], mmpix[1], mmpix[2]);
+d124 1
+a124 1
+   	image_template (image, mask, mskpct, nx, ny, num_slices, &npix);
+d127 1
+a127 1
+		mask[i] = 1;
+d134 1
+a134 1
+  center_of_mass (image, mask, num_slices, nx, ny, center, &npix, &mean);
+d136 4
+a139 4
+  scale = 1000. / mean;
+	param [6] = (center[0] + 1) * mmpix[0];
+	param [7] = (center[1] + 1) * mmpix[1];
+	param [8] = (center[2] + 1) * mmpix[2];
+d142 1
+a142 1
+  printf ("Image Center (mm):  %.2f  %.2f  %.2f\n", param[6], param[7], param[8]);
+d149 1
+a149 1
+  imgroto (image, mask, &num_slices, &nx, &ny, fovmm, mmpix, param, &scale, &err);
+d151 1
+a151 1
+  imgroto_ (image, mask, &num_slices, &nx, &ny, fovmm, mmpix, param, &scale, &err);
+d159 1
+a159 1
+  alignr (image, mask, &num_slices, &nx, &ny, mmpix, param, &rmsrot);
+d161 1
+a161 1
+  alignr_ (image, mask, &num_slices, &nx, &ny, mmpix, param, &rmsrot);
+d163 1
+d165 3
+a167 3
+  printf ("yz translation    %.3f mm\n", t);
+  printf ("yz angular motion %.3f mm\n", rmsrot);
+  printf ("total adjustment  %.3f mm\n", sqrt(rmsrot*rmsrot + t*t));
+d173 3
+a175 3
+	angle[0] = -param [3];
+	angle[1] =  param [4];
+	angle[2] = -param [5];
+d177 3
+a179 3
+	center[0] = (param [6] / mmpix [0]) - 1;
+	center[1] = (param [7] / mmpix [1]) - 1;
+	center[2] = (param [8] / mmpix [2]) - 1;
+@
+
+
+1.8
+log
+@angles debugged
+@
+text
+@d1 1
+a1 1
+/* $Log */
+d21 1
+d32 1
+a32 1
+static char rcsid []= "$Id: imgrot.c,v 1.7 1993/08/26 17:26:35 tom Exp tom $"; 
+d52 5
+d59 1
+d124 3
+d128 1
+d133 4
+d138 1
+@
+
+
+1.7
+log
+@changed atlas y-dim to used 5 mm between brain and skull
+@
+text
+@d20 1
+d31 1
+a31 1
+static char rcsid []= "$Id: imgrot.c,v 1.6 1993/08/20 20:24:07 tom Exp tom $"; 
+d121 8
+a128 6
+ *
+ *  alignr_ (image, mask, &num_slices, &nx, &ny, mmpix, param, &rmsrot);
+ *	t = sqrt (param[1] * param[1] + param[2] * param[2]);
+ *  printf ("yz ang motion    %.3f mm\n", rmsrot);
+ *  printf ("total adjustment %.3f mm\n", sqrt(rmsrot*rmsrot + t*t));
+ *
+d133 1
+a133 1
+	angle[1] = -param [4];
+@
+
+
+1.6
+log
+@first version with Talairach 1988 atlas
+@
+text
+@d19 1
+d30 1
+a30 1
+static char rcsid []= "$Id: imgrot.c,v 1.5 1993/08/19 22:55:48 tom Exp tom $"; 
+d74 1
+a74 1
+	param [3] = angle[0];
+d129 3
+a131 3
+	angle[0] = param [3];
+	angle[1] = param [4];
+	angle[2] = param [5];
+@
+
+
+1.5
+log
+@a corrected hd6mean-atlas version of t88mean
+@
+text
+@d29 1
+a29 1
+static char rcsid []= "$Id: imgrot.c,v 1.7 1993/07/26 22:07:18 tom Exp tom $"; 
+d119 6
+a124 9
+ */
+
+  alignr_ (image, mask, &num_slices, &nx, &ny, mmpix, param, &rmsrot);
+
+	t = sqrt (param[0] * param[0] + param[1] * param[1] + param[2] * param[2]);
+  printf ("ang motion  %f mm\n", rmsrot);
+  printf ("total %f mm\n", sqrt(rmsrot*rmsrot + t*t));
+
+/*
+@

@@ -1,0 +1,216 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: make_eff_tr.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $*/
+/*$Log: make_eff_tr.c,v $
+ * Revision 3.1  1998/03/24  23:43:10  jmo
+ * ..
+ *
+ * Revision 3.0  1997/10/29  19:26:43  jmo
+ * Support Exact HR.
+ *
+ * Revision 2.5  1997/08/06  18:22:04  jmo
+ * Last version before adding CTI rev 7 support.
+ *
+ * Revision 2.4  1996/06/19  11:20:15  jmo
+ *
+ * Revision 2.3  1996/04/23  15:02:05  jmo
+ * Version released April 23, 1996
+ *
+ * Revision 2.0  1996/01/27  13:44:48  jmo
+ * Version installed at Neuro-imaging group, January 1996
+ *
+ * Revision 1.2  1996/01/18  16:10:01  jmo
+ * Modified file formats, Interfile and Matrix Rev 7.0 support.
+ *
+ * Revision 1.1  1996/01/12  18:09:13  jmo
+ * Initial revision
+ *
+ * Revision 1.8  1995/09/20  15:01:48  jmo
+ * Version sent to Pittsburgh
+ *
+ * Revision 1.7  95/09/19  10:43:55  jmo
+ * Version for revised paper to physics in medicine and biology.
+ * 
+ * Revision 1.6  95/05/26  14:29:36  jmo
+ * Version sent to Pittsburgh, 5/26/95
+ * 
+ * Revision 1.5  95/05/04  10:37:16  jmo
+ * Modified normalization files.
+ * 
+ * Revision 1.4  95/04/27  17:42:39  jmo
+ * Version used for 3d95
+ * 
+ * Revision 1.3  95/03/31  15:46:22  jmo
+ * Version for 951 sent to Pittsburgh.
+ * 
+ * Revision 1.2  95/03/03  16:24:54  jmo
+ * Modified for cti951
+ * 
+ * Revision 1.1  95/01/19  22:40:20  ty7777
+ * Initial revision
+ * */
+
+/*--------------------------------------------------------------------
+
+Program: make_eff_tr
+
+Purpose: Make transmission scan for plane efficiency data.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string.h>
+#include <imagio.h>
+#include <cti_proto.h>
+#include <scatter.h>
+
+#define TRUE 1
+#define FALSE 0
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/make_eff_tr.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+SubHeader	*sh;
+MainHeader     *mh;
+
+int	i,stat,length,plane=1,frame=1,gate=1,data=0,bed=0,rsq,
+	numray,numang,iang,ray,rayoff,ioff,moff,m,mash;
+
+float	*sino,*trsino,*blsino,raysiz,*ctr,y;
+
+char	*plnfil,trfil[MAXNAME],blfil[MAXNAME],*dot;
+
+if(argc < 2) {
+        fprintf(stderr,"Usage: make_eff_tr plane_eff_file\n");
+	fprintf(stderr,"       Make transmission and blank scans from an emission sinogram of a \n");
+	fprintf(stderr,"       CTI 20-cm solid phantom in the CTI holder.\n");
+        exit(-1);
+        }
+
+plnfil  = argv[1];
+strcpy(trfil,plnfil);
+dot = strstr(trfil,".");
+*dot = NULL;
+
+if((mh=getmhdr(plnfil)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",plnfil);
+    exit(ERROR);
+    }
+if(mh->scanner_type == 961) {
+    strcat(trfil,"_tr.ifs");
+    sprintf(blfil,"unit_%s.ifs",SCANNER_STRING);
+    }
+else {
+    strcat(trfil,"_tr.scn");
+    sprintf(blfil,"unit_%s.scn",SCANNER_STRING);
+    }
+
+/* Find out how many data planes there are. */
+if((sh=(SubHeader *)getsbhdr(plnfil,plane,frame,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not read subheader for %s\n",plnfil);
+    exit(-1);
+    }
+numray = sh->dim1;
+mash = NUMANG/sh->dim2;
+numang = NUMANG;
+raysiz = 10.*sh->sample_size_1;
+length = numray*numang;
+rsq = (CYL_OUT_RADIUS/raysiz)*(CYL_OUT_RADIUS/raysiz);
+
+trsino = (float *)malloc(length*sizeof(float));
+blsino = (float *)malloc(length*sizeof(float));
+ctr = (float *)malloc(numang*sizeof(float));
+for(i=0;i<length;i++) blsino[i] = 1.;
+
+mh->nframe = 1;
+for(plane=1;plane<=MAX_PLANE;plane++) {
+    if((sino=rdimg(plnfil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",plnfil,plane);
+        exit(ERROR);
+        }
+    if(mash > 1) {
+        for(iang=0,rayoff=0,ioff=0;iang<numang;iang++,rayoff+=2*numray,ioff+=numray) {
+	    for(ray=1;ray<numray;ray++)
+                sino[ray+ioff] = sino[ray+rayoff];
+	    for(m=1,moff=numray;m<mash;m++,moff+=numray) {
+	        for(ray=1;ray<numray;ray++)
+                    sino[ray+ioff] += sino[ray+rayoff+moff];
+                }
+            }
+         }
+
+    if((sh=(SubHeader *)getsbhdr(plnfil,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read main header., %s\n",plnfil);
+        exit(ERROR);
+        }
+    sh->dim2 /= mash;
+    fit_ctrs(ctr,sino,numray,numang);
+
+    for(iang=0,rayoff=0;iang<numang;iang++,rayoff+=numray) {
+	trsino[rayoff] = 1.;
+	for(ray=1;ray<numray;ray++) {
+	    y = (float)ray - (ctr[iang] + numray/2.);
+	    y = rsq - y*y;
+	    if(y > 0)
+		trsino[ray+rayoff] = (float)exp(-2.*raysiz*MU_GEL*sqrt((double)y));
+	    else
+		trsino[ray+rayoff] = 1.;
+	    }
+	}
+    sh->deadtime_corr = 1.;
+    sh->duration = 1000.;
+    if(mh->file_format == MATRIX_REV7) {
+        mh->file_format = INTERFILE;
+        }
+    sh->storage_order = 1; /* Store in sinogram mode. */
+    mh->nplane = MAX_PLANE;
+    if((stat=wrimg(trfil,trsino,mh,sh,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",trfil,plane);
+        exit(ERROR);
+        }
+    if((stat=wrimg(blfil,blsino,mh,sh,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",blfil,plane);
+        exit(ERROR);
+        }
+    }
+
+printf("Transmission data written to %s\n",trfil);
+printf("Blank data written to %s\n",blfil);
+
+}
+@

@@ -1,0 +1,378 @@
+head	1.2;
+access;
+symbols;
+locks
+	tom:1.2; strict;
+comment	@# @;
+
+
+1.2
+date	2005.09.15.20.58.58;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2005.09.15.17.03.59;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@;+
+; NAME:
+;	FID_FID_DRAW
+;
+; PURPOSE:
+;	Draws a point [xp,yp,zp] at the appropriate 2D location in the displayed image.
+;
+; CALLING SEQUENCE:
+;	Result = FID_FID_DRAW(s)
+;
+; MODIFICATION HISTORY:
+;	Tom Videen, Sep 2005.
+;-
+
+PRO FID_FID_DRAW, s
+   COMMON FID
+   COMMON IMAGE_UTILS
+   
+   str = string(xp, yp, zp, format='("X,Y,Z:",F9.2,F9.2,F9.2)')
+   widget_control, s.pos_w, SET_VALUE=str
+
+   x = (xp - 1)*s.zoom
+   y = (s.img.dim[1] + 0.75 - yp)*s.zoom
+   z = (s.img.dim[2] + 0.75 - zp)*s.zoom
+   xy1 = [[x-20,y],[x+20,y]]
+   xy2 = [[x,y-50],[x,y+50]]
+   xz1 = [[x-20,z],[x+20,z]]
+   xz2 = [[x,z-20],[x,z+50]]
+
+   WSET, s.win0
+   !x.s = [0, 1/float(!d.x_size)]
+   !y.s = [0, 1/float(!d.y_size)]
+   plots, xy1, color=dsp[0].nc
+   plots, xy2, color=dsp[0].nc
+   
+   WSET, s.win1
+   !x.s = [0, 1/float(!d.x_size)]
+   !y.s = [0, 1/float(!d.y_size)]
+   plots, xz1, color=dsp[0].nc
+   plots, xz2, color=dsp[0].nc
+END   
+
+;+
+; NAME:
+;	FID_FID_EVENT
+;
+; PURPOSE:
+;	Shows coordinates of a point [x,y,z] and saves it to a list if button pressed
+;
+; Called from the FID_FID event loop.
+; CALLING SEQUENCE:
+;	FID_FID_EVENT, ev, s
+;
+; Parameters:
+;	ev = event structure
+;	s = state structure
+;
+; MODIFICATION HISTORY:
+;	Tom Videen, Sep 2005.
+;-
+
+PRO FID_FID_EVENT, ev, s	;; alway on transverse slice
+   COMMON FID
+   COMMON IMAGE_UTILS
+   
+   s.button = s.button OR ev.press XOR ev.release ; New button state   
+
+   IF (s.button EQ 1) THEN BEGIN
+      xp = ev.x/s.zoom + 1
+      yp = s.img.dim[1] - ev.y/s.zoom
+      zp = s.img.p
+      FID_FID_DRAW, s
+   ENDIF 
+   RETURN
+END   
+   
+PRO FID_FID, uv, zoom
+   COMMON FID
+   COMMON IMAGE_UTILS
+   
+   group = uv.wid.base
+   base = WIDGET_BASE(title='Select Image Points', group_leader=group, /ROW)   
+   base1 = WIDGET_BASE(base,row=4)   
+   base2 = WIDGET_BASE(base1,/ROW)
+   up = WIDGET_BUTTON(base2, value=' Up ')
+   down = WIDGET_BUTTON(base2, value=' Down ')  
+   left = WIDGET_BUTTON(base2, value=' Left ')
+   right = WIDGET_BUTTON(base2, value=' Right ')  
+   ant = WIDGET_BUTTON(base2, value=' Anterior ')
+   post = WIDGET_BUTTON(base2, value=' Posterior ')
+   pos_w = WIDGET_TEXT(base2, YSIZE=1, XSIZE=25, /FRAME, VALUE='X,Y,Z:   0   0   0')
+   record = WIDGET_BUTTON(base2, value=' Record ')
+   listing = WIDGET_BUTTON(base2, value=' List ')
+   base3 = WIDGET_BASE(base1,/ROW)
+   fid = ['AC','PC','OX','OTL','OTR','BEL','BER','PTL','PTR','RNL','RNR']
+   pnum = CW_BGROUP(base3, fid, LABEL_LEFT='Fiducial:', /ROW, /EXCLUSIVE, set_value=uv.wid.pnum)
+   base4 = WIDGET_BASE(base1,/ROW)
+   sup = WIDGET_BUTTON(base4, value=' Slice Up ')
+   sdown = WIDGET_BUTTON(base4, value=' Slice Down ')  
+   cpln = WIDGET_BUTTON(base4, value=' Commissural Plane ')  
+   mpln = WIDGET_BUTTON(base4, value=' Mid-Commissural Plane ')  
+   s5up = WIDGET_BUTTON(base4, value=' Up 5 Slices ')
+   s5down = WIDGET_BUTTON(base4, value=' Down 5 Slices ')  
+   msg = WIDGET_TEXT(base, YSIZE=11, XSIZE=35)
+   exit = WIDGET_BUTTON(base, value=' Exit ')  
+
+   widget_control, uv.wid.win[0], GET_VALUE=win0
+   widget_control, uv.wid.win[1], GET_VALUE=win1
+   draw = uv.wid.win[0]
+   WSET, win0
+   img = uv.img[orient]
+   fp = 1
+   lp = img.dim[orient]
+   xdim = img.dim[0]
+   xp = 0.
+   yp = 0.
+   zp = 0.
+   yp = img.f
+   zp = img.p
+   
+   s = {POINT_STATE, $          ; Structure containing state
+        base: base, $           ; Main base widget
+        pos_w : pos_w, $        ; Position text widget
+        msg : msg, $            ; Message window
+        win0:  win0, $          ; draw window 1 (tra)
+        win1:  win1, $          ; draw window 2 (cor)
+        button: 0, $            ; button state
+        zoom : zoom, $          ; zoom factor
+        img : img $             ; pointer to image data
+       }
+   
+   widget_control, base, /REALIZE, xoffset=0, yoffset=0
+   WSHOW, win0
+   msg = string(format='(A,/,A)', "Use left mouse button to add a point.", $
+                "Button keys on left to shift it.")
+   widget_control, s.msg, set_value=msg
+
+   p = s.img.p
+   imgname = img.fname
+   loc = RSTRPOS (imgname, '/')
+   IF (loc GT 0) THEN imgname = STRMID(imgname,loc+1)
+   
+   catch, error_status
+   IF (error_status NE 0) THEN $
+      widget_control, s.msg, set_value=!err_string
+
+   WHILE 1 DO BEGIN             ; Internal event loop   
+      ev = WIDGET_EVENT([base, draw])
+      CASE ev.id OF
+         
+         draw: BEGIN
+            FID_FID_EVENT, ev, s
+            IF (s.img.f NE yp AND yp GT 0) THEN BEGIN 
+               uv.img[0].f = yp
+               uv.img[1].f = yp
+               widget_control, uv.wid.slider2, set_value=uv.img[0].f
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF
+         ENDCASE 
+         
+         up: BEGIN
+            IF (zp GT fp) THEN BEGIN 
+               zp = zp-0.25
+               uv.img[0].p = fix(zp+0.5)
+               uv.img[1].p = uv.img[0].p
+               widget_control, uv.wid.slider1, set_value=uv.img[0].p
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF
+         ENDCASE 
+         
+         down: BEGIN
+            IF (zp LT lp) THEN BEGIN 
+               zp = zp+0.25
+               uv.img[0].p = fix(zp+0.5)
+               uv.img[1].p = uv.img[0].p
+               widget_control, uv.wid.slider1, set_value=uv.img[0].p
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF
+         ENDCASE 
+
+         left:  BEGIN
+            IF (xp GT 0) THEN BEGIN
+               xp = xp-0.25
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF 
+         ENDCASE 
+
+         right:  BEGIN
+            IF (xp LT xdim) THEN BEGIN
+               xp = xp+0.25
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF 
+         ENDCASE 
+
+         ant: BEGIN
+            IF (yp GT ff) THEN BEGIN 
+               yp = yp-0.25
+               uv.img[0].f = fix(yp+0.5)
+               uv.img[1].f = uv.img[0].f
+               widget_control, uv.wid.slider2, set_value=uv.img[0].f
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF
+         ENDCASE 
+         
+         post: BEGIN
+            IF (yp LT lf) THEN BEGIN 
+               yp = yp+0.25
+               uv.img[0].f = fix(yp+0.5)
+               uv.img[1].f = uv.img[0].f
+               widget_control, uv.wid.slider2, set_value=uv.img[0].f
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF
+         ENDCASE 
+
+         pnum:   BEGIN
+            uv.wid.pnum = ev.value
+            CASE uv.wid.pnum OF
+               0: msg = "Anterior Commissure"
+               1: msg = "Posterior Commissure"
+               2: msg = "Optic Chiasm"
+               3: msg = "Optic Tract Left"
+               4: msg = "Optic Tract Right"
+               5: msg = "Brain Edge Left"
+               6: msg = "Brain Edge Right"
+               7: msg = "Putamen Left"
+               8: msg = "Putamen Right"
+               9: msg = "Red Nucleus Left"
+               10: msg = "Red Nucleus Right"
+			ENDCASE
+            widget_control, s.msg, set_value=msg
+         ENDCASE
+         
+         record: BEGIN
+            pt = uv.wid.pnum
+			locus[0,pt] = xp
+			locus[1,pt] = yp
+			locus[2,pt] = zp
+			list = strarr(11)
+            FOR n=0, 10 DO list[n] = string(format='(A,F9.2,F9.2,F9.2)',fid[n],locus[*,n])
+            widget_control, s.msg, set_value=list
+         ENDCASE 
+
+         listing: BEGIN
+			list = strarr(11)
+            FOR n=0, 10 DO list[n] = string(format='(A,F9.2,F9.2,F9.2)',fid[n],locus[*,n])
+            widget_control, s.msg, set_value=list
+         ENDCASE 
+
+         sup: BEGIN
+            IF (zp GT fp) THEN BEGIN 
+               zp = zp-1
+               uv.img[0].p = fix(zp+0.5)
+               uv.img[1].p = uv.img[0].p
+               s.img.p = uv.img[0].p
+               widget_control, uv.wid.slider1, set_value=uv.img[0].p
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF
+         ENDCASE 
+         
+         sdown: BEGIN
+            IF (zp LT lp) THEN BEGIN 
+               zp = zp+1
+               uv.img[0].p = fix(zp+0.5)
+               uv.img[1].p = uv.img[0].p
+               s.img.p = uv.img[0].p
+               widget_control, uv.wid.slider1, set_value=uv.img[0].p
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF
+         ENDCASE 
+
+         s5up: BEGIN
+            IF (zp-5 GT fp) THEN BEGIN 
+               zp = zp-5
+               uv.img[0].p = fix(zp+0.5)
+               uv.img[1].p = uv.img[0].p
+               s.img.p = uv.img[0].p
+               widget_control, uv.wid.slider1, set_value=uv.img[0].p
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF
+         ENDCASE 
+         
+         s5down: BEGIN
+            IF (zp+5 LT lp) THEN BEGIN 
+               zp = zp+5
+               uv.img[0].p = fix(zp+0.5)
+               uv.img[1].p = uv.img[0].p
+               s.img.p = uv.img[0].p
+               widget_control, uv.wid.slider1, set_value=uv.img[0].p
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF
+         ENDCASE 
+
+         cpln: BEGIN
+            IF (locus[2,0] GT 0) THEN BEGIN
+               zp = locus[2,0]
+               uv.img[0].p = zp
+               uv.img[1].p = uv.img[0].p
+               s.img.p = uv.img[0].p
+               widget_control, uv.wid.slider1, set_value=uv.img[0].p
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF ELSE widget_control, s.msg, set_value='AC is not defined'
+         ENDCASE 
+
+         mpln: BEGIN
+            IF (locus[1,0] GT 0 AND locus[1,1] GT 0) THEN BEGIN
+               yp = (locus[1,0] + locus[1,1])/2
+               uv.img[0].f = yp
+               uv.img[1].f = uv.img[0].f
+               s.img.f = uv.img[0].f
+               widget_control, uv.wid.slider1, set_value=uv.img[0].f
+               FID_DISPLAY, uv
+               FID_FID_DRAW, s
+            ENDIF ELSE widget_control, s.msg, set_value='AC and PC must be defined'
+         ENDCASE 
+
+         exit:  BEGIN
+            widget_control, base, /DESTROY
+            RETURN
+         ENDCASE 
+         
+      ENDCASE 
+   ENDWHILE
+END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d204 1
+a204 1
+               uv.img[1].p = uv.img[0].f
+d215 1
+a215 1
+               uv.img[1].p = uv.img[0].f
+@

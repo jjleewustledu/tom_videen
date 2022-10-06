@@ -1,0 +1,1860 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	99.03.05.18.49.14;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	99.02.17.18.43.30;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.04.29.15.20.35;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	94.01.14.17.26.28;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	94.01.07.20.46.35;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	92.12.10.19.15.57;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.14.15.03.11;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   M2DISPLA.FTN
+C     Author:       Tom O. Videen
+C     Date:         28-May-87
+C     Intent:
+C     .  This subroutine writes the DISPLAY OPTIONS LIST to the terminal
+C     .  along with the currently selected values for the display parameters.
+C     .  It uses full screen editing techniques to allow the user to alter
+C     .  any of the displayed parameters.
+C     
+C     History:
+C     .  Modified 05-Mar-99 by TOV to allow processing for CVO2
+C     .     (PROCESS may be 0-7)
+C     .  Modified 28-Apr-98 by TOV to allow processing for CMRGlucose
+C     .     (PROCESS may be 0-6)
+C     .  Modified by TOV 12-Aug-87 to eliminate a bug in error checking
+C     .     for max. value of NUMDISP for coronal and sagittal sections;
+C     .  Modified 06-Oct-87 by TOV to allow processing for tissue activity
+C     .     either with or without decay correction; (PROCESS may be 0-5)
+C     .  Modified 28-Dec-87 by TOV to allow scaling of rows of 7 images
+C     .     to individual slice max (SEPSCALE added to common block).
+C     .  Modified 13-Sep-88 by TOV:
+C     .     1) change name to subtrahend.
+C     .     2) eliminate REFRESH option.
+C     .     3) change FILETP from I*4 to CH*23 in **DISPLAY common block.
+C     .  Modified 03-Jan-90 by TOV:
+C     .     1) allow template to be stored with 15-slice images.
+C     .  Modified 20-Sep-91 by Tom Yang to port to UNIX and X Windows.
+C     .  Modified 26-Sep-91 by TOV for XSPIDERAM:
+C     .     1) for xspideram
+C     .  Modified 14-Apr-92 by TOV for XSPIDERAM:
+C     .     1) allow templating with 49-slice images
+C     .  Modified 07-Jan-94 by Tom Yang to allow templating with images
+C     .     having slices greater than 49.
+C     
+C     Common blocks from SPIDERAM.INC
+C     .  **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .  **DISPLAY  - display parameters             (write)
+C     .  **FILES    - scan file list                 (read only)
+C     
+C     Local Variables:
+C     .  TITLE - title of this menu;
+C     .  MENU - menu options;
+C     .  MENUSET - set of characters allowed for menu options;
+C     .  ROWMENU = line number of the line above the first line of the menu fields;
+C     .  CH - input character for selecting a menu option;
+C     .  ROWCH,COLCH - location of the field for entering CH;
+C     .  WARNLINE - line on which warnings will be written;
+C     .  MAXD - maximum section number that can be displayed;
+C     .  MAXN - maximum number of sections to display;
+C     .  L - length passed to write field subroutines;
+C     .  Q,A - question and answer;
+C     .  STR - string to write to terminal;
+C     .  NEWNAME - disk file name for storing an image;
+C     .  HOME,CLEAR - values passed to TCONTROL to home the cursor and
+C     .     clear the terminal screen;
+C     .  ERROR - true indicates an error message needs to be erased
+C     .     from the terminal;
+C     .  NEXT - logical variables required by some function calls but
+C     .     which is not used in this calling program;
+C     .  COUNT - number of pixels to subtract from templates;
+C     .  ERRTYPE = type of error in processing images:
+C     
+C     The following local variables correspond to common block variables
+C     in the LAST displayed image.  When a new image is displayed they
+C     are altered.  When this subroutine is exited, the common block
+C     variables are reset to these values.
+C     .  LORIENT   = ORIENT
+C     .  LMAG      = MAG
+C     .  LPROCESS  = PROCESS
+C     .  LSMOOTH   = SMOOTH
+C     .  LFILE(3)  = FILE(3)
+C     .  LCOMPARE  = COMPARE
+C     .  LTEMPLATE = TEMPLATE
+C     .  LTHRESHLD = THRESHLD
+C     
+C     Uses Subroutines:
+C     .  D2DISPLA - display an image;
+C     .  D2ERROR  - gets appropriate error message for an ERRTYPE;
+C     .  D2OPTION - write a display option field;
+C     .  D2RETEMP - reduce templates;
+C     .  D2ZOOM   - get region of image to zoom;
+C     .  CHFIELD  - get a character from terminal;
+C     .  ERSFIELD - erase a field;
+C     .  INFIELD  - get a string from a field;
+C     .  INTFIELD - get an integer from a field;
+C     .  QUERY    - write a question and get a Y or N response;
+C     .  WRTFIELD - write a character string to a field;
+C     
+C     Called by:  SPIDERAM
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: m2displa.f,v 1.11 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE M2DISPLA
+
+      INTEGER*4    WARNLINE,ROWCH,COLCH,ROWMENU,MAXD,HOME,CLEAR,COUNT,
+     &     LMAG,LPROCESS,LTEMPLATE,LTHRESHLD,LFILE(3),ERRTYPE,
+     &     MAXN,I,L,N,NUM
+      CHARACTER*1  LORIENT,CH,BELL
+      CHARACTER*3  COUNTSTR
+      CHARACTER*20 NEWNAME,BLANK,TITLE
+      CHARACTER*30 MENU(18)
+      CHARACTER*80 Q,STR,MENUSET
+      LOGICAL*1    LSMOOTH,LCOMPARE,A,NEXT
+
+      INCLUDE 'spideram.inc'
+
+      DATA HOME,CLEAR /1,2/
+      DATA BLANK    /' '/
+      DATA TITLE    /'Display Options:'/
+      DATA MENU(1)  /'O = Orientation              '/
+      DATA MENU(2)  /'S = Size                     '/
+      DATA MENU(3)  /'P = PET Data Representation  '/
+      DATA MENU(4)  /'I = Interpolate              '/
+      DATA MENU(5)  /'L = Labels                   '/
+      DATA MENU(6)  /'V = Total Sections Displayed '/
+      DATA MENU(7)  /'J = Inter-Section Step       '/
+      DATA MENU(8)  /'A = Primary Scan File        '/
+      DATA MENU(9)  /'B = Subtrahend Scan File     '/
+      DATA MENU(10) /'C = Divisor Scan File        '/
+      DATA MENU(11) /'X = Image Comparisons        '/
+      DATA MENU(12) /'T = Threshold/Template       '/
+      DATA MENU(13) /'% = Cutoff for Threshold     '/
+      DATA MENU(14) /'- = Shrink Template          '/
+      DATA MENU(15) /'Z = Zoom Image               '/
+      DATA MENU(16) /'D = Display Images           '/
+      DATA MENU(17) /'N = Number Scale             '/
+      DATA MENU(18) /'M = Exit to Main Menu        '/
+      DATA MENUSET  /'OSPILVJABCXT%_ZDNMospilvjabcxt5-zdnm'/
+      DATA ROWMENU,ROWCH,COLCH,WARNLINE /2,22,5,24/
+      NEWNAME = ' '
+      BELL = CHAR(7)
+      ERRTYPE = 0
+
+C     Initialize local variables for last displayed image
+
+      LORIENT   = ORIENT
+      LMAG      = MAG
+      LPROCESS  = PROCESS
+      LSMOOTH   = SMOOTH
+      LFILE(1)  = FILE(1)
+      LFILE(2)  = FILE(2)
+      LFILE(3)  = FILE(3)
+      LCOMPARE  = COMPARE
+      LTEMPLATE = TEMPLATE
+      LTHRESHLD = THRESHLD
+
+C====================================================================
+
+C     Clear the screen and write the menu & currently selection options
+
+ 8010 FORMAT(A20)
+ 8020 FORMAT(A20)
+ 8030 FORMAT(5X,A30)
+
+ 100  CALL TCONTROL (HOME, 0, 0)
+      CALL TCONTROL (CLEAR, 0, 0)
+      WRITE (USEROUT, 8010) TITLE
+      WRITE (USEROUT, 8020) BLANK
+      DO 120 I = 1, 18
+         WRITE (USEROUT, 8030) MENU (I)
+ 120  CONTINUE
+      DO 140 I=1,13
+         CALL D2OPTION(I,ROWMENU)
+ 140  CONTINUE
+      CALL D2OPTION(17,ROWMENU)
+
+C====================================================================
+C     Get the options selected by the user and execute it
+
+ 200  CALL CHFIELD(CH,MENUSET,ROWCH,COLCH,0)
+
+C     #1 = orientation
+
+      IF (CH.EQ.'O' .OR. CH.EQ.'o') THEN
+         Q = 'Change Orientation'
+ 1010    CALL QUERY(Q,A,ROWCH,COLCH)
+         IF (A) THEN
+            N = 1
+            IF (ORIENT.EQ.'S') THEN
+               ORIENT = 'T'
+            ELSE IF (ORIENT.EQ.'T') THEN
+               ORIENT = 'C'
+            ELSE IF (ORIENT.EQ.'C') THEN
+               ORIENT = 'S'
+            END IF
+            CALL D2OPTION(N,ROWMENU)
+            GO TO 1010
+         END IF
+
+C     Max. no. of transverse sections that can be displayed is no. of slices
+
+         IF (ORIENT.EQ.'T' .AND. NUMDISP.GT.NMSLICES) THEN
+            NUMDISP = NMSLICES
+            CALL D2OPTION(6,ROWMENU)
+         END IF
+
+C     Can only save a template with transverse images
+C     Set TEMPLATE to 0 (NONE)
+
+         IF (ORIENT.NE.'T' .AND. TEMPLATE.EQ.2) THEN
+            TEMPLATE = 0
+            CALL D2OPTION(12,ROWMENU)
+            CALL D2OPTION(13,ROWMENU)
+         END IF
+         CALL ERSFIELD(50,ROWCH,COLCH)
+
+C     ---------------------------------------------------
+C     #2 = Magnification
+C     (26-Sep-91 options added for XSPIDERAM)
+
+      ELSE IF (CH.EQ.'S' .OR. CH.EQ.'s') THEN
+         Q = 'Change Size'
+ 1020    CALL QUERY(Q,A,ROWCH,COLCH)
+         IF (A) THEN
+            N = 2
+            IF (MAG.EQ.7) THEN
+               MAG = 5
+            ELSE IF (MAG.EQ.5) THEN
+               MAG = 4
+            ELSE IF (MAG.EQ.4) THEN
+               MAG = 3
+            ELSE IF (MAG.EQ.3) THEN
+               MAG = 2
+            ELSE IF (MAG.EQ.2) THEN
+               MAG = 1
+            ELSE IF (MAG.EQ.1) THEN
+               MAG = 8
+            ELSE IF (MAG.EQ.8) THEN
+               MAG = 9
+            ELSE 
+               MAG = 7
+            END IF
+            CALL D2OPTION(N,ROWMENU)
+            GO TO 1020
+         END IF
+         CALL ERSFIELD(50,ROWCH,COLCH)
+
+C     Update number of sections displayed and inter-section step
+
+         CALL D2OPTION(6,ROWMENU)
+         CALL D2OPTION(7,ROWMENU)
+
+C     ---------------------------------------------------
+C     #3 = type of processing
+
+      ELSE IF (CH.EQ.'P' .OR. CH.EQ.'p') THEN
+         Q = 'Change Processing Type'
+ 1030    CALL QUERY(Q,A,ROWCH,COLCH)
+         IF (A) THEN
+            N = 3
+            IF (PROCESS.EQ.0) THEN
+               PROCESS = 1
+            ELSE IF (PROCESS.EQ.1) THEN
+               PROCESS = 2
+            ELSE IF (PROCESS.EQ.2) THEN
+               PROCESS = 3
+            ELSE IF (PROCESS.EQ.3) THEN
+               PROCESS = 7
+            ELSE IF (PROCESS.EQ.7) THEN
+               PROCESS = 4
+            ELSE IF (PROCESS.EQ.4) THEN
+               PROCESS = 5
+            ELSE IF (PROCESS.EQ.5) THEN
+               PROCESS = 6
+            ELSE
+               PROCESS = 0
+            END IF
+            CALL D2OPTION(N,ROWMENU)
+            GO TO 1030
+         END IF
+         CALL ERSFIELD(50,ROWCH,COLCH)
+
+C     ---------------------------------------------------
+C     #4 = Interpolation
+
+      ELSE IF (CH.EQ.'I' .OR. CH.EQ.'i') THEN
+         Q = 'Change Interpolation'
+ 1040    CALL QUERY(Q,A,ROWCH,COLCH)
+         IF (A) THEN
+            N = 4
+            IF (SMOOTH) THEN
+               SMOOTH = .FALSE.
+            ELSE
+               SMOOTH = .TRUE.
+            END IF
+            CALL D2OPTION(N,ROWMENU)
+            GO TO 1040
+         END IF
+         CALL ERSFIELD(50,ROWCH,COLCH)
+
+C     ---------------------------------------------------
+C     #5 = Labels
+
+      ELSE IF (CH.EQ.'L' .OR. CH.EQ.'l') THEN
+         Q = 'Change Annotation'
+ 1050    CALL QUERY(Q,A,ROWCH,COLCH)
+         IF (A) THEN
+            N = 5
+            IF (ANNOTATE) THEN
+               ANNOTATE = .FALSE.
+            ELSE
+               ANNOTATE = .TRUE.
+            END IF
+            CALL D2OPTION(N,ROWMENU)
+            GO TO 1050
+         END IF
+         CALL ERSFIELD(50,ROWCH,COLCH)
+
+C     ---------------------------------------------------
+C     #6 = Sections displayed
+C     (26-Sep-91 28-->49 for XSPIDERAM)
+
+      ELSE IF (CH.EQ.'V' .OR. CH.EQ.'v') THEN
+         N = 6
+         Q = 'Number of Sections to Display'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         IF (ORIENT.EQ.'T') THEN
+            IF (NMSLICES.GT.49) THEN
+               MAXN = 49
+            ELSE
+               MAXN = NMSLICES
+            END IF
+         ELSE
+            MAXN = 49
+         END IF
+         CALL INTFIELD(NUMDISP,1,MAXN,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         CALL D2OPTION(N,ROWMENU)
+         CALL ERSFIELD(80,ROWCH,1)
+
+C     ---------------------------------------------------
+C     #7 = Intersection Step
+
+      ELSE IF (CH.EQ.'J' .OR. CH.EQ.'j') THEN
+         N = 7
+         Q = 'Step size between displayed sections'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         CALL INTFIELD(SECTSTEP,1,100,3,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         CALL D2OPTION(N,ROWMENU)
+         CALL ERSFIELD(80,ROWCH,1)
+
+C     ---------------------------------------------------
+C     #8 = Primary Scan File Number
+
+      ELSE IF (CH.EQ.'A' .OR. CH.EQ.'a') THEN
+         N = 8
+         Q = 'Primary Scan File Number'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         CALL INTFIELD(FILE(1),1,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         CALL D2OPTION(N,ROWMENU)
+         CALL ERSFIELD(80,ROWCH,1)
+
+C     ---------------------------------------------------
+C     #9 = Subtrahend Scan File Number
+C     (used only with COMPARE)
+
+      ELSE IF ((CH.EQ.'B' .OR. CH.EQ.'b') .AND. COMPARE) THEN
+         N = 9
+         Q = 'Subtrahend Scan File Number'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         CALL INTFIELD(FILE(2),0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         CALL D2OPTION(N,ROWMENU)
+         CALL ERSFIELD(80,ROWCH,1)
+
+C     ---------------------------------------------------
+C     #10 = Divisor Scan File Number
+C     (used only with COMPARE)
+
+      ELSE IF ((CH.EQ.'C' .OR. CH.EQ.'c') .AND. COMPARE) THEN
+         N = 10
+         Q = 'Divisor Scan File Number'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         CALL INTFIELD(FILE(3),0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         CALL D2OPTION(N,ROWMENU)
+         CALL ERSFIELD(80,ROWCH,1)
+
+C     ---------------------------------------------------
+C     #11 = Image Comparisons
+C     (cannot use thresholding or save template with COMPARE)
+
+      ELSE IF (CH.EQ.'X' .OR. CH.EQ.'x') THEN
+         Q = 'Change Image Comparisons'
+ 1110    CALL QUERY(Q,A,ROWCH,COLCH)
+         IF (A) THEN
+            N = 11
+            IF (COMPARE) THEN
+               COMPARE = .FALSE.
+            ELSE
+               COMPARE = .TRUE.
+            END IF
+            CALL D2OPTION(N,ROWMENU)
+            GO TO 1110
+         END IF
+
+         CALL D2OPTION(9,ROWMENU)
+         CALL D2OPTION(10,ROWMENU)
+
+C     Cannot use thresholding or save template with COMPARE
+C     Set TEMPLATE to 0 (NONE)
+
+         IF (COMPARE .AND. (TEMPLATE.EQ.1 .OR.TEMPLATE.EQ.2)) THEN
+            TEMPLATE = 0
+            CALL D2OPTION(12,ROWMENU)
+            CALL D2OPTION(13,ROWMENU)
+         END IF
+         CALL ERSFIELD(50,ROWCH,COLCH)
+
+C     ---------------------------------------------------
+C     #12 = Threshold/Template
+C     (cannot use thresholding or save template with COMPARE)
+C     (can only save template with transverse images)
+C     (modified to allow templating with 49-slice images 14-Apr-92)
+C     (modified to allow templating with >= 49-slice images 14-Jan-94)
+
+      ELSE IF (CH.EQ.'T' .OR. CH.EQ.'t') THEN
+         Q = 'Change Threshold/Template'
+ 1120    CALL QUERY (Q, A, ROWCH, COLCH)
+         IF (A) THEN
+            N = 12
+            IF (TEMPLATE.EQ.0 .AND. .NOT. COMPARE) THEN
+               TEMPLATE = 1
+            ELSE IF (TEMPLATE.EQ.1 .AND. .NOT. COMPARE .AND. ORIENT.EQ.'T') THEN
+               TEMPLATE = 2
+            ELSE IF (TEMPLATE .LT. 3) THEN
+               TEMPLATE = 3
+            ELSE IF (TEMPLATE .LT. 4 .AND. NMSLICES .GE. 49) THEN
+               TEMPLATE = 4
+            ELSE
+               TEMPLATE = 0
+            END IF
+            CALL D2OPTION (N, ROWMENU)
+            CALL D2OPTION (N + 1, ROWMENU)
+            GO TO 1120
+         END IF
+         CALL ERSFIELD (50, ROWCH, COLCH)
+
+C     ---------------------------------------------------
+C     #13 = Cutoff for thresholding
+
+      ELSE IF ((CH.EQ.'%' .OR. CH.EQ.'5') .AND.
+     2        (TEMPLATE.EQ.1. OR. TEMPLATE.EQ.2)) THEN
+         N = 13
+         Q = 'Percent Cutoff for Thresholding'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         CALL INTFIELD(THRESHLD,0,100,3,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         CALL D2OPTION(N,ROWMENU)
+         CALL ERSFIELD(80,ROWCH,1)
+
+C     ---------------------------------------------------
+C     #15 = Shrink Template
+
+      ELSE IF ((CH.EQ.'-' .OR. CH.EQ.'_') .AND.
+     2        FILETP(1:20).NE.BLANK) THEN
+         COUNT = 0
+         Q = 'Number of pixels to subtract from the template'
+         L = INANYR(Q,' ')
+         CALL WRTFIELD(Q,L,ROWCH,COLCH)
+         CALL INTFIELD(COUNT,0,10,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+         IF (COUNT.GT.0 .AND. NMSLICES.GT.0) THEN
+            DO 1150 I=1,NMSLICES
+               CALL D2RETEMP (COUNT, I)
+ 1150       CONTINUE
+
+C     Add '-nn' to end of template file name
+C     where nn is the total pixels subtracted from the template
+
+            COUNTSTR = FILETP(21:23)
+            IF (COUNTSTR.NE.'   ') THEN
+               READ(COUNTSTR,8100) NUM
+               COUNT = NUM-COUNT
+            ELSE
+               COUNT = -COUNT
+            END IF
+            WRITE(COUNTSTR,8100) COUNT
+            FILETP(21:23) = COUNTSTR
+            CALL D2OPTION(12,ROWMENU)
+         END IF
+         CALL ERSFIELD(80,ROWCH,1)
+ 8100    FORMAT(I3)
+
+C     ---------------------------------------------------
+C     #15 = Zoom Image
+
+      ELSE IF (CH.EQ.'Z' .OR. CH.EQ.'z') THEN
+         IF (ORIENT.EQ.'T') THEN
+            Q = 'Zoom Image'
+            CALL QUERY (Q, A, ROWCH, COLCH)
+            IF (A) THEN
+               CALL D2ZOOM
+               GO TO 100
+            ELSE
+               CALL ERSFIELD (80, ROWCH, 1)
+            END IF
+         ELSE
+            STR = 'Cannot zoom coronal/sagittal images'//BELL
+            CALL WRTFIELD (STR, 70, WARNLINE, 1)
+            GO TO 200
+         END IF
+
+C     ---------------------------------------------------
+C     #16 = Display Images
+C     (26-Sep-91 altered for XSPIDERAM)
+
+      ELSE IF ((CH.EQ.'D') .OR. (CH.EQ.'d')) THEN
+         IF (MAG.EQ.7 .OR. NUMDISP.EQ.1) THEN
+            Q = 'Display Section #'
+         ELSE
+            Q = 'Display Sections beginning with #'
+         END IF
+         L = INANYR (Q, ' ')
+         CALL WRTFIELD (Q, L, ROWCH, COLCH)
+         Q = '(enter 0 to cancel)'
+         CALL WRTFIELD (Q, 20, ROWCH, COLCH + L + 7)
+         IF (ORIENT.EQ.'T') THEN
+            MAXD = NMSLICES
+         ELSE
+            MAXD = AMAX
+         END IF
+         CALL INTFIELD (DSECTION, 0, MAXD, 3, ROWCH, COLCH + L + 2, WARNLINE, NEXT)
+         IF (DSECTION.GT.0) THEN
+            IF ((MAG.EQ.5 .AND. NUMDISP .LT. 4) .OR.
+     &           (MAG.EQ.4 .AND. NUMDISP.LE.4) .OR.
+     &           (MAG.EQ.3 .AND. NUMDISP.LE.8) .OR.
+     &           (MAG.EQ.2 .AND. NUMDISP.LE.21).OR.
+     &           (MAG.EQ.8 .AND. NUMDISP.LE.48).OR.
+     &           (MAG.EQ.9 .AND. NUMDISP.LE.6) .OR.
+     &           (MAG.EQ.1 .AND. NUMDISP.LE.42)) THEN
+               CALL ERSFIELD (80, ROWCH, 1)
+               Q = 'Ramtek Location'
+               L = INANYR (Q, ' ')
+               CALL WRTFIELD (Q, L, ROWCH, COLCH)
+               Q = '(enter 0 to cancel)'
+               CALL WRTFIELD (Q, 20, ROWCH, COLCH + L + 7)
+
+               IF (MAG.EQ.1 .AND. NUMDISP.LE.7) THEN
+                  MAXD = 7
+               ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.14) THEN
+                  MAXD = 6
+               ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.21) THEN
+                  MAXD = 5
+               ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.28) THEN
+                  MAXD = 4
+               ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.35) THEN
+                  MAXD = 3
+               ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.42) THEN
+                  MAXD = 2
+               ELSE IF (MAG.EQ.2 .AND. NUMDISP.LE.7) THEN
+                  MAXD = 4
+               ELSE IF (MAG.EQ.2 .AND. NUMDISP.LE.14) THEN
+                  MAXD = 3
+               ELSE IF (MAG.EQ.2 .AND. NUMDISP.LE.21) THEN
+                  MAXD = 2
+               ELSE IF (MAG.EQ.3 .AND. NUMDISP.LE.4) THEN
+                  MAXD = 3
+               ELSE IF (MAG.EQ.3 .AND. NUMDISP.LE.8) THEN
+                  MAXD = 2
+               ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.8) THEN
+                  MAXD = 6
+               ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.16) THEN
+                  MAXD = 5
+               ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.24) THEN
+                  MAXD = 4
+               ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.32) THEN
+                  MAXD = 3
+               ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.40) THEN
+                  MAXD = 2
+               ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.48) THEN
+                  MAXD = 1
+               ELSE IF (MAG.EQ.9) THEN
+                  MAXD = 7 - NUMDISP
+               ELSE
+                  MAXD = 5 - NUMDISP
+               END IF
+               CALL INTFIELD (DLOC, 0, MAXD, 1, ROWCH, COLCH + L + 2, WARNLINE, NEXT)
+            ELSE
+               DLOC = 1
+            END IF
+            IF (DLOC.GT.0) THEN
+               ZFACTOR = 1
+               IF (ERRTYPE.NE.0) CALL ERSFIELD (70, WARNLINE, 1)
+               ERRTYPE = 0
+               CALL D2DISPLA (ERRTYPE)
+               IF (ERRTYPE.EQ.0) THEN
+                  LORIENT       = ORIENT
+                  LMAG       = MAG
+                  LPROCESS = PROCESS
+                  LSMOOTH       = SMOOTH
+                  LFILE (1) = FILE (1)
+                  LFILE (2) = FILE (2)
+                  LFILE (3) = FILE (3)
+                  LCOMPARE = COMPARE
+                  LTEMPLATE = TEMPLATE
+                  LTHRESHLD = THRESHLD
+               ELSE
+                  CALL D2ERROR (ERRTYPE, STR)
+                  CALL WRTFIELD (STR, 70, WARNLINE, 1)
+               END IF
+            END IF
+         END IF
+         CALL ERSFIELD (80, ROWCH, 1)
+
+C     ---------------------------------------------------
+C     #17 = Scaling
+
+      ELSE IF (CH.EQ.'N' .OR. CH.EQ.'n') THEN
+         Q = 'Change Scaling'
+ 1170    CALL QUERY(Q,A,ROWCH,COLCH)
+         IF (A) THEN
+            N = 17
+            IF (SEPSCALE) THEN
+               SEPSCALE = .FALSE.
+            ELSE
+               SEPSCALE = .TRUE.
+            END IF
+            CALL D2OPTION(N,ROWMENU)
+            GO TO 1170
+         END IF
+         CALL ERSFIELD (50,ROWCH,COLCH)
+
+C     ---------------------------------------------------
+C     #18 = Exit to Main Menu
+
+C     Restore common block variables to those use in last displayed image
+
+      ELSE IF (CH.EQ.'M' .OR. CH.EQ.'m') THEN
+         ORIENT   = LORIENT
+         MAG      = LMAG
+         PROCESS  = LPROCESS
+         SMOOTH   = LSMOOTH
+         FILE(1)  = LFILE(1)
+         FILE(2)  = LFILE(2)
+         FILE(3)  = LFILE(3)
+         COMPARE  = LCOMPARE
+         TEMPLATE = LTEMPLATE
+         THRESHLD = LTHRESHLD
+         RETURN
+      END IF
+      GO TO 200
+
+C     ====================================================================
+      END
+@
+
+
+1.11
+log
+@format changes plus fixes for g77
+@
+text
+@d94 1
+a94 1
+C     rcsheader = "$Id: m2displa.f,v 1.10 1999/03/05 18:49:14 tom Exp tom $"
+@
+
+
+1.10
+log
+@add CVO2
+@
+text
+@d2 91
+a92 103
+C
+C  Subroutine:   M2DISPLA.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         28-May-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified 05-Mar-99 by TOV to allow processing for CVO2
+C        (PROCESS may be 0-7)
+C     Modified 28-Apr-98 by TOV to allow processing for CMRGlucose
+C        (PROCESS may be 0-6)
+C     Modified by TOV 12-Aug-87 to eliminate a bug in error checking
+C        for max. value of NUMDISP for coronal and sagittal sections;
+C     Modified 06-Oct-87 by TOV to allow processing for tissue activity
+C        either with or without decay correction; (PROCESS may be 0-5)
+C     Modified 28-Dec-87 by TOV to allow scaling of rows of 7 images
+C        to individual slice max (SEPSCALE added to common block).
+C     Modified 13-Sep-88 by TOV:
+C        1) change name to subtrahend.
+C        2) eliminate REFRESH option.
+C        3) change FILETP from I*4 to CH*23 in **DISPLAY common block.
+C     Modified 03-Jan-90 by TOV:
+C        1) allow template to be stored with 15-slice images.
+C     Modified 20-Sep-91 by Tom Yang to port to UNIX and X Windows.
+C     Modified 26-Sep-91 by TOV for XSPIDERAM:
+C        1) for xspideram
+C     Modified 14-Apr-92 by TOV for XSPIDERAM:
+C			   1) allow templating with 49-slice images
+C     Modified 07-Jan-94 by Tom Yang to allow templating with images
+C        having slices greater than 49.
+C
+C  Intent:
+C     This subroutine writes the DISPLAY OPTIONS LIST to the terminal
+C     along with the currently selected values for the display parameters.
+C     It uses full screen editing techniques to allow the user to alter
+C     any of the displayed parameters.
+C
+C  Common blocks from SPIDERAM.INC
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (write)
+C     **FILES    - scan file list                 (read only)
+C
+C  Local Variables:
+C     TITLE - title of this menu;
+C     MENU - menu options;
+C     MENUSET - set of characters allowed for menu options;
+C     ROWMENU = line number of the line above the first line of
+C        the menu fields;
+C     CH - input character for selecting a menu option;
+C     ROWCH,COLCH - location of the field for entering CH;
+C     WARNLINE - line on which warnings will be written;
+C     MAXD - maximum section number that can be displayed;
+C     MAXN - maximum number of sections to display;
+C     L - length passed to write field subroutines;
+C     Q,A - question and answer;
+C     STR - string to write to terminal;
+C     NEWNAME - disk file name for storing an image;
+C     HOME,CLEAR - values passed to TCONTROL to home the cursor and
+C        clear the terminal screen;
+C     ERROR - true indicates an error message needs to be erased
+C        from the terminal;
+C     NEXT - logical variables required by some function calls but
+C        which is not used in this calling program;
+C     COUNT - number of pixels to subtract from templates;
+C     ERRTYPE = type of error in processing images:
+C
+C  The following local variables correspond to common block variables
+C  in the LAST displayed image.  When a new image is displayed they
+C  are altered.  When this subroutine is exited, the common block
+C  variables are reset to these values.
+C     LORIENT   = ORIENT
+C     LMAG      = MAG
+C     LPROCESS  = PROCESS
+C     LSMOOTH   = SMOOTH
+C     LFILE(3)  = FILE(3)
+C     LCOMPARE  = COMPARE
+C     LTEMPLATE = TEMPLATE
+C     LTHRESHLD = THRESHLD
+C
+C  Uses Subroutines:
+C
+C  FORTRAN library
+C     ENCODE - convert integer to string
+C     DECODE - convert string to integer
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     D2DISPLA - display an image;
+C     D2ERROR  - gets appropriate error message for an ERRTYPE;
+C     D2OPTION - write a display option field;
+C     D2RETEMP - reduce templates;
+C     D2ZOOM   - get region of image to zoom;
+C
+C  FIELDS.LIB - terminal I/O routines using fields:
+C     CHFIELD  - get a character from terminal;
+C     ERSFIELD - erase a field;
+C     INFIELD  - get a string from a field;
+C     INTFIELD - get an integer from a field;
+C     QUERY    - write a question and get a Y or N response;
+C     WRTFIELD - write a character string to a field;
+C
+C  Called by:  SPIDERAM
+C
+d94 1
+d99 2
+a100 2
+     &             LMAG,LPROCESS,LTEMPLATE,LTHRESHLD,LFILE(3),ERRTYPE,
+     &             MAXN,I,L,N,NUM
+a106 1
+      character*256 rcsheader
+a108 1
+      rcsheader = "$Id: m2displa.f,v 1.9 1999/02/17 18:43:30 tom Exp tom $"
+d137 1
+a137 1
+C  Initialize local variables for last displayed image
+d152 1
+a152 1
+C  Clear the screen and write the menu & currently selection options
+d154 3
+a156 3
+8010  FORMAT(A20)
+8020  FORMAT(A20)
+8030  FORMAT(5X,A30)
+d158 1
+a158 1
+100   CALL TCONTROL (HOME, 0, 0)
+d163 2
+a164 2
+	WRITE (USEROUT, 8030) MENU (I)
+120   CONTINUE
+d166 2
+a167 2
+        CALL D2OPTION(I,ROWMENU)
+140   CONTINUE
+d171 1
+a171 1
+C  Get the options selected by the user and execute it
+d173 1
+a173 1
+200   CALL CHFIELD(CH,MENUSET,ROWCH,COLCH,0)
+d175 1
+a175 1
+C  #1 = orientation
+d178 14
+a191 14
+        Q = 'Change Orientation'
+1010    CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) THEN
+          N = 1
+          IF (ORIENT.EQ.'S') THEN
+            ORIENT = 'T'
+          ELSE IF (ORIENT.EQ.'T') THEN
+            ORIENT = 'C'
+          ELSE IF (ORIENT.EQ.'C') THEN
+            ORIENT = 'S'
+          END IF
+          CALL D2OPTION(N,ROWMENU)
+          GO TO 1010
+        END IF
+d193 1
+a193 1
+C  Max. no. of transverse sections that can be displayed is no. of slices
+d195 4
+a198 4
+        IF (ORIENT.EQ.'T' .AND. NUMDISP.GT.NMSLICES) THEN
+          NUMDISP = NMSLICES
+          CALL D2OPTION(6,ROWMENU)
+        END IF
+d200 2
+a201 2
+C    Can only save a template with transverse images
+C    Set TEMPLATE to 0 (NONE)
+d203 6
+a208 6
+        IF (ORIENT.NE.'T' .AND. TEMPLATE.EQ.2) THEN
+          TEMPLATE = 0
+          CALL D2OPTION(12,ROWMENU)
+          CALL D2OPTION(13,ROWMENU)
+        END IF
+        CALL ERSFIELD(50,ROWCH,COLCH)
+d210 3
+a212 3
+C ---------------------------------------------------
+C  #2 = Magnification
+C   (26-Sep-91 options added for XSPIDERAM)
+d215 25
+a239 25
+        Q = 'Change Size'
+1020    CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) THEN
+          N = 2
+          IF (MAG.EQ.7) THEN
+            MAG = 5
+          ELSE IF (MAG.EQ.5) THEN
+            MAG = 4
+          ELSE IF (MAG.EQ.4) THEN
+            MAG = 3
+          ELSE IF (MAG.EQ.3) THEN
+            MAG = 2
+          ELSE IF (MAG.EQ.2) THEN
+            MAG = 1
+          ELSE IF (MAG.EQ.1) THEN
+            MAG = 8
+          ELSE IF (MAG.EQ.8) THEN
+            MAG = 9
+          ELSE 
+            MAG = 7
+          END IF
+          CALL D2OPTION(N,ROWMENU)
+          GO TO 1020
+        END IF
+        CALL ERSFIELD(50,ROWCH,COLCH)
+d241 1
+a241 1
+C    Update number of sections displayed and inter-section step
+d243 2
+a244 2
+        CALL D2OPTION(6,ROWMENU)
+        CALL D2OPTION(7,ROWMENU)
+d246 2
+a247 2
+C ---------------------------------------------------
+C  #3 = type of processing
+d250 25
+a274 25
+        Q = 'Change Processing Type'
+1030    CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) THEN
+          N = 3
+          IF (PROCESS.EQ.0) THEN
+            PROCESS = 1
+          ELSE IF (PROCESS.EQ.1) THEN
+            PROCESS = 2
+          ELSE IF (PROCESS.EQ.2) THEN
+            PROCESS = 3
+          ELSE IF (PROCESS.EQ.3) THEN
+            PROCESS = 7
+          ELSE IF (PROCESS.EQ.7) THEN
+            PROCESS = 4
+          ELSE IF (PROCESS.EQ.4) THEN
+            PROCESS = 5
+          ELSE IF (PROCESS.EQ.5) THEN
+            PROCESS = 6
+          ELSE
+            PROCESS = 0
+          END IF
+          CALL D2OPTION(N,ROWMENU)
+          GO TO 1030
+        END IF
+        CALL ERSFIELD(50,ROWCH,COLCH)
+d276 2
+a277 2
+C ---------------------------------------------------
+C  #4 = Interpolation
+d280 13
+a292 13
+        Q = 'Change Interpolation'
+1040    CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) THEN
+          N = 4
+          IF (SMOOTH) THEN
+            SMOOTH = .FALSE.
+          ELSE
+            SMOOTH = .TRUE.
+          END IF
+          CALL D2OPTION(N,ROWMENU)
+          GO TO 1040
+        END IF
+        CALL ERSFIELD(50,ROWCH,COLCH)
+d294 2
+a295 2
+C ---------------------------------------------------
+C  #5 = Labels
+d298 13
+a310 13
+        Q = 'Change Annotation'
+1050    CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) THEN
+          N = 5
+          IF (ANNOTATE) THEN
+            ANNOTATE = .FALSE.
+          ELSE
+            ANNOTATE = .TRUE.
+          END IF
+          CALL D2OPTION(N,ROWMENU)
+          GO TO 1050
+        END IF
+        CALL ERSFIELD(50,ROWCH,COLCH)
+d312 3
+a314 3
+C ---------------------------------------------------
+C  #6 = Sections displayed
+C   (26-Sep-91 28-->49 for XSPIDERAM)
+d317 11
+a327 6
+        N = 6
+        Q = 'Number of Sections to Display'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        IF (ORIENT.EQ.'T') THEN
+          IF (NMSLICES.GT.49) THEN
+d329 4
+a332 9
+          ELSE
+            MAXN = NMSLICES
+          END IF
+        ELSE
+          MAXN = 49
+        END IF
+        CALL INTFIELD(NUMDISP,1,MAXN,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        CALL D2OPTION(N,ROWMENU)
+        CALL ERSFIELD(80,ROWCH,1)
+d334 2
+a335 2
+C ---------------------------------------------------
+C  #7 = Intersection Step
+d338 7
+a344 7
+        N = 7
+        Q = 'Step size between displayed sections'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        CALL INTFIELD(SECTSTEP,1,100,3,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        CALL D2OPTION(N,ROWMENU)
+        CALL ERSFIELD(80,ROWCH,1)
+d346 2
+a347 2
+C ---------------------------------------------------
+C  #8 = Primary Scan File Number
+d350 7
+a356 7
+        N = 8
+        Q = 'Primary Scan File Number'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        CALL INTFIELD(FILE(1),1,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        CALL D2OPTION(N,ROWMENU)
+        CALL ERSFIELD(80,ROWCH,1)
+d358 2
+a359 2
+C ---------------------------------------------------
+C  #9 = Subtrahend Scan File Number
+d363 7
+a369 7
+        N = 9
+        Q = 'Subtrahend Scan File Number'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        CALL INTFIELD(FILE(2),0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        CALL D2OPTION(N,ROWMENU)
+        CALL ERSFIELD(80,ROWCH,1)
+d371 2
+a372 2
+C ---------------------------------------------------
+C  #10 = Divisor Scan File Number
+d376 7
+a382 7
+        N = 10
+        Q = 'Divisor Scan File Number'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        CALL INTFIELD(FILE(3),0,20,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        CALL D2OPTION(N,ROWMENU)
+        CALL ERSFIELD(80,ROWCH,1)
+d384 2
+a385 2
+C ---------------------------------------------------
+C  #11 = Image Comparisons
+d389 12
+a400 12
+        Q = 'Change Image Comparisons'
+1110    CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) THEN
+          N = 11
+          IF (COMPARE) THEN
+            COMPARE = .FALSE.
+          ELSE
+            COMPARE = .TRUE.
+          END IF
+          CALL D2OPTION(N,ROWMENU)
+          GO TO 1110
+        END IF
+d402 2
+a403 2
+        CALL D2OPTION(9,ROWMENU)
+        CALL D2OPTION(10,ROWMENU)
+d405 2
+a406 2
+C    Cannot use thresholding or save template with COMPARE
+C    Set TEMPLATE to 0 (NONE)
+d408 6
+a413 6
+        IF (COMPARE .AND. (TEMPLATE.EQ.1 .OR.TEMPLATE.EQ.2)) THEN
+          TEMPLATE = 0
+          CALL D2OPTION(12,ROWMENU)
+          CALL D2OPTION(13,ROWMENU)
+        END IF
+        CALL ERSFIELD(50,ROWCH,COLCH)
+d415 2
+a416 2
+C ---------------------------------------------------
+C  #12 = Threshold/Template
+d423 20
+a442 23
+	Q = 'Change Threshold/Template'
+1120	CALL QUERY (Q, A, ROWCH, COLCH)
+	IF (A) THEN
+	   N = 12
+	   IF (TEMPLATE.EQ.0 .AND. .NOT. COMPARE) THEN
+	      TEMPLATE = 1
+	   ELSE IF (TEMPLATE.EQ.1 .AND. .NOT. COMPARE
+C     2	      .AND. ORIENT.EQ.'T' .AND. NMSLICES.LE.49) THEN
+     2	      .AND. ORIENT.EQ.'T') THEN
+	      TEMPLATE = 2
+C	   ELSE IF (TEMPLATE .LT. 3 .AND. NMSLICES.LE.49) THEN
+	   ELSE IF (TEMPLATE .LT. 3) THEN
+	      TEMPLATE = 3
+	   ELSE IF (TEMPLATE .LT. 4 .AND. NMSLICES .GE. 49) THEN
+	      TEMPLATE = 4
+	   ELSE
+	      TEMPLATE = 0
+	   END IF
+	   CALL D2OPTION (N, ROWMENU)
+	   CALL D2OPTION (N + 1, ROWMENU)
+	   GO TO 1120
+	END IF
+	CALL ERSFIELD (50, ROWCH, COLCH)
+d444 2
+a445 2
+C ---------------------------------------------------
+C  #13 = Cutoff for thresholding
+d448 8
+a455 8
+     2         (TEMPLATE.EQ.1. OR. TEMPLATE.EQ.2)) THEN
+        N = 13
+        Q = 'Percent Cutoff for Thresholding'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        CALL INTFIELD(THRESHLD,0,100,3,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        CALL D2OPTION(N,ROWMENU)
+        CALL ERSFIELD(80,ROWCH,1)
+d457 2
+a458 2
+C ---------------------------------------------------
+C  #15 = Shrink Template
+d461 10
+a470 10
+     2    FILETP(1:20).NE.BLANK) THEN
+        COUNT = 0
+        Q = 'Number of pixels to subtract from the template'
+        L = INANYR(Q,' ')
+        CALL WRTFIELD(Q,L,ROWCH,COLCH)
+        CALL INTFIELD(COUNT,0,10,2,ROWCH,COLCH+L+2,WARNLINE,NEXT)
+        IF (COUNT.GT.0 .AND. NMSLICES.GT.0) THEN
+          DO 1150 I=1,NMSLICES
+            CALL D2RETEMP (COUNT, I)
+1150      CONTINUE
+d472 2
+a473 2
+C  Add '-nn' to end of template file name
+C  where nn is the total pixels subtracted from the template
+d475 13
+a487 13
+          COUNTSTR = FILETP(21:23)
+          IF (COUNTSTR.NE.'   ') THEN
+            READ(COUNTSTR,8100) NUM
+            COUNT = NUM-COUNT
+          ELSE
+            COUNT = -COUNT
+          END IF
+          WRITE(COUNTSTR,8100) COUNT
+          FILETP(21:23) = COUNTSTR
+          CALL D2OPTION(12,ROWMENU)
+        END IF
+        CALL ERSFIELD(80,ROWCH,1)
+8100    FORMAT(I3)
+d489 2
+a490 2
+C ---------------------------------------------------
+C  #15 = Zoom Image
+d493 14
+a506 14
+	IF (ORIENT.EQ.'T') THEN
+		Q = 'Zoom Image'
+		CALL QUERY (Q, A, ROWCH, COLCH)
+		IF (A) THEN
+			CALL D2ZOOM
+			GO TO 100
+		ELSE
+			CALL ERSFIELD (80, ROWCH, 1)
+		END IF
+	ELSE
+		STR = 'Cannot zoom coronal/sagittal images'//BELL
+		CALL WRTFIELD (STR, 70, WARNLINE, 1)
+		GO TO 200
+	END IF
+d508 3
+a510 3
+C ---------------------------------------------------
+C  #16 = Display Images
+C   (26-Sep-91 altered for XSPIDERAM)
+d513 29
+a541 29
+	IF (MAG.EQ.7 .OR. NUMDISP.EQ.1) THEN
+		Q = 'Display Section #'
+	ELSE
+		Q = 'Display Sections beginning with #'
+	END IF
+	L = INANYR (Q, ' ')
+	CALL WRTFIELD (Q, L, ROWCH, COLCH)
+	Q = '(enter 0 to cancel)'
+	CALL WRTFIELD (Q, 20, ROWCH, COLCH + L + 7)
+	IF (ORIENT.EQ.'T') THEN
+		MAXD = NMSLICES
+	ELSE
+		MAXD = AMAX
+	END IF
+	CALL INTFIELD (DSECTION, 0, MAXD, 3, ROWCH, COLCH + L + 2, WARNLINE, NEXT)
+	IF (DSECTION.GT.0) THEN
+		IF ((MAG.EQ.5 .AND. NUMDISP .LT. 4) .OR.
+     &			(MAG.EQ.4 .AND. NUMDISP.LE.4) .OR.
+     &			(MAG.EQ.3 .AND. NUMDISP.LE.8) .OR.
+     &			(MAG.EQ.2 .AND. NUMDISP.LE.21).OR.
+     &			(MAG.EQ.8 .AND. NUMDISP.LE.48).OR.
+     &			(MAG.EQ.9 .AND. NUMDISP.LE.6) .OR.
+     &			(MAG.EQ.1 .AND. NUMDISP.LE.42)) THEN
+			CALL ERSFIELD (80, ROWCH, 1)
+			Q = 'Ramtek Location'
+			L = INANYR (Q, ' ')
+			CALL WRTFIELD (Q, L, ROWCH, COLCH)
+			Q = '(enter 0 to cancel)'
+			CALL WRTFIELD (Q, 20, ROWCH, COLCH + L + 7)
+d543 66
+a608 66
+			IF (MAG.EQ.1 .AND. NUMDISP.LE.7) THEN
+				MAXD = 7
+			ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.14) THEN
+				MAXD = 6
+			ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.21) THEN
+				MAXD = 5
+			ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.28) THEN
+				MAXD = 4
+			ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.35) THEN
+				MAXD = 3
+			ELSE IF (MAG.EQ.1 .AND. NUMDISP.LE.42) THEN
+				MAXD = 2
+			ELSE IF (MAG.EQ.2 .AND. NUMDISP.LE.7) THEN
+				MAXD = 4
+			ELSE IF (MAG.EQ.2 .AND. NUMDISP.LE.14) THEN
+				MAXD = 3
+			ELSE IF (MAG.EQ.2 .AND. NUMDISP.LE.21) THEN
+				MAXD = 2
+			ELSE IF (MAG.EQ.3 .AND. NUMDISP.LE.4) THEN
+				MAXD = 3
+			ELSE IF (MAG.EQ.3 .AND. NUMDISP.LE.8) THEN
+				MAXD = 2
+			ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.8) THEN
+				MAXD = 6
+			ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.16) THEN
+				MAXD = 5
+			ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.24) THEN
+				MAXD = 4
+			ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.32) THEN
+				MAXD = 3
+			ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.40) THEN
+				MAXD = 2
+			ELSE IF (MAG.EQ.8 .AND. NUMDISP.LE.48) THEN
+				MAXD = 1
+			ELSE IF (MAG.EQ.9) THEN
+				MAXD = 7 - NUMDISP
+			ELSE
+				MAXD = 5 - NUMDISP
+			END IF
+			CALL INTFIELD (DLOC, 0, MAXD, 1, ROWCH, COLCH + L + 2, WARNLINE, NEXT)
+		ELSE
+			DLOC = 1
+		END IF
+		IF (DLOC.GT.0) THEN
+			ZFACTOR = 1
+			IF (ERRTYPE.NE.0) CALL ERSFIELD (70, WARNLINE, 1)
+			ERRTYPE = 0
+			CALL D2DISPLA (ERRTYPE)
+			IF (ERRTYPE.EQ.0) THEN
+				LORIENT	 = ORIENT
+				LMAG	 = MAG
+				LPROCESS = PROCESS
+				LSMOOTH	 = SMOOTH
+				LFILE (1) = FILE (1)
+				LFILE (2) = FILE (2)
+				LFILE (3) = FILE (3)
+				LCOMPARE = COMPARE
+				LTEMPLATE = TEMPLATE
+				LTHRESHLD = THRESHLD
+			ELSE
+				CALL D2ERROR (ERRTYPE, STR)
+				CALL WRTFIELD (STR, 70, WARNLINE, 1)
+			END IF
+		END IF
+	END IF
+	CALL ERSFIELD (80, ROWCH, 1)
+d610 2
+a611 2
+C ---------------------------------------------------
+C  #17 = Scaling
+d614 13
+a626 13
+        Q = 'Change Scaling'
+1170    CALL QUERY(Q,A,ROWCH,COLCH)
+        IF (A) THEN
+          N = 17
+          IF (SEPSCALE) THEN
+            SEPSCALE = .FALSE.
+          ELSE
+            SEPSCALE = .TRUE.
+          END IF
+          CALL D2OPTION(N,ROWMENU)
+          GO TO 1170
+        END IF
+        CALL ERSFIELD (50,ROWCH,COLCH)
+d628 2
+a629 2
+C ---------------------------------------------------
+C  #18 = Exit to Main Menu
+d631 1
+a631 1
+C  Restore common block variables to those use in last displayed image
+d634 11
+a644 11
+        ORIENT   = LORIENT
+        MAG      = LMAG
+        PROCESS  = LPROCESS
+        SMOOTH   = LSMOOTH
+        FILE(1)  = LFILE(1)
+        FILE(2)  = LFILE(2)
+        FILE(3)  = LFILE(3)
+        COMPARE  = LCOMPARE
+        TEMPLATE = LTEMPLATE
+        THRESHLD = LTHRESHLD
+        RETURN
+d648 1
+a648 1
+C ====================================================================
+@
+
+
+1.9
+log
+@add 8x6 and 3x2 displays for PC uinsg 1024x768 screen resolution
+@
+text
+@d10 2
+d121 1
+a121 1
+      rcsheader = "$Id: m2displa.f,v 1.8 1998/04/29 15:20:35 tom Exp tom $"
+d274 2
+@
+
+
+1.8
+log
+@allow processing for CMRGlucose
+@
+text
+@d104 1
+a104 1
+C
+d106 1
+a106 1
+C
+d117 1
+a117 1
+C
+d119 1
+a119 1
+      rcsheader = "$Id: m2displa.f,v 1.7 1994/01/14 17:26:28 ty7777 Exp tom $"
+d147 1
+a147 1
+C
+d149 1
+a149 1
+C
+d160 1
+a160 1
+C
+d162 1
+a162 1
+C
+d164 1
+a164 1
+C
+d168 1
+a168 1
+C
+d180 1
+a180 1
+C
+d183 1
+a183 1
+C
+d185 1
+a185 1
+C
+d187 1
+a187 1
+C
+d203 1
+a203 1
+C
+d205 1
+a205 1
+C
+d210 1
+a210 1
+C
+d213 1
+a213 1
+C
+d220 1
+a220 1
+C
+d224 1
+a224 1
+C
+d240 5
+a244 1
+          ELSE
+d251 1
+a251 1
+C
+d253 1
+a253 1
+C
+d256 1
+a256 1
+C
+d259 1
+a259 1
+C
+d284 1
+a284 1
+C
+d287 1
+a287 1
+C
+d302 1
+a302 1
+C
+d305 1
+a305 1
+C
+d320 1
+a320 1
+C
+d324 1
+a324 1
+C
+d331 1
+a331 1
+          IF (NMSLICES .GT. 49) THEN
+d342 1
+a342 1
+C
+d345 1
+a345 1
+C
+d354 1
+a354 1
+C
+d357 1
+a357 1
+C
+d366 1
+a366 1
+C
+d370 1
+a370 1
+C
+d379 1
+a379 1
+C
+d383 1
+a383 1
+C
+d392 1
+a392 1
+C
+d396 1
+a396 1
+C
+d410 1
+a410 1
+C
+d413 1
+a413 1
+C
+d416 1
+a416 1
+C
+d423 1
+a423 1
+C
+d430 3
+a432 3
+C
+      ELSE IF (CH .EQ. 'T' .OR. CH .EQ. 't') THEN
+	Q	= 'Change Threshold/Template'
+d435 8
+a442 8
+	   N	= 12
+	   IF (TEMPLATE .EQ. 0 .AND. .NOT. COMPARE) THEN
+	      TEMPLATE	= 1
+	   ELSE IF (TEMPLATE .EQ. 1 .AND. .NOT. COMPARE
+C     2	      .AND. ORIENT .EQ. 'T' .AND. NMSLICES .LE. 49) THEN
+     2	      .AND. ORIENT .EQ. 'T') THEN
+	      TEMPLATE	= 2
+C	   ELSE IF (TEMPLATE .LT. 3 .AND. NMSLICES .LE. 49) THEN
+d444 1
+a444 1
+	      TEMPLATE	= 3
+d446 1
+a446 1
+	      TEMPLATE	= 4
+d448 1
+a448 1
+	      TEMPLATE	= 0
+d455 1
+a455 1
+C
+d458 1
+a458 1
+C
+d468 1
+a468 1
+C
+d471 1
+a471 1
+C
+d483 1
+a483 1
+C
+d486 1
+a486 1
+C
+d500 1
+a500 1
+C
+d503 4
+a506 4
+C
+      ELSE IF (CH .EQ. 'Z' .OR. CH .EQ. 'z') THEN
+	IF (ORIENT .EQ. 'T') THEN
+		Q	= 'Zoom Image'
+d515 1
+a515 1
+		STR	= 'Cannot zoom coronal/sagittal images'//BELL
+d519 1
+a519 1
+C
+d523 4
+a526 4
+C
+      ELSE IF ((CH .EQ. 'D') .OR. (CH .EQ. 'd')) THEN
+	IF (MAG .GE. 7 .OR. NUMDISP .EQ. 1) THEN
+		Q	= 'Display Section #'
+d528 1
+a528 1
+		Q	= 'Display Sections beginning with #'
+d530 1
+a530 1
+	L	= INANYR (Q, ' ')
+d532 1
+a532 1
+	Q	= '(enter 0 to cancel)'
+d534 2
+a535 2
+	IF (ORIENT .EQ. 'T') THEN
+		MAXD	= NMSLICES
+d537 1
+a537 1
+		MAXD	= AMAX
+d540 8
+a547 5
+	IF (DSECTION .GT. 0) THEN
+		IF ((MAG .LE. 5 .AND. NUMDISP .LT. 4) .OR.
+     &			(MAG .EQ. 3 .AND. NUMDISP .LE. 8) .OR.
+     &			(MAG .EQ. 2 .AND. NUMDISP .LE. 21).OR.
+     &			(MAG .EQ. 1 .AND. NUMDISP .LE. 42)) THEN
+d549 2
+a550 2
+			Q	= 'Ramtek Location'
+			L	= INANYR (Q, ' ')
+d552 1
+a552 1
+			Q	= '(enter 0 to cancel)'
+d554 37
+a590 23
+C
+			IF (MAG .EQ. 1 .AND. NUMDISP .LE. 7) THEN
+				MAXD	= 7
+			ELSE IF (MAG .EQ. 1 .AND. NUMDISP .LE. 14) THEN
+				MAXD	= 6
+			ELSE IF (MAG .EQ. 1 .AND. NUMDISP .LE. 21) THEN
+				MAXD	= 5
+			ELSE IF (MAG .EQ. 1 .AND. NUMDISP .LE. 28) THEN
+				MAXD	= 4
+			ELSE IF (MAG .EQ. 1 .AND. NUMDISP .LE. 35) THEN
+				MAXD	= 3
+			ELSE IF (MAG .EQ. 1 .AND. NUMDISP .LE. 42) THEN
+				MAXD	= 2
+			ELSE IF (MAG .EQ. 2 .AND. NUMDISP .LE. 7) THEN
+				MAXD	= 4
+			ELSE IF (MAG .EQ. 2 .AND. NUMDISP .LE. 14) THEN
+				MAXD	= 3
+			ELSE IF (MAG .EQ. 2 .AND. NUMDISP .LE. 21) THEN
+				MAXD	= 2
+			ELSE IF (MAG .EQ. 3 .AND. NUMDISP .LE. 4) THEN
+				MAXD	= 3
+			ELSE IF (MAG .EQ. 3 .AND. NUMDISP .LE. 8) THEN
+				MAXD	= 2
+d592 1
+a592 1
+				MAXD	= 5 - NUMDISP
+d596 1
+a596 1
+			DLOC	= 1
+d598 4
+a601 4
+		IF (DLOC .GT. 0) THEN
+			ZFACTOR	= 1
+			IF (ERRTYPE .NE. 0) CALL ERSFIELD (70, WARNLINE, 1)
+			ERRTYPE	= 0
+d603 11
+a613 11
+			IF (ERRTYPE .EQ. 0) THEN
+				LORIENT		= ORIENT
+				LMAG		= MAG
+				LPROCESS	= PROCESS
+				LSMOOTH		= SMOOTH
+				LFILE (1)	= FILE (1)
+				LFILE (2)	= FILE (2)
+				LFILE (3)	= FILE (3)
+				LCOMPARE	= COMPARE
+				LTEMPLATE	= TEMPLATE
+				LTHRESHLD	= THRESHLD
+d621 1
+a621 1
+C
+d624 1
+a624 1
+C
+d639 1
+a639 1
+C
+d642 1
+a642 1
+C
+d644 1
+a644 1
+C
+d659 2
+a660 3
+C
+C====================================================================
+C
+@
+
+
+1.7
+log
+@Processing for more than 49 slices.
+@
+text
+@d10 2
+d119 1
+a119 1
+      rcsheader = "$Id: m2displa.f,v 1.6 1994/01/07 20:46:35 ty7777 Exp ty7777 $"
+d271 2
+@
+
+
+1.6
+log
+@Allowing templates to be created for images with more than 49 slices.
+@
+text
+@d27 1
+a27 1
+C     Modified 07-Jan-94 by tom Yang to allow templating with images
+d117 1
+a117 1
+      rcsheader = "$Id: m2displa.f,v 1.5 1993/10/04 21:55:32 tom Exp ty7777 $"
+d323 1
+a323 1
+          IF (NMSLICES.GT.49) THEN
+d420 2
+a421 1
+C			(modified to allow templating with 49-slice images 14-Apr-92)
+d437 1
+a437 1
+	   ELSE IF (TEMPLATE .LT. 4 .AND. NMSLICES .EQ. 49) THEN
+@
+
+
+1.5
+log
+@added rcsheader
+@
+text
+@d22 1
+d27 2
+d117 1
+a117 1
+      rcsheader = "$Id$"
+d430 2
+a431 1
+     2	      .AND. ORIENT .EQ. 'T' .AND. NMSLICES .LE. 49) THEN
+d433 2
+a434 1
+	   ELSE IF (TEMPLATE .LT. 3 .AND. NMSLICES .LE. 49) THEN
+@
+
+
+1.4
+log
+@Same as the last version.
+@
+text
+@d103 2
+a104 2
+     2             LMAG,LPROCESS,LTEMPLATE,LTHRESHLD,LFILE(3),ERRTYPE,
+     3             MAXN,I,L,N,NUM
+d111 1
+d114 2
+@
+
+
+1.3
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@@
+
+
+1.2
+log
+@14-Apr-92 TOV
+Allow templates to be created on 49-slice images.
+@
+text
+@d417 1
+a417 1
+			Q	= 'Change Threshold/Template'
+d419 19
+a437 19
+			IF (A) THEN
+				N	= 12
+				IF (TEMPLATE .EQ. 0 .AND. .NOT. COMPARE) THEN
+					TEMPLATE	= 1
+				ELSE IF (TEMPLATE .EQ. 1 .AND. .NOT. COMPARE
+     2			.AND. ORIENT .EQ. 'T' .AND. NMSLICES .LE. 49) THEN
+					TEMPLATE	= 2
+				ELSE IF (TEMPLATE .LT. 3 .AND. NMSLICES .LE. 49) THEN
+					TEMPLATE	= 3
+				ELSE IF (TEMPLATE .LT. 4 .AND. NMSLICES .EQ. 49) THEN
+					TEMPLATE	= 4
+				ELSE
+					TEMPLATE	= 0
+				END IF
+				CALL D2OPTION (N, ROWMENU)
+				CALL D2OPTION (N + 1, ROWMENU)
+				GO TO 1120
+			END IF
+			CALL ERSFIELD (50, ROWCH, COLCH)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d24 2
+d413 2
+a414 2
+C     (can only save template with transverse images with <= 15 slices)
+C     (49-slice images must use stored template)
+d417 1
+a417 1
+	Q	= 'Change Threshold/Template'
+d419 19
+a437 19
+	IF (A) THEN
+		N	= 12
+		IF (TEMPLATE .EQ. 0 .AND. .NOT. COMPARE) THEN
+			TEMPLATE	= 1
+		ELSE IF (TEMPLATE .EQ. 1 .AND. .NOT. COMPARE
+     2			.AND. ORIENT .EQ. 'T' .AND. NMSLICES .LE. 15) THEN
+			TEMPLATE	= 2
+		ELSE IF (TEMPLATE .LT. 3 .AND. NMSLICES .LE. 15) THEN
+			TEMPLATE	= 3
+		ELSE IF (TEMPLATE .LT. 4 .AND. NMSLICES .EQ. 49) THEN
+			TEMPLATE	= 4
+		ELSE
+			TEMPLATE	= 0
+		END IF
+		CALL D2OPTION (N, ROWMENU)
+		CALL D2OPTION (N + 1, ROWMENU)
+		GO TO 1120
+	END IF
+	CALL ERSFIELD (50, ROWCH, COLCH)
+@

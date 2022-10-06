@@ -1,0 +1,511 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	2011.03.30.13.53.34;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2011.01.12.13.37.03;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2004.02.20.14.18.21;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.11.27.17.51.14;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2000.09.06.19.44.03;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.07.22.21.19.23;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.07.14.21.47.43;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.07.14.17.57.25;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@debug sampled flag
+@
+text
+@/*	$Log: smooth3d.c,v $
+ * Revision 1.7  2011/01/12  13:37:03  tom
+ * add sampled flag to determine whether or not to include only fully-sampled voxels (within the smoothing sphere)
+ *
+ * Revision 1.6  2004/02/20  14:18:21  tom
+ * Feb 2004
+ *
+ * Revision 1.5  2002/11/27  17:51:14  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  2000/09/06  19:44:03  tom
+ * strcpy filename
+ *
+ * Revision 1.3  1999/07/22  21:19:23  tom
+ * compute mean of sphere using total volume of sphere even if not completely sampled
+ *
+ * Revision 1.2  1999/07/14  21:47:43  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/07/14  17:57:25  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			smooth3d.c
+ *	Date:			Jul 1999
+ *	Author:			Tom Videen
+ *	Description:	Smooth an ECAT image averaging within a 3D sphere.
+ *		If no all sphere is sampled in the image, then the mean will be reduced accordingly.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/smooth3d/RCS/smooth3d.c,v 1.7 2011/01/12 13:37:03 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <imgutil.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <pettable.h>
+
+int main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	MainHeader     *mh;
+	SubHeader      *sh;
+	FILE           *recfp;			 /* rec file pointer */
+	char           *recfile;		 /* rec filename */
+	float        ***img;			 /* input image */
+	float        ***new;			 /* filtered image */
+	char           *fname1;			 /* file to process */
+	char           *fname2;			 /* file to write */
+	char            runstamp[40];	 /* version, date and userid info */
+	int             sampled;		 /* 1=only include if all pixels sampled; 0=include all */
+	int             chk;
+	long            nx, ny, nz;		 /* array dimensions */
+	long            x0, y0, z0;
+	long            i, j, k, n;
+	long            npix;
+	long           *xi, *yi, *zi;
+	float           x, y, z;
+	float           vol;			 /* volume of sphere (cubic mm) */
+	float           sum;
+	double          d;			 /* in mm */
+	double          radius;			 /* sphere radius (mm) */
+	double          ra, rt;			 /* axial & transverse radii (pixels) */
+	double          sza, szt;		 /* axial & transverse pixel dimensions (mm) */
+	double          radsqr;			 /* radius squared (mm*mm) */
+
+/*
+ *	Get command line arguments and open rec file
+ */
+
+	fname1 = argv[1];
+	fname2 = argv[2];
+	radius = atof (argv[3]);
+	sampled = atoi (argv[4]);
+	recfile = argv[5];
+
+	radsqr = DSQR (radius);
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[6], argv[7], argv[8],
+			argv[10], argv[11], argv[12]);
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [smooth3d]: Cannot open %s\n", recfile);
+		return (ERROR);
+	}
+/*
+ *	Get main header and subheader.
+ *	Store RCS version in mh->sw_revision.
+ */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	file = make_imgfile (fname1);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [smooth3d]: Could not open %s\n", fname1);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [smooth3d]: Could not get MainHeader from %s\n", fname1);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	if (indx.frm < 1) {
+		fprintf (stderr, "ERROR [smooth3d]: cannot find %s frame(s) 1 to %d\n", fname1, -indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [smooth3d]: Could not read file subheader in %s\n", fname1);
+		return (ERROR);
+	}
+	mh = file->mh;
+	sh = file->sh;
+	if ((img = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	recout (recfp, fname1);
+	(void) save_rcs (file, rcsid, runstamp);
+	nx = sh->dim1;
+	ny = sh->dim2;
+	nz = sh->dim3;
+	szt = 10 * sh->sample_size_1;		 /* transaxial pixel dimension in mm */
+	sza = 10 * sh->sample_size_3;		 /* axial pixel dimension in mm */
+	rt = radius / szt;			 /* transaxial radius in pixels */
+	ra = radius / sza;			 /* axial radius in pixels */
+
+/*	Initialize arrays of indices to include in the sphere */
+
+	npix = 8 * rt * rt * ra;
+	xi = (long *) calloc (npix, sizeof (long));
+	yi = (long *) calloc (npix, sizeof (long));
+	zi = (long *) calloc (npix, sizeof (long));
+	x0 = nx / 2;
+	y0 = ny / 2;
+	z0 = nz / 2;
+	npix = 0;
+	for (z = z0 - ra; z <= z0 + ra; z++) {
+		i = ROUND (z);
+		if (i >= 1 && i <= nz) {
+			for (y = y0 - rt; y <= y0 + rt; y++) {
+				j = ROUND (y);
+				if (j >= 1 && j <= ny) {
+					for (x = x0 - rt; x <= x0 + rt; x++) {
+						k = ROUND (x);
+						if (k >= 1 && k <= nx) {
+							d = DSQR ((k - x0) * szt) + DSQR ((j - y0) * szt) + DSQR ((i - z0) * sza);
+							if (d <= radsqr) {
+								xi[npix] = k - x0;
+								yi[npix] = j - y0;
+								zi[npix] = i - z0;
+								npix++;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	vol = npix * szt * szt * sza * 0.001;
+	fprintf (stdout, "Volume of averaging sphere = %ld pixels  %.2f cc\n", npix, vol);
+
+	if ((new = f3tensor (1, nz, 1, ny, 1, nx)) == NULL) {
+		fprintf (stderr, "ERROR [smooth3d]: malloc\n");
+		return (ERROR);
+	}
+/*	Filter  */
+
+	for (z0 = 1; z0 <= nz; z0++) {		 /* for all pixels in the image */
+		for (y0 = 1; y0 <= ny; y0++) {
+			for (x0 = 1; x0 <= nx; x0++) {
+				sum = 0.;
+				chk = 0;
+				for (n = 0; n < npix; n++) {	/* for all pixels in the predefined sphere */
+					i = z0 + zi[n];
+					if (i >= 1 && i <= nz) {
+						j = y0 + yi[n];
+						if (j >= 1 && j <= ny) {
+							k = x0 + xi[n];
+							if (k >= 1 && k <= nx) {
+								if (img[i][j][k] == 0)
+									chk = 1;
+								sum += img[i][j][k];
+							}
+						}
+					}
+				}
+				if (sampled == 1) {
+					if (chk == 0)
+						new[z0][y0][x0] = sum / npix;
+				} else {
+					new[z0][y0][x0] = sum / npix;
+				}
+			}
+		}
+	}
+
+/*	Write image */
+
+	indx.frm = 1;
+	printf ("Writing filtered image %s, frame %d\n", fname2, indx.frm);
+	close_imgfile (file);
+	(void) strcpy (file->name, fname2);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [smooth3d]: Could not open %s\n", fname2);
+		return (ERROR);
+	}
+	mh->nframe = indx.frm;
+	if (put_mh (file) == ERROR)
+		return (ERROR);
+	if (writetensor (file, &indx, new) == ERROR)
+		return (ERROR);
+	free_f3tensor (img, 1, nz, 1, ny, 1, nx);
+	free_f3tensor (new, 1, nz, 1, ny, 1, nx);
+	free_imgfile (file);
+	free (xi);
+	free (yi);
+	free (zi);
+	(void) fclose (recfp);
+	return (OK);
+}
+@
+
+
+1.7
+log
+@add sampled flag to determine whether or not to include only fully-sampled voxels (within the smoothing sphere)
+@
+text
+@d2 3
+d32 1
+a32 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/smooth3d/RCS/smooth3d.c,v 1.6 2004/02/20 14:18:21 tom Exp tom $";
+d196 4
+a199 1
+				if (chk == 0 && sampled == 1)
+d201 1
+@
+
+
+1.6
+log
+@Feb 2004
+@
+text
+@d2 3
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/smooth3d/RCS/smooth3d.c,v 1.5 2002/11/27 17:51:14 tom Exp tom $";
+d41 1
+a41 1
+main (argc, argv)
+d57 2
+d67 1
+a67 1
+	double          d;				 /* in mm */
+d77 5
+a81 4
+	fname1  = argv[1];
+	fname2  = argv[2];
+	radius  = atof (argv[3]);
+	recfile = argv[4];
+d83 3
+a85 3
+	radsqr  = DSQR (radius);
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[5], argv[6], argv[7],
+		 argv[9], argv[10], argv[11]);
+d128 4
+a131 4
+	szt = 10 * sh->sample_size_1;	/* transaxial pixel dimension in mm */
+	sza = 10 * sh->sample_size_3;	/* axial pixel dimension in mm */
+	rt = radius / szt;				/* transaxial radius in pixels */
+	ra = radius / sza;				/* axial radius in pixels */
+a171 1
+
+d174 1
+a174 1
+	for (z0 = 1; z0 <= nz; z0++) {			/* for all pixels in the image */
+d178 1
+d185 3
+a187 1
+							if (k >= 1 && k <= nx) 
+d189 1
+d193 2
+a194 1
+				new[z0][y0][x0] = sum / npix;
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d19 1
+a19 1
+ *	Date:			Jul-99
+d25 2
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/smooth3d/RCS/smooth3d.c,v 1.4 2000/09/06 19:44:03 tom Exp tom $";
+d39 1
+d118 1
+a118 1
+	save_rcs (file, rcsid, runstamp);
+@
+
+
+1.4
+log
+@strcpy filename
+@
+text
+@d2 3
+d22 1
+a22 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/smooth3d/RCS/smooth3d.c,v 1.3 1999/07/22 21:19:23 tom Exp tom $";
+d26 1
+a26 1
+#include <math.h>
+a30 1
+#include <nr.h>
+d73 1
+a73 1
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[5], argv[6], argv[7],
+d155 1
+a155 1
+	fprintf (stdout, "Volume of averaging sphere = %d pixels  %.2f cc\n", npix, vol);
+d189 2
+a190 2
+	strcpy (file->name, fname2);
+	strcpy (file->mode, "w");
+d203 4
+a206 1
+	fclose (recfp);
+@
+
+
+1.3
+log
+@compute mean of sphere using total volume of sphere even if not completely sampled
+@
+text
+@d2 3
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/smooth3d/RCS/smooth3d.c,v 1.2 1999/07/14 21:47:43 tom Exp $";
+d187 1
+a187 2
+	free (file->name);
+	file->name = fname2;
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d13 1
+d16 1
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/smooth3d/RCS/smooth3d.c,v 1.1 1999/07/14 17:57:25 tom Exp tom $";
+d47 1
+a47 1
+	long            num, ni;
+d112 4
+a115 4
+	szt = 10 * sh->sample_size_1;
+	sza = 10 * sh->sample_size_3;
+	rt = radius / szt;
+	ra = radius / sza;
+d119 4
+a122 4
+	ni = 8 * rt * rt * ra;
+	xi = (long *) calloc (ni, sizeof (long));
+	yi = (long *) calloc (ni, sizeof (long));
+	zi = (long *) calloc (ni, sizeof (long));
+d126 1
+a126 1
+	ni = 0;
+d138 4
+a141 4
+								xi[ni] = k - x0;
+								yi[ni] = j - y0;
+								zi[ni] = i - z0;
+								ni++;
+d149 2
+a150 2
+	vol = ni * szt * szt * sza * 0.001;
+	fprintf (stdout, "Volume of averaging sphere = %d pixels  %.2f cc\n", ni, vol);
+d159 1
+a159 1
+	for (z0 = 1; z0 <= nz; z0++) {
+a161 1
+				num = 0;
+d163 1
+a163 1
+				for (n = 0; n < ni; n++) {
+d169 1
+a169 1
+							if (k >= 1 && k <= nx) {
+a170 2
+								num++;
+							}
+d174 1
+a174 4
+				if (num > 0)
+					new[z0][y0][x0] = sum / num;
+				else
+					new[z0][y0][x0] = 0;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/smooth3d/RCS/smooth3d.c,v 2.14 1997/03/10 15:47:34 tom Exp $";
+d48 5
+a52 5
+	float           d;				 /* in mm */
+	float           radius;			 /* sphere radius (mm) */
+	float           ra, rt;			 /* radius+tolerance, axial & transverse (pixels) */
+	float           sza, szt;		 /* axial & transverse pixel dimensions (mm) */
+	float           radsqr;			 /* radius squared (mm*mm) */
+d63 1
+a63 1
+	radsqr  = SQR (radius);
+d132 1
+a132 1
+							d = SQR ((k - x0) * szt) + SQR ((j - y0) * szt) + SQR ((i - z0) * sza);
+a144 1
+	ni--;
+d160 1
+a160 1
+				for (n = 0; n <= ni; n++) {
+@

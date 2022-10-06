@@ -1,0 +1,369 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	95.11.10.16.27.52;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	94.11.09.17.24.56;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.03.03.19.57.33;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.10.22.21.36.06;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.08.20.21.30;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.06.11.18.48.00;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.03.03.20.32.34;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@PutImagePett6.c initial checking in.
+@
+
+
+1.7
+log
+@remove petutil parent directory from include statements
+@
+text
+@/*$Id: PutImagePett6.c,v 1.6 1994/11/09 17:24:56 ty7777 Exp tom $*/
+/*$Log: PutImagePett6.c,v $
+ * Revision 1.6  1994/11/09  17:24:56  ty7777
+ * Added the function prototype.
+ *
+ * Revision 1.5  1994/03/03  19:57:33  ty7777
+ * Replace id with header.
+ *
+ * Revision 1.4  1993/10/22  21:36:06  ty7777
+ * Changed pett6_header data type from PETT6_HEADER to short integer array
+ * so Avi can use it.
+ **/
+
+/*___________________________________________________________________________________
+ 	File Name:	PutImagePett6.c
+
+	Function:	void PutImagePett6 (short *pet_slice_image, short slice_index, 
+				short *header, char *pet_image_outname)
+
+	Arguments:	pet_slice_data:		This is an array of short integers 
+						storing the pixel values of a pet slice. 
+						The user of the function ia responsible
+						for allocating memory and assigning
+						values for the array before calling
+						this function. The dimension of the
+						array is 
+						PETT6_SLICE_WIDTH x PETT6_SLICE_HEIGHT.
+			slice_index:		Slice number of a pet image, start at 1.
+			header:			pett6 header. It is a short integer 
+						array. The application programmer 
+						should allocate and fill the structure 
+						before calling the function.
+			pet_image_outname:	File name for storing the processed
+			pet slice.
+
+	Return Value:	void
+
+	Description:	Given an array of pixels corresponding to a slice from a pet
+			image with index "slice_index", this function writes the pet 
+			image data and a PETT6 header to the proper place in the out-
+			put image file "pet_image_outname". The header is setup in 
+			such a way that the fields corresponding to those in the 
+			structure "pet_slice_header" are filled while all the other
+			fields are set to zero. If the slice_index is the first slice,
+			we check whether the user specified output file exists. For all
+			other slices, we check the size of the output image and make 
+			sure that before we append the current slice to the output
+			file, there are already (slice_index -1) slices in the output
+			image file.
+
+	Calling:	ieee2ps
+
+	Author:		Tom Yang
+
+	Date:		03/24/1992
+___________________________________________________________________________________*/
+
+#include <stdio.h>
+#include <unistd.h>
+#include <petutil.h>
+
+static char rcsid [] = "$Header: /export/home/npggw/tom/src/libnpg/RCS/PutImagePett6.c,v 1.6 1994/11/09 17:24:56 ty7777 Exp tom $";
+
+#define	PERMS	0755		/* protection mode: rwx for user; rx for both group and others. */
+
+void PutImagePett6 (pet_slice_image, slice_index, header, pet_image_outname)
+	short	*pet_slice_image;
+	short	slice_index;
+	short	*header;				
+	char	*pet_image_outname;
+{
+	PETT6HDR	*pett6_header;				/* PETT6 header structure */
+	char		pett6_garbage [PETT6_GARBAGE_SIZE];	/* garbage at end of pixel data */
+	int		i;					/* counter */
+	FILE		*fp;					/* file pointer for output image file */
+
+	pett6_header	= (PETT6HDR *) header;
+
+	/*
+	 * Check whether the specified output file exists before any
+	 * writing.
+	 */
+	if (slice_index == 1)
+	{
+		if ((fp = fopen (pet_image_outname, "r")) != NULL)
+		{
+			fprintf (stderr, "Output file %s is not empty when writing started\n", 
+					pet_image_outname);
+			fclose (fp);
+			exit (0);
+		}
+		fclose (fp);
+	}
+
+	/*
+	 * Open or create if necessary the output file for writing.
+	 */
+	fp	= fopen (pet_image_outname, "a+b");
+
+	/*
+	 * Check whether we have the right size.
+	 */
+	if (slice_index > 1)
+	{
+		fseek (fp, 0, SEEK_END);
+		if (ftell (fp) != (slice_index - 1) * PETT6_RECS_PER_SLICE * RECORD_SIZE)
+		{
+			fprintf (stderr, "Output file %s does not have the right size.\n", 
+					pet_image_outname);
+			fprintf (stderr, "slice index = %d\n", slice_index);
+			return;
+		}
+	}
+
+	/*
+	 * Write the slice header.
+	 */
+	i	= fwrite (pett6_header, HEADER_SIZE, 1, fp);
+	if (i != 1)
+		printf ("Error: Only %d bytes header are written.\n", i);
+
+	/*
+	 * Write the slice pixel data.
+	 */
+	i	= fwrite (pet_slice_image, PETT6_SLICE_SIZE, 1, fp);
+	if (i != 1)
+		printf ("Error: Only %d bytes data are written.\n", i);
+
+	/*
+	 * Fill the tail with trash.
+	 */
+	i	= fwrite (pett6_garbage, PETT6_GARBAGE_SIZE, 1, fp);
+	if (i != 1)
+		printf ("Error: Only %d bytes data are written.\n", i);
+
+	/*
+	 * Free memory and close output file.
+	 */
+	fclose (fp);
+}
+@
+
+
+1.6
+log
+@Added the function prototype.
+@
+text
+@d1 1
+a1 1
+/*$Id: PutImagePett6.c,v 1.5 1994/03/03 19:57:33 ty7777 Exp ty7777 $*/
+d3 3
+d60 1
+a60 1
+#include <petutil/petutil.h>
+d62 1
+a62 1
+static char rcsid [] = "$Header: /export/home/petsun4/ty7777/src/libhp/RCS/PutImagePett6.c,v 1.5 1994/03/03 19:57:33 ty7777 Exp ty7777 $";
+@
+
+
+1.5
+log
+@Replace id with header.
+@
+text
+@d1 1
+a1 1
+/*$Id: PutImagePett6.c,v 1.4 1993/10/22 21:36:06 ty7777 Exp ty7777 $*/
+d3 3
+d12 41
+a52 36
+ *
+ *	File Name:	PutImagePett6.c
+ *	Function Name:	PutImagePett6
+ *	Arguments:	pet_slice_image:	This is an array of short integers 
+ *						storing the pixel values of a pet slice. 
+ *						The user of the function ia responsible
+ *						for allocating memory and assigning
+ *						values for the array before calling
+ *						this function. The dimension of the
+ *						array is 
+ *						PETT6_SLICE_WIDTH x PETT6_SLICE_HEIGHT.
+ *			slice_index:		Slice number of a pet image, start at
+ *						1.
+ *			header:			pett6 header. It is a short integer 
+ *						array. The application programmer 
+ *						should allocate and fill the structure 
+ *						before calling the function.
+ *			pet_image_outname:	File name for storing the processed
+ *						pet slice.
+ *	Return Value:	void
+ *	Description:	Given an array of pixels corresponding to a slice from a pet
+ *			image with index "slice_index", this function writes the pet 
+ *			image data and a PETT6 header to the proper place in the out-
+ *			put image file "pet_image_outname". The header is setup in 
+ *			such a way that the fields corresponding to those in the 
+ *			structure "pet_slice_header" are filled while all the other
+ *			fields are set to zero. If the slice_index is the first slice,
+ *			we check whether the user specified output file exists. For all
+ *			other slices, we check the size of the output image and make 
+ *			sure that before we append the current slice to the output
+ *			file, there are already (slice_index -1) slices in the output
+ *			image file.
+ *	Function Used:	ieee2ps
+ *	Author:		Tom Yang
+ *	Date:		03/24/1992
+ *
+d59 1
+a59 1
+static char rcsid [] = "$Header$";
+d61 1
+a61 2
+#define	PERMS	0755		/* protection mode: rwx for user; rx for both
+				   group and others. */
+@
+
+
+1.4
+log
+@Changed pett6_header data type from PETT6_HEADER to short integer array
+so Avi can use it.
+@
+text
+@d1 6
+a6 2
+/*$Id$*/
+/*$Log$*/
+d51 1
+a51 1
+static char rcsid [] = "$Id$";
+@
+
+
+1.3
+log
+@Added dimension information.
+@
+text
+@d1 3
+d16 6
+a21 6
+ *			slice_index:		Slice number of a pet image.
+ *			pett6_header:		A PETI6HDR structure. See the header
+ *						file "petimage.h" for details. The 
+ *						application programmer should allocate
+ *						and fill the structure before calling
+ *						the function.
+d47 2
+d52 5
+a56 5
+void PutImagePett6 (pet_slice_image, slice_index, pett6_header, pet_image_outname)
+short		*pet_slice_image;
+short		slice_index;
+PETT6HDR	*pett6_header;				/* PETT6 header structure */
+char		*pet_image_outname;
+d58 1
+d61 1
+a61 5
+	FILE		*existfp;				/* file pointer for checking 
+								   existence of output image 
+								   file */ 
+	FILE		*outfp;					/* file pointer for output 
+								   image file */
+d63 2
+d71 1
+a71 1
+		if ((existfp = fopen (pet_image_outname, "r")) != NULL)
+d75 1
+a75 1
+			fclose (existfp);
+d78 1
+a78 1
+		fclose (existfp);
+d84 1
+a84 1
+	outfp	= fopen (pet_image_outname, "a+b");
+d91 2
+a92 2
+		fseek (outfp, 0, SEEK_END);
+		if (ftell (outfp) != (slice_index - 1) * PETT6_RECS_PER_SLICE * RECORD_SIZE)
+d104 1
+a104 1
+	i	= fwrite (pett6_header, HEADER_SIZE, 1, outfp);
+d111 1
+a111 1
+	i	= fwrite (pet_slice_image, PETT6_SLICE_SIZE, 1, outfp);
+d118 1
+a118 1
+	i	= fwrite (pett6_garbage, PETT6_GARBAGE_SIZE, 1, outfp);
+d125 1
+a125 1
+	fclose (outfp);
+@
+
+
+1.2
+log
+@Before wokring on setpath.c
+@
+text
+@d10 3
+a12 1
+ *						this function.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d88 1
+a88 1
+			fprintf (stderr, "Output file %s does not have the right size\n", 
+@

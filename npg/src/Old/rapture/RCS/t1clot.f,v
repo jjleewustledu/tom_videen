@@ -1,0 +1,211 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.06.04.19.16.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@create ROI surrounding ich
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@C $Log$
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C  Subroutine:   T1CLOT.FTN
+C  Author:       Tom O. Videen
+C  Date:         May-97
+C  Written For:  RAPTURE
+C  Intent:
+C     Generate an ROI of thickness RIM around a hole (pixel values = 0)
+C  Uses:
+C     T1POINT
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+      SUBROUTINE T1CLOT (X, Y, RIM, SKIP, THRESH1, THRESH2, DISPLAY)
+
+      INCLUDE 'rapture.inc'
+
+      INTEGER*4  X, Y        ! seed point
+      INTEGER*4  RIM         ! pixel thickness of ROI
+      INTEGER*4  SKIP        ! pixel thickness to pad around clot
+      INTEGER*4  THRESH1, THRESH2
+      LOGICAL*1  DISPLAY     ! true--> display while processing
+
+      INTEGER*4  X, Y        ! local point to be checked for inclusion
+      INTEGER*4  X0, Y0      ! adjacent point checked for previous inclusion
+      INTEGER*4  X1, X2      ! first and last X-image elements in loop
+      INTEGER*4  Y1, Y2      ! first and last Y-image elements to loop
+      INTEGER*4  K           ! local increment in X0 or Y0
+      INTEGER*4  DPLANE      ! plane to display point in
+      integer*4  NPTS
+      integer*4  P(400,2)
+      LOGICAL*1  MORE        ! more points added to region
+      CHARACTER*256 RCSHEADER
+
+      RCSHEADER = '$Id: t1thresh.f,v 1.2 1993/11/17 20:01:25 ty7777 Exp $'
+      MORE   = .FALSE.
+      DPLANE = PLANE
+
+C  First set points in SETB to represent clot (values = 0)
+C  Clear SETB (except cursor pixel)
+C  Clear SETA
+
+      DO 120 J = 1, 128
+        DO 110 I = 1, 128
+          SETA (I, J) = .FALSE.
+          SETB (I, J) = .FALSE.
+110     CONTINUE
+120   CONTINUE
+      SETB (X, Y) = .TRUE.
+
+200   X1 = XMIN
+      X2 = XMAX
+      Y1 = YMIN
+      Y2 = YMAX
+      DO 240 Y0 = Y1, Y2
+        DO 230 X0 = X1, X2
+          IF (SETB (X0, Y0)) THEN
+            DO 210 K = -1, 1, 2
+
+              X = X0 + K
+              Y = Y0
+              IF (.NOT. SETB (X, Y) .AND. .NOT. SETC (X, Y) .AND.
+     &            SETM (X, Y) .GT. 0 .AND.
+     &            IMAGE (X, Y) .EQ. 0) THEN
+                SETB (X, Y) = .TRUE.
+                IF (X .GT. XMAX) THEN
+                  XMAX = X
+                ELSE IF (X .LT. XMIN) THEN
+                  XMIN = X
+                END IF
+                MORE = .TRUE.
+              END IF
+
+              X = X0
+              Y = Y0 + K
+              IF (.NOT. SETB (X, Y) .AND. .NOT. SETC (X, Y) .AND.
+     &            SETM (X, Y) .GT. 0 .AND.
+     &            IMAGE (X, Y) .EQ. 0) THEN
+                SETB (X, Y) = .TRUE.
+                IF (Y .GT. YMAX) THEN
+                  YMAX = Y
+                ELSE IF (Y .LT. YMIN) THEN
+                  YMIN = Y
+                END IF
+                MORE = .TRUE.
+              END IF
+210         CONTINUE
+
+          END IF
+230     CONTINUE
+240   CONTINUE
+      IF (MORE) THEN
+        MORE = .FALSE.
+        GO TO 200
+      END IF
+
+C  If SKIP > 0, expand the region around the clot
+
+      IF (SKIP .GT. 0) THEN
+        XMIN = XMIN - SKIP
+        XMAX = XMAX + SKIP
+        YMIN = YMIN - SKIP
+        YMAX = YMAX + SKIP
+        X1 = XMIN
+        X2 = XMAX
+        Y1 = YMIN
+        Y2 = YMAX
+        CALL CIRCLEPTS(SKIP,NPTS,P)
+        DO 340 Y0 = Y1, Y2
+          DO 330 X0 = X1, X2
+            IF (SETB (X0, Y0)) THEN
+              DO 310 K = 1, NPTS
+                X = X0 + P(K,1)
+                Y = Y0 + P(K,2)
+                IF (.NOT. SETB (X, Y) .AND. .NOT. SETC (X, Y) .AND.
+     &              SETM (X, Y) .GT. 0) THEN
+                  SETA (X, Y) = .TRUE.
+                END IF
+310           CONTINUE
+            END IF
+330       CONTINUE
+340     CONTINUE
+        DO 360 J = 1, 128
+          DO 350 I = 1, 128
+            IF (SETA(I,J)) SETB(I,J) = .TRUE.
+            SETA (I, J) = .FALSE.
+350       CONTINUE
+360     CONTINUE
+      ENDIF
+
+C  Now set points in SETA to represent rim around clot
+C  SETA is saved as an roi (in RC) in call to T1PIXELS
+
+      XMIN = XMIN - RIM
+      XMAX = XMAX + RIM
+      YMIN = YMIN - RIM
+      YMAX = YMAX + RIM
+      X1 = XMIN
+      X2 = XMAX
+      Y1 = YMIN
+      Y2 = YMAX
+      CALL CIRCLEPTS(RIM,NPTS,P)
+      DO 440 Y0 = Y1, Y2
+        DO 430 X0 = X1, X2
+          IF (SETB (X0, Y0)) THEN
+            DO 410 K = 1, NPTS
+              X = X0 + P(K,1)
+              Y = Y0 + P(K,2)
+              IF (.NOT. SETB (X, Y) .AND. .NOT. SETC (X, Y) .AND.
+     &            SETM (X, Y) .GT. 0 .AND.
+     &            IMAGE (X, Y) .GE. THRESH1 .AND.
+     &            IMAGE (X, Y) .LE. THRESH2) THEN
+                SETA (X, Y) = .TRUE.
+                IF (DISPLAY) CALL T1POINT (X, Y, DPLANE)
+              END IF
+410         CONTINUE
+          END IF
+430     CONTINUE
+440   CONTINUE
+
+      RETURN
+      END
+
+      subroutine circlepts (r,n,p)
+      integer*4 r
+      integer*4 n
+      integer*4 p(400,2)
+      real*4    d
+
+      do 110 i=1,400
+        do 100 j=1,2
+          p(i,j) = 0
+100     continue
+110   continue
+      n = 0
+      if (r .le. 0) return
+      do 300 i=-r,r
+        do 200 j=-r,r
+          d = sqrt(float(i*i + j*j))
+          if (d .le. float(r)) then
+             n = n+1
+             p(n,1) = i
+             p(n,2) = j
+          endif
+200     continue
+300   continue
+      return
+      end
+@

@@ -1,0 +1,218 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2000.08.31.15.23.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/* ===============================================================================
+ *	Module:			voicoss2.c
+ *	Date:			Aug 2000
+ *	Author:			Tom Videen
+ *	Description:	Compute mean ratios on 2 images for a list of VOIs.
+ *	History:
+ *		Revised version of voistat for COSS study.
+ * ===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/voicoss2/RCS/voicoss2.c,v 1.2 2000/08/25 18:06:40 tom Exp $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <imgutil.h>
+#include <voistat.h>
+#include <nrutil.h>
+#include <image.h>
+#include <libimage.h>
+#include <libnrimg.h>
+
+#define MAXLIST 1000
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	ImageFile      *file = NULL;		 /* input image file structure */
+	Index           indx;			 /* frame, plane, gate, data, bed */
+	PARAMETER_DATA  prm;			 /* processing parameters */
+	RGTDATA         rgtlist;		 /* list of region processing output */
+	VOIDATA        *voilist;		 /* list of VOI definitions */
+	char            date[MAXLINE];
+	char            program[MAXFNAME];
+	char            version[MAXFNAME];
+	char           *oname;			 /* oxygen image name */
+	char           *hname;			 /* water image name */
+	char           *regfile;		 /* region file */
+	char           *rgtfile;		 /* output RGT file (means) */
+	char           *uid;
+	float        ***oimg;			 /* oxygen image */
+	float        ***himg;			 /* water image */
+	float           mean;
+	float           diam;			 /* VOI diameter in mm */
+	float           adim[3];		 /* voxel dimensions in mm */
+	int             pdim[3];		 /* image dimensions in pixels (128x128) */
+	int             npixels;		 /* number of pixels in VOI */
+	int             firstfrm;		 /* first valid frame */
+	int             i, j, k, n;
+	int             nvoi = 0;		 /* number of VOIs */
+
+/* Initializations */
+
+	if (argc != 13) {
+		fprintf (stderr, "Usage: voicoss2 oo ho voidim reg rgt diameter date uid\n");
+		return (ERROR);
+	}
+	oname = argv[1];
+	hname = argv[2];
+	regfile = argv[3];
+	rgtfile = argv[4];
+	diam = atof (argv[5]);
+	n = 5;
+	(void) sprintf (date, "%s %s %s %s %s %s",
+			argv[n], argv[n + 1], argv[n + 2], argv[n + 3], argv[n + 4], argv[n + 5]);
+	uid = argv[n + 7];
+	(void) sscanf (rcsid, "%s %s", program, version);
+	(void) strcat (program, " ");
+	(void) strcat (program, version);
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	npixels = 0;
+
+	prm.voi_shape = VOI_NEW_SPHERE;
+	prm.voi_xdim = diam;
+	prm.voi_ydim = diam;
+	prm.voi_zdim = diam;
+	prm.voi_zero_chk = 1;
+
+/* Read the region file	*/
+
+	voilist = (VOIDATA *) malloc (sizeof (VOIDATA) * MAXLIST);
+	if (readvoi (regfile, &nvoi, voilist) == ERROR) {
+		fprintf (stderr, "ERROR [voicoss2]: Reading VOI\n");
+		return (ERROR);
+	}
+
+/* Read OO image */
+
+	if (file == NULL)
+		file = make_imgfile (oname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [voicoss2]: Cannot open %s\n", oname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [voicoss2]: Cannot get MainHeader from %s\n", oname);
+		return (ERROR);
+	}
+	firstfrm = firstimgfrm (file);
+	if (firstfrm > 0) {
+		indx.frm = firstfrm;
+		if (existimgfrm (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [voicoss2]: Cannot read %s frame %d\n", oname, indx.frm);
+			return (ERROR);
+		}
+	} else {
+		fprintf (stderr, "ERROR [voicoss2]: Cannot read %s frame %d\n", oname, indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [voicoss2]: Cannot read file subheader in %s\n", oname);
+		return (ERROR);
+	}
+	adim[0] = 10.0 * file->sh->sample_size_1;
+	adim[1] = 10.0 * file->sh->sample_size_2;
+	adim[2] = 10.0 * file->sh->sample_size_3;
+	if (file->sh->dim1 <= 128 && file->sh->dim2 <= 128) {
+		pdim[0] = 128;
+		pdim[1] = 128;
+	} else {
+		pdim[0] = file->sh->dim1;
+		pdim[1] = file->sh->dim2;
+	}
+	pdim[2] = file->sh->dim3;
+	fprintf (stdout, "Reading = %s  frame %d\n", oname, indx.frm);
+	if ((oimg = rdtensor (oname, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [voicoss2] Cannot read %s\n", oname);
+		return (ERROR);
+	}
+
+/* Read HO image */
+
+	if (file == NULL)
+		file = make_imgfile (hname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [voicoss2]: Cannot open %s\n", hname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [voicoss2]: Cannot get MainHeader from %s\n", hname);
+		return (ERROR);
+	}
+	firstfrm = firstimgfrm (file);
+	if (firstfrm > 0) {
+		indx.frm = firstfrm;
+		if (existimgfrm (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [voicoss2]: Cannot read %s frame %d\n", hname, indx.frm);
+			return (ERROR);
+		}
+	} else {
+		fprintf (stderr, "ERROR [voicoss2]: Cannot read %s frame %d\n", hname, indx.frm);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [voicoss2]: Cannot read file subheader in %s\n", hname);
+		return (ERROR);
+	}
+	fprintf (stdout, "Reading = %s  frame %d\n", hname, indx.frm);
+	if ((himg = rdtensor (hname, &indx, pdim)) == NULL) {
+		fprintf (stderr, "ERROR [voicoss2] Cannot read %s\n", hname);
+		return (ERROR);
+	}
+	for (i = 1; i <= pdim[2]; i++)
+		for (j = 1; j <= pdim[1]; j++)
+			for (k = 1; k <= pdim[0]; k++)
+				oimg[i][j][k] /= himg[i][j][k];
+
+/* Compute means */
+
+	rgtlist.nvoi = nvoi;
+	rgtlist.mean = (float **) malloc (sizeof (float *));
+	rgtlist.mean[0] = (float *) calloc (nvoi, sizeof (float));
+	for (k = 0; k < nvoi; k++) {
+		rgtmean (oimg, pdim, adim, k, voilist, prm, &mean, &npixels);
+		rgtlist.mean[0][k] = mean;
+	}
+
+/* Write rgtfile */
+
+	if (writergt (rgtfile, prm, program, nvoi, voilist, rgtlist, date, uid,
+		      regfile, npixels, adim, oname, hname) == ERROR)
+		fprintf (stderr, "ERROR [voicoss2] in writing rgt data to file %s\n", rgtfile);
+
+	free_f3tensor (oimg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free_f3tensor (himg, 1, pdim[2], 1, pdim[1], 1, pdim[0]);
+	free (rgtlist.mean[0]);
+	free (rgtlist.mean);
+	free (voilist);
+	return (OK);
+}
+@

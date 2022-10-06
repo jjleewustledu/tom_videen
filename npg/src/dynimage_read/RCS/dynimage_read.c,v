@@ -1,0 +1,528 @@
+head	2.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.4
+date	2008.08.21.17.59.53;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	2005.10.05.16.08.58;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	2004.09.01.13.10.45;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	2004.04.30.13.18.10;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2004.04.30.13.16.34;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2004.02.16.14.12.59;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2003.12.23.19.01.19;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2002.11.27.14.55.29;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.26.20.51.26;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.12.26.18.36.34;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.11.26.21.51.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.4
+log
+@int main
+@
+text
+@/*	$Log: dynimage_read.c,v $
+ * Revision 2.3  2005/10/05  16:08:58  tom
+ * search for first frame
+ *
+ * Revision 2.2  2004/09/01  13:10:45  tom
+ * *** empty log message ***
+ *
+ * Revision 2.1  2004/04/30  13:18:10  tom
+ * search frames 1-4
+ *
+ * Revision 1.7  2004/04/30  13:16:34  tom
+ * search for frames 1-4
+ *
+ * Revision 1.6  2004/02/16  14:12:59  tom
+ * Feb 2004
+ *
+ * Revision 1.5  2003/12/23  19:01:19  tom
+ * fix flipimg
+ *
+ *	Revision 1.4  2002/11/27 14:55:29  tom
+ *	*** empty log message ***
+ *
+ * Revision 1.3  2002/11/26  20:51:26  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1997/12/26  18:36:34  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1997/11/26  21:51:49  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *	Module:			dynimage_read.c
+ *	Date:			Dec 1997
+ *	Author:			Tom Videen
+ *	Description:	Read one or more planes and one or more frames
+ *		of a dynamic image file for IDL
+ *	Notes:
+ *		If error, write -1 followed by string message to stdout
+ *		To read all planes, fp=1, lp>=last plane (e.g., 1,100)
+ *		To read all frames, ff=1, lf>=last frame (e.g., 1,100)
+ *		To read first frame, ff=1, lf=1
+ *	Otherwise write:
+ *		file_format (integer)
+ *		first and last frames (2 integers)
+ *		first and last planes (2 integers)
+ *		dim1, dim2, dim3 (3 integers)
+ *	if (file_format eq 1)
+ *		mh6		sizeof (Main_header)
+ *		sh6		sizeof (Image_subheader)
+ *	if (file_format eq 2)
+ *		mh7		sizeof (Main_header7)
+ *		sh7		sizeof (Image_subheader7)
+ *	then write 1 plane of each as dim1 x dim2 floats
+ * ===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 2.3 2005/10/05 16:08:58 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+#include <pettable.h>
+
+int main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	float          *img;
+	char           *fname;
+	int             first, last;
+	int             firstfrm, lastfrm, firstpln, lastpln, reverse;
+	int            *starttime, *duration;
+	long            frm, pln, sizepln;
+	unsigned long   dim1, dim2, dim3;
+
+	fname = argv[1];
+	firstfrm = atoi (argv[2]);
+	lastfrm = atoi (argv[3]);
+	firstpln = atoi (argv[4]);
+	lastpln = atoi (argv[5]);
+	indx.frm = firstfrm;
+	indx.pln = firstpln;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stdout, "-1  Cannot open %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stdout, "-1  Cannot get MainHeader from %s\n", fname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+
+	if (indx.frm <= 0) {
+		fprintf (stdout, "-1  Cannot find %s data\n", fname);
+		return (ERROR);
+	} else if (firstfrm == 1 && lastfrm == 1 && indx.frm > 0) {
+		firstfrm = indx.frm;
+		lastfrm = firstfrm;
+	} else if (indx.frm > firstfrm) {
+		if (indx.frm <= lastfrm) {
+			firstfrm = indx.frm;
+		} else {
+			fprintf (stdout, "-1  Cannot find %s frame %d\n", fname, firstfrm);
+			return (ERROR);
+		}
+	}
+	first = indx.frm;
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stdout, "-1  Cannot read file subheader in %s\n", fname);
+		return (ERROR);
+	}
+	dim1 = (unsigned long) file->sh->dim1;
+	dim2 = (unsigned long) file->sh->dim2;
+	dim3 = (unsigned long) file->sh->dim3;
+	if (firstpln > dim3) {
+		fprintf (stdout, "-1  Cannot read plane %d in %s\n", firstpln, fname);
+		return (ERROR);
+	}
+	if (lastpln > dim3)
+		lastpln = dim3;
+	sizepln = dim1 * dim2;
+	reverse = file->mh->orientation;
+
+	while (existimgfrm (file, &indx) != ERROR)
+		indx.frm++;
+	last = indx.frm - 1;
+	if (last < lastfrm)
+		lastfrm = last;
+	if (first > firstfrm) {
+		if (firstfrm <= 1) {
+			firstfrm = first;
+			if (lastfrm < firstfrm)
+				lastfrm = firstfrm;
+		} else {
+			fprintf (stdout, "-1  Cannot read frame %d in %s\n", firstfrm, fname);
+			return (ERROR);
+		}
+	}
+	if (firstfrm > lastfrm) {
+		fprintf (stdout, "-1  Cannot read frame %d in %s\n", firstfrm, fname);
+		return (ERROR);
+	}
+	fprintf (stdout, "%d\n", file->mh->file_format);
+	fprintf (stdout, "%d %d\n", firstfrm, lastfrm);
+	fprintf (stdout, "%d %d\n", firstpln, lastpln);
+	fprintf (stdout, "%d %d %d\n", (int) dim1, (int) dim2, (int) dim3);
+
+	if (file->mh->file_format == MATRIX_REV6) {
+		(void) fwrite (file->m6->mh, sizeof (Main_header), 1, stdout);
+		(void) fwrite (file->m6->sh, sizeof (Image_subheader), 1, stdout);
+	} else if (file->mh->file_format == MATRIX_REV7) {
+		(void) fwrite (file->m7->mh, sizeof (Main_header7), 1, stdout);
+		(void) fwrite (file->m7->sh, sizeof (Image_subheader7), 1, stdout);
+	} else if (file->mh->file_format == PETT6) {
+		(void) fwrite (file->p6, sizeof (PETT6HDR), 1, stdout);
+	}
+	starttime = (int *) calloc (100, sizeof (int));
+	duration = (int *) calloc (100, sizeof (int));
+	for (frm = firstfrm; frm <= lastfrm; frm++) {
+		indx.frm = frm;
+		for (pln = firstpln; pln <= lastpln; pln++) {
+			indx.pln = pln;
+			if ((img = rdimg (file, &indx)) == NULL) {
+				fprintf (stdout, "-1  Cannot read frame %d plane %d of %s\n",
+					 indx.frm, indx.pln, fname);
+				return (ERROR);
+			}
+			if (reverse != 0)
+				img = flipimg (file, img);
+			(void) fwrite (img, sizeof (float), sizepln, stdout);
+			free (img);
+		}
+		starttime[frm] = file->sh->start_time;
+		duration[frm] = file->sh->duration;
+	}
+	if (reverse != 0)
+		file->mh->orientation = 0;
+
+	for (frm = firstfrm; frm <= lastfrm; frm++)
+		fprintf (stdout, "%d  %d\n", starttime[frm], duration[frm]);
+	close_imgfile (file);
+	free_imgfile (file);
+	free (starttime);
+	free (duration);
+	return (OK);
+}
+@
+
+
+2.3
+log
+@search for first frame
+@
+text
+@d2 3
+d58 1
+a58 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 2.2 2004/09/01 13:10:45 tom Exp tom $";
+d67 1
+a67 1
+main (argc, argv)
+@
+
+
+2.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d37 3
+a39 2
+ *		To read all planes, fp=1, lp>last plane (e.g., 1,100)
+ *		To read all frames, ff=1, lf>last frame (e.g., 1,100)
+d55 1
+a55 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 2.1 2004/04/30 13:18:10 tom Exp tom $";
+d98 15
+a112 6
+    indx.frm = firstimgfrm (file);
+    if (indx.frm <= 0 || indx.frm > lastfrm) {
+		fprintf (stdout, "-1  Cannot find %s frame 1-%d\n", fname, -indx.frm);
+        return (ERROR);
+    } else if (indx.frm < firstfrm) {
+		indx.frm = firstfrm;
+@
+
+
+2.1
+log
+@search frames 1-4
+@
+text
+@d2 3
+d51 1
+a51 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 1.7 2004/04/30 13:16:34 tom Exp tom $";
+d94 6
+a99 18
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (indx.frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR) {
+					indx.frm = 4;
+					if (existimgfrm (file, &indx) == ERROR) {
+						fprintf (stdout, "-1  Cannot find %s frame 1, 2, 3 or 4\n", fname);
+						return (ERROR);
+					}
+				}
+			}
+		} else {
+			fprintf (stdout, "-1  Cannot find %s frame %d\n",
+				 fname, indx.frm);
+			return (ERROR);
+		}
+@
+
+
+1.7
+log
+@search for frames 1-4
+@
+text
+@d2 3
+d48 1
+a48 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 1.6 2004/02/16 14:12:59 tom Exp tom $";
+@
+
+
+1.6
+log
+@Feb 2004
+@
+text
+@d2 3
+d45 1
+a45 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 1.5 2003/12/23 19:01:19 tom Exp $";
+d94 5
+a98 2
+					fprintf (stdout, "-1  Cannot find %s frame 1, 2 or 3\n", fname);
+					return (ERROR);
+@
+
+
+1.5
+log
+@fix flipimg
+@
+text
+@d2 3
+d19 1
+a19 1
+ *	Date:			Dec-97
+d41 2
+a42 1
+static char     rcsid[] = "$Header: /home/tom/src/dynimage_read/RCS/dynimage_read.c,v 1.4 2002/11/27 14:55:29 tom Exp tom $";
+d52 1
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d38 1
+a38 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 1.3 2002/11/26 20:51:26 tom Exp tom $";
+d113 1
+a113 1
+	while (existimgfrm (file, &indx) != ERROR) 
+d121 2
+a122 1
+			if (lastfrm < firstfrm) lastfrm=firstfrm;
+d138 2
+a139 2
+		fwrite (file->m6->mh, sizeof (Main_header), 1, stdout);
+		fwrite (file->m6->sh, sizeof (Image_subheader), 1, stdout);
+d141 2
+a142 2
+		fwrite (file->m7->mh, sizeof (Main_header7), 1, stdout);
+		fwrite (file->m7->sh, sizeof (Image_subheader7), 1, stdout);
+d144 1
+a144 1
+		fwrite (file->p6, sizeof (PETT6HDR), 1, stdout);
+a145 1
+
+d152 1
+a152 1
+			if ((img = rdimg (file, indx)) == NULL) {
+d159 1
+a159 1
+			fwrite (img, sizeof (float), sizepln, stdout);
+d165 2
+d172 2
+a173 2
+	free(starttime);
+	free(duration);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d35 1
+a35 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 1.2 1997/12/26 18:36:34 tom Exp tom $";
+d55 1
+a55 1
+	long            frm, pln, frames, sizepln;
+a108 1
+	frames = file->mh->nframe;
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d32 1
+a32 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 1.1 1997/11/26 21:51:49 tom Exp tom $";
+a35 1
+#include <math.h>
+a37 2
+#include <libnrimg.h>
+#include <nr.h>
+d49 1
+a49 1
+	int             k, first, last;
+d129 1
+a129 1
+	fprintf (stdout, "%d %d %d\n", dim1, dim2, dim3);
+d165 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d7 1
+a7 1
+ *	Date:			Nov-97
+d9 2
+a10 1
+ *	Description:	Read one or more planes of all frames of a dynamic image file for IDL
+d13 2
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dynimage_read/RCS/dynimage_read.c,v 1.2 1997/10/08 20:48:52 tom Exp $";
+d49 3
+a51 2
+	int             k, firstfrm, lastfrm, firstpln, lastpln, reverse;
+	int			   *starttime, *duration;
+d90 1
+a90 1
+	firstfrm = indx.frm;
+d98 6
+d108 1
+a108 1
+	while (existimgfrm (file, &indx) != ERROR)
+d110 16
+a125 2
+	lastfrm = indx.frm - 1;
+
+d132 2
+a133 2
+		fwrite (file->m6->mh, sizeof(Main_header), 1, stdout);
+		fwrite (file->m6->sh, sizeof(Image_subheader), 1, stdout);
+d135 2
+a136 2
+		fwrite (file->m7->mh, sizeof(Main_header7), 1, stdout);
+		fwrite (file->m7->sh, sizeof(Image_subheader7), 1, stdout);
+d138 1
+a138 1
+		fwrite (file->p6, sizeof(PETT6HDR), 1, stdout);
+d141 2
+a142 2
+	starttime = (int *) calloc (100, sizeof(int));
+	duration = (int *) calloc (100, sizeof(int));
+d149 1
+a149 1
+				 	indx.frm, indx.pln, fname);
+d154 1
+a154 1
+			fwrite (img, sizeof(float), sizepln, stdout);
+d161 2
+a162 2
+	for (frm = firstfrm; frm <= lastfrm; frm++) 
+		fprintf (stdout,"%d  %d\n", starttime[frm], duration[frm]);
+@

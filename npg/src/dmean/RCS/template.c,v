@@ -1,0 +1,472 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2004.02.13.22.19.33;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.26.20.49.17;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.09.19.11.53;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@/*	$Id: template.c,v 1.2 2002/11/26 20:49:17 tom Exp tom $
+	$Log: template.c,v $
+ * Revision 1.2  2002/11/26  20:49:17  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1998/12/09  19:11:53  tom
+ * Initial revision
+ *
+ * Revision 2.5  1997/07/24  21:30:16  tom
+ * fix bug in second CBF/CBV image
+ *
+ * Revision 2.4  1997/01/24  18:19:12  tom
+ * add firstimgfrm to check for frames 1-3
+ *
+ * Revision 2.3  1996/10/21  22:28:39  tom
+ * free_imgfiles added
+ *
+ * Revision 2.2  1996/10/11  16:27:46  tom
+ * update prms to processPET and processOxygen
+ *
+ * Revision 2.1  1996/08/21  22:36:51  tom
+ * correct some free memory omissions
+ *
+ * Revision 2.0  1996/05/16  19:52:40  tom
+ * new libraries
+ * */
+/* ===============================================================================
+ *	Module:			template.c
+ *	Author:			Tom Yang
+ *	Date:			July 1993
+ *	Description:	This function creates a thresholded mask image and then
+ *					computes the  mean pixel value within this mask for
+ *					activation and control images.
+ *	History:
+ *		Created by Tom Yang on 07/27/1993
+ *		30-Sep-94	Modified TOV to call makemask, which allows a peak plane to be specified
+ *		21-Feb-96	Modified TOV to call readtensor.
+ *		May-96	TOV	Eliminate expansion of image names and filtering from this routine.
+ *
+ *	Algorithm:
+ *		a) Threshold the filtered mask image to mskpct% of the whole brain maximum
+ *			or of a specified plane's maximum pixel if peakpln > 0.
+ *		b) Mask the filtered activation image by the thresholded mask image and
+ *		   compute activation_mean.
+ *		c) Mask the filtered control image by the thresholded mask image and
+ *		   compute control_mean if image list is paired.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dmean/RCS/template.c,v 1.2 2002/11/26 20:49:17 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <nrutil.h>
+#include <libnrimg.h>
+#include <imgutil.h>
+
+int             template (imgname, oxygen, mskname, prm, list, peakpln)
+	char           *(imgname[6]);		 /* complete filenames */
+	int             oxygen;			 /* true -> oxygen processing */
+	char           *mskname;		 /* complete filename of mask */
+	PARAMETER_DATA  prm;			 /* image parameters */
+	IMAGE_LIST_DATA *list;			 /* returns activation & control means */
+	int             peakpln;		 /* plane of peak to use for thresholding */
+{
+	ImageFile      *file, *file2;
+	Index           indx;
+	HEADER_DATA     hdr;			 /* hdr structure */
+	FILE           *recfp = NULL;		 /* rec file pointer (unused) */
+	float        ***mskimg = NULL;		 /* mask image tensor */
+	float        ***image = NULL;		 /* primary image tensor */
+	float        ***cbfimg = NULL;		 /* CBF or flow image tensor */
+	float        ***cbvimg = NULL;		 /* CBV or volume  image tensor */
+	char           *fname;			 /* temp for filenames */
+	int             firstpln;		 /* first plane to use in computing mean */
+	int             lastpln;		 /* last plane to use in computing mean */
+	long            npixels;
+	float           sum;
+	float           scaler = 1.0;
+	long            dim[3];			 /* dimensions of tensors */
+	int             i, j, pln;
+
+/*
+ *	Initializations
+ */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ *	Read the mask image.
+ *	Determine the planes in which the peak may exist, and then generate the mask
+ */
+
+	file = make_imgfile (mskname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [template]: Cannot open %s\n", mskname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [template]: Cannot get MainHeader from %s\n", mskname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [template]: cannot find %s frame 1, 2 or 3\n", mskname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [template]: Cannot read file subheader in %s\n", mskname);
+		return (ERROR);
+	}
+	dim[0] = (long) file->sh->dim1;
+	dim[1] = (long) file->sh->dim2;
+	dim[2] = (long) file->sh->dim3;
+	if ((mskimg = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+	if (prm.first_slice > 0) {
+		firstpln = prm.first_slice;
+		lastpln = prm.last_slice;
+	} else {
+		firstpln = 1;
+		lastpln = dim[2];
+	}
+	masktensor (file, mskimg, prm.mskpct, firstpln, lastpln, peakpln, &npixels);
+	free_imgfile (file);
+
+/*
+ *	Read the primary image: imgname[0]
+ */
+
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	fname = imgname[0];
+	file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [template]: Cannot open %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [template]: Cannot get MainHeader from %s\n", fname);
+		return (ERROR);
+	}
+	indx.frm = firstimgfrm (file);
+	if (indx.frm <= 0) {
+		fprintf (stderr, "ERROR [template]: cannot find %s frame 1, 2 or 3\n", fname);
+		return (ERROR);
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [template]: Cannot read file subheader in %s\n", fname);
+		return (ERROR);
+	}
+	if ((image = readtensor (file, &indx)) == NULL)
+		return (ERROR);
+/*
+ *	Process the image (if specified):
+ */
+	if (oxygen == TRUE && prm.imglist_mode == MULTITRACER_IMAGE_MODE) {
+		fname = imgname[1];
+		file2 = make_imgfile (fname);
+		if (open_imgfile (file2) == ERROR) {
+			fprintf (stderr, "ERROR [template]: Cannot open %s\n", fname);
+			return (ERROR);
+		}
+		if (get_mh (file2) == ERROR) {
+			fprintf (stderr, "ERROR [template]: Cannot get MainHeader from %s\n", fname);
+			return (ERROR);
+		}
+		indx.frm = firstimgfrm (file);
+		if (indx.frm <= 0) {
+			fprintf (stderr, "ERROR [template]: cannot find %s frame 1, 2 or 3\n", fname);
+			return (ERROR);
+		}
+		if (get_sh (file2, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [template]: Cannot read file subheader in %s\n", fname);
+			return (ERROR);
+		}
+		if ((cbfimg = readtensor (file2, &indx)) == NULL)
+			return (ERROR);
+		free_imgfile (file2);
+
+		fname = imgname[2];
+		file2 = make_imgfile (fname);
+		if (open_imgfile (file2) == ERROR) {
+			fprintf (stderr, "ERROR [template]: Cannot open %s\n", fname);
+			return (ERROR);
+		}
+		if (get_mh (file2) == ERROR) {
+			fprintf (stderr, "ERROR [template]: Cannot get MainHeader from %s\n", fname);
+			return (ERROR);
+		}
+		indx.frm = firstimgfrm (file);
+		if (indx.frm <= 0) {
+			fprintf (stderr, "ERROR [template]: cannot find %s frame 1, 2 or 3\n", fname);
+			return (ERROR);
+		}
+		if (get_sh (file2, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [template]: Cannot read file subheader in %s\n", fname);
+			return (ERROR);
+		}
+		if ((cbvimg = readtensor (file2, &indx)) == NULL)
+			return (ERROR);
+		free_imgfile (file2);
+	}
+	if (oxygen== TRUE ) {
+		if ((processOxygen (image, cbfimg, cbvimg, dim, scaler, prm.processing,
+				    imgname[0], imgname[1], imgname[2], recfp, &hdr)) == ERROR) {
+			return (ERROR);
+		}
+	} else {
+		fname = imgname[0];
+		if (prm.processing != PROC_NONE) {
+			if (readhdr (fname, &hdr, recfp) == ERROR) {
+				fprintf (stderr, "ERROR [template] processing %s\n", fname);
+				return (ERROR);
+			}
+		}
+		if ((processPET (image, dim, scaler, prm.processing, fname, recfp, &hdr)) == ERROR) {
+			return (ERROR);
+		}
+	}
+
+	sum = 0.0;
+	for (pln = firstpln; pln <= lastpln; pln++) {
+		for (j = 1; j <= dim[1]; j++) {
+			for (i = 1; i <= dim[0]; i++) {
+				if (mskimg[pln][j][i] > 0.)
+					sum += image[pln][j][i];
+			}
+		}
+	}
+
+	if (npixels > 0)
+		list->mean1 = sum / npixels;
+	else
+		list->mean1 = 0.0;
+
+	if (image != NULL)
+		free_f3tensor (image, 1, dim[2], 1, dim[1], 1, dim[0]);
+	if (cbfimg != NULL)
+		free_f3tensor (cbfimg, 1, dim[2], 1, dim[1], 1, dim[0]);
+	if (cbvimg != NULL)
+		free_f3tensor (cbvimg, 1, dim[2], 1, dim[1], 1, dim[0]);
+	free_imgfile (file);
+
+/*
+ * If there is a second image (activation pair), process it:
+ * Oxygen processing uses oo = imgname[3], cbf = imgname[4], cbv = imgname[5]
+ * Activation processing uses control = imgname[1]
+ */
+	if (strlen (list->scanset2_id) > 0) {
+		if (oxygen == TRUE && prm.imglist_mode == MULTITRACER_IMAGE_MODE)
+			fname = imgname[3];
+		else
+			fname = imgname[1];
+		file = make_imgfile (fname);
+		if (open_imgfile (file) == ERROR) {
+			fprintf (stderr, "ERROR [template]: Cannot open %s\n", fname);
+			return (ERROR);
+		}
+		if (get_mh (file) == ERROR) {
+			fprintf (stderr, "ERROR [template]: Cannot get MainHeader from %s\n", fname);
+			return (ERROR);
+		}
+		indx.frm = firstimgfrm (file);
+		if (indx.frm <= 0) {
+			fprintf (stderr, "ERROR [template]: cannot find %s frame 1, 2 or 3\n", fname);
+			return (ERROR);
+		}
+		if (get_sh (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [template]: Cannot read file subheader in %s\n", fname);
+			return (ERROR);
+		}
+		if ((image = readtensor (file, &indx)) == NULL) {
+			return (ERROR);
+		}
+		if (oxygen == TRUE && prm.imglist_mode == MULTITRACER_IMAGE_MODE) {
+			fname = imgname[4];
+			file2 = make_imgfile (fname);
+			if (open_imgfile (file2) == ERROR) {
+				fprintf (stderr, "ERROR [template]: Cannot open %s\n", fname);
+				return (ERROR);
+			}
+			if (get_mh (file2) == ERROR) {
+				fprintf (stderr, "ERROR [template]: Cannot get MainHeader from %s\n", fname);
+				return (ERROR);
+			}
+			indx.frm = firstimgfrm (file);
+			if (indx.frm <= 0) {
+				fprintf (stderr, "ERROR [template]: cannot find %s frame 1, 2 or 3\n", fname);
+				return (ERROR);
+			}
+			if (get_sh (file2, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [template]: Cannot read file subheader in %s\n", fname);
+				return (ERROR);
+			}
+			if ((cbfimg = readtensor (file2, &indx)) == NULL) {
+				return (ERROR);
+			}
+			free_imgfile (file2);
+
+			fname = imgname[5];
+			file2 = make_imgfile (fname);
+			if (open_imgfile (file2) == ERROR) {
+				fprintf (stderr, "ERROR [template]: Cannot open %s\n", fname);
+				return (ERROR);
+			}
+			if (get_mh (file2) == ERROR) {
+				fprintf (stderr, "ERROR [template]: Cannot get MainHeader from %s\n", fname);
+				return (ERROR);
+			}
+			indx.frm = firstimgfrm (file);
+			if (indx.frm <= 0) {
+				fprintf (stderr, "ERROR [template]: cannot find %s frame 1, 2 or 3\n", fname);
+				return (ERROR);
+			}
+			if (get_sh (file2, &indx) == ERROR) {
+				fprintf (stderr, "ERROR [template]: Cannot read file subheader in %s\n", fname);
+				return (ERROR);
+			}
+			if ((cbvimg = readtensor (file2, &indx)) == NULL) {
+				return (ERROR);
+			}
+			free_imgfile (file2);
+		}
+		if (oxygen== TRUE ) {
+			if ((processOxygen (image, cbfimg, cbvimg, dim, scaler, prm.processing,
+				     imgname[3], imgname[4], imgname[5], recfp, &hdr)) == ERROR) {
+				return (ERROR);
+			}
+		} else {
+			if (prm.processing != PROC_NONE) {
+				if (readhdr (fname, &hdr, recfp) == ERROR) {
+					fprintf (stderr, "ERROR [template] processing %s\n", fname);
+					return (ERROR);
+				}
+			}
+			if ((processPET (image, dim, scaler, prm.processing, imgname[1], recfp, &hdr)) == ERROR) {
+				return (ERROR);
+			}
+		}
+
+		sum = 0.0;
+		for (pln = firstpln; pln <= lastpln; pln++) {
+			for (j = 1; j <= dim[1]; j++) {
+				for (i = 1; i <= dim[0]; i++) {
+					if (mskimg[pln][j][i] > 0.)
+						sum += image[pln][j][i];
+				}
+			}
+
+		}
+		if (npixels > 0)
+			list->mean2 = sum / npixels;
+		else
+			list->mean2 = 0.0;
+
+		if (image != NULL)
+			free_f3tensor (image, 1, dim[2], 1, dim[1], 1, dim[0]);
+		if (cbfimg != NULL)
+			free_f3tensor (cbfimg, 1, dim[2], 1, dim[1], 1, dim[0]);
+		if (cbvimg != NULL)
+			free_f3tensor (cbvimg, 1, dim[2], 1, dim[1], 1, dim[0]);
+		free_imgfile (file);
+	}
+	free_f3tensor (mskimg, 1, dim[2], 1, dim[1], 1, dim[0]);
+/*
+ * Normalize the mean if it is required.
+ */
+	if (prm.voi_norm > 0.0) {
+		if (list->mean1 > 0.0)
+			list->mean1 = prm.voi_norm / list->mean1;
+		if (list->mean2 > 0.0)
+			list->mean2 = prm.voi_norm / list->mean2;
+	}
+	return (OK);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*	$Id: template.c,v 1.1 1998/12/09 19:11:53 tom Exp tom $
+d3 3
+d30 1
+a30 1
+ *	Date:			July, 1993
+d49 1
+d51 1
+a51 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/dmean/RCS/template.c,v 1.1 1998/12/09 19:11:53 tom Exp tom $";
+d169 1
+a169 1
+	if (oxygen && prm.imglist_mode == MULTITRACER_IMAGE_MODE) {
+d216 1
+a216 1
+	if (oxygen) {
+d263 1
+a263 1
+		if (oxygen && prm.imglist_mode == MULTITRACER_IMAGE_MODE)
+d288 1
+a288 1
+		if (oxygen && prm.imglist_mode == MULTITRACER_IMAGE_MODE) {
+d337 1
+a337 1
+		if (oxygen) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+/*	$Id: template.c,v 2.5 1997/07/24 21:30:16 tom Exp $
+d3 3
+d47 1
+a47 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/imgmean/RCS/template.c,v 2.5 1997/07/24 21:30:16 tom Exp $";
+a54 1
+#include <nr.h>
+@

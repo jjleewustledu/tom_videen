@@ -1,0 +1,842 @@
+head	1.21;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.21
+date	95.11.10.23.29.58;	author tom;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	95.11.10.16.27.47;	author tom;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	95.10.24.21.38.09;	author ty7777;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	95.10.17.21.21.05;	author ty7777;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	95.10.13.17.04.09;	author ty7777;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	95.09.28.18.28.18;	author ty7777;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	95.06.14.20.08.08;	author ty7777;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	93.11.03.17.43.18;	author ty7777;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	93.10.27.21.23.07;	author ty7777;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	93.10.27.20.27.41;	author ty7777;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	93.10.26.14.35.07;	author ty7777;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	93.10.26.14.17.48;	author ty7777;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	93.10.25.20.46.17;	author ty7777;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	93.10.25.20.43.58;	author ty7777;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	93.08.06.16.31.38;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.06.22.22.30.37;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.04.28.16.01.45;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.04.21.16.59.40;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.03.08.18.14.52;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.03.04.17.09.00;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.03.03.20.32.05;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Open ECAT images.
+@
+
+
+1.21
+log
+@*** empty log message ***
+@
+text
+@/*	$Id$
+	$Log$ */
+/* ===============================================================================
+ *	Module:			OpenEcat.c
+ *	Date:			04/13/1992
+ *	Author:			Tom Yang
+ *	Description:	Open an ECAT image file and return
+ *					matfptr, xdim, ydim. num_slices, pixel_size, and plane_separation.
+ *	Calls:			matrix_open, matrix_read, free_matrix_data
+ *	Returns:		pointer to a MatrixFile structure or NULL.
+ *	Note:			memory must be freed externally with matrix_close
+ *	History:
+ *		10-Nov-95	TOV modification
+ * ===============================================================================
+ */
+#include <petutil.h>
+#include <matrix7.h>
+
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libnpg/RCS/OpenEcat.c,v 1.20 1995/11/10 16:27:47 tom Exp tom $";
+
+MatrixFile     *OpenEcat (ecat_image_file, num_slices, xdim, ydim,
+			                  pixel_size, plane_separation, matval)
+	char           *ecat_image_file;	/* filename */
+	short          *num_slices;			/* number of slices */
+	short          *xdim;				/* number of pixels */
+	short          *ydim;				/* number of pixels */
+	float          *pixel_size;	
+	float          *plane_separation;
+	struct Matval   matval;				/* CTI structure (no longer used) */
+{
+	MatrixFile     *matrix_open ();
+	MatrixData     *matrix_read ();
+
+	Image_subheader *image_subheader;
+	Main_header    *main_header;
+	MatDirNode     *node;
+	MatrixData     *volume;
+	MatrixFile     *matfptr;
+
+	matfptr = matrix_open (ecat_image_file, MAT_READ_ONLY, MAT_UNKNOWN_FTYPE);
+	main_header = matfptr->mhptr;
+	if (matfptr == NULL || (main_header->file_type != PetImage
+		     && main_header->file_type != PetVolume && main_header->file_type != ByteImage
+	   && main_header->file_type != ByteVolume && main_header->file_type != InterfileImage)) {
+		if (matfptr != NULL) fprintf (stderr, "ERROR [OpenEcat]: ",
+			 "incompatible data_type: %d. Correct data type should be: %d, %d %d, %d, or %d\n",
+			 main_header->file_type, PetImage, PetVolume, ByteImage, ByteVolume, InterfileImage);
+		fprintf (stderr, "ERROR [OpenEcat]: cannot open %s\n", ecat_image_file);
+		*num_slices = 0;
+		*xdim = 0;
+		*ydim = 0;
+		return NULL;
+	}
+	*plane_separation = main_header->plane_separation;
+	*num_slices = 0;
+	node = matfptr->dirlist->first;
+	while (node) {
+		volume = matrix_read (matfptr, node->matnum, MAT_SUB_HEADER);
+		*num_slices += volume->zdim;
+		free_matrix_data (volume);
+		node = node->next;
+	}
+
+/*
+ * Get the dimension and pixel_size of slice.
+ */
+	node = matfptr->dirlist->first;
+	volume = matrix_read (matfptr, node->matnum, MAT_SUB_HEADER);
+	image_subheader = (Image_subheader *) volume->shptr;
+
+	*xdim = image_subheader->x_dimension;
+	*ydim = image_subheader->y_dimension;
+	*pixel_size = image_subheader->x_pixel_size;
+
+	free_matrix_data (volume);
+	return matfptr;
+}
+@
+
+
+1.20
+log
+@remove petutil parent directory from include statements
+@
+text
+@d1 15
+a15 98
+/*$Id: OpenEcat.c,v 1.19 1995/10/24 21:38:09 ty7777 Exp tom $*/
+/*$Log: OpenEcat.c,v $
+ * Revision 1.19  1995/10/24  21:38:09  ty7777
+ * Same as the last version, just want to check in.
+ *
+ * Revision 1.18  1995/10/17  21:21:05  ty7777
+ * Same as the last version.
+ *
+ * Revision 1.17  1995/10/13  17:04:09  ty7777
+ * Use matrix7.h
+ *
+ * Revision 1.16  1995/09/28  18:28:18  ty7777
+ * Updated for 961 data.
+ *
+ * Revision 1.15  1995/06/14  20:08:08  ty7777
+ * Identical to the last version.
+ *
+ * Revision 1.14  1993/11/03  17:43:18  ty7777
+ * delete ssccsid.
+ *
+ * Revision 1.13  1993/10/27  21:23:07  ty7777
+ * Added checking for frames.
+ *
+ * Revision 1.12  1993/10/27  20:27:41  ty7777
+ * Change error message for make_list.
+ *
+ * Revision 1.11  1993/10/26  14:35:07  ty7777
+ * Added processing if matval.frame is <= 0.
+ *
+ * Revision 1.10  1993/10/26  14:17:48  ty7777
+ * Modified to use different frames.
+ *
+ * Revision 1.9  1993/10/25  20:46:17  ty7777
+ * Change rcsid content from id to header.
+ *
+ * Revision 1.8  1993/10/25  20:43:58  ty7777
+ * Modified so that it can open any plane in any frame and plane.
+ *
+ * Revision 1.7  1993/08/06  16:31:38  ty7777
+ * Changed error message.
+ *
+ * Revision 1.6  1993/06/22  22:30:37  ty7777
+ * matval is nonger used.
+ * matval is no longer used.
+ *
+ * Revision 1.5  1993/04/28  16:01:45  ty7777
+ * Make sure we get the correct number of slices by calling make_list.
+ *
+ * Revision 1.4  1993/04/21  16:59:40  ty7777
+ * initial checking in.
+ *
+ * Revision 1.3  1993/03/08  18:14:52  ty7777
+ * Before changing filter code and filter parameters.
+ *
+ * Revision 1.2  1993/03/04  17:09:00  ty7777
+ * Adding error checking.
+ *
+ * Revision 1.1  1993/03/03  20:32:05  ty7777
+ * Initial revision
+ **/
+
+static char rcsid [] = "$Header: /export/home/npggw/tom/src/libnpg/RCS/OpenEcat.c,v 1.19 1995/10/24 21:38:09 ty7777 Exp tom $";
+
+/*___________________________________________________________________________________
+ *
+ *	File Name:	OpenEcat.c
+ *	Function Name:	OpenEcat
+ *	Arguments:	fd:			ECAT file descriptor, not used
+ *						currently. Reserved for latter use 
+ *						for the function to work with 
+ *						FORTRAN functions.
+ *			ecat_image_file:	ECAT image file name.	
+ *			num_slices:		number of slices in image file,
+ *						returned.
+ *			xdim:			x-dimension, returned.
+ *			ydim:			y-dimension, returned.
+ *			matval:			structure containing frame, plane,
+ *						gate, data, and bed numbers. Not used,
+ *						this is here just for backward 
+ *						compability with earlier versions of
+ *						libpetutil.a and libhp.a.
+ *	Return Value:	MatrixFile *:		Pointer to a MatrixFile structure or
+ *						NULL if there is error. The user is
+ *						responsible to free memory after the 
+ *						MatrixFile pointer is no longer used 
+ *						by using  the matrix_close ()
+ *						function from the CTI library or our
+ *						own library libcti.a.
+ *	Description:	Open the ECAT image file and return matfptr, xdim, ydim, 
+ *			num_slices, pixel_size, and plane_separation.
+ *	Called by:	ecat2pett6.c in ecat2pett6.bin
+ *			getimage_type.c in libpetutil.a
+ *	Calling:	matrix_open (), matrix_read ().
+ *	Author:		Tom Yang
+ *	History:	Created by Tom Yang on 04/13/1992
+ *
+___________________________________________________________________________________*/
+
+d19 11
+a29 9
+MatrixFile *OpenEcat (ecat_image_file, num_slices, xdim, ydim, 
+			pixel_size, plane_separation, matval)
+	char		*ecat_image_file;
+	short		*num_slices;
+	short		*xdim;
+	short		*ydim;
+	float		*pixel_size;
+	float		*plane_separation;
+	struct Matval	matval;
+d31 2
+a32 2
+	MatrixFile	*matrix_open ();
+	MatrixData	*matrix_read ();
+d34 5
+a38 5
+	Image_subheader		*image_subheader;
+	Main_header		*main_header;
+	MatDirNode		*node;
+	MatrixData		*volume;
+	MatrixFile		*matfptr;
+d40 12
+a51 16
+	matfptr	= matrix_open (ecat_image_file, MAT_READ_ONLY, MAT_UNKNOWN_FTYPE);
+	main_header		= matfptr->mhptr;
+	if (matfptr == NULL || (main_header->file_type != PetImage 
+	&& main_header->file_type != PetVolume && main_header->file_type != ByteImage 
+	&& main_header->file_type != ByteVolume && main_header->file_type != InterfileImage))
+	{
+		if (matfptr != NULL)
+			fprintf (stderr, 
+	"Error: incompatible data_type: %d. Correct data type should be: %d, %d %d, %d, or %d\n", 
+				main_header->file_type, PetImage, PetVolume, ByteImage,
+				ByteVolume, InterfileImage);
+		fprintf (stderr, "Error in opening matrix file %s.\n", ecat_image_file);
+		*num_slices	= 0;
+		*xdim		= 0;
+		*ydim		= 0;
+
+d54 6
+a59 9
+
+	*plane_separation	= main_header->plane_separation;
+
+	*num_slices	= 0;
+	node		= matfptr->dirlist->first;
+	while (node) 
+	{
+		volume		= matrix_read (matfptr, node->matnum, MAT_SUB_HEADER);
+		*num_slices	+= volume->zdim;
+d64 6
+a69 6
+	/*
+	 * Get the dimension and pixel_size of slice.
+	 */
+	node		= matfptr->dirlist->first;
+	volume		= matrix_read (matfptr, node->matnum, MAT_SUB_HEADER);
+	image_subheader	= (Image_subheader *) volume->shptr;
+d71 3
+a73 3
+	*xdim		= image_subheader->x_dimension; 
+	*ydim		= image_subheader->y_dimension; 
+	*pixel_size	= image_subheader->x_pixel_size;
+a75 1
+
+@
+
+
+1.19
+log
+@Same as the last version, just want to check in.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.18 1995/10/17 21:21:05 ty7777 Exp ty7777 $*/
+d3 3
+d62 1
+a62 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.18 1995/10/17 21:21:05 ty7777 Exp ty7777 $";
+d99 2
+a100 2
+#include <petutil/petutil.h>
+#include <petutil/matrix7.h>
+@
+
+
+1.18
+log
+@Same as the last version.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.17 1995/10/13 17:04:09 ty7777 Exp $*/
+d3 3
+d59 1
+a59 1
+static char rcsid [] = "$Header: /usr/local/src/libhp/RCS/OpenEcat.c,v 1.17 1995/10/13 17:04:09 ty7777 Exp $";
+@
+
+
+1.17
+log
+@Use matrix7.h
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.16 1995/09/28 18:28:18 ty7777 Exp ty7777 $*/
+d3 3
+d56 1
+a56 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.16 1995/09/28 18:28:18 ty7777 Exp ty7777 $";
+@
+
+
+1.16
+log
+@Updated for 961 data.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.15 1995/06/14 20:08:08 ty7777 Exp $*/
+d3 3
+d53 1
+a53 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.15 1995/06/14 20:08:08 ty7777 Exp $";
+d91 1
+a91 1
+#include <petutil/matrix.h>
+@
+
+
+1.15
+log
+@Identical to the last version.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.14 1993/11/03 17:43:18 ty7777 Exp ty7777 $*/
+d3 3
+d50 1
+a50 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.14 1993/11/03 17:43:18 ty7777 Exp ty7777 $";
+a101 1
+	int		mat_numcod ();
+d103 5
+a107 7
+	Image_subheader	*image_subheader;
+	Main_header	*main_header;
+	MatrixData	*matrixx_data;
+	MatrixFile	*matfptr;
+	Mlist		*mlist;
+	char		list [MAXLINE];
+	int		diff;  /* number of differences between spec and actual */
+d109 5
+a113 2
+	matfptr	= matrix_open (ecat_image_file, "r");
+	if (matfptr == NULL || matfptr->mhptr->data_type != IMAGE_DATA)
+d116 4
+a119 2
+			printf ("Incompatible data_type: %d. Correct data type should be: %d\n", 
+				matfptr->mhptr->data_type, IMAGE_DATA);
+a127 1
+	main_header		= matfptr->mhptr;
+d130 3
+a132 6
+	/*
+	 * Get the number of frames in image file.
+	 */
+	strcpy (list, "*;*;*;*");
+	mlist	= make_list (ecat_image_file, (char *) NULL, list, &diff);
+	if (!mlist) 
+d134 4
+a137 4
+		fprintf (stderr, "make_list error in OpenEcat () for image %s.\n", ecat_image_file);
+		fprintf (stderr, "list is %s.\n", list);
+		matrix_close (matfptr);
+		return NULL;
+a140 19
+ 	 * The number of mats in a list always gives the correct number of
+ 	 * slices.
+ 	 */
+	if (matval.frame > 0 && matval.frame <= mlist->frames)
+	{
+		free_Mlist (mlist);
+		sprintf (list, "%d;*;*;*", matval.frame);
+		mlist	= make_list (ecat_image_file, (char *) NULL, list, &diff);
+		if (!mlist) 
+		{
+			fprintf (stderr, "make_list error in OpenEcat () for image %s.\n", ecat_image_file);
+			fprintf (stderr, "list is %s.\n", list);
+			matrix_close (matfptr);
+			return NULL;
+		}
+	}
+	*num_slices	= mlist->nmats;
+
+	/*
+d143 3
+a145 5
+	matrixx_data	= matrix_read (matfptr, mlist->list [0]);
+	image_subheader	= (Image_subheader *) matrixx_data->shptr;
+	*xdim		= image_subheader->dimension_1; 
+	*ydim		= image_subheader->dimension_2; 
+	*pixel_size	= image_subheader->pixel_size;
+d147 5
+a151 2
+	free_Mlist (mlist);
+	free_matrix_data (matrixx_data);
+@
+
+
+1.14
+log
+@delete ssccsid.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.13 1993/10/27 21:23:07 ty7777 Exp ty7777 $*/
+d3 3
+d47 1
+a47 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.13 1993/10/27 21:23:07 ty7777 Exp ty7777 $";
+@
+
+
+1.13
+log
+@Added checking for frames.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.12 1993/10/27 20:27:41 ty7777 Exp ty7777 $*/
+d3 3
+d44 1
+a44 4
+#ifndef lint
+static char sccsid[] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.12 1993/10/27 20:27:41 ty7777 Exp ty7777 $";
+#endif
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.12 1993/10/27 20:27:41 ty7777 Exp ty7777 $";
+@
+
+
+1.12
+log
+@Change error message for make_list.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.11 1993/10/26 14:35:07 ty7777 Exp ty7777 $*/
+d3 3
+d42 1
+a42 1
+static char sccsid[] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.11 1993/10/26 14:35:07 ty7777 Exp ty7777 $";
+d44 1
+a44 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.11 1993/10/26 14:35:07 ty7777 Exp ty7777 $";
+d124 3
+a126 7
+ 	 * The number of mats in a list always gives the correct number of
+ 	 * slices.
+ 	 */
+	if (matval.frame > 0)
+		sprintf (list, "%d;*;*;*", matval.frame);
+	else
+		strcpy (list, "*;*;*;*");
+d134 18
+@
+
+
+1.11
+log
+@Added processing if matval.frame is <= 0.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.10 1993/10/26 14:17:48 ty7777 Exp ty7777 $*/
+d3 3
+d39 1
+a39 1
+static char sccsid[] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.10 1993/10/26 14:17:48 ty7777 Exp ty7777 $";
+d41 1
+a41 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.10 1993/10/26 14:17:48 ty7777 Exp ty7777 $";
+d131 2
+a132 1
+		fprintf (stderr, "make_list error in OpenEcat ().\n");
+@
+
+
+1.10
+log
+@Modified to use different frames.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.9 1993/10/25 20:46:17 ty7777 Exp ty7777 $*/
+d3 3
+d36 1
+a36 1
+static char sccsid[] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.9 1993/10/25 20:46:17 ty7777 Exp ty7777 $";
+d38 1
+a38 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/libhp/RCS/OpenEcat.c,v 1.9 1993/10/25 20:46:17 ty7777 Exp ty7777 $";
+d121 4
+a124 1
+	sprintf (list, "%d;*;*;*", matval.frame);
+@
+
+
+1.9
+log
+@Change rcsid content from id to header.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.8 1993/10/25 20:43:58 ty7777 Exp ty7777 $*/
+d3 3
+d33 1
+a33 1
+static char sccsid[] = "$Header$";
+d35 1
+a35 1
+static char rcsid [] = "$Header$";
+d118 1
+a118 1
+	sprintf (list, "%d;%d;%d;%d", matval.frame, matval.plane, matval.gate, matval.bed);	
+d131 1
+a131 1
+	matrixx_data	= matrix_read (matfptr, mlist->list [matval.frame - 1]);
+@
+
+
+1.8
+log
+@Modified so that it can open any plane in any frame and plane.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.7 1993/08/06 16:31:38 ty7777 Exp ty7777 $*/
+d3 3
+d30 1
+a30 1
+static char sccsid[]="@@(#)OpenEcat.c	10/09/92 Copyright Neural Pet Group, Washington University 1992";
+d32 1
+a32 1
+static char rcsid []= "$Id: OpenEcat.c,v 1.7 1993/08/06 16:31:38 ty7777 Exp ty7777 $";
+@
+
+
+1.7
+log
+@Changed error message.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.6 1993/06/22 22:30:37 ty7777 Exp ty7777 $*/
+d3 3
+d29 1
+a29 1
+static char rcsid []= "$Id: OpenEcat.c,v 1.6 1993/06/22 22:30:37 ty7777 Exp ty7777 $";
+d88 1
+d112 2
+a113 1
+	mlist	= make_list (ecat_image_file, (char *) NULL, "*;*;*;*", &diff);
+d125 1
+a125 1
+	matrixx_data	= matrix_read (matfptr, mlist->list [0]);
+@
+
+
+1.6
+log
+@matval is nonger used.
+matval is no longer used.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.5 1993/04/28 16:01:45 ty7777 Exp $*/
+d3 4
+d26 1
+a26 1
+static char rcsid []= "$Id: OpenEcat.c,v 1.5 1993/04/28 16:01:45 ty7777 Exp $";
+d90 1
+a90 3
+		if (matfptr == NULL)
+			printf ("NULL MatrixFile pointer\n");
+		else
+d93 1
+a93 1
+		fprintf (stderr, "matrix_open error in OpenEcat () to open %s\n", ecat_image_file);
+@
+
+
+1.5
+log
+@Make sure we get the correct number of slices by calling make_list.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.4 1993/04/21 16:59:40 ty7777 Exp ty7777 $*/
+d3 3
+d22 1
+a22 1
+static char rcsid []= "$Id: OpenEcat.c,v 1.4 1993/04/21 16:59:40 ty7777 Exp ty7777 $";
+d28 4
+a31 1
+ *	Arguments:	fd:			ECAT file descriptor.
+d38 13
+a50 7
+ *						gate, data, and bed numbers.
+ *	Return Value:	MatrixFile *:		Pointer to a MatrixFile structure.
+ *						Free memory after the pointer is no 
+ *						longer used with the matrixx_close ()
+ *						function from the CTI library.
+ *	Description:	Open the ECAT image file and return matfptr, num_slices,
+ *			xdim, ydim.
+d53 1
+a53 1
+ *	Calling:	matrixx_open (), matrixx_read ().
+a81 1
+	int		matnum;
+a101 1
+
+a113 1
+	free_Mlist (mlist);
+d116 1
+a116 1
+	 * Get the dimension of slice.
+d118 1
+a118 2
+	matnum		= mat_numcod (matval.frame, matval.plane, matval.gate, matval.data, matval.bed);
+	matrixx_data	= matrix_read (matfptr, matnum);
+d123 2
+@
+
+
+1.4
+log
+@initial checking in.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.3 1993/03/08 18:14:52 ty7777 Exp $*/
+d3 3
+d19 1
+a19 1
+static char rcsid []= "$Id: OpenEcat.c,v 1.3 1993/03/08 18:14:52 ty7777 Exp $";
+d68 2
+d90 15
+a104 1
+	*num_slices		= main_header->num_planes; 
+@
+
+
+1.3
+log
+@Before changing filter code and filter parameters.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.2 1993/03/04 17:09:00 ty7777 Exp ty7777 $*/
+d3 3
+d16 1
+a16 1
+static char rcsid []= "$Id: OpenEcat.c,v 1.2 1993/03/04 17:09:00 ty7777 Exp ty7777 $";
+d75 1
+a75 1
+		fprintf (stderr, "matrixx_open error in OpenEcat ()\n");
+@
+
+
+1.2
+log
+@Adding error checking.
+@
+text
+@d1 1
+a1 1
+/*$Id: OpenEcat.c,v 1.1 1993/03/03 20:32:05 ty7777 Exp $*/
+d3 3
+d13 1
+a13 1
+static char rcsid []= "$Id: OpenEcat.c,v 1.1 1993/03/03 20:32:05 ty7777 Exp $";
+d68 1
+a68 1
+			printf ("NULL matfptr\n");
+d70 2
+a71 1
+			printf ("data_type = %d\n", matfptr->mhptr->data_type);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d10 1
+a10 1
+static char rcsid []= "$Id: OpenEcat.c,v 1.1 1993/01/28 22:00:30 ty7777 Exp $";
+a60 4
+	/*
+	matfptr	= pet_matrixx_open (fd, ecat_image_file, MAT_READ_ONLY, IMAGE_DATA);
+	*/
+
+d64 4
+a67 4
+if (matfptr == NULL)
+	printf ("NULL matfptr\n");
+else
+	printf ("data_type = %d\n", matfptr->mhptr->data_type);
+@

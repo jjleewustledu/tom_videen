@@ -1,0 +1,55 @@
+#!/bin/csh
+#	Name:	masktr1_2dg3
+#	Author:	Tom Videen
+#	Date:	May 1999
+#	Use:	Threshold a 2D filtered transmission image to brain
+#			and mask to brain slices above sphenoid sinus
+
+if (! $?NPG) setenv NPG /usr/local/npg
+
+if ($#argv < 1 || $#argv > 2) then
+	echo "Usage:  masktrans pid [slices]"
+	echo " e.g.:  masktrans p5000"
+	echo "        masktrans p5000 9to37"
+	exit 1
+endif
+
+set PID = $1
+set SLICES = 0
+if ($#argv == 2) set SLICES = $2
+
+if (! -e ${PID}tr1_2dg3.v) then
+	set SPECIES = `echo $PID | cut -c1`
+	set IDNUM = `echo $PID | cut -c2-`
+	echo "species:   $SPECIES"    >! trprm
+	echo "tracer:    tr"          >> trprm
+	echo "recfilter: ramp"        >> trprm
+	echo "imgfilter: gauss2d 0.3" >> trprm
+	if ($SPECIES == "m" || $IDNUM < 5000) then
+		echo "extension:      img" >> trprm
+		echo "scanner:        953" >> trprm
+		echo "acquisition:    stationary" >> trprm
+		echo "reconstruction: fb"  >> trprm
+	else
+		echo "extension:      v"   >> trprm
+		echo "scanner:        961" >> trprm
+		echo "acquisition:    2d"  >> trprm
+		echo "reconstruction: fbu" >> trprm
+	endif
+	echo "$IDNUM 1" >! trlst
+	filterimg trprm trlst
+endif
+
+if ($SLICES != 0) then
+	set TOP = `echo $SLICES | cut -f1 -dt`
+	set BOT = `echo $SLICES | cut -f2 -do`
+	set MID = `echo "$TOP + $BOT / 2" | bc`
+	set MASKTOP = '1to'`echo $TOP - 1 | bc`
+	set MASKBOT = `echo $BOT + 1 | bc`'to47'
+
+	${NPG}/bin/maskrange ${PID}tr1_2dg3.v ${PID}mask.v 900 1100
+	${NPG}/bin/maskshrink ${PID}mask.v ${PID}mask.v 4
+	${NPG}/bin/maskslc ${PID}mask.v ${PID}mask.v $MASKTOP
+	${NPG}/bin/maskslc ${PID}mask.v ${PID}mask.v $MASKBOT
+	${NPG}/bin/maskobj ${PID}mask.v ${PID}mask.v 900 1100 64 64 $MID
+endif

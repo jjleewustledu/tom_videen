@@ -1,0 +1,273 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: scatcor.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $*/
+/*$Log: scatcor.c,v $
+ * Revision 3.1  1998/03/24  23:43:10  jmo
+ * ..
+ *
+ * Revision 3.0  1997/10/29  19:26:43  jmo
+ * Support Exact HR.
+ *
+ * Revision 2.6  1997/08/06  18:33:42  jmo
+ * Last version before cti rev 7 capability added.
+ *
+ * Revision 2.4  1996/06/19  11:20:50  jmo
+ *
+ * Revision 2.3  1996/04/23  15:02:05  jmo
+ * Version released April 23, 1996
+ *
+ * Revision 2.1  1996/03/15  21:57:19  jmo
+ * Version installed in St. Louis.
+ *
+ * Revision 2.0  1996/01/27  13:46:20  jmo
+ * Version installed at Neuro-imaging group, January 1996
+ *
+ * Revision 1.2  1996/01/18  16:10:14  jmo
+ * Modified file formats, Interfile and Matrix Rev 7.0 support.
+ *
+ * Revision 1.1  1996/01/12  18:09:30  jmo
+ * Initial revision
+ *
+ * Revision 1.13  1995/10/25  16:36:51  jmo
+ *
+ * Revision 1.12  1995/09/19  10:44:37  jmo
+ * Version for revised paper to physics in medicine and biology.
+ *
+ * Revision 1.11  95/06/19  16:47:08  jmo
+ * Fix normalization.
+ * 
+ * Revision 1.10  95/05/26  14:30:01  jmo
+ * Version sent to Pittsburgh, 5/26/95
+ * 
+ * Revision 1.9  95/05/04  10:37:51  jmo
+ * Modified normalization files.
+ * 
+ * Revision 1.8  95/04/27  17:43:24  jmo
+ * Version used for 3d95
+ * 
+ * Revision 1.7  95/03/31  15:48:21  jmo
+ *  Version for 951 sent to Pittsburgh.
+ * 
+ * Revision 1.6  95/03/03  16:27:11  jmo
+ * Modified but not tested for cti951
+ * 
+ * Revision 1.5  95/01/28  15:57:02  jmo
+ * Fix problem with frame number specification
+ * 
+ * Revision 1.4  1995/01/27  16:14:37  ty7777
+ * Use GetVersion () in the local directory.
+ *
+ * Revision 1.3  1995/01/20  23:25:45  ty7777
+ * Added petutil.h.
+ *
+ * Revision 1.2  1995/01/20  23:09:00  ty7777
+ * Added program version to main header.
+ *
+ * Revision 1.1  1995/01/19  22:40:20  ty7777
+ * Initial revision
+ **/
+
+/*--------------------------------------------------------------------
+
+Program: scatcor
+
+Purpose: Correct a 3D emission sinogram.
+
+Perpetrator: John Ollinger
+
+Date: October 7, 1993
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <petutil.h>
+#include <imagio.h>
+#include <cti_proto.h>
+#include <scatter.h>
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/scatcor.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+#define TRUE 1
+#define FALSE 0
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+int	i,j,k,plane=1,pad,ring1,ring2,ringdiff,rings[2],outfrm=1,stat,
+	ioff,joff,gate=1,data=0,bed=0,frame=1,dir_ring,scat_ring,ring_diff,
+	numray_sino,iang,scatonly=FALSE,pln,dpln,
+	norm_only=FALSE,scale_tails = HI_COUNT;
+
+float	**scatin,*scatpln,*sino,*normtr,*normsc,sum2,sum3,sumtot=0,
+	sumscat=0,*scat_interp(),scl=1.,sclsum=0.,**norm,*geo,
+	**inflate_norm(),version,*blank,**tran,scale_factor;
+
+char	emisbody[MAXNAME],*emisfile,*scatfil,*nrmfil,*geofil,dum[120],*ptr,		*tranfile,*blankfile;
+
+SubHeader 	*sh,*sht,*shb;
+MainHeader 	*mh;
+
+NormData *nrm,*read_norm();
+
+int     ***get_tran_support();
+
+struct ringinfo *rng;
+struct scatter_tab *sc;
+
+int	ring_list[LEN_RING_LIST] = RING_LIST,
+	scatter_only = FALSE;
+
+if(argc < 7) {
+    fprintf(stderr,"Usage: scatcor emission blank tran scatter norm geo [-frame frame -sf scale_factor -scatter_only -norm_only]\n");
+    exit(ERROR);
+    }
+sscanf(rcsid,"%s %s %f %s %s %s %s %s",dum,dum,&version,dum,dum,dum,dum,dum);
+
+emisfile  = argv[1];
+tranfile  = argv[2];
+blankfile  = argv[3];
+scatfil = argv[4];
+nrmfil = argv[5];
+geofil = argv[6];
+strcpy(emisbody,emisfile);
+ptr = strstr(emisbody,".");
+*ptr = NULL;
+
+frame = 1;
+scale_factor = -1.;
+for(i=0;i<argc;i++) {
+    if(!strcmp(argv[i],"-frame") & argc > i+1)
+	frame = atoi(argv[i+1]);
+    if(!strcmp(argv[i],"-sf") & argc > i+1)
+	scale_factor = atof(argv[i+1]);
+    if(!strcmp(argv[i],"-scatter_only"))
+	scatter_only = TRUE;
+    if(!strcmp(argv[i],"-norm_only"))
+	norm_only = TRUE;
+    }
+
+rng = (struct ringinfo *)malloc(sizeof(struct ringinfo));
+sc = (struct scatter_tab *)malloc(sizeof(struct scatter_tab));
+loadscat(scatfil,&scatin,rng);
+
+if( (mh = getmhdr(emisfile)) == NULL) {
+    printf("Error in getmhdr, %s.\n",emisfile);
+    exit(ERROR);
+    }
+
+sc->frame = 1;
+sc->scanner_type = 961;
+scale_tails = NO_SCALE;
+scale_tails = HI_COUNT;
+sc->numray = NUMRAY;
+sc->numang = NUMANG;
+sc->imgdim = 40;
+sc->numpln = NUM_RINGS;
+/* Compute scatter for all possible ring-differences. */
+sc->num_dir_rings = LEN_RING_LIST;
+sc->num_scat_rings = LEN_RING_LIST;
+sc->num_scat_sinos = 0;
+sc->ring_tab = (int **)malloc(LEN_RING_LIST*sizeof(int *));
+for(i=0;i<LEN_RING_LIST;i++)
+    sc->ring_tab[i] = (int *)malloc(LEN_RING_LIST*sizeof(int));
+for(i=0;i<LEN_RING_LIST;i++) {
+    dir_ring = ring_list[i];
+    for(j=0;j<LEN_RING_LIST;j++) {
+        scat_ring = ring_list[j];
+        ring_diff = abs(dir_ring-scat_ring);
+        sc->num_scat_rings = 0;
+        if((ring_diff <= MAX_RING_DIFF)&&(ring_diff%SPAN==0)) {
+            sc->ring_tab[i][j] = sc->num_scat_sinos;
+            ++sc->num_scat_rings;
+            ++sc->num_scat_sinos;
+            }
+        else
+            sc->ring_tab[i][j] = -1;
+        }
+    }
+
+/* Get support of transmission sinogram. */
+tran = (float **)malloc((MAX_PLANE+1)*sizeof(float *));
+for(pln=1,dpln=1;pln<=MAX_PLANE;pln+=2,dpln++) {
+    if((tran[dpln] = rdimg(tranfile,pln,frame,gate,data,bed))==NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",tranfile,pln);
+        exit(ERROR);
+        }
+    if((sht = (SubHeader *)getsbhdr(tranfile,pln,frame,gate,data,bed))==NULL) {
+        fprintf(stderr,"Could not read main header.,%s\n",tranfile);
+        exit(ERROR);
+        }
+    if((blank = rdimg(blankfile,pln,frame,gate,data,bed))==NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",blankfile,pln);
+        exit(ERROR);
+        }
+    if((shb = (SubHeader *)getsbhdr(blankfile,pln,frame,gate,data,bed))==NULL) {
+        fprintf(stderr,"Could not read main header.,%s\n",blankfile);
+        exit(ERROR);
+        }
+    scl = sht->duration/shb->duration;
+    for(i=0;i<sht->dim1*sht->dim2;i++) {
+        if(tran[dpln][i] > 0 && blank[i] > 0)
+            tran[dpln][i] = (float)log((double)(scl*blank[i]/tran[dpln][i]));
+        else
+            tran[dpln][i] = 0.;
+        }
+#ifdef CHOP
+    /* Chop out central bins from sinograms. */
+    pad = (sht->dim1 - NUMRAY)/2;
+    for(i=0,ioff=pad,joff=0;i<NUMANG;i++,ioff+=sht->dim1,joff+=NUMRAY) {
+        for(j=0;j<NUMRAY;j++)
+            tran[dpln][j+joff] = tran[dpln][j+ioff];
+        }
+    sht->dim1 = NUMRAY;
+#endif
+    free(sht);
+    free(shb);
+    free(blank);
+    }
+sc->tran_sup = get_tran_support(tran,sc->numray,sc->numang,NUM_RINGS);
+for(pln=1,dpln=1;pln<=MAX_PLANE;pln+=2,dpln++)
+    free(tran[dpln]);
+free(tran);
+sc->mainplane1 = 1;
+
+
+if(SOFTWARE_REVISION == 6)
+    scatcor_rev6(scatin,sc,mh,scale_tails,emisbody,emisfile,nrmfil,
+						geofil,version,scale_factor);
+else
+    scatcor_rev7(scatin,sc,mh,scale_tails,emisbody,emisfile,nrmfil,
+                            geofil,version,scale_factor,scatter_only,norm_only);
+
+
+}
+@

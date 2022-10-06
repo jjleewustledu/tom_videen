@@ -1,0 +1,218 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	93.03.03.20.39.07;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@pet_matrixx.c initial checking in.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id$*/
+/*$Log$*/
+
+#ifndef lint
+static char sccsid[]="@@(#)pet_matrixx.c	10/09/92  Copyright Neural Pet Group, Washington University 1992";
+#endif
+static char rcsid []= "$Id: pet_matrixx.c,v 1.1 1993/01/28 22:04:00 ty7777 Exp $";
+
+/*
+ * Include Files.
+ */
+
+#include	<stdio.h>
+#include	<fcntl.h>
+#include	<unistd.h>
+#include	<string.h>
+#include	<petutil/petutil.h>
+#include	<datacalc/datacalc.h>
+
+typedef enum {
+	MAT_OK,
+	MAT_MALLOC_ERR,
+	MAT_MHDREAD_ERR,
+	MAT_ACSDIR_ERR,
+	MAT_ACS_FILE_NOT_FOUND,
+	MAT_NFS_FILE_OPEN_ERR,
+	MAT_NFS_CREATE_ERR,
+	MAT_FILE_TYPE_NOT_MATCH,
+	MAT_READ_FROM_NILFPTR,
+	MAT_NOMHD_FILE_OBJECT,
+	MAT_NIL_SHPTR,
+	MAT_NIL_DATA_PTR,
+	MAT_MATRIX_NOT_FOUND,
+	MAT_UNKNOWN_FILE_TYPE,
+	MAT_READ_ACS_SUBHD_ERR,
+	MAT_READ_ACS_DATA_ERR,
+	MAT_ACS_DATA_SIZE_MISMATCH,
+	MAT_NFS_FILE_NOT_FOUND,
+	MAT_ACS_READ_SUBHD_ERR,
+	MAT_NODIRPTR_FILE_OBJECT,
+	MAT_READ_ACS_DIRBLK_ERR,
+	MAT_ACS_CREATE_ERR,
+	MAT_BAD_ATTRIBUTE,
+	MAT_BAD_FILE_ACCESS_MODE,
+	MAT_END_ERRORS
+}
+MatrixErrorCode;
+
+static char* mat_errors [] = {
+	"MAT_NO_ERROR",
+	"MAT_MALLOC_ERR",
+	"MAT_MHDREAD_ERR",
+	"MAT_ACSDIR_ERR",
+	"MAT_ACS_FILE_NOT_FOUND",
+	"MAT_NFS_FILE_OPEN_ERR",
+	"MAT_NFS_CREATE_ERR",
+	"MAT_FILE_TYPE_NOT_MATCH",
+	"MAT_READ_FROM_NILFPTR",
+	"MAT_NOMHD_FILE_OBJECT",
+	"MAT_NIL_SHPTR",
+	"MAT_NIL_DATA_PTR",
+	"MAT_MATRIX_NOT_FOUND",
+	"MAT_UNKNOWN_FILE_TYPE",
+	"MAT_READ_ACS_SUBHD_ERR",
+	"MAT_READ_ACS_DATA_ERR",
+	"MAT_ACS_DATA_SIZE_MISMATCH",
+	"MAT_NFS_FILE_NOT_FOUND",
+	"MAT_ACS_READ_SUBHD_ERR",
+	"MAT_NODIRPTR_FILE_OBJECT",
+	"MAT_READ_ACS_DIRBLK_ERR",
+	"MAT_ACS_CREATE_ERR",
+	"MAT_BAD_ATTRIBUTE",
+	"MAT_BAD_FILE_ACCESS_MODE",
+	"MAT_END_ERRORS"
+};
+
+MatrixErrorCode mat_errno ;
+
+MatrixFile *pet_matrixx_open (fd, fname, fmode, mtype)
+	int	fd;
+	char	*fname ;
+	int	fmode, mtype ;
+{
+	FILE		*fptr = NULL, *mat_create() ;
+	MatrixFile	*fp ;
+	MatDirList	*mat_read_xdirectory() ;
+	Main_header	*mhead ;
+	int		status, dtype, create_flag = FALSE, exists;
+	char		*omode;
+
+	/* 
+	 * Allocate space for MatrixFile data structure. 
+	 */
+	fp	= (MatrixFile *) malloc (sizeof (MatrixFile));
+	if (fp == NULL)
+	{
+		mat_errno	= MAT_MALLOC_ERR;
+		return (NULL);
+	}
+	bzero ((char *) fp, sizeof (MatrixFile));
+
+	/* 
+	 * Allocate space for main header data structure and initialize. 
+	 */
+	mhead	= (Main_header *) malloc (sizeof (Main_header)) ;
+	if (mhead == NULL)
+	{
+		mat_errno	= MAT_MALLOC_ERR;
+		return (NULL);
+	}
+	bzero ( (char *) mhead, sizeof (Main_header));
+
+	omode	= "r+";	/* assume READ_WRITE access mode */
+	if (fmode == MAT_READ_ONLY) 
+		omode	= "r";
+	if ((fmode == MAT_CREATE_NEW_FILE) || (fmode == MAT_CREATE))
+		create_flag	= TRUE ;
+	dtype	= mtype;
+	fp->fname	= (char*) malloc ( 1 + strlen (fname));
+	strcpy (fp->fname, fname);
+	mat_errno	= OK;
+	exists	= TRUE;
+	if (is_xacs (fname))
+	{
+		if (exists)
+		{
+			status	= rts_rmhd (fname, mhead);
+			if (status == ERROR)
+				mat_errno	= MAT_MHDREAD_ERR;
+			else
+			{
+				status		= xmat_acs_build_dir (fp);
+				if (status == ERROR) 
+					mat_errno	= MAT_ACSDIR_ERR;
+			}
+		}
+		else if (create_flag)	/* cannot create acs file */
+		{
+			mat_errno	= MAT_ACS_CREATE_ERR;
+		}
+		else		/* acs matrix file does not exists */
+		{
+			mat_errno	= MAT_ACS_FILE_NOT_FOUND;
+		}
+	}
+	else	/* nfs matrix file */
+	{
+		if (exists)
+		{
+			fptr	= fdopen (fd, omode);
+			if (fptr == NULL) 
+			{
+				mat_errno	= MAT_NFS_FILE_OPEN_ERR;
+			}
+			else
+			{
+				fseek (fptr, 0L, SEEK_SET);
+				mat_read_main_header (fptr, mhead);
+				fp->dirlist	= mat_read_xdirectory (fptr);
+			}
+		}
+		else if (create_flag)
+		{   
+			if ((fmode == MAT_CREATE_NEW_FILE) || 
+				((fmode == MAT_CREATE) && !exists)) 
+			{
+				fptr	= mat_create (fname, mhead) ;
+				if (fptr == NULL) 
+					mat_errno	= MAT_NFS_CREATE_ERR ;
+			}
+		}
+		else
+		{
+			mat_errno	= MAT_NFS_FILE_NOT_FOUND ;
+		}
+	}
+
+	if (mat_errno == OK)
+	{
+		fp->mhptr	= mhead;
+		fp->fptr	= fptr;
+		fp->acs		= is_xacs (fname);
+		if (dtype != GENERIC && dtype != fp->mhptr->file_type)
+			mat_errno	= MAT_FILE_TYPE_NOT_MATCH;
+	}
+
+	if (mat_errno == OK)
+		return (fp);
+	else
+	{
+		matrixx_close (fp);
+		return (NULL);
+	}
+}
+@

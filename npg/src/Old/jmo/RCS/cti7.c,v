@@ -1,0 +1,2122 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2000.02.14.14.40.44;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*
+
+File: imagio.c
+
+Purpose: Provide functions for accessing and writing the
+	 contents of image files compatible with the UCLA
+	 and Penn-PET display packages.
+
+Subroutines:
+
+getmatpos: Get beginning and ending record numbers of
+credirent: Create a directory entry of the appropriate
+rdrec:	Read specified number of records from disk.
+wrtrec:	Write specified number of records to disk.
+rdimg7:	Read image specified by a slice, phase and frame
+wrimg7:	Write image specified by a slice, phase and frame
+getmhdr: Read main header of specfied file.
+putmhdr: Write main header.
+getsbhdr: Read subheader.
+putshdr: Write subheader.
+
+Miscellaneous:
+numcod: Encode a matrix number from frame, slice and phase numbers.
+
+Perpetrator: John Ollinger
+
+Date: Spring, 1988, Revised for cti version 7, Fall 1995.
+
+Modified for new format by Shenjie Guan.
+Date: Fall, 1991
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+----------------------------------------------------------------------*/
+
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <string.h>
+#include <unistd.h>
+#include <math.h>
+#include <time.h>
+#include <cti7.h>
+#include <imagio.h>
+#include <matrix.h>
+
+#define MAX_FILES 50
+#define MAXNAME 120
+
+static char     rcsid[] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/cti7.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+struct file     fi[MAX_FILES_OPEN];
+
+FILE           *fp_list7[MAX_FILES] =
+{NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+char            file_list7[MAX_FILES][MAXNAME];
+char            mode_list7[MAX_FILES][4];	 /* Access modes of opened files. */
+float           file_sf[MAX_FILES] = {0., 0., 0., 0., 0., 0., 0., 0., 0., 0.};
+
+FILE           *getfp7 ();
+FILE           *write_fp7 ();
+float           get_sf ();
+void            filclose ();
+
+/********************************************/
+int             numcod (frame, plane, gate, data, bed)
+/********************************************/
+
+	int             frame, plane, gate, data, bed;
+{
+	int             matnum8data16bed64gate1024plane512frame, loPlane, hiPlane = 0, loData,
+	                hiData = 0;
+
+	hiPlane = (plane & 0x300);
+	loPlane = (plane & 0xFF);
+	loData = (data & 0x3);
+	hiData = (data & 0x4);
+	matnum8data16bed64gate1024plane512frame = ((frame & 0x1FF) | ((bed & 0xF) << 12) | ((loPlane << 16) | (hiPlane << 1)) | ((gate & 0x3F) << 24) | ((loData << 30) | (hiData << 9)));
+
+	return (matnum8data16bed64gate1024plane512frame);
+
+}
+
+
+/***********************/
+FILE           *filopn (filnam, mode)
+/***********************/
+
+/* Purpose: Open image file specified by filnam.		*/
+
+/* Calling sequence: fd = filopn(filnam,mode)			*/
+
+/* Mode specifies the access mode of the file.			*/
+/*	"r": Read only.  (in fcntl.h)				*/
+/*	"w"; Write only.					*/
+/*	"a": Read and write.				 	*/
+/* fd is set to NULL if an error occurs.			*/
+
+	char           *filnam;
+	char           *mode;
+{
+
+	FILE           *fd;
+	int             fp,			 /* Pointer to directory.	 */
+	                i, j;
+	static int      lcfirst = TRUE;
+
+	if ((fd = fopen (filnam, mode)) == NULL) {
+		printf ("\nCould not open file: %s\n", filnam);
+		return (NULL);
+	}
+	if (lcfirst == TRUE) {			 /* Initialize directory id's. */
+		lcfirst = FALSE;
+		for (i = 0; i < MAX_FILES_OPEN; i++)	/* Initialize directory id's.	 */
+			fi[i].id = NULL;
+	}
+	for (i = 0; i < MAX_FILES_OPEN; i++)
+		if (fi[i].id == NULL) {
+			fi[i].id = fd;
+			fp = i;
+			break;
+		}
+	if (i == MAX_FILES_OPEN) {
+		printf ("Error assigning directory in \"filopn\".\n");
+		printf ("Close files with \"filclose\" to free directories.\n");
+		return (NULL);
+	}
+	fi[fp].id = fd;				 /* Assign file fd a directory record. 	 */
+	fi[fp].memsize = SIZE_DIR_MALLOC;
+	if (NULL == (fi[fp].dir = (struct directory *)
+		     malloc ((unsigned) (SIZE_DIR_MALLOC * sizeof (struct directory))))) {
+		printf ("Could not alloc mem for directory in \"filopn\".\n");
+		return (NULL);
+	}
+/* Initialize structure. */
+	for (i = 0; i < fi[fp].memsize; i++)
+		for (j = 0; j < DNOD_REC; j++)
+			fi[fp].dir[i].entry[j].flag = UNUSED;
+	fi[fp].dir[0].hdr.forptr = DIR_NUM_1;
+	fi[fp].dir[0].hdr.bakptr = 0;
+	fi[fp].lstrec = 0;
+
+	return (fd);
+
+}
+
+/*********************/
+void            close_cti7 (filnam)
+/*********************/
+
+	char           *filnam;
+
+{
+
+	FILE           *fp;
+
+	if ((fp = getfp7 (filnam, "r")) == NULL) {
+		fprintf (stderr, "Could not get file pointer in \"rdimg7\".\n");
+	}
+	filclose (fp);
+
+}
+
+
+/***************/
+void            filclose (fd)
+/***************/
+
+/* Purpose: Close image file specified by filnam.
+   	    This function also frees the directory
+	    associated with the file.
+
+   Calling sequence: filclose(fd)
+*/
+
+
+
+	FILE           *fd;			 /* File designator. 			 */
+
+{
+
+	int             fp;			 /* Pointer to directory.	 */
+
+	for (fp = 0; fp < MAX_FILES_OPEN; fp++) {
+		if (fi[fp].id == fd) {
+			free (fi[fp].dir);	 /* Deallocate directory memory. */
+			fi[fp].id = NULL;	 /* Flag directory as available. */
+			file_sf[fp] = 0.;	 /* Flag directory as available. */
+			break;
+		}
+	}
+	fclose (fd);
+	return;
+
+}
+
+
+/***********************/
+FILE           *filcre (filnam, mode)
+/***********************/
+
+/* Purpose: Create image file specified by filnam.		*/
+
+/* Calling sequence: fd = filcre(filnam,mode)			*/
+
+/* Mode specifies the access mode of the file.			*/
+/*	"r": Read only.  (in fcntl.h)			*/
+/*	"w"; Write only.					*/
+/*	"a": Read and write.				 	*/
+/* fd is set to NULL if an error occurs.				*/
+
+	char           *filnam;
+	char           *mode;
+{
+	FILE           *fd;
+
+	if ((fd = fopen (filnam, "w")) == NULL)
+		printf ("\nCould not create file: %s\n", filnam);
+
+	if (create_dir (fd) < 0) {		 /* Initialize directory record.	 */
+		fprintf (stderr, "Could not create directory in create_dir.\n");
+		return (NULL);
+	}
+	fclose (fd);
+	filopn (filnam, "r+");
+
+	return (fd);
+}
+
+/*****************************/
+int             getmatpos (fd, matnum, endrec)
+/*****************************/
+
+	FILE           *fd;			 /* File id, i.e., logical unit number.	 */
+	int             matnum;			 /* Matrix number of desired matrix, sinogram etc. */
+	int            *endrec;			 /* Ending record number of matrix. 		 */
+
+{
+
+
+	int             i, j, begrec, irec, memsize_old, lenrd, recnum, fp;	/* Pointer to file of
+										 * directory. */
+	int             stat = 0;		 /* Set status to OK. */
+
+
+/* Find index to directory corresponding to file designated by fd. */
+	fp = -1;
+	for (i = 0; i < MAX_FILES_OPEN; i++)	 /* Search for directory structure. */
+		if (fi[i].id == fd)
+			fp = i;
+	if (fp < 0) {
+		/* printf("Directory not found in \"getmatpos\".\n"); */
+		return (-1);
+	}
+	for (irec = 1; irec <= fi[fp].lstrec; irec++) {
+		for (i = 0; i < DNOD_REC; i++) {
+			/* Loop through all directory entries in RAM. 	 */
+			/* Entry #0 is directory header, skip it.	 */
+			if (fi[fp].dir[irec].entry[i].matnum == matnum) {
+				begrec = fi[fp].dir[irec].entry[i].begrec;
+				*endrec = fi[fp].dir[irec].entry[i].endrec;
+				return (begrec);
+			}
+		}
+	}
+	TRACE (printf ("getmatpos: Memory searched.\n"))
+/* Matrix not found in memory-resident directory entries. Are there more*/
+/* more entries on disk? If so, read into memory. 			*/
+
+/* First, check to see that pointers are initialized. */
+		if (fi[fp].dir[0].hdr.forptr == 0)
+		fi[fp].dir[0].hdr.forptr = DIR_NUM_1;
+
+	while ((fi[fp].dir[fi[fp].lstrec].hdr.forptr != DIR_NUM_1 &&
+		fi[fp].lstrec > 0) || fi[fp].lstrec == 0) {
+		/* Search directory entries on disk.	 */
+		if (fi[fp].lstrec > MAX_REC) {
+			printf ("Insufficient buffer space to store directory entries.\n");
+			--fi[fp].lstrec;
+			return (-1);
+		}
+		if (fi[fp].lstrec >= fi[fp].memsize - 1) {	/* Allocate more memory */
+			TRACE (printf ("credirent: Reallocating directory.\n"))
+				memsize_old = fi[fp].memsize;
+			fi[fp].memsize += SIZE_DIR_MALLOC;
+			if (NULL == (fi[fp].dir = (struct directory *) realloc ((char *) fi[fp].dir, (unsigned) (fi[fp].memsize * sizeof (struct directory)))));
+
+			/* Initialize structure, since stupid Sun compiler doesn't. */
+			for (i = memsize_old; i < fi[fp].memsize; i++)
+				for (j = 0; j < DNOD_REC; j++)
+					fi[fp].dir[i].entry[j].flag = UNUSED;
+		}
+		if (fi[fp].lstrec == 0)
+			recnum = DIR_NUM_1;
+		else
+			recnum = fi[fp].dir[fi[fp].lstrec].hdr.forptr;
+
+		++fi[fp].lstrec;		 /* Increment number of last record read from disc.	 */
+		lenrd = 1;			 /* Read one record.	 */
+		stat = rdrec (fd, (char *) &fi[fp].dir[fi[fp].lstrec], recnum, lenrd);
+
+		if (stat <= 0) {
+/*        printf("Error reading directory in \"getmatpos\", status = %d\n",stat);*/
+			return (-1);
+		} else {
+			/* Convert from DEC format. */
+			lenrd *= LENREC_L;
+
+			/*
+			 * dec2sun_long((int *)&fi[fp].dir[fi[fp].lstrec],lenrd);
+			 */
+		}
+
+		/* Search newly read entries for matrix. */
+		for (i = 0; i < DNOD_REC; i++) {
+			if (fi[fp].dir[fi[fp].lstrec].entry[i].matnum == matnum) {
+				begrec = fi[fp].dir[fi[fp].lstrec].entry[i].begrec;
+				*endrec = fi[fp].dir[fi[fp].lstrec].entry[i].endrec;
+				return (begrec);
+			}
+		}
+	}
+
+/* Matrix not found, return error. */
+/*printf("Matrix #%x not found. \"getmatpos\"\n",matnum);*/
+	return (-1);
+
+}
+
+
+/*****************************/
+rdrec (fd, buffer, recnum, length)
+/*****************************/
+
+/*
+Purpose: Read <length> records starting at record number <recnum> from
+disk file specified by <fd> into <buffer>.
+*/
+
+	FILE           *fd;			 /* File designator. 		 */
+	char           *buffer;			 /* Input buffer.		 */
+	int             recnum;			 /* Beginning record number.	 */
+ /* First record = 1		 */
+	int             length;			 /* Number of records to read.	 */
+
+{
+
+	long            dskptr;
+	int             count, stat;
+
+/* Position pointer beginning of record. */
+	dskptr = (recnum - 1) * LENREC;
+	if ((stat = fseek (fd, (long) dskptr, SEEK_SET)) != NULL)
+		return (-1);
+
+/* Read next record.    */
+	count = length * LENREC;
+	if ((stat = fread (buffer, sizeof (char), count, fd)) != count) {
+/*    printf("Error occurred during read in rdrec, status = %d\n",stat);*/
+		return (-1);
+	}
+	return (stat);
+
+}
+
+
+/******************************/
+wrtrec (fd, buffer, recnum, length)
+/******************************/
+
+/*
+Purpose: Write <length> records starting at record number <recnum> from
+disk file specified by <fd> into <buffer>.
+*/
+
+	FILE           *fd;			 /* File designator. 		 */
+	char           *buffer;			 /* Input buffer.		 */
+	int             recnum;			 /* Beginning record number.	 */
+	int             length;			 /* Number of records to read.	 */
+
+{
+	long            dskptr;
+	int             count, stat;
+
+/* Position pointer beginning of record. */
+	dskptr = (recnum - 1) * LENREC;
+	fseek (fd, (long) dskptr, SEEK_SET);
+
+/* Write next record.    */
+	count = length * LENREC;
+	if ((stat = fwrite (buffer, sizeof (char), count, fd)) != count) {
+		printf ("Error occurred during write, count = %d\n", stat);
+		stat = -1;
+	} else
+		stat = NULL;
+
+	return (stat);
+
+}
+
+/*************************/
+Main_header7   *read_mhdr (fd)
+/*************************/
+
+	FILE           *fd;			 /* File designator for image or scan file. */
+
+{
+
+	union temp_short {
+		short           s[LENREC_S];
+		char            c[LENREC];
+	}               tmp;
+
+	union temp_long {
+		float           f;
+		long            l;
+		short           s[2];
+	}               tmpl;
+
+	int             i, j, len;
+	int             recnum, lenrd, stat;
+	short          *hdr;
+
+	Main_header7   *mhdr;
+
+	mhdr = (Main_header7 *) malloc (sizeof (Main_header7));
+	lenrd = 1;
+	recnum = 1;
+	if ((stat = rdrec (fd, (char *) tmp.s, recnum, lenrd)) <= 0) {
+		printf ("Error reading main header.\n");
+		return (NULL);
+	}
+	hdr = (short *) malloc (LENREC);
+	for (i = 0; i < LENREC_S; i++)
+		hdr[i] = tmp.s[i];
+	mhdr->whole_header = (void *) hdr;
+
+	mhdr->system_type = tmp.s[24];
+	mhdr->file_type = tmp.s[25];
+
+	tmpl.s[0] = tmp.s[31];
+	tmpl.s[1] = tmp.s[32];
+	mhdr->scan_start_time = tmpl.l;
+
+	for (i = 0; i < 15; i++)
+		mhdr->patient_id[i] = tmp.c[166 + i];
+
+	mhdr->num_planes = tmp.s[176];
+	mhdr->num_frames = tmp.s[177];
+	mhdr->num_gates = tmp.s[178];
+	mhdr->num_bed_pos = tmp.s[179];
+
+	tmpl.s[0] = tmp.s[59];
+	tmpl.s[1] = tmp.s[60];
+	mhdr->bed_elevation = tmpl.f;
+	tmpl.s[0] = tmp.s[72];
+	tmpl.s[1] = tmp.s[73];
+	mhdr->calibration_factor = tmpl.f;
+	tmpl.s[0] = tmp.s[180];
+	tmpl.s[1] = tmp.s[181];
+	mhdr->init_bed_position = tmpl.f;
+	for (i = 0, j = 0; i < 16; i++, j += 2) {
+		tmpl.s[0] = tmp.s[182 + j];
+		tmpl.s[1] = tmp.s[183 + j];
+		mhdr->bed_offset[i] = tmpl.f;
+	}
+
+	tmpl.s[0] = tmp.s[212];
+	tmpl.s[1] = tmp.s[213];
+	mhdr->plane_separation = tmpl.f;
+
+	return (mhdr);
+
+}
+
+/*********************/
+int             write_mhdr (fd, mhdr)
+/*********************/
+
+	FILE           *fd;			 /* File designator for image or scan file. */
+	Main_header7   *mhdr;
+
+{
+
+	union temp_short {
+		short           s[LENREC_S];
+		char            c[LENREC];
+	}               tmp;
+
+	union temp_long {
+		float           f;
+		long            l;
+		short           s[2];
+	}               tmpl;
+
+	int             i, j, len;
+	int             recnum, stat;
+	short          *hdr;
+
+	hdr = (short *) mhdr->whole_header;
+	for (i = 0; i < LEN_MAINHEADER7; i++)
+		tmp.s[i] = hdr[i];
+
+	tmp.s[24] = mhdr->system_type;
+	tmp.s[25] = mhdr->file_type;
+
+	tmpl.l = mhdr->scan_start_time;
+	tmp.s[31] = tmpl.s[0];
+	tmp.s[32] = tmpl.s[1];
+
+	for (i = 0; i < 15; i++)
+		tmp.c[166 + i] = mhdr->patient_id[i];
+
+	tmp.s[176] = mhdr->num_planes;
+	tmp.s[177] = mhdr->num_frames;
+	tmp.s[178] = mhdr->num_gates;
+	tmp.s[179] = mhdr->num_bed_pos;
+
+	tmpl.f = mhdr->init_bed_position;
+	tmp.s[180] = tmpl.s[0];
+	tmp.s[181] = tmpl.s[1];
+	for (i = 0, j = 0; i < 16; i++, j += 2) {
+		tmpl.f = mhdr->bed_offset[i];
+		tmp.s[182 + j] = tmpl.s[0];
+		tmp.s[183 + j] = tmpl.s[1];
+	}
+
+	tmp.s[212] = tmpl.s[0];
+	tmp.s[213] = tmpl.s[1];
+	tmpl.f = mhdr->plane_separation;
+
+	len = 1;
+	recnum = 1;
+	if ((stat = wrtrec (fd, (char *) tmp.s, recnum, len)) != NULL) {
+		printf ("Error writing main header.\n");
+		return (-1);
+	}
+	return (NULL);
+
+}
+
+/**********************************************************/
+Scan3D_subheader7 *read_scan_shdr (fd, plane, frame, gate, data, bed)
+/**********************************************************/
+
+	FILE           *fd;			 /* File designator for image or scan file. */
+	int             plane, frame, gate, data, bed;
+
+{
+
+	Scan3D_subheader7 *sh;
+
+	union temporary {
+		float           f[NUMREC_SSHDR * LENREC_S / 2];
+		long            l[NUMREC_SSHDR * LENREC_S / 2];
+		short           s[NUMREC_SSHDR * LENREC_S];
+		char            c[NUMREC_SSHDR * LENREC];
+	}               tmp;
+
+	union temp_long {
+		float           f;
+		long            l;
+		short           s[2];
+	}               tmpl;
+
+	int             i, len;
+	int             lenrd, stat, matnum, begrec, endrec;
+	short          *hdr;
+
+	sh = (Scan3D_subheader7 *) malloc (sizeof (Scan3D_subheader7));
+	matnum = numcod (frame, plane, gate, data, bed);
+	if ((begrec = getmatpos (fd, matnum, &endrec)) < 0) {
+		printf ("Could not find image in directory, \"getsbhdr\".\n");
+		return (NULL);
+	}
+	lenrd = NUMREC_SSHDR;
+	if ((stat = rdrec (fd, (char *) tmp.s, begrec, lenrd)) <= 0) {
+		return (NULL);
+	}
+	hdr = (short *) malloc (LENREC);
+	for (i = 0; i < LENREC_S; i++)
+		hdr[i] = tmp.s[i];
+	sh->whole_header = (void *) hdr;
+
+	sh->data_type = tmp.s[0];
+	sh->num_dimensions = tmp.s[1];
+	sh->num_r_elements = tmp.s[2];
+	sh->num_angles = tmp.s[3];
+	for (i = 0; i < 64; i++)
+		sh->num_z_elements[i] = tmp.s[5 + i];
+	sh->ring_difference = tmp.s[69];
+	sh->storage_order = tmp.s[70];
+	sh->axial_compression = tmp.s[71];
+
+	sh->x_resolution = tmp.f[36];
+	sh->v_resolution = tmp.f[37];
+	sh->z_resolution = tmp.f[38];
+
+	tmpl.s[0] = tmp.s[92];
+	tmpl.s[1] = tmp.s[93];
+	sh->scale_factor = tmpl.f;
+
+	sh->scan_min = tmp.s[94];
+	sh->scan_max = tmp.s[95];
+
+	sh->prompts = tmp.l[48];
+	sh->delayed = tmp.l[49];
+	sh->multiples = tmp.l[50];
+	sh->net_trues = tmp.l[51];
+
+	sh->frame_start_time = tmp.l[55];
+	sh->frame_duration = tmp.l[56];
+
+	tmpl.s[0] = tmp.s[178];
+	tmpl.s[1] = tmp.s[179];
+	sh->loss_correction_fctr = tmp.f[57];
+
+	return (sh);
+
+}
+
+/**************************************************/
+int             write_scan_shdr (fd, sh, plane, frame, gate, data, bed)
+/**************************************************/
+
+	FILE           *fd;			 /* File designator for image or scan file. */
+	Scan3D_subheader7 *sh;
+	int             plane, frame, gate, data, bed;
+
+{
+
+	union temporary {
+		float           f[NUMREC_SSHDR * LENREC_S / 2];
+		long            l[NUMREC_SSHDR * LENREC_S / 2];
+		short           s[NUMREC_SSHDR * LENREC_S];
+		char            c[NUMREC_SSHDR * LENREC];
+	}               tmp;
+
+	union temp_long {
+		float           f;
+		long            l;
+		short           s[2];
+	}               tmpl;
+
+	int             i, len, stat, matnum, begrec, endrec;
+	short          *hdr;
+
+	hdr = (short *) sh->whole_header;
+	for (i = 0; i < LEN_SSHDR - 1; i++)
+		tmp.s[i] = hdr[i];
+
+	tmp.s[0] = sh->data_type;
+	tmp.s[1] = sh->num_dimensions;
+	tmp.s[2] = sh->num_r_elements;
+	tmp.s[3] = sh->num_angles;
+	tmp.s[69] = sh->ring_difference;
+	for (i = 0; i < 64; i++)
+		tmp.s[5 + i] = sh->num_z_elements[i];
+
+	tmp.f[36] = sh->x_resolution;
+	tmp.f[37] = sh->v_resolution;
+	tmp.f[38] = sh->z_resolution;
+
+	tmpl.f = sh->scale_factor;
+	tmp.s[92] = tmpl.s[0];
+	tmp.s[93] = tmpl.s[1];
+
+	tmp.s[94] = sh->scan_min;
+	tmp.s[95] = sh->scan_max;
+
+	tmp.l[48] = sh->prompts;
+	tmp.l[49] = sh->delayed;
+	tmp.l[50] = sh->multiples;
+	tmp.l[51] = sh->net_trues;
+
+	tmp.l[54] = sh->frame_start_time;
+	tmp.l[55] = sh->frame_duration;
+
+	tmp.f[57] = sh->loss_correction_fctr;
+	tmp.s[178] = tmpl.s[0];
+	tmp.s[179] = tmpl.s[1];
+
+	matnum = numcod (frame, plane, gate, data, bed);
+	if ((begrec = getmatpos (fd, matnum, &endrec)) < 0) {
+		printf ("Could not find image in directory, \"getsbhdr\".\n");
+		return (NULL);
+	}
+	len = NUMREC_SSHDR;
+	if ((stat = wrtrec (fd, (char *) tmp.s, begrec, len)) != NULL) {
+		return (-1);
+	}
+	return (NULL);
+
+}
+
+/************************************************************/
+Image_subheader7 *read_image_shdr (fd, plane, frame, gate, data, bed)
+/************************************************************/
+
+	FILE           *fd;			 /* File designator for image or scan file. */
+	int             plane, frame, gate, data, bed;
+
+{
+
+	Image_subheader7 *sh;
+
+	union temporary {
+		float           f[NUMREC_ISHDR * LENREC_S / 2];
+		long            l[NUMREC_ISHDR * LENREC_S / 2];
+		short           s[NUMREC_ISHDR * LENREC_S];
+		char            c[NUMREC_ISHDR * LENREC];
+	}               tmp;
+
+	union temp_long {
+		float           f;
+		long            l;
+		short           s[2];
+	}               tmpl;
+
+	int             len, i, pln1 = 1;
+	int             lenrd, stat, matnum, begrec, endrec;
+	short          *hdr;
+
+	sh = (Image_subheader7 *) malloc (sizeof (Image_subheader7));
+	matnum = numcod (frame, plane, gate, data, bed);
+	if ((begrec = getmatpos (fd, matnum, &endrec)) < 0) {
+		printf ("Could not find image in directory, \"getsbhdr\".\n");
+		return (NULL);
+	}
+	lenrd = NUMREC_ISHDR;
+	if ((stat = rdrec (fd, (char *) tmp.s, begrec, lenrd)) <= 0) {
+		return (NULL);
+	}
+	hdr = (short *) malloc (LENREC);
+	for (i = 0; i < LENREC_S; i++)
+		hdr[i] = tmp.s[i];
+	sh->whole_header = (void *) hdr;
+
+	sh->data_type = tmp.s[0];
+	sh->num_dimensions = tmp.s[1];
+	sh->x_dimension = tmp.s[2];
+	sh->y_dimension = tmp.s[3];
+	sh->z_dimension = tmp.s[4];
+
+	tmpl.s[0] = tmp.s[13];
+	tmpl.s[1] = tmp.s[14];
+	sh->scale_factor = tmpl.f;
+
+	sh->image_min = tmp.s[15];
+	sh->image_max = tmp.s[16];
+
+	tmpl.s[0] = tmp.s[17];
+	tmpl.s[1] = tmp.s[18];
+	sh->x_resolution = tmpl.f;
+	tmpl.s[0] = tmp.s[19];
+	tmpl.s[1] = tmp.s[20];
+	sh->y_resolution = tmpl.f;
+	tmpl.s[0] = tmp.s[21];
+	tmpl.s[1] = tmp.s[22];
+	sh->z_resolution = tmpl.f;
+
+	tmpl.s[0] = tmp.s[23];
+	tmpl.s[1] = tmp.s[24];
+	sh->frame_start_time = tmpl.l;
+	tmpl.s[0] = tmp.s[25];
+	tmpl.s[1] = tmp.s[26];
+	sh->frame_duration = tmpl.l;
+
+	return (sh);
+
+}
+
+
+/***************************************************/
+int             write_image_shdr (fd, sh, plane, frame, gate, data, bed)
+/***************************************************/
+
+	FILE           *fd;			 /* File designator for image or scan file. */
+	Image_subheader7 *sh;
+	int             plane, frame, gate, data, bed;
+
+{
+
+	union temporary {
+		float           f[NUMREC_ISHDR * LENREC_S / 2];
+		long            l[NUMREC_ISHDR * LENREC_S / 2];
+		short           s[NUMREC_ISHDR * LENREC_S];
+		char            c[NUMREC_ISHDR * LENREC];
+	}               tmp;
+
+	union temp_long {
+		float           f;
+		long            l;
+		short           s[2];
+	}               tmpl;
+
+	int             i, pln1 = 1;
+	int             len, stat, matnum, begrec, endrec;
+	short          *hdr;
+
+	hdr = (short *) sh->whole_header;
+	for (i = 0; i < LEN_ISHDR; i++)
+		tmp.s[i] = hdr[i];
+
+	tmp.s[0] = sh->data_type;
+	tmp.s[1] = sh->num_dimensions;
+	tmp.s[2] = sh->x_dimension;
+	tmp.s[3] = sh->y_dimension;
+	tmp.s[4] = sh->z_dimension;
+
+	tmpl.f = sh->scale_factor;
+	tmp.s[13] = tmpl.s[0];
+	tmp.s[14] = tmpl.s[1];
+
+	tmp.s[15] = sh->image_min;
+	tmp.s[16] = sh->image_max;
+
+	tmpl.f = sh->x_resolution;
+	tmp.s[17] = tmpl.s[0];
+	tmp.s[18] = tmpl.s[1];
+	tmpl.f = sh->y_resolution;
+	tmp.s[19] = tmpl.s[0];
+	tmp.s[20] = tmpl.s[1];
+	tmpl.f = sh->z_resolution;
+	tmp.s[21] = tmpl.s[0];
+	tmp.s[22] = tmpl.s[1];
+
+	tmpl.l = sh->frame_start_time;
+	tmp.s[23] = tmpl.s[0];
+	tmp.s[24] = tmpl.s[1];
+	tmpl.l = sh->frame_duration;
+	tmp.s[25] = tmpl.s[0];
+	tmp.s[26] = tmpl.s[1];
+
+	matnum = numcod (frame, pln1, gate, data, bed);
+	if ((begrec = getmatpos (fd, matnum, &endrec)) < 0) {
+		printf ("Could not find image in directory, \"getsbhdr\".\n");
+		return (NULL);
+	}
+	len = NUMREC_ISHDR;
+	if ((stat = wrtrec (fd, (char *) tmp.s, begrec, len)) != NULL) {
+		return (-1);
+	}
+	return (NULL);
+
+}
+
+/****************/
+int             create_dir (fd)
+/****************/
+
+	FILE           *fd;			 /* File designator from "open" function. */
+
+{
+
+	struct directory *dir;
+	int             recnum, stat, j, len;
+
+	TRACE (printf ("Entering create_dir.\n"))
+		if (NULL == (dir = (struct directory *) malloc ((unsigned) sizeof (struct directory))))
+		printf ("Could not alloc mem for directory in \"create_dir\".\n");
+
+	dir->hdr.numfree = DNOD_REC;
+	dir->hdr.forptr = DIR_NUM_1;
+	dir->hdr.bakptr = 0;
+	dir->hdr.numused = 0;
+	for (j = 0; j < DNOD_REC; j++)
+		dir->entry[j].flag = UNUSED;
+
+	recnum = 2;
+	len = 1;				 /* sg added */
+	if ((stat = wrtrec (fd, (int *) dir, recnum, len)) != NULL) {
+		return (-1);
+	}
+	return (NULL);
+
+}
+
+
+/*****************************/
+int             credirent (fd, matnum, length)
+/*****************************/
+
+	FILE           *fd;			 /* File id, (logical unit number).		 */
+	int             matnum;			 /* Matrix number of desired matrix, sinogram etc. */
+	int             length;			 /* Length of matrix to be created in records.	 */
+
+{
+
+	int             i, j, begrec,		 /* Beginning record number of matrix. 	 */
+	                irec = 0, recnum, highrec = 2, lenrd, more_to_search,	/* TRUE: More records to
+										 * search. */
+	                memsize_old, current_rec;/* Current record number. 	 */
+	int             stat = OK,		 /* Set status to OK. */
+	                free1 = FALSE,		 /* Flag for first free entry. */
+	                ifree = 0,		 /* Index to first free entry. */
+	                fp = 0;			 /* Pointer to directory for file. */
+
+	fp = -1;
+	for (i = 0; i < MAX_FILES_OPEN; i++)	 /* Search for directory structure. */
+		if (fi[i].id == fd)
+			fp = i;
+	if (fp < 0) {
+		printf ("Directory not found in \"credirent\".\n");
+		return (-1);
+	}
+	more_to_search = TRUE;
+	while (more_to_search == TRUE) {
+		/* Search directory entries on disk if not last dir rec. */
+		TRACE (printf ("credirent: fi[%d].dir[%d].hdr.forptr=%d\n", fp, fi[fp].lstrec, fi[fp].dir[fi[fp].lstrec].hdr.forptr))
+			if (fi[fp].lstrec > MAX_REC) {
+			printf ("Insufficient buffer space to store directory entries in \"credirent\".\n");
+			stat = -1;
+			return (stat);
+		}
+		if (irec < fi[fp].lstrec) {	 /* Search records in memory.	 */
+			++irec;
+			TRACE (printf ("credirent: irec=%d, lstrec=%d\n", irec, fi[fp].lstrec))
+				for (i = 0; i < DNOD_REC; i++) {
+				/* Loop through all directory entries in RAM. 	 */
+				if (fi[fp].dir[irec].entry[i].flag == USED) {
+					/* Entry is used, fall through and skip further tests. */
+					if (fi[fp].dir[irec].entry[i].endrec > highrec)
+						highrec = fi[fp].dir[irec].entry[i].endrec;
+				} else if (fi[fp].dir[irec].entry[i].flag == REMOVED) {
+					/* Matrix removed, see if it  is large enough. */
+					if ((fi[fp].dir[irec].entry[i].endrec - fi[fp].dir[irec].entry[i].begrec + 1) >= length) {
+						/* This matrix is large enough. */
+						begrec = fi[fp].dir[irec].entry[i].begrec;
+						fi[fp].dir[irec].entry[i].endrec = begrec + length - 1;
+						fi[fp].dir[irec].entry[i].flag = USED;
+						fi[fp].dir[irec].entry[i].matnum = matnum;
+						++fi[fp].dir[irec].hdr.numused;
+						--fi[fp].dir[irec].hdr.numfree;
+						recnum = fi[fp].dir[irec - 1].hdr.forptr;
+						stat = wrtrec (fd, (int *) &fi[fp].dir[fi[fp].lstrec], &recnum, 1);
+						if (stat != NULL) {
+							printf ("Error occurred during write, status = %d\n", stat);
+							stat = -1;
+						} else
+							stat = OK;
+						return (stat);
+					}
+					if (fi[fp].dir[irec].entry[i].endrec > highrec)
+						highrec = fi[fp].dir[irec].entry[i].endrec;
+				} else if (fi[fp].dir[irec].entry[i].flag == UNUSED) {
+					/* Unused entry, save first one for later use. */
+					if (free1 == FALSE) {
+						free1 = TRUE;
+						ifree = i;
+					}
+				} else {
+					printf ("Invalid directory record in credirent.\n");
+					printf ("fi[%d].dir[%d].entry[%d].flag: %d\n", fp, irec, i, fi[fp].dir[irec].entry[i].flag);
+				}
+			}
+			if ((fi[fp].dir[irec].hdr.forptr == DIR_NUM_1) & (fi[fp].lstrec > 0))
+				more_to_search = FALSE;
+		} else {			 /* Read next directory record from disk.	 */
+			if (fi[fp].lstrec >= fi[fp].memsize - 1) {	/* Allocate more memory */
+				TRACE (printf ("credirent: Reallocating directory.\n"))
+					memsize_old = fi[fp].memsize;
+				fi[fp].memsize += SIZE_DIR_MALLOC;
+				if (NULL == (fi[fp].dir = (struct directory *) realloc ((char *) fi[fp].dir, (unsigned) (fi[fp].memsize * sizeof (struct directory)))));
+
+				/* Initialize structure, since stupid Sun compiler doesn't. */
+				for (i = memsize_old; i < fi[fp].memsize; i++)
+					for (j = 0; j < DNOD_REC; j++)
+						fi[fp].dir[i].entry[j].flag = UNUSED;
+			}
+			current_rec = fi[fp].dir[fi[fp].lstrec].hdr.forptr;
+			if (current_rec > highrec)
+				highrec = current_rec;
+			++fi[fp].lstrec;
+			TRACE (printf ("Reading record #%d\n", fi[fp].lstrec))
+				lenrd = 1;	 /* Read one record.	 */
+			stat = rdrec (fd, &fi[fp].dir[fi[fp].lstrec], current_rec, lenrd);
+			if (stat <= 0) {
+				printf ("Error reading directory in \"credirent\", status = %d\n", stat);
+				stat = -1;
+				return (stat);
+			} else {
+				/* Convert from DEC format. */
+				lenrd = lenrd * LENREC_L;
+
+				/*
+				 * dec2sun_long((int *)&fi[fp].dir[fi[fp].lstrec],lenrd);
+				 */
+			}
+		}
+	}
+	TRACE (printf ("lcfree1 = %d, free = %d, msize=%d\n", free1, ifree, fi[fp].memsize))
+		if (free1 == TRUE) {
+		/* Unused entry found, use it. */
+		begrec = highrec + 1;
+		fi[fp].dir[fi[fp].lstrec].entry[ifree].begrec = begrec;
+		fi[fp].dir[fi[fp].lstrec].entry[ifree].endrec = begrec + length - 1;
+		highrec = fi[fp].dir[fi[fp].lstrec].entry[ifree].endrec;
+		fi[fp].dir[fi[fp].lstrec].entry[ifree].flag = USED;
+		fi[fp].dir[fi[fp].lstrec].entry[ifree].matnum = matnum;
+		++fi[fp].dir[fi[fp].lstrec].hdr.numused;
+		--fi[fp].dir[fi[fp].lstrec].hdr.numfree;
+	} else {
+		/* No unused entries, create new directory record. */
+		++fi[fp].lstrec;
+		if (fi[fp].lstrec >= fi[fp].memsize) {	/* Allocate more memory */
+			TRACE (printf ("credirent: Reallocating directory.\n"))
+				fi[fp].memsize += SIZE_DIR_MALLOC;
+			if (NULL == (fi[fp].dir = (struct directory *) realloc ((char *) fi[fp].dir, (unsigned) (fi[fp].memsize * sizeof (struct directory))))) {
+				printf ("Could not realloc memory for image directory.\n");
+				return (-1);
+			}
+		}
+		fi[fp].dir[fi[fp].lstrec].hdr.numused = 1;
+		fi[fp].dir[fi[fp].lstrec].hdr.numfree = DNOD_REC - 1;
+		if (fi[fp].lstrec == 1)
+			/* This is first directory record. */
+			fi[fp].dir[fi[fp].lstrec].hdr.bakptr = 0;
+		else
+			fi[fp].dir[fi[fp].lstrec].hdr.bakptr = fi[fp].dir[fi[fp].lstrec - 2].hdr.forptr;
+		fi[fp].dir[fi[fp].lstrec].hdr.forptr = 2;
+
+		if (fi[fp].lstrec > 1) {	 /* If not first directory record, update forward
+						  * pointer in last directory record. */
+			++highrec;
+			current_rec = highrec;
+			fi[fp].dir[fi[fp].lstrec - 1].hdr.forptr = current_rec;
+			recnum = fi[fp].dir[fi[fp].lstrec].hdr.bakptr;
+			stat = wrtrec (fd, (int *) &fi[fp].dir[fi[fp].lstrec - 1], &recnum, 1);
+			if (stat != NULL)
+				printf ("Error occurred during write, status = %d\n", stat);
+		}
+		/* Write first entry to new directory record. */
+		fi[fp].dir[fi[fp].lstrec].entry[0].matnum = matnum;
+		fi[fp].dir[fi[fp].lstrec].entry[0].begrec = highrec + 1;
+		begrec = fi[fp].dir[fi[fp].lstrec].entry[0].begrec;
+		fi[fp].dir[fi[fp].lstrec].entry[0].endrec = fi[fp].dir[fi[fp].lstrec].entry[0].begrec + length - 1;
+		highrec = fi[fp].dir[fi[fp].lstrec].entry[0].endrec;
+		fi[fp].dir[fi[fp].lstrec].entry[0].flag = USED;
+	}
+
+	recnum = fi[fp].dir[fi[fp].lstrec - 1].hdr.forptr;
+	if ((stat = wrtrec (fd, fi[fp].dir[fi[fp].lstrec], recnum, 1)) != NULL)
+		return (-1);
+
+	return (begrec);
+
+}
+
+/**************/
+float           get_sf (fp)
+/**************/
+
+	FILE           *fp;
+
+{
+
+	int             fn;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list7[fn] == fp)
+			return (file_sf[fn]);
+	}
+
+	return (0);
+
+}
+
+/****************/
+void            put_sf (fp, sf)
+/****************/
+
+	FILE           *fp;
+	float           sf;
+
+{
+
+	int             fn;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list7[fn] == fp) {
+			file_sf[fn] = sf;
+			return;
+		}
+	}
+
+}
+
+/**********************/
+FILE           *getfp7 (filnam, mode)
+/**********************/
+
+	char           *filnam, *mode;
+
+{
+
+	int             i, fn;
+
+	FILE           *fp, *fptest;
+
+	if (strstr (filnam, ".v") && strstr (filnam, ".S")) {
+		fprintf (stderr, "Invalid CTI file name.\n");
+		return (NULL);
+	}
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list7[fn])) {
+			if (!strcmp (mode, mode_list7[fn]))
+				return (fp_list7[fn]);
+			if (!strcmp (mode, "r") && !strcmp (mode_list7[fn], "r+"))
+				return (fp_list7[fn]);
+			else {
+				/* File opened with wrong read/write mode. */
+				filclose (fp_list7[fn]);
+				fp_list7[fn] = filopn (file_list7[fn], mode);
+				strcpy (mode_list7[fn], mode);
+				return (fp_list7[fn]);
+			}
+		}
+	}
+
+/* File not open, assign it available slot. */
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list7[fn] == NULL)
+			break;
+	}
+	if (fn == MAX_FILES) {
+		fprintf (stderr, "Maximum number of open files exceeded in getfd\n");
+		return (NULL);
+	}
+	if (!strcmp (mode, "r+")) {
+		if ((fptest = fopen (filnam, "r")) != NULL)	/* File exists. */
+			filclose (fptest);
+		else
+			mode = "w";
+	}
+	if ((fp_list7[fn] = filopn (filnam, mode)) != NULL) {
+		strcpy (file_list7[fn], filnam);
+		strcpy (mode_list7[fn], mode);
+		return (fp_list7[fn]);
+	} else
+		return (NULL);
+
+}
+
+/*****************************************/
+void           *getsbhdr7 (filnam, frame, gate, data, bed)
+/*****************************************/
+
+	char           *filnam;
+	int             frame, gate, data, bed;
+
+{
+
+	int             matnum, pln1 = 1;
+
+	char           *mode = "r";
+
+	Scan3D_subheader7 *scansh;
+	Image_subheader7 *imgsh;
+
+	FILE           *fp;
+
+	if ((fp = getfp7 (filnam, mode)) == NULL) {
+/*    fprintf(stderr,"Could not get file pointer in \"getsbhdr\".\n");*/
+		return (NULL);
+	}
+	if (strstr (filnam, ".S")) {
+		/* Read scan subheader. */
+		if ((scansh = read_scan_shdr (fp, pln1, frame, gate, data, bed)) == NULL) {
+			fprintf (stderr, "Could not read scan subheader in \"getsbhdr7\" %s.\n", filnam);
+			return (NULL);
+		}
+		return ((void *) scansh);
+	} else if (strstr (filnam, ".v")) {
+		if ((imgsh = read_image_shdr (fp, pln1, frame, gate, data, bed)) == NULL) {
+			fprintf (stderr, "Could not read image subheader in \"getsbhdr7\" %s.\n", filnam);
+			return (NULL);
+		}
+		return ((void *) imgsh);
+	} else {
+		fprintf (stderr, "*** %s is a file type not supported by getsbhdr.  ***\n", filnam);
+		return (NULL);
+	}
+
+}
+
+/********************/
+void           *getmhdr7 (filnam)
+/********************/
+
+	char           *filnam;
+
+{
+
+	int             matnum;
+
+	char           *mode = "r";
+
+	Main_header7   *mh;
+
+	FILE           *fp;
+
+	if ((fp = getfp7 (filnam, mode)) == NULL) {
+		return (NULL);
+	}
+	if ((mh = read_mhdr (fp)) == NULL) {
+		fprintf (stderr, "Could not read main header in \"getmhdr7\", %s.\n", filnam);
+		return (NULL);
+	}
+	return (mh);
+
+}
+
+/*********************************************/
+float          *rdimg7 (filnam, plane, frame, gate, data, bed)
+/*********************************************/
+
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+
+{
+
+	int             matnum, i, j, joff, xdim, ydim, zdim, data_type, begrec, endrec, stat,
+	                pln1 = 1, nrec_shdr, len, span, ring_difference, slice, group, segment,
+	                z_elements;
+
+	short          *simg;
+
+	char           *mode = "r";
+
+	float          *matrix, scl;
+
+	FILE           *fp;
+
+	long            dskptr;
+
+	Main_header7   *mh;
+	Scan3D_subheader7 *shscan;
+	Image_subheader7 *shimg;
+
+	void           *sh;
+
+	if ((fp = getfp7 (filnam, mode)) == NULL) {
+		fprintf (stderr, "Could not get file pointer in \"rdimg7\".\n");
+		return (NULL);
+	}
+	if ((mh = read_mhdr (fp)) == NULL) {
+		fprintf (stderr, "Could not read main header in \"rdimg7\", %s.\n", filnam);
+		return (NULL);
+	}
+	if ((matnum = numcod (frame, pln1, gate, data, bed)) == NULL) {
+		fprintf (stderr, "Could not get matrix number in \"rdimg7\".\n");
+		return (NULL);
+	}
+	if ((sh = getsbhdr7 (filnam, frame, gate, data, bed)) == NULL) {
+		fprintf (stderr, "Could not get subheader in \"rdimg7\".\n");
+		return (NULL);
+	}
+	if ((begrec = getmatpos (fp, matnum, &endrec)) < 0) {
+		printf ("Could not find image in directory, \"rdimg7\".\n");
+		return (NULL);
+	}
+	if (mh->file_type == Short3dSinogram) {
+		shscan = (Scan3D_subheader7 *) sh;
+		span = shscan->axial_compression;
+		ring_difference = shscan->ring_difference;
+		xdim = shscan->num_r_elements;
+		ydim = shscan->num_angles;
+		scl = shscan->scale_factor;
+		len = xdim * ydim;
+		slice = plane - 1;
+		nrec_shdr = NUMREC_SSHDR;
+		simg = (short *) malloc (len * sizeof (short));
+		if (shscan->storage_order == 0) {/* View mode. */
+			for (group = 0; shscan->num_z_elements[group] > 0; group++) {
+				if ((slice - shscan->num_z_elements[group]) >= 0)
+					slice -= shscan->num_z_elements[group];
+				else
+					break;
+			}
+			segment = group;
+			z_elements = shscan->num_z_elements[group];
+			if (group > 0 && slice >= (z_elements / 2)) {
+				segment = -segment;
+				slice -= z_elements / 2;
+			}
+			if (group > 0)
+				z_elements /= 2;
+			if (slice >= z_elements)
+				return (NULL);
+			dskptr = (begrec + nrec_shdr - 1) * LENREC + slice * xdim * sizeof (short);
+			for (i = 0; i < group; i++)	/* Point to correct ring difference group */
+				dskptr += shscan->num_z_elements[i] * xdim * ydim * sizeof (short);
+			if (segment < 0)	 /* Point to correct ring difference sign. */
+				dskptr += z_elements * xdim * ydim * sizeof (short);
+			for (j = 0, joff = 0; j < ydim; j++, joff += xdim) {
+				/* Extract a line from each planar view. */
+				if ((stat = fseek (fp, (long) dskptr, SEEK_SET)) != NULL)
+					return (NULL);
+				if ((stat = fread (&simg[joff], sizeof (short), xdim, fp)) != xdim) {
+					printf ("rdimg7: Error occurred during read, status=%d\n", stat);
+					return (NULL);
+				}
+				dskptr += xdim * sizeof (short) * z_elements;
+			}
+		} else {
+			dskptr = (begrec + nrec_shdr - 1) * LENREC + (plane - 1) * len * sizeof (short);
+			if ((stat = fseek (fp, (long) dskptr, SEEK_SET)) != NULL)
+				return (NULL);
+			if ((stat = fread (simg, sizeof (short), len, fp)) != len) {
+				printf ("rdimg7: Error occurred during read, status=%d\n", stat);
+				return (NULL);
+			}
+		}
+	} else if (mh->file_type == PetVolume) {
+		shimg = (Image_subheader7 *) sh;
+		xdim = shimg->x_dimension;
+		ydim = shimg->y_dimension;
+		zdim = shimg->z_dimension;
+		scl = shimg->scale_factor;
+		nrec_shdr = NUMREC_ISHDR;
+		if (plane > 0) {
+			dskptr = (begrec + nrec_shdr - 1) * LENREC + (plane - 1) * xdim * ydim * sizeof (short);
+			len = xdim * ydim;
+		} else {
+			len = xdim * ydim * zdim;
+			dskptr = (begrec - 1) * LENREC;
+		}
+		if ((stat = fseek (fp, (long) dskptr, SEEK_SET)) != NULL)
+			return (NULL);
+		simg = (short *) malloc (len * sizeof (short));
+		if ((stat = fread (simg, sizeof (short), len, fp)) != len) {
+			printf ("rdrecr Error occurred during read, status = %d\n", stat);
+			return (NULL);
+		}
+	} else {
+		fprintf (stderr, "Invalid file type %s in \"rdimg7\".\n", filnam);
+		return (NULL);
+	}
+
+	if (NULL == (matrix = (float *) malloc (len * sizeof (float)))) {
+		fprintf (stderr, "Could not malloc memory for matrix in \"rdimg7\".\n");
+		return (NULL);
+	}
+	if (mh->calibration_factor != 0.0 && scl != 0.0) {
+		for (i = 0; i < len; i++) {
+			matrix[i] = mh->calibration_factor * scl * simg[i];
+		}
+	} else if (mh->calibration_factor == 0.0 && scl != 0.0) {
+		for (i = 0; i < len; i++) {
+			matrix[i] = scl * simg[i];
+		}
+	} else if (mh->calibration_factor != 0.0 && scl == 0.0) {
+		for (i = 0; i < len; i++) {
+			matrix[i] = mh->calibration_factor * simg[i];
+		}
+	} else {
+		for (i = 0; i < len; i++) {
+			matrix[i] = (float) simg[i];
+		}
+	}
+
+	free (simg);
+	free (sh);
+	return (matrix);
+
+}
+
+/************************************************/
+int             putsbhdr7 (sh, filnam, plane, frame, gate, data, bed)
+/************************************************/
+
+	void           *sh;
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+
+{
+
+	int             matnum;
+
+	char           *mode = "r+";
+
+	Scan3D_subheader7 *scansh;
+	Image_subheader7 *imgsh;
+
+	FILE           *fp;
+
+	matnum = numcod (frame, plane, gate, data, bed);
+
+	if ((fp = getfp7 (filnam, mode)) == NULL) {
+		fprintf (stderr, "Could not get file pointer in \"putsbhdr\".\n");
+		return (-1);
+	}
+	if (strstr (filnam, ".S"))
+		write_scan_shdr (fp, sh, plane, frame, gate, data, bed);
+	else if (strstr (filnam, ".v"))
+		write_image_shdr (fp, sh, plane, frame, gate, data, bed);
+	else {
+		fprintf (stderr, "*** %s is a file type not supported by putsbhdr7.  ***\n", filnam);
+		return (-1);
+	}
+
+	return (NULL);
+
+}
+
+/*********************/
+int             putmhdr7 (filnam, mh)
+/*********************/
+
+	Main_header7   *mh;
+	char           *filnam;
+
+{
+
+	char           *mode = "r+";
+
+	int             stat;
+
+	FILE           *fp;
+
+	if ((fp = getfp7 (filnam, mode)) == NULL) {
+		fprintf (stderr, "Could not get file pointer in \"putsbhdr\".\n");
+		return (-1);
+	}
+	if ((stat = write_mhdr (fp, mh)) != NULL) {
+		fprintf (stderr, "Could not write main header to %s\n", filnam);
+		return (-1);
+	}
+	return (NULL);
+
+}
+
+/********************************************************************/
+int             wrimg7 (char *filnam, float *matrix, Main_header7 * mh, void *sh, float scale_factor, int plane, int frame, int gate, int data, int bed)
+/********************************************************************/
+
+/*char		*filnam;
+float		*matrix;
+Main_header7 	*mh;
+void		*sh;
+int		plane,frame,gate,data,bed;
+float		scale_factor;*/
+
+{
+
+	int             matnum, i, xdim, ydim, zdim, stat, data_type, file_type, len, begrec,
+	                endrec, dskptr, pln1 = 1, nrec_shdr, span, ring_difference, slice, group,
+	                segment, z_elements, j, joff;
+
+	short          *smatrix;
+
+	char           *mode = "w";
+
+	float           scl, max, min;
+
+	Scan3D_subheader7 *shscn3d;
+	Scan_subheader7 *shscan;
+	Image_subheader7 *shimg;
+	FILE           *fp;
+	void            put_sf ();
+
+	if (mh->file_type == Sinogram) {
+		shscan = (Scan_subheader7 *) sh;
+		xdim = shscan->num_r_elements;
+		ydim = shscan->num_angles;
+		zdim = 1;
+		data_type = SHORT;
+		pln1 = 1;
+		nrec_shdr = NUMREC_SSHDR;
+	} else if (mh->file_type == Short3dSinogram) {
+		shscn3d = (Scan3D_subheader7 *) sh;
+		xdim = shscn3d->num_r_elements;
+		ydim = shscn3d->num_angles;
+		for (i = 0, zdim = 0; i < shscn3d->ring_difference; i++)
+			zdim += shscn3d->num_z_elements[i];
+		data_type = SHORT;
+		pln1 = 1;
+		nrec_shdr = NUMREC_SSHDR;
+	} else if (mh->file_type == PetImage) {
+		shimg = (Image_subheader7 *) sh;
+		xdim = shimg->x_dimension;
+		ydim = shimg->y_dimension;
+		zdim = 1;
+		data_type = SHORT;
+		pln1 = 1;
+		nrec_shdr = NUMREC_ISHDR;
+	} else if (mh->file_type == PetVolume) {
+		shimg = (Image_subheader7 *) sh;
+		xdim = shimg->x_dimension;
+		ydim = shimg->y_dimension;
+		zdim = shimg->z_dimension;
+		data_type = SHORT;
+		pln1 = 1;
+		nrec_shdr = NUMREC_ISHDR;
+	} else {
+		fprintf (stderr, "Invalid file type, %d, in wrimg7.\n", mh->file_type);
+		return (-1);
+	}
+
+	if ((matnum = numcod (frame, pln1, gate, data, bed)) == NULL) {
+		fprintf (stderr, "Could not get matrix number in \"wrimg7\".\n");
+		return (NULL);
+	}
+	if ((fp = write_fp7 (filnam, "r+")) == NULL) {
+		fprintf (stderr, "Could not create file in \"wrimg7\".\n");
+		return (-1);
+	}
+	if (scale_factor > 0.)
+		scl = scale_factor;
+	else
+		scl = get_sf (fp);
+	if (data_type == SHORT) {
+		if (plane <= 0 || scl == 0.) {
+			max = -1.e20;
+			min = 1.e20;
+			len = xdim * ydim * zdim;
+			for (i = 0; i < len; i++) {
+				if (matrix[i] > max)
+					max = matrix[i];
+				if (matrix[i] < min)
+					min = matrix[i];
+			}
+			if (max > -min) {
+				scl = 16383 / max;
+				max = 16383;
+				min = min * scl;
+			} else {
+				scl = -16383 / min;
+				max = max * scl;
+				min = -16383;
+			}
+			put_sf (fp, scl);
+
+		} else {
+			if (plane <= 0)
+				len = xdim * ydim * zdim;
+			else
+				len = xdim * ydim;
+		}
+		if (NULL == (smatrix = (short *) malloc (len * sizeof (short)))) {
+			fprintf (stderr, "Could not malloc memory for matrix, \"wrimg7\".\n");
+			return (NULL);
+		}
+		for (i = 0; i < len; i++)
+			smatrix[i] = scl * matrix[i];
+	}
+	if (mh->file_type == Sinogram) {
+		shscan->scan_min = (short) min;
+		shscan->scan_max = (short) max;
+		shscan->scale_factor = 1. / scl;
+	} else if (mh->file_type == Short3dSinogram) {
+		shscn3d->scan_min = (short) min;
+		shscn3d->scan_max = (short) max;
+		shscn3d->scale_factor = 1. / scl;
+	} else if (mh->file_type == PetImage || mh->file_type == PetVolume) {
+		shimg->image_min = (short) min;
+		shimg->image_max = (short) max;
+		shimg->scale_factor = 1. / scl / mh->calibration_factor;
+	}
+	if ((stat = putmhdr7 (filnam, mh)) != NULL) {
+		fprintf (stderr, "Could not write main header to %s\n", filnam);
+		return (-1);
+	}
+	if ((begrec = getmatpos (fp, matnum, &endrec)) < 0) {
+		if ((begrec = credirent (fp, matnum, begrec, len)) < 0) {
+			printf ("Could not create directory entry, \"rdimg7\".\n");
+			return (NULL);
+		}
+	}
+	if (plane == pln1) {
+		if ((stat = putsbhdr7 (sh, filnam, plane, frame, gate, data, bed)) != NULL) {
+			fprintf (stderr, "Could not write subheader to %s, plane %d\n", filnam, plane);
+			return (-1);
+		}
+	}
+	if (plane <= 0) {			 /* Write whole volume. */
+		len *= sizeof (short);
+		if (len % LENREC == 0)
+			len /= LENREC;
+		else
+			len = len / LENREC + 1;
+		if ((stat = wrtrec (fp, (char *) smatrix, begrec + nrec_shdr, len)) != NULL) {
+			return (-1);
+		}
+	} else {				 /* Write one plane only. */
+		if (mh->file_type == Short3dSinogram) {
+			shscn3d = (Scan3D_subheader7 *) sh;
+			span = shscn3d->axial_compression;
+			ring_difference = shscn3d->ring_difference;
+			xdim = shscn3d->num_r_elements;
+			ydim = shscn3d->num_angles;
+			scl = shscn3d->scale_factor;
+			len = xdim * ydim;
+			slice = plane - 1;
+			if (shscn3d->storage_order == 0) {	/* View mode. */
+				nrec_shdr = NUMREC_SSHDR;
+				for (group = 0; shscn3d->num_z_elements[group] > 0; group++) {
+					if ((slice - shscn3d->num_z_elements[group]) >= 0)
+						slice -= shscn3d->num_z_elements[group];
+					else
+						break;
+				}
+				segment = group;
+				z_elements = shscn3d->num_z_elements[group];
+				if (group > 0 && slice >= (z_elements / 2)) {
+					segment = -segment;
+					slice -= z_elements / 2;
+				}
+				if (group > 0)
+					z_elements /= 2;
+				if (slice >= z_elements)
+					if (slice >= z_elements)
+						return (NULL);
+				dskptr = (begrec + nrec_shdr - 1) * LENREC + slice * xdim * sizeof (short);
+				for (i = 0; i < group; i++)	/* Point to correct ring difference
+								 * group */
+					dskptr += shscn3d->num_z_elements[i] * xdim * ydim * sizeof (short);
+				if (segment < 0) /* Point to correct ring difference sign. */
+					dskptr += z_elements * xdim * ydim * sizeof (short);
+				for (j = 0, joff = 0; j < ydim; j++, joff += xdim) {
+					/* Write a line for each planar view. */
+					if ((stat = fseek (fp, (long) dskptr, SEEK_SET)) != NULL)
+						return (NULL);
+					if ((stat = fwrite (&smatrix[joff], sizeof (short), xdim, fp)) != xdim) {
+						printf ("wrimg7: Error occurred during write, status=%d\n", stat);
+						return (NULL);
+					}
+					dskptr += xdim * sizeof (short) * shscn3d->num_z_elements[group];
+				}
+			} else {
+				dskptr = (begrec + nrec_shdr - 1) * LENREC + (plane - 1) * len * sizeof (short);
+				if ((stat = fseek (fp, (long) dskptr, SEEK_SET)) != NULL)
+					return (NULL);
+				if ((stat = fwrite (smatrix, sizeof (short), len, fp)) != len) {
+					printf ("wrimg7: Error occurred during write, status=%d\n", stat);
+					return (NULL);
+				}
+			}
+		} else {
+			dskptr = LENREC * (begrec - 1 + nrec_shdr) + (plane - 1) * xdim * ydim * sizeof (short);
+			if ((stat = fseek (fp, (long) dskptr, SEEK_SET)) != NULL)
+				return (NULL);
+			if ((stat = fwrite (smatrix, sizeof (short), len, fp)) != len) {
+				printf ("Error occurred during write in wrimg7, status = %d\n", stat);
+				return (NULL);
+			}
+		}
+	}
+
+	free (smatrix);
+	return (NULL);
+
+}
+
+/*************************************************/
+float          *scan3D_max (filnam, mh, sh, frame, gate, data, bed)
+/*************************************************/
+
+	char           *filnam;
+	Main_header7   *mh;
+	Scan3D_subheader7 *sh;
+	int             frame, gate, data, bed;
+
+{
+
+	int             matnum, i, xdim, ydim, zdim, stat, data_type, file_type, len, begrec,
+	                endrec, dskptr, pln1 = 1, nrec_shdr, span, ring_difference, slice, group,
+	                segment, z_elements, j, joff, k;
+
+	float           max, min, scl, *maxminscl;
+
+	FILE           *fp;
+
+	short          *simg;
+
+	xdim = sh->num_r_elements;
+	ydim = sh->num_angles;
+	for (i = 0, zdim = 0; i < sh->ring_difference; i++)
+		zdim += sh->num_z_elements[i];
+	data_type = SHORT;
+	nrec_shdr = NUMREC_SSHDR;
+
+	if ((matnum = numcod (frame, pln1, gate, data, bed)) == NULL) {
+		fprintf (stderr, "Could not get matrix number in \"wrimg7\".\n");
+		return (NULL);
+	}
+	if ((fp = getfp7 (filnam, "r+")) == NULL) {
+		fprintf (stderr, "Could not create file in wrimg7.\n");
+		return (NULL);
+	}
+	if ((begrec = getmatpos (fp, matnum, &endrec)) < 0) {
+		if ((begrec = credirent (fp, matnum, begrec, len)) < 0) {
+			printf ("Could not create directory entry, \"rdimg7\".\n");
+			return (NULL);
+		}
+	}
+	dskptr = (begrec + nrec_shdr - 1) * LENREC;
+	if ((stat = fseek (fp, (long) dskptr, SEEK_SET)) != NULL)
+		return (NULL);
+	len = xdim * ydim;
+	simg = (short *) malloc (len * sizeof (short));
+	min = 1.e20;
+	max = -1.e20;
+	for (k = 0; k < zdim; k++) {
+		if ((stat = fread (simg, sizeof (short), len, fp)) != len) {
+			printf ("wrimg7: Error occurred during write, status=%d\n", stat);
+			return (NULL);
+		}
+		for (i = 0; i < len; i++) {
+			if (simg[i] > max)
+				max = simg[i];
+			if (simg[i] < min)
+				min = simg[i];
+		}
+	}
+	scl = (max - min) / 32767;
+
+	free (simg);
+
+	maxminscl = (float *) malloc (3 * sizeof (float));
+	maxminscl[0] = max;
+	maxminscl[1] = min;
+	maxminscl[2] = scl;
+
+	return (maxminscl);
+
+}
+
+/*****************************/
+FILE           *write_fp7 (filnam, mode)
+/*****************************/
+/* Get file pointer for file to be written. */
+
+	char           *filnam;
+	char           *mode;
+
+{
+
+	int             i, fn;
+
+	FILE           *fp, *fptest, *filopn (), *filcre ();
+
+	char            cmd[MAXNAME];
+
+	if (strstr (filnam, ".S") && strstr (filnam, ".v")) {
+		fprintf (stderr, "Invalid CTI file name.\n");
+		return (NULL);
+	}
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list7[fn])) {
+			if (!strcmp ("r", mode_list7[fn])) {
+				/* File opened in read-only mode. */
+				filclose (fp_list7[fn]);
+				fp_list7[fn] = NULL;
+			} else
+				return (fp_list7[fn]);
+		}
+	}
+
+/* File not open, assign it available slot. */
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list7[fn] == NULL)
+			break;
+	}
+	if (fn == MAX_FILES) {
+		fprintf (stderr, "Maximum number of open files exceeded in getfd\n");
+		return (NULL);
+	}
+	if ((fp = fopen (filnam, "r")) != NULL) {/* File exists. */
+		if (!strcmp (mode, "w")) {
+			/* Delete the file if mode is write. */
+			fclose (fp);
+			sprintf (cmd, "rm %s\n", filnam);
+			system (cmd);
+			fprintf (stderr, "*** Deleted %s ***\n", filnam);
+		}
+	} else {
+		if (!strcmp (mode, "r+")) {
+			/* Can't open in mode r+ since it doesn't exist, change mode to w. */
+			mode = "w";
+		}
+	}
+
+	if (!strcmp (mode, "r+")) {
+		if ((fp_list7[fn] = filopn (filnam, mode)) == NULL)
+			return (NULL);
+	} else {				 /* Write mode. */
+		if ((fp_list7[fn] = filcre (filnam, "w")) == NULL)
+			return (NULL);
+	}
+
+	strcpy (file_list7[fn], filnam);
+	strcpy (mode_list7[fn], mode);
+	return (fp_list7[fn]);
+
+}
+
+/* =============================================================================
+ *	Function:		ssh7_to_sh
+ *	Description:	Fill structure sh from Version 7 scan subheader
+ * =============================================================================
+ */
+SubHeader      *ssh7_to_sh (ssh7)
+	Scan3D_subheader7 *ssh7;
+{
+
+	int             i;
+	SubHeader      *sh;
+
+	sh = (SubHeader *) malloc (sizeof (SubHeader));
+
+	sh->file_format = MATRIX_REV7;
+	if (ssh7->data_type == BYTE_TYPE)
+		sh->number_format = BYTE_DATA;
+	else if (ssh7->data_type == SUN_I2 || ssh7->data_type == VAX_I2)
+		sh->number_format = SHORT_DATA;
+	else if (ssh7->data_type == IEEE_R4)
+		sh->number_format = FLOAT_DATA;
+	else
+		sh->number_format = SHORT_DATA;
+	sh->ndim = ssh7->num_dimensions;
+	sh->dim1 = ssh7->num_r_elements;
+	sh->dim2 = ssh7->num_angles;
+	for (i = 0, sh->dim3 = 0; i < 64; i++)
+		sh->dim3 += ssh7->num_z_elements[i];
+	sh->ring_diff = ssh7->ring_difference;
+	sh->span = ssh7->axial_compression;
+	sh->sample_size_1 = ssh7->x_resolution;
+	sh->sample_size_2 = ssh7->v_resolution;
+	sh->sample_size_3 = ssh7->z_resolution;
+	sh->scale_factor = ssh7->scale_factor;
+	sh->min = ssh7->scan_min;
+	sh->max = ssh7->scan_max;
+	sh->total = ssh7->prompts;
+	sh->delayeds = ssh7->delayed;
+	sh->multiples = ssh7->multiples;
+	sh->trues = ssh7->net_trues;
+	sh->start_time = ssh7->frame_start_time;
+	sh->duration = ssh7->frame_duration;
+	sh->deadtime_corr = ssh7->loss_correction_fctr;
+	sh->storage_order = ssh7->storage_order;
+	sh->comment = NULL;
+	sh->whole_header = ssh7->whole_header;
+
+	return (sh);
+}
+
+/* =============================================================================
+ *	Function:		ish7_to_sh
+ *	Description:	Fill structure sh from Version 7 image subheader
+ * =============================================================================
+ */
+SubHeader      *ish7_to_sh (ish7)
+	Image_subheader7 *ish7;
+
+{
+	SubHeader      *sh;
+
+	sh = (SubHeader *) malloc (sizeof (SubHeader));
+
+	sh->file_format = MATRIX_REV7;
+	if (ish7->data_type == BYTE_TYPE)
+		sh->number_format = BYTE_DATA;
+	else if (ish7->data_type == SUN_I2 || ish7->data_type == VAX_I2)
+		sh->number_format = SHORT_DATA;
+	else if (ish7->data_type == IEEE_R4)
+		sh->number_format = FLOAT_DATA;
+	else
+		sh->number_format = SHORT_DATA;
+	sh->ndim = ish7->num_dimensions;
+	sh->dim1 = ish7->x_dimension;
+	sh->dim1 = ish7->y_dimension;
+	sh->dim1 = ish7->z_dimension;
+	sh->sample_size_1 = ish7->x_resolution;
+	sh->sample_size_2 = ish7->y_resolution;
+	sh->sample_size_3 = ish7->z_resolution;
+	sh->scale_factor = ish7->scale_factor;
+	sh->min = ish7->image_min;
+	sh->max = ish7->image_max;
+	sh->start_time = ish7->frame_start_time;
+	sh->duration = ish7->frame_duration;
+	sh->calibration_factor = 1.;		 /* Stored in main header for rev. 7 */
+	sh->total = 0;
+	sh->delayeds = 0;
+	sh->multiples = 0;
+	sh->trues = 0;
+	sh->whole_header = ish7->whole_header;
+
+	return (sh);
+}
+
+
+
+/* =============================================================================
+ *	Function:		sh_to_ssh7
+ *	Description:	Fill Version 7 scan subheader from structure sh
+ * =============================================================================
+ */
+Scan3D_subheader7 *sh_to_ssh7 (sh)
+	SubHeader      *sh;
+
+{
+	int             zsum, i;
+	char           *stat;
+	Scan3D_subheader7 *ssh7;
+
+	ssh7 = (Scan3D_subheader7 *) malloc (sizeof (Scan3D_subheader7));
+	if (sh->whole_header != NULL && sh->file_format == MATRIX_REV7)
+		stat = memcpy ((void *) ssh7, (void *) sh->whole_header, sizeof (Scan3D_subheader7));
+
+	if (sh->number_format == BYTE_DATA)
+		ssh7->data_type = BYTE_TYPE;
+	else if (sh->number_format == SHORT_DATA)
+		ssh7->data_type = SUN_I2;
+	else if (sh->number_format == FLOAT_DATA)
+		ssh7->data_type = IEEE_R4;
+	else
+		ssh7->data_type = SUN_I2;
+	ssh7->num_dimensions = sh->ndim;
+	ssh7->num_r_elements = sh->dim1;
+	ssh7->num_angles = sh->dim2;
+	zsum = 0;
+	i = 0;
+	while (ssh7->num_z_elements[i] > 0) {
+		zsum += ssh7->num_z_elements[i];
+		++i;
+	}
+	if (zsum != sh->dim3) {
+		/* Overwrite if existing data is invalid. */
+		ssh7->num_z_elements[0] = sh->dim3;
+		ssh7->num_z_elements[1] = 0;
+	}
+	ssh7->ring_difference = sh->ring_diff;
+	ssh7->axial_compression = sh->span;
+	ssh7->x_resolution = sh->sample_size_1;
+	ssh7->v_resolution = sh->sample_size_2;
+	ssh7->z_resolution = sh->sample_size_3;
+	ssh7->scale_factor = sh->scale_factor;
+	ssh7->scan_min = sh->min;
+	ssh7->scan_max = sh->max;
+	ssh7->prompts = sh->total;
+	ssh7->delayed = sh->delayeds;
+	ssh7->multiples = sh->multiples;
+	ssh7->net_trues = sh->trues;
+	ssh7->frame_start_time = sh->start_time;
+	ssh7->frame_duration = sh->duration;
+	ssh7->loss_correction_fctr = sh->deadtime_corr;
+	ssh7->whole_header = sh->whole_header;
+	ssh7->storage_order = sh->storage_order;
+
+	return (ssh7);
+}
+
+/* =============================================================================
+ *	Function:		sh_to_ish7
+ *	Description:	Fill Version 7 image subheader from structure sh
+ *	Note:	The structure returned points to the whole_header field of sh.
+ * =============================================================================
+ */
+Image_subheader7 *sh_to_ish7 (sh)
+	SubHeader      *sh;
+
+{
+	Image_subheader7 *ish7;
+
+	char           *stat;
+
+	ish7 = (Image_subheader7 *) malloc (sizeof (Image_subheader7));
+	if (sh->whole_header != NULL && sh->file_format == MATRIX_REV7)
+		stat = memcpy ((void *) ish7, (void *) sh->whole_header, sizeof (Image_subheader7));
+
+	if (sh->number_format == BYTE_DATA)
+		ish7->data_type = BYTE_TYPE;
+	else if (sh->number_format == SHORT_DATA)
+		ish7->data_type = SUN_I2;
+	else if (sh->number_format == FLOAT_DATA)
+		ish7->data_type = IEEE_R4;
+	else
+		ish7->data_type = SUN_I2;
+	ish7->num_dimensions = sh->ndim;
+	ish7->x_dimension = sh->dim1;
+	ish7->y_dimension = sh->dim2;
+	ish7->z_dimension = sh->dim3;
+	ish7->x_resolution = sh->sample_size_1;
+	ish7->y_resolution = sh->sample_size_2;
+	ish7->z_resolution = sh->sample_size_3;
+	ish7->scale_factor = sh->scale_factor;
+	ish7->image_min = sh->min;
+	ish7->image_max = sh->max;
+	ish7->frame_start_time = sh->start_time;
+	ish7->frame_duration = sh->duration;
+	ish7->whole_header = sh->whole_header;
+
+	return (ish7);
+}
+
+
+
+/* =============================================================================
+ *	Function:		mh7_to_mh
+ *	Description:	Fill generic mainheader structure, mh, from Version 7 mainheader
+ * =============================================================================
+ */
+MainHeader     *mh7_to_mh (mh7)
+	Main_header7   *mh7;
+
+{
+	int             i;
+	MainHeader     *mh;
+	struct tm      *time;
+	time_t          timet;
+
+	mh = (MainHeader *) malloc (sizeof (MainHeader));
+	mh->file_format = MATRIX_REV7;
+	mh->data_file = NULL;
+	mh->number_format = SHORT_DATA;
+	mh->scanner_type = mh7->system_type;
+	mh->filtyp = mh7->file_type;
+	mh->start_time = mh7->scan_start_time;
+	timet = mh7->scan_start_time;
+	time = localtime (&timet);
+	sprintf (mh->date_time, "%d/%d/%02d, %d:%02d:%02d", time->tm_mon + 1, time->tm_mday,
+		 time->tm_year, time->tm_hour, time->tm_min, time->tm_sec);
+	for (i = 0; i < 16; i++)
+		mh->patnum[i] = mh7->patient_id[i];
+	mh->nplane = mh7->num_planes;
+	mh->nframe = mh7->num_frames;
+	mh->ngate = mh7->num_gates;
+	mh->nbed = mh7->num_bed_pos;
+	mh->bed_elevation = mh7->bed_elevation;
+	mh->init_bed_pos = mh7->init_bed_position;
+	for (i = 0; i < 16; i++) {
+		mh->bed_off[i] = mh7->bed_offset[i];
+	}
+	mh->slcthk = mh7->plane_separation;
+	mh->whole_header = mh7->whole_header;
+	mh->calibration_factor = mh7->calibration_factor;
+	mh->sw_revision = (char *) malloc (32);
+	for (i = 0; i < 32; i++)
+		mh->sw_revision[i] = mh7->physician_name[i];
+
+	return (mh);
+}
+
+
+/* =============================================================================
+ *	Function:		mh_to_mh7
+ *	Description:	Allocate and fill a Version 7 main header
+ *					using fields from the generic MainHeader.
+ *	Note:	If a version 7 main header exists in the whole_header field of mh,
+ *			then the pointer returned points to it.
+ * =============================================================================
+ */
+Main_header7   *mh_to_mh7 (mh)
+	MainHeader     *mh;
+
+{
+	int             i, j;
+	Main_header7   *mh7;
+	char           *stat;
+
+	if (mh == NULL) {
+		fprintf (stderr, "ERROR [mh_to_mh7]: Null MainHeader\n");
+		return (NULL);
+	}
+	mh7 = (Main_header7 *) malloc (sizeof (Main_header7));
+	if (mh->whole_header != NULL && mh->file_format == MATRIX_REV7)
+		stat = memcpy ((void *) mh7, (void *) mh->whole_header, sizeof (Main_header7));
+
+	mh7->system_type = mh->scanner_type;
+	mh7->file_type = mh->filtyp;
+	mh7->scan_start_time = mh->start_time;
+	for (i = 0; i < 16; i++)
+		mh7->patient_id[i] = mh->patnum[i];
+	mh7->num_planes = mh->nplane;
+	mh7->num_frames = mh->nframe;
+	mh7->num_gates = mh->ngate;
+	mh7->num_bed_pos = mh->nbed;
+	mh7->bed_elevation = mh->bed_elevation;
+	mh7->init_bed_position = mh->init_bed_pos;
+	for (i = 0; i < 16; i++)
+		mh7->bed_offset[i] = mh->bed_off[i];
+	mh7->plane_separation = mh->slcthk;
+	if (mh->sw_revision != NULL) {
+		if (strlen (mh->sw_revision) > 31)
+			j = 31;
+		else
+			j = strlen (mh->sw_revision) + 1;
+		for (i = 0; i < j; i++)
+			mh7->physician_name[i] = mh->sw_revision[i];
+		mh7->physician_name[j] = NULL;
+	} else
+		mh7->physician_name[0] = NULL;
+	mh7->whole_header = mh->whole_header;
+
+	return (mh7);
+}
+@

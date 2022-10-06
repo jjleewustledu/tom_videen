@@ -1,0 +1,317 @@
+head	3.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+3.0
+date	2004.02.20.16.18.40;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	99.12.17.16.58.46;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	96.09.10.20.00.49;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.08.16.20.41.14;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.08.14.20.12.53;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@new version
+@
+
+
+3.0
+log
+@Feb 2004
+@
+text
+@/* $Log: get_input_lists.c,v $
+ * Revision 2.3  1999/12/17  16:58:46  tom
+ * lint cleaning
+ *
+ * Revision 2.2  1996/09/10  20:00:49  tom
+ * *** empty log message ***
+ *
+ * Revision 2.1  1996/09/03  18:22:17  tom
+ * add imgmode to handle OEF images properly
+ *
+ * Revision 2.0  1996/05/10  21:58:08  tom
+ * new libimage
+ * indexing from 1 on images and atlas
+ *
+ * Revision 1.11  1995/11/10  18:47:55  tom
+ * remove petutil parent directory from include statements
+ *
+ * Revision 1.10  1994/10/03  16:17:13  tom
+ * standard format with indent
+ *
+ * Revision 1.9  1994/05/18  15:53:30  tom
+ * changed $Id: get_input_lists.c,v 2.3 1999/12/17 16:58:46 tom Exp tom $ to $Header: /home/npggw/tom/src/t88trans/RCS/get_input_lists.c,v 2.3 1999/12/17 16:58:46 tom Exp tom $
+ *
+ * Revision 1.8  1993/09/29  16:01:52  tom
+ * added metabolic processing and hdr files (cbf, cbv, oef, cmor2)
+ *
+ * Revision 1.7  1993/08/26  17:26:35  tom
+ * changed atlas y-dim to used 5 mm between brain and skull
+ *
+ * Revision 1.6  1993/08/20  20:24:07  tom
+ * first version with Talairach 1988 atlas
+ *
+ * Revision 1.5  1993/08/19  22:55:48  tom
+ * a corrected hd6mean-atlas version of t88mean
+ *
+ * Revision 1.4  1993/08/12  22:58:02  tom
+ * equivalent to hd6mean
+ *
+ * Revision 1.3  1993/08/06  15:16:49  tom
+ * reads prm and list files
+ *
+ * Revision 1.1  1993/08/05  22:22:58  tom
+ * revised matrix_mult and eliminated matrix_point_mult
+ * */
+/*	===============================================================================
+ *	Module:			get_input_lists.c
+ *	Date:			Jul 1993
+ *	Author:			Tom Videen
+ *	Description:	Read an input image list file and an input image parameter file.
+ *
+ *	Input:
+ *		prmfile  -   parameter filename
+ *		lstfile  -   image list filename
+ *		filtmode -   used to expand the image list
+ *			(IMGFILTER_MODE in imgutil.h)
+ *	Output:
+ *		prm   	 -   structure PARAMETER_DATA (imgutil.h)
+ *		list     -   structure IMAGE_LIST_DATA (imgutil.h)
+ *		scan     -   scan filenames
+ *		mapfile  -   map filenames
+ *		lstsize  -   number of scan (pairs) in image list
+ *
+ *	Algorithm:
+ *	1)  Read the parameter file into prm.
+ *	2)  Read the image list into list.
+ *	3)  Get full names of activation  and control scans and store in scan.
+ *	4)  Get full names of map files and store in mapfile.
+ *
+ *	History:		Modification of chklist.c
+ *		11-Aug 1993:	Changed for new checkimg.c (passes extension)
+ *		07-Sep 1993:	Added filtmode;
+ *					New calls to build_short_names and chklist (eliminate checkimg)
+ *					Replace INPUT_FILE_LIST structure with arrays scan and mapfile (elim list.h)
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88trans/RCS/get_input_lists.c,v 2.3 1999/12/17 16:58:46 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <myvalues.h>			 /* ERROR, MAXPATH */
+#include <imgutil.h>			 /* IMAGE_LIST_DATA, PARAMETER_DATA, get_path */
+
+int            get_input_lists (prmfile, lstsize, imgmode, filtmode, scan, mapfile, prm, imglist)
+	char           *prmfile;
+	int             lstsize;
+	int             imgmode;		 /* imagelist mode */
+	int             filtmode;		 /* filter mode */
+	PARAMETER_DATA *prm;			 /* parameters */
+	IMAGE_LIST_DATA *imglist;		 /* image list */
+	char         ***scan;
+	char          **mapfile;
+
+{
+	char          **imgname;
+	char           *mapname;
+	char           *dtype;
+	int             nfiles = 0;
+	int             i, j;
+
+/*
+ * Read parameters into prm
+ */
+
+	if (readprm (prmfile, prm) == ERROR) {
+		fprintf (stderr, "ERROR [get_input_lists]: reading %s\n", prmfile);
+		return (ERROR);
+	}
+	prm->imglist_mode = imgmode;
+
+/*
+ * Get full names of activation, control and .map files.
+ */
+
+	imgname = (char **) malloc (6 * sizeof (char *));
+	if (imgname == NULL)
+		return (ERROR);
+	for (i = 0; i < 6; i++)
+		imgname[i] = (char *) malloc (MAXPATH * sizeof (char));
+	mapname = (char *) malloc (MAXPATH * sizeof (char));
+	if (mapname == NULL)
+		return (ERROR);
+	dtype = (char *) malloc (MAXPATH * sizeof (char));
+	if (dtype == NULL)
+		return (ERROR);
+
+	for (i = 0; i < lstsize; i++) {
+		if (build_mnames (prm, imglist[i], filtmode, &nfiles, imgname, mapname) == ERROR) {
+			fprintf (stderr, "ERROR [get_input_lists] building filenames from %s %s %f %s %f %s\n",
+				 imglist[i].subject_id, imglist[i].scanset1_id, imglist[i].mean1,
+				 imglist[i].scanset2_id, imglist[i].mean2, imglist[i].sxrid);
+			return (ERROR);
+		}
+		if (nfiles < 6)
+			for (j = nfiles; j < 6; j++)
+				strcpy (scan[i][j], "");
+		strcpy (dtype, prm->scanner);
+		strcat (dtype, "_");
+		strcat (dtype, prm->acquisition);
+		strcat (dtype, "_");
+		strcat (dtype, prm->reconstruction);
+		strcat (dtype, "_");
+		strcat (dtype, prm->recfilter);
+		for (j = 0; j < nfiles; j++) {
+			scan[i][j] = getpath (imgname[j], dtype, prm);
+			if (strcmp (scan[i][j],"") == 0)
+				return (ERROR);
+		}
+		strcpy (dtype, "data");
+		mapfile[i] = getpath (mapname, dtype, prm);
+		if (strcmp (mapfile[i],"") == 0)
+			return (ERROR);
+	}
+	for (i = 0; i < 6; i++)
+		free (imgname[i]);
+	free (imgname);
+	free (mapname);
+	free (dtype);
+	return (OK);
+}
+@
+
+
+2.3
+log
+@lint cleaning
+@
+text
+@d2 3
+d22 1
+a22 1
+ * changed $Id: get_input_lists.c,v 2.2 1996/09/10 20:00:49 tom Exp tom $ to $Header: /home/npggw/tom/src/t88trans/RCS/get_input_lists.c,v 2.2 1996/09/10 20:00:49 tom Exp tom $
+d47 1
+a47 1
+ *	Date:			28-Jul-93
+d70 2
+a71 2
+ *		11-Aug-93:	Changed for new checkimg.c (passes extension)
+ *		07-Sep-93:	Added filtmode;
+d76 1
+d78 1
+a78 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88trans/RCS/get_input_lists.c,v 2.2 1996/09/10 20:00:49 tom Exp tom $";
+d119 2
+d124 2
+d127 2
+@
+
+
+2.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d19 1
+a19 1
+ * changed $Id: get_input_lists.c,v 2.1 1996/09/03 18:22:17 tom Exp $ to $Header: /home/npggw/tom/src/t88mean/RCS/get_input_lists.c,v 2.1 1996/09/03 18:22:17 tom Exp $
+a52 1
+ *
+d73 4
+d78 1
+a79 1
+#include <values.h>
+a81 1
+#include <atlas.h>				 /* SCANLIST_ARRAY, SXRLIST_ARRAY */
+d83 1
+a83 5
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/get_input_lists.c,v 2.1 1996/09/03 18:22:17 tom Exp $";
+#endif
+
+void            get_input_lists (prmfile, lstsize, imgmode, filtmode, scan, mapfile, prm, imglist)
+d106 1
+a106 1
+		exit (ERROR);
+d125 1
+a125 1
+			exit (ERROR);
+d140 1
+a140 1
+				exit (ERROR);
+d145 1
+a145 1
+			exit (ERROR);
+d152 1
+@
+
+
+2.1
+log
+@change buildnames to build_mnames
+@
+text
+@d2 2
+a3 2
+ * Revision 2.0  1996/08/14  20:12:53  tom
+ * new version
+d16 1
+a16 1
+ * changed $Id: get_input_lists.c,v 2.0 1996/08/14 20:12:53 tom Exp tom $ to $Header: /home/npggw/tom/src/t88trans/RCS/get_input_lists.c,v 2.0 1996/08/14 20:12:53 tom Exp tom $
+d67 1
+d79 1
+a79 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88trans/RCS/get_input_lists.c,v 2.0 1996/08/14 20:12:53 tom Exp tom $";
+d82 1
+a82 1
+void            get_input_lists (prmfile, lstsize, filtmode, scan, mapfile, prm, imglist)
+d85 1
+d107 2
+@
+
+
+2.0
+log
+@new version
+@
+text
+@d2 3
+d16 1
+a16 1
+ * changed $Id: get_input_lists.c,v 2.0 1996/05/10 21:58:08 tom Exp $ to $Header: /home/petsun19/tom/src/t88mean/RCS/get_input_lists.c,v 2.0 1996/05/10 21:58:08 tom Exp $
+a66 1
+ *					New calls to build_short_names and chklist (eliminate checkimg)
+d78 1
+a78 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/t88mean/RCS/get_input_lists.c,v 2.0 1996/05/10 21:58:08 tom Exp $";
+d116 1
+a116 1
+		if (buildnames (prm, imglist[i], filtmode, &nfiles, imgname, mapname) == ERROR) {
+@

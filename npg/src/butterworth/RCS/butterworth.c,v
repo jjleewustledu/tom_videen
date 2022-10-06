@@ -1,0 +1,764 @@
+head	2.20;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.20
+date	2004.02.13.19.56.44;	author tom;	state Exp;
+branches;
+next	2.17;
+
+2.17
+date	2000.09.06.19.22.45;	author tom;	state Exp;
+branches;
+next	2.16;
+
+2.16
+date	99.12.15.18.36.53;	author tom;	state Exp;
+branches;
+next	2.15;
+
+2.15
+date	97.03.10.16.08.30;	author tom;	state Exp;
+branches;
+next	2.14;
+
+2.14
+date	97.03.10.15.50.24;	author tom;	state Exp;
+branches;
+next	2.13;
+
+2.13
+date	96.10.16.16.26.40;	author tom;	state Exp;
+branches;
+next	2.9;
+
+2.9
+date	96.08.26.18.23.49;	author tom;	state Exp;
+branches;
+next	2.8;
+
+2.8
+date	96.08.05.14.27.07;	author tom;	state Exp;
+branches;
+next	2.7;
+
+2.7
+date	96.05.24.18.02.51;	author tom;	state Exp;
+branches;
+next	2.6;
+
+2.6
+date	96.05.14.21.24.03;	author tom;	state Exp;
+branches;
+next	2.5;
+
+2.5
+date	96.04.30.14.51.25;	author tom;	state Exp;
+branches;
+next	2.4;
+
+2.4
+date	96.02.22.15.36.25;	author tom;	state Exp;
+branches;
+next	2.3;
+
+2.3
+date	96.01.31.18.42.56;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	96.01.05.19.43.53;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.01.03.16.12.09;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	95.12.18.15.11.48;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial TOV version
+@
+
+
+2.20
+log
+@Feb 2004
+@
+text
+@/*	$Id: butterworth.c,v 2.17 2000/09/06 19:22:45 tom Exp tom $
+	$Log: butterworth.c,v $
+ * Revision 2.17  2000/09/06  19:22:45  tom
+ * strcpy filename
+ *
+ * Revision 2.16  1999/12/15  18:36:53  tom
+ * lint cleanup
+ *
+ * Revision 2.15  1997/03/10  16:08:30  tom
+ * change error messages
+ *
+ * Revision 2.14  1997/03/10  15:50:24  tom
+ * read frame 1,2 or 3
+ *
+ * Revision 2.13  1996/10/16  16:26:40  tom
+ * sync with Version
+ * new libimage
+ *
+ * Revision 2.9  1996/08/26  18:23:49  tom
+ * new libimage
+ *
+ * Revision 2.8  1996/08/05  14:27:07  tom
+ * new libimage and libnrimg
+ *
+ * Revision 2.7  1996/05/24  18:02:51  tom
+ * new libimage, libnrimg
+ *
+ * Revision 2.6  1996/05/14  21:24:03  tom
+ * new libimage.a with altered fill_sh6
+ *
+ * Revision 2.5  1996/04/30  14:51:25  tom
+ * *** empty log message ***
+ *
+ * Revision 2.4  1996/02/22  15:36:25  tom
+ * revised libnrimg.a
+ *
+ * Revision 2.3  1996/01/31  18:42:56  tom
+ * add mh->pr_filter = 8
+ *
+ * Revision 2.2  1996/01/05  19:43:53  tom
+ * revised libimg.a which handles 3D version 6 images properly
+ *
+ * Revision 2.1  1996/01/03  16:12:09  tom
+ * 3 filter parameters in the output subheader are now changed
+ *
+ * Revision 2.0  1995/12/18  15:11:48  tom
+ * *** empty log message ***
+ *
+*/
+/* ===============================================================================
+ *	Module:			butterworth.c
+ *	Date:			Dec 1995
+ *	Author:			Tom Videen
+ *	Description:	Apply Butterworth low-pass filter to an image file.
+ * ===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.17 2000/09/06 19:22:45 tom Exp tom $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <image.h>
+#include <imgutil.h>
+#include <libimage.h>
+#include <libnrimg.h>
+#include <nr.h>
+#include <nrutil.h>
+#include <pettable.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+
+{
+	ImageFile      *file;
+	Index           indx;
+	MainHeader     *mh;
+	SubHeader      *sh;
+	FILE           *recfp;			 /* rec file pointer */
+	char           *recfile;		 /* rec filename */
+	float        ***img;			 /* image array and frequency spectrum */
+	float         **spec;			 /* contains portion of frequency spectrum not in */
+	char           *fname1;			 /* file to process */
+	char           *fname2;			 /* file to write */
+	int             frm;			 /* frame number to process */
+	char            runstamp[40];		 /* version, date and userid info */
+	float           f0;			 /* half frequency 1/cm	 */
+	float           fc;			 /* squared half frequency */
+	double          order;			 /* order of Butterworth */
+	float           fac;			 /* filter factor */
+	unsigned long   dim1, dim2, dim3;	 /* array dimensions */
+	unsigned long   nx, ny, nz;		 /* padded array dimensions */
+	float           dx, dy, dz;		 /* delta frequency for each dimension */
+	float           fx, fy, fz;		 /* frequency in each dimension */
+	float           f;			 /* square of radial frequency */
+	float           fnorm;			 /* required to normalize inverse FFT */
+	long            i, j, k;
+
+/*
+ *	Get command line arguments
+ */
+
+	fname1 = argv[1];
+	fname2 = argv[2];
+	f0 = atof (argv[3]);
+	order = (double) atof (argv[4]);
+	recfile = argv[5];
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[6], argv[7], argv[8],
+		 argv[10], argv[11], argv[12]);
+
+/*	Open rec file */
+
+	recfp = fopen (recfile, "a");
+	if (recfp == (FILE *) NULL) {
+		fprintf (stderr, "ERROR [butterworth]: Cannot open %s\n", recfile);
+		return (ERROR);
+	}
+/*
+ *	Get main header and subheader.
+ *	Store RCS version in mh->sw_revision.
+ */
+
+	frm = 1;
+	indx.frm = frm;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	file = make_imgfile (fname1);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [butterworth]: Could not open %s\n", fname1);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [butterworth]: Could not get MainHeader from %s\n", fname1);
+		return (ERROR);
+	}
+	if (existimgfrm (file, &indx) == ERROR) {
+		if (frm == 1) {
+			indx.frm = 2;
+			if (existimgfrm (file, &indx) == ERROR) {
+				indx.frm = 3;
+				if (existimgfrm (file, &indx) == ERROR) {
+					fprintf (stderr, "ERROR [butterworth]: cannot find %s frame 1, 2 or 3\n", fname1);
+					return (ERROR);
+				}
+			}
+		} else {
+			fprintf (stderr, "ERROR [butterworth]: cannot find %s frame %d\n",
+				 fname1, frm);
+			return (ERROR);
+		}
+	}
+	if (get_sh (file, &indx) == ERROR) {
+		fprintf (stderr, "ERROR [butterworth]: Could not read file subheader in %s\n", fname1);
+		return (ERROR);
+	}
+	mh = file->mh;
+	sh = file->sh;
+
+	(void) save_rcs (file, rcsid, runstamp);
+
+	dim1 = (unsigned long) sh->dim1;
+	dim2 = (unsigned long) sh->dim2;
+	dim3 = (unsigned long) sh->dim3;
+	if (dim1 <= 128)
+		nx = 128;
+	else
+		nx = 256;
+	if (dim2 <= 128)
+		ny = 128;
+	else
+		ny = 256;
+	if (dim3 <= 31)
+		nz = 64;
+	else
+		nz = 128;
+	dx = 1.0 / ((float) nx * (sh->sample_size_1));
+	dy = 1.0 / ((float) ny * (sh->sample_size_2));
+	dz = 1.0 / ((float) nz * (sh->sample_size_3));
+	spec = matrix (1, nz, 1, 2 * ny);
+
+/*	Read image */
+
+	printf ("Filtering %s, frame %d\n", fname1, indx.frm);
+	if ((img = readtensor (file, indx)) == NULL)
+		return (ERROR);
+	recout (recfp, fname1);
+
+/*	Pad at top and bottom before FFT */
+
+	img = padtensor (img, dim1, dim2, dim3, nx, ny, nz);
+	rlft3 (img, spec, nz, ny, nx, 1);	 /* wants dimensions z,y,x */
+
+/*	Order of elements in freq spectrum defined on pp 526-7 of Numerical Recipes in C */
+
+	fc = pow (f0, 2.0);
+	for (i = 1; i <= nz; i++) {
+		if (i <= nz / 2 + 1)
+			fz = (i - 1) * dz;
+		else
+			fz = (nz - i + 1) * dz;
+		for (j = 1; j <= ny; j++) {
+			if (j <= ny / 2 + 1)
+				fy = (j - 1) * dy;
+			else
+				fy = (ny - j + 1) * dy;
+			for (k = 1; k <= nx / 2; k++) {
+				fx = (k - 1) * dx;
+				f = pow (fx, 2.0) + pow (fy, 2.0) + pow (fz, 2.0);
+				fac = 1. / (1. + pow (f / fc, order));
+				img[i][j][2 * k - 1] *= fac;
+				img[i][j][2 * k] *= fac;
+			}
+			fx = (nx / 2) * dx;
+			f = pow (fx, 2.0) + pow (fy, 2.0) + pow (fz, 2.0);
+			fac = 1. / (1. + pow (f / fc, order));
+			spec[i][2 * j - 1] *= fac;	/* effectively 0 */
+			spec[i][2 * j] *= fac;
+		}
+	}
+
+/*	Inverse FFT, trim to original size, then normalize for FFT */
+
+	rlft3 (img, spec, nz, ny, nx, -1);
+	img = trimtensor (img, nx, ny, nz, dim1, dim2, dim3);
+
+	fnorm = 2.0 / ((float) nx * (float) ny * (float) nz);
+	for (i = 1; i <= dim3; i++)
+		for (j = 1; j <= dim2; j++)
+			for (k = 1; k <= dim1; k++)
+				img[i][j][k] = fnorm * img[i][j][k];
+
+/*
+ *	Write image.
+ *	The output frame number is set to 1.
+ *	The subheader is altered to add a constant (BUTTERWORTH_FILTER_CODE)
+ *	to the reconstruction filter_code, and the cutoff and order are inserted
+ *	in 2 other filter parameters which were assumed to be unimportant.
+ */
+	indx.frm = 1;
+	printf ("Writing filtered image %s, frame %d\n", fname2, indx.frm);
+	close_imgfile (file);
+	(void) strcpy (file->name, fname2);
+	(void) strcpy (file->mode, "w");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [butterworth]: Could not open %s\n", fname2);
+		return (ERROR);
+	}
+	mh->nframe = indx.frm;
+	mh->pr_filter = 8;
+	sh->filter_code += BUTTERWORTH_FILTER_CODE;
+	sh->filter_ramp_slope = f0;
+	sh->filter_order = order;
+	(void) put_mh (file);
+	if (writetensor (file, indx, img) == ERROR)
+		return (ERROR);
+	free_matrix (spec, 1, nz, 1, 2 * ny);
+	free_f3tensor (img, 1, dim3, 1, dim2, 1, dim1);
+	free_imgfile (file);
+	(void) fclose (recfp);
+	return (OK);
+}
+@
+
+
+2.17
+log
+@strcpy filename
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.16 1999/12/15 18:36:53 tom Exp tom $
+d3 3
+d52 1
+a52 1
+ *	Date:			Dec-95
+d57 1
+a57 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.16 1999/12/15 18:36:53 tom Exp tom $";
+d109 1
+a109 1
+	sprintf (runstamp, "%s %s %s %s %s %s", argv[6], argv[7], argv[8],
+d162 1
+a162 1
+	save_rcs (file, rcsid, runstamp);
+d245 2
+a246 2
+	strcpy (file->name, fname2);
+	strcpy (file->mode, "w");
+d256 1
+a256 1
+	put_mh (file);
+d262 1
+a262 1
+	fclose (recfp);
+@
+
+
+2.16
+log
+@lint cleanup
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.15 1997/03/10 16:08:30 tom Exp tom $
+d3 3
+d54 1
+a54 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.15 1997/03/10 16:08:30 tom Exp tom $";
+d242 1
+a242 2
+	free (file->name);
+	file->name = fname2;
+@
+
+
+2.15
+log
+@change error messages
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.14 1997/03/10 15:50:24 tom Exp tom $
+d3 3
+d51 1
+a51 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.14 1997/03/10 15:50:24 tom Exp tom $";
+d58 1
+a75 1
+	void            rlft3 ();		 /* FFT transform */
+d111 1
+a111 1
+		exit (ERROR);
+d127 1
+a127 1
+		exit (ERROR);
+d131 1
+a131 1
+		exit (ERROR);
+d146 1
+a146 1
+			exit (ERROR);
+d151 1
+a151 1
+		exit (ERROR);
+d182 1
+a182 1
+		exit (ERROR);
+d244 1
+a244 1
+		exit (ERROR);
+d253 1
+a253 1
+		exit (ERROR);
+d258 1
+a258 1
+	exit (OK);
+@
+
+
+2.14
+log
+@read frame 1,2 or 3
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.13 1996/10/16 16:26:40 tom Exp tom $
+d3 3
+d48 1
+a48 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.13 1996/10/16 16:26:40 tom Exp tom $";
+d123 1
+a123 1
+		fprintf (stderr, "ERROR [imghdr]: Could not open %s\n", fname1);
+d127 1
+a127 1
+		fprintf (stderr, "ERROR [imghdr]: Could not get MainHeader from %s\n", fname1);
+d136 1
+a136 1
+					fprintf (stderr, "ERROR [gauss]: cannot find %s frame 1, 2 or 3\n", fname1);
+d141 1
+a141 1
+			fprintf (stderr, "ERROR [imghdr]: cannot find %s frame %d\n",
+d147 1
+a147 1
+		fprintf (stderr, "ERROR [imghdr]: Could not read file subheader in %s\n", fname1);
+d240 1
+a240 1
+		fprintf (stderr, "ERROR [imghdr]: Could not open %s\n", fname2);
+@
+
+
+2.13
+log
+@sync with Version
+new libimage
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.9 1996/08/26 18:23:49 tom Exp tom $
+d3 4
+d45 1
+a45 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.9 1996/08/26 18:23:49 tom Exp tom $";
+d75 3
+a77 3
+	char            runstamp[40];	 /* version, date and userid info */
+	float           f0;			     /* half frequency 1/cm	 */
+	float           fc;			     /* squared half frequency */
+d80 1
+a80 1
+	unsigned long   dim1, dim2, dim3; /* array dimensions */
+d84 1
+a84 1
+	float           f;			     /* square of radial frequency */
+d131 5
+a135 2
+				fprintf (stderr, "ERROR [imghdr]: cannot find %s frame 1 or 2\n", fname1);
+				exit (ERROR);
+@
+
+
+2.9
+log
+@new libimage
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.8 1996/08/05 14:27:07 tom Exp tom $
+d3 3
+d41 1
+a41 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.8 1996/08/05 14:27:07 tom Exp tom $";
+@
+
+
+2.8
+log
+@new libimage and libnrimg
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.7 1996/05/24 18:02:51 tom Exp tom $
+d3 3
+d38 1
+a38 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.7 1996/05/24 18:02:51 tom Exp tom $";
+@
+
+
+2.7
+log
+@new libimage, libnrimg
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.6 1996/05/14 21:24:03 tom Exp tom $
+d3 3
+d35 1
+a35 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/butterworth/RCS/butterworth.c,v 2.6 1996/05/14 21:24:03 tom Exp tom $";
+@
+
+
+2.6
+log
+@new libimage.a with altered fill_sh6
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.5 1996/04/30 14:51:25 tom Exp tom $
+d3 3
+d32 1
+a32 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/butterworth/RCS/butterworth.c,v 2.5 1996/04/30 14:51:25 tom Exp tom $";
+@
+
+
+2.5
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.4 1996/02/22 15:36:25 tom Exp $
+d3 3
+d29 1
+a29 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/butterworth/RCS/butterworth.c,v 2.4 1996/02/22 15:36:25 tom Exp $";
+@
+
+
+2.4
+log
+@revised libnrimg.a
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.3 1996/01/31 18:42:56 tom Exp tom $
+d3 3
+d26 1
+a26 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.3 1996/01/31 18:42:56 tom Exp tom $";
+d32 2
+a33 1
+#include <libimg.h>
+d44 2
+a47 1
+
+d52 7
+a58 8
+	float         **spec;			 /* contains portion of frequency spectrum not in
+						  * img */
+	char          **files;			 /* file(s) to process */
+	int            *frm;			 /* frame number(s) to process */
+	char           *outfile;		 /* output file name */
+	char            runstamp[40];		 /* version, date and userid info */
+	float           f0;			 /* half frequency 1/cm	 */
+	float           fc;			 /* squared half frequency */
+d61 1
+a61 1
+	unsigned long   dim1, dim2, dim3;	 /* array dimensions */
+d65 1
+a65 1
+	float           f;			 /* square of radial frequency */
+a67 1
+	int             plane = 1, frame1 = 1, gate = 1, data = 0, bed = 0;
+d70 1
+a70 1
+ *	Get list of files and frames to sum from command arguments
+d73 2
+a74 5
+	files = (char **) malloc (argc * sizeof (char *));
+	frm = (int *) malloc (argc * sizeof (int));
+	files[0] = argv[1];
+	frm[0] = 1;
+	outfile = argv[2];
+d93 9
+a101 1
+	if ((mh = getmhdr (files[0])) == NULL)
+d103 10
+a112 6
+
+	if (existimgfrm (mh, files[0], plane, frm[0], gate, data, bed) == ERROR) {
+		if (frm[0] == 1) {
+			frm[0] = 2;
+			if (existimgfrm (mh, files[0], plane, frm[0], gate, data, bed) == ERROR) {
+				fprintf (stderr, "ERROR [butterworth]: Cannot find %s frame 1 or 2\n", files[0]);
+d116 2
+a117 2
+			fprintf (stderr, "ERROR [butterworth]: Cannot find %s frame %d\n",
+				 files[0], frm[0]);
+d121 3
+a123 8
+
+	if ((sh = getsbhdr (mh, files[0], plane, frm[0], gate, data, bed)) == NULL) {
+		if (frm[0] == 1) {
+			frm[0] = 2;
+			if ((sh = getsbhdr (mh, files[0], plane, frm[0], gate, data, bed)) == NULL)
+				exit (ERROR);
+		} else
+			exit (ERROR);
+d125 2
+a126 1
+	save_rcs (mh, rcsid, runstamp);
+d128 2
+d152 2
+a153 2
+	printf ("Filtering %s, frame %d\n", files[0], frm[0]);
+	if ((img = readtensor (files[0], frm[0], mh, sh)) == NULL)
+d155 1
+a155 1
+	recout (recfp, files[0]);
+d208 11
+a218 3
+
+	printf ("Writing filtered image %s, frame %d\n", outfile, frame1);
+	mh->nframe = frame1;
+d223 2
+a224 1
+	if (writetensor (outfile, frame1, mh, sh, img) != OK)
+d227 2
+a228 3
+	freetensor (mh, sh, img);
+	free (files);
+	free (frm);
+@
+
+
+2.3
+log
+@add mh->pr_filter = 8
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.2 1996/01/05 19:43:53 tom Exp tom $
+d3 3
+d23 1
+a23 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.2 1996/01/05 19:43:53 tom Exp tom $";
+@
+
+
+2.2
+log
+@revised libimg.a which handles 3D version 6 images properly
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.1 1996/01/03 16:12:09 tom Exp tom $
+d3 3
+d20 1
+a20 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.1 1996/01/03 16:12:09 tom Exp tom $";
+d198 1
+@
+
+
+2.1
+log
+@3 filter parameters in the output subheader are now changed
+@
+text
+@d1 1
+a1 1
+/*	$Id: butterworth.c,v 2.0 1995/12/18 15:11:48 tom Exp tom $
+d3 3
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 2.0 1995/12/18 15:11:48 tom Exp tom $";
+@
+
+
+2.0
+log
+@*** empty log message ***
+@
+text
+@d1 5
+a5 2
+/*	$Id$
+	$Log$
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/butterworth/RCS/butterworth.c,v 1.1 1995/12/04 17:01:40 tom Exp tom $";
+d24 1
+d182 7
+a188 1
+/*	Write image */
+d192 3
+@

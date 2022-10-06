@@ -1,0 +1,124 @@
+#!/bin/csh
+#	Module:	align_mpr2fdg
+#	Author:	Tom Videen
+#	Date:	Oct 2005
+#	Use:	Align MPRAGE images to filtered PET FDG image.
+#	Creates:
+#		rp5951mpr.img
+#		p5951mpr_to_p5951fdg.air
+#		align_mpr2fdg.log
+#	Uses:
+#		p5949mpr.img	- MPRAGE
+#		p5949fdg.img	- FDG sum for 40-60 min filtered with gauss 0.6
+#		p5949mask.img	- brain mask
+
+# Parameters for alignlinear which may affect accuracy of the coregistration
+
+if ($#argv < 3) then
+	echo "Usage: align_mpr2fdg mpr fdg mask [-mb 3] [-pb 3] [-t 10]"
+	echo " e.g., align_mpr2fdg p5949mpr p5949fdg p5949mask"
+	echo "  or,  align_mpr2fdg p5949mpr p5949fdg p5949mask -mb 3 -pb 3 -t 10"
+	exit 1
+endif
+
+set MPR  = $1
+set FDG  = $2
+set MASK = $3
+set AIR  = ${MPR}_to_${FDG}
+set LOGFILE = align_mpr2fdg.log
+set INIT = air_init
+set MB   = 0
+set PB   = 0
+set THR  = 10
+set PTS  = 16384
+
+shift argv
+shift argv
+shift argv
+top:
+	if ($#argv > 0) then
+		switch ("$argv[1]")
+		case -mb:
+			shift argv
+			if ($#argv > 0) then
+				set MB = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_mpr2fdg]: missing number following -mb"
+				exit 1
+			endif
+			goto top
+		case -pb:
+			shift argv
+			if ($#argv > 0) then
+				set PB = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_mpr2fdg]: missing number following -pb"
+				exit 1
+			endif
+			goto top
+		case -t:
+			shift argv
+			if ($#argv > 0) then
+				set THR = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_mpr2fdg]:
+				echo "Usage: align_mpr2fdg mpr pet [-mb 3] [-pb 6] [-t 10]"
+				exit 1
+			endif
+			goto top
+		case -?*:
+			echo "ERROR [align_mpr2fdg]: illegal parameter $argv[1]"
+			echo "Usage: align_mpr2fdg mpr pet [-mb 3] [-pb 6] [-t 10]"
+			exit 1
+		default:
+			echo "ERROR [align_mpr2fdg]: extra parameter $argv[1]"
+			echo "Usage: align_mpr2fdg mpr pet [-mb 3] [-pb 6] [-t 10]"
+			exit 1
+		endsw
+	endif
+endif
+set MBLUR = ""
+set PBLUR = ""
+if ($MB != 0) set MBLUR = "-b2 $MB $MB $MB"
+if ($PB != 0) set PBLUR = "-b1 $PB $PB $PB"
+
+checkfiles $MPR.img $MPR.hdr $FDG.img $FDG.hdr $MASK.img $MASK.hdr
+if ($status != 0) exit 1
+set t1 = `t`
+
+setanamin $FDG 0
+setanamin $MPR 0
+setanamin $MASK 0
+if (-e $INIT) then
+	set PRM = "-m 6 -p1 0 -p2 $PTS -t2 $THR $PBLUR $MBLUR -e2 $MASK -x 1 -v -f $INIT"
+	echo "Aligning $MPR to $FDG using initialization file $INIT ..."
+else
+	set PRM = "-m 6 -p1 0 -p2 $PTS -t2 $THR $PBLUR $MBLUR -e2 $MASK -x 1 -v"
+	echo "Aligning $MPR to $FDG ..."
+endif
+echo $PRM 
+alignlinear $FDG $MPR $AIR.air $PRM >! log
+
+echo alignlinear $FDG $MPR $AIR.air $PRM >! $LOGFILE
+tail -6 log >> $LOGFILE
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+	echo $ERROR
+	echo "Alignment may require an initialization file ($INIT)"
+	echo $ERROR >> $LOGFILE
+	exit 1
+endif
+
+imgreslice $MPR $AIR
+scanair $AIR.air | tail -6 | head -3
+set t2 = `t`
+echo "[align_mpr2fdg] Complete at" `date` "   Elapsed time: " `echo "$t2 - $t1" | bc` " sec"
+echo "----------------------------------"
+echo "Check coregistration using vidi:"
+echo "   Image 1 = r$MPR.img"
+echo "   Image 2 = $FDG.img"
+

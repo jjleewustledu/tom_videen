@@ -1,0 +1,552 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.8
+date	94.05.02.16.57.17;	author ty7777;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	94.05.02.16.45.21;	author ty7777;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	94.01.14.18.19.35;	author ty7777;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	94.01.10.17.21.14;	author ty7777;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.22.15.22.18;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+1.8
+log
+@Fixed syntax.
+@
+text
+@C$Id: d2displa.f,v 1.7 1994/05/02 16:45:21 ty7777 Exp ty7777 $
+C$Log: d2displa.f,v $
+c Revision 1.7  1994/05/02  16:45:21  ty7777
+c Added processing for ZORIGIN.
+c
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   D2DISPLA.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         01-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified by TOV 16-Jul-87:
+C       correct bug in scaling quarter screen images to individual max;
+C     Modified 29-Dec-87 by TOV to allow scaling of rows of 7 images
+C        to individual slice max (SEPSCALE added to common block).
+C     Modified 15-Sep-88 by TOV:
+C        1) eliminate REFRESH option.
+C        2) Incorporate % diff scaling into SCALER.
+C     Modified 01-Feb-90 by TOV:
+C        1) Write stereotaxic section numbers for images with
+C           49 slices (assumed to be SARP images).
+C     Modified by Tom Yang 25-Sep-91 to port to X Windows and UNIX.
+C     Modified by TOV 26-Sep-91 for 1152 x 900 pixel window.
+C     Modified by Tom Yang 14-Jan-94 to allow displaying of
+C        stereotactic coordinates for images with SLICES >= 49.
+C     Modified by Tom Yang 02-May-94 to use the ZORIGIN.
+C
+C  Intent:
+C     This routine displays an image on the Ramtek.
+C
+C  Passed Variables:
+C     ERRTYPE = type of error in processing images:
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (read only)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (write)
+C     **SCALES   - scaling parameters             (read only)
+C     **FILES    - scan file list                 (read only)
+C     **REGION   - regions of interest parameters (read only)
+C
+C  Local Variables:
+C     F1,F2,F3 = scan file numbers for FILE(1), FILE(2), and FILE(3);
+C     N = number of sections to display;
+C     SECTION = current section number to display;
+C     SUB = true if an image (FILE(2)) is to be subtracted;
+C     DIVIDE = true if an image (FILE(3)) is to be divided;
+C     MAXCOUNT = DMAX for all displayed images (rows of 7 only);
+C     MINCOUNT = DMIN for all displayed images (rows of 7 only);
+C     TEXT,STR = character array and string used for writing
+C        text to the Ramtek;
+C     SIDE = set to 0 to display entire image;
+C
+C  Uses:
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     D2BAR    - display a color bar;
+C     D2IMAGE  - assemble an image slice from component image files;
+C     D2INIT   - initializes display parameters;
+C     D2LABEL2 - label quarter screen displays (MAG=4 or 5);
+C     D2LABEL4 - label full screen display (MAG=7);
+C     D2MAXVAL - get the maximum value for the slice;
+C     D2RAW    - display an uninterpolated image;
+C     D2RAWX   - display an uninterpolated cross-sectional image;
+C     D2SCALER - scale the image for the appropriate color scale;
+C     D2SMOOTH - display an interpolated image;
+C     D2SMOX   - display an interpolated cross-sectional image;
+C     D2XIMAGE - store one line of cross-sectional image;
+C
+C  RAMUTY.LIB
+C     RAMWRITE - write text on Ramtek;
+C
+C  Called by:  M2DISPLA
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE D2DISPLA(ERRTYPE)
+C
+      REAL          RTOPP,RBOT
+      INTEGER*4     ERRTYPE,N,SECTION,INUM,COL,ROW,F1,F2,F3,SIDE,SNUM
+      INTEGER*2     MAXCOUNT,MINCOUNT
+      LOGICAL*1     SUB,DIVIDE,SPLIT
+      CHARACTER*1   TEXT(100)
+      CHARACTER*100 STR
+      character*256 rcsheader
+C
+      EQUIVALENCE  (STR,TEXT)
+      INCLUDE 'spideram.inc'
+      DATA INUM,SIDE /1,0/
+      rcsheader = "$Header: /home/petsun4/ty7777/src/spideram/RCS/d2displa.f,v 1.7 1994/05/02 16:45:21 ty7777 Exp ty7777 $"
+C
+C  --------------------------------------------------------------
+C  Initialize parameters used to create this display
+C
+      ERRTYPE = 0
+      F1 = FILE(1)
+      F2 = FILE(2)
+      F3 = FILE(3)
+      SLICES = NMSLICES
+      SPLIT = .FALSE.
+      SUB    = .FALSE.
+      DIVIDE = .FALSE.
+      IF (COMPARE) THEN
+        IF (F2.NE.0 .AND. MULTFACT(F2).NE.0.0) SUB=.TRUE.
+        IF (F3.NE.0 .AND. MULTFACT(F3).NE.0.0) DIVIDE=.TRUE.
+      ELSE
+        ABSSCALE = .TRUE.
+      END IF
+      ROW = 0
+      COL = 0
+      SNUM = 0
+      CALL D2INIT(N,PETTNUM)
+C
+C  --------------------------------------------------------------
+C  If images are to be displayed with a common scale, then
+C  Get scale range (DMAX, DMIN).
+C
+      IF (.NOT.ABSRANGE .AND. .NOT.SEPSCALE) THEN
+        SECTION = DSECTION
+        MAXCOUNT = 0
+        MINCOUNT = 32767
+        DO 200 I=1,N
+          IF (ORIENT.EQ.'S') THEN
+            COL=SECTION
+            J1 = 1
+            J2 = SLICES
+          ELSE IF (ORIENT.EQ.'C') THEN
+            ROW=SECTION
+            J1 = 1
+            J2 = SLICES
+          ELSE
+            J1 = SECTION
+            J2 = SECTION
+          END IF
+C
+C  Assemble the image
+C
+          DO 100 J=J1,J2
+            CALL D2IMAGE(J,COL,ROW,SUB,DIVIDE,ERRTYPE)
+            IF (ERRTYPE.NE.0) RETURN
+            CALL D2MAXVAL(COL,ROW,SIDE)
+            MAXCOUNT = MAX0(MAXCOUNT,DMAX)
+            MINCOUNT = MIN0(MINCOUNT,DMIN)
+100       CONTINUE
+C
+          SECTION = SECTION + SECTSTEP
+200     CONTINUE
+C
+        DMAX = MAXCOUNT
+        IF (MAXCOUNT.GT.MINCOUNT) THEN
+          DMIN = MINCOUNT
+        ELSE
+          DMIN = 0
+        END IF
+      END IF
+C
+C  --------------------------------------------------------------
+C  Display all specified slices
+C
+      SECTION = DSECTION
+      DO 400 I=1,N
+C
+C  Get the next slice
+C
+        IF (ORIENT.EQ.'S') THEN
+          COL=SECTION
+          J1 = 1
+          J2 = SLICES
+        ELSE IF (ORIENT.EQ.'C') THEN
+          ROW=SECTION
+          J1 = 1
+          J2 = SLICES
+        ELSE
+          J1 = SECTION
+          J2 = SECTION
+        END IF
+C
+C  Assemble the image
+C
+        MAXCOUNT = 0
+        DO 300 J=J1,J2
+          CALL D2IMAGE(J,COL,ROW,SUB,DIVIDE,ERRTYPE)
+          IF (ERRTYPE.NE.0) RETURN
+          IF (.NOT.ABSRANGE .AND. SEPSCALE) THEN
+            CALL D2MAXVAL(COL,ROW,SIDE)
+            MAXCOUNT = MAX0(MAXCOUNT,DMAX)
+          END IF
+          IF (ORIENT.NE.'T') CALL D2XIMAGE(J,COL,ROW)
+300     CONTINUE
+C
+C  --------------------------------------------------------------
+C     Scale the image for this slice
+C
+        IF (ABSRANGE) THEN
+          DMAX = ABSMAX/SCALER(1)
+        ELSE IF (SEPSCALE) THEN
+          DMAX = MAXCOUNT
+        END IF
+        CALL D2SCALER(COL,ROW,SIDE)
+C
+C     Display it on the Ramtek
+C
+        IF (SMOOTH .AND. MAG.GT.1) THEN
+          IF (ORIENT.EQ.'T') THEN
+            CALL D2SMOOTH(SPLIT)     ! Interpolated Transverse Image
+          ELSE
+            CALL D2SMOX              ! Interpolated Cross-sectional Image
+          END IF
+        ELSE
+          IF (ORIENT.EQ.'T') THEN
+            CALL D2RAW               ! Uninterpolated Transverse Image
+          ELSE
+            CALL D2RAWX              ! Uninterpolated Cross-sectional Image
+          END IF
+        END IF
+C
+C  --------------------------------------------------------------
+C     Write a Slice Number on Rows of 7 Images
+C     (stereotactic coordinates for images with SLICES >= 49)
+C
+        IF (MAG.LE.3) THEN
+          IF (SLICES .GE. 49) THEN
+            IF (ORIENT .EQ. 'T') THEN
+              SNUM = 2 * (ZORIGIN - SECTION)
+            ELSE IF (ORIENT.EQ.'S') THEN
+              SNUM = NINT(2.*(XMIDLINE-FLOAT(SECTION)))
+            ELSE IF (ORIENT.EQ.'C') THEN
+              SNUM = 2.*(YCORLINE-SECTION)
+            ELSE
+              SNUM = SECTION
+            END IF
+          ELSE
+            SNUM = SECTION
+          END IF
+          STR = ' '
+          WRITE(STR(1:3),8100) SNUM
+          STR(4:4) = '~'
+          IF (MAG.EQ.1) THEN
+            CALL RAMWRITE(XORG+94,YORG+118,1,1,0,FIXPLANE,
+     2                  RMD,TEXT,FONT2C)
+          ELSE IF (MAG.EQ.2) THEN
+            CALL RAMWRITE(XORG+135,YORG+160,1,1,0,FIXPLANE,
+     2                  RMD,TEXT,FONT2C)
+          ELSE IF (MAG.EQ.3) THEN
+            CALL RAMWRITE(XORG+235,YORG+250,1,1,0,FIXPLANE,
+     2                  RMD,TEXT,FONT2C)
+          END IF
+        END IF
+8100    FORMAT (I3)
+C
+C  --------------------------------------------------------------
+C     Write Slice Maximum on Images when scaling to slice max
+C
+        IF (MAG.LE.3 .AND. SEPSCALE) THEN
+C
+C  Get value to write (max of RTOPP and RBOT)
+C
+          RTOPP = 0.0
+          RBOT = 0.0
+          IF (ABSSCALE) THEN
+            IF (ABSRANGE) THEN
+              RTOPP = ABSMAX
+            ELSE
+              RTOPP = FLOAT(DMAX)*SCALER(1)
+            END IF
+            RBOT = 0.0
+          ELSE
+            IF (SCALEPOS.EQ.0) THEN
+              IF (ABSRANGE) THEN
+                RTOPP = RELMAX
+              ELSE
+                RTOPP = FLOAT(MAX0(DMAX,IABS(DMIN)))*SCALER(1)
+              END IF
+              RBOT = -RTOPP
+            ELSE IF (SCALEPOS.EQ.1) THEN
+              IF (ABSRANGE) THEN
+                RTOPP = RELMAX
+              ELSE
+                RTOPP = FLOAT(DMAX)*SCALER(1)
+              END IF
+              RBOT = 0.0
+            ELSE IF (SCALEPOS.EQ.-1) THEN
+              IF (ABSRANGE) THEN
+                RBOT = -ABS(RELMAX)
+              ELSE
+                RBOT = FLOAT(DMIN)*SCALER(1)
+              END IF
+              RTOPP = 0.0
+            END IF
+          END IF
+          RMAX = AMAX1(ABS(RTOPP),ABS(RBOT))
+C
+          STR = ' '
+          IF (ABS(RMAX).GE.100.0) THEN
+            WRITE(STR(1:80),8200) NINT(RMAX)
+          ELSE IF (ABS(RMAX).GE.10.0) THEN
+            WRITE(STR(1:80),8201) RMAX
+          ELSE IF (ABS(RMAX).GE.1.0) THEN
+            WRITE(STR(1:80),8202) RMAX
+          ELSE
+            WRITE(STR(1:80),8203) RMAX
+          END IF
+          L = INANYR(STR,' ') + 1
+          STR(L:L) = '~'
+          IF (MAG.EQ.1) THEN
+            CALL RAMWRITE(XORG+40,YORG+118,1,1,0,
+     2                   FIXPLANE,RMD,TEXT,FONT2C)
+          ELSE IF (MAG.EQ.2) THEN
+            CALL RAMWRITE(XORG+70,YORG+160,1,1,0,
+     2                   FIXPLANE,RMD,TEXT,FONT2C)
+          ELSE IF (MAG.EQ.3) THEN
+            CALL RAMWRITE(XORG+120,YORG+250,1,1,0,
+     2			FIXPLANE,RMD,TEXT,FONT2C)
+          END IF
+        END IF
+8200    FORMAT(I5)
+8201    FORMAT(F6.1)
+8202    FORMAT(F6.2)
+8203    FORMAT(F6.3)
+C
+C  --------------------------------------------------------------
+C     Draw the Color Bar
+C
+        IF (MAG.EQ.4 .OR. MAG.EQ.5) CALL D2BAR
+C
+C  --------------------------------------------------------------
+C    Write Labels on the Display
+C    (annotation for MAG=2 or 3 is included in D2BARLAB)
+C
+        IF (ANNOTATE) THEN
+          IF (MAG.EQ.7) THEN
+            CALL D2LABEL4
+          ELSE IF (MAG.EQ.4 .OR. MAG.EQ.5) THEN
+            CALL D2LABEL2(SECTION)
+          END IF
+        END IF
+C
+C  --------------------------------------------------------------
+C  Initial display location values for next image
+C    (Note: values of XORG, YORG, XBAR, YBAR should correspond
+C        with those in D2INIT)
+C
+        IF (I.LT.N) THEN
+          IF (MAG.EQ.1) THEN
+            IF (MOD(I,7).EQ.0) THEN
+              XORG = 0
+              YORG = YORG + 128
+            ELSE
+              XORG = XORG+128
+            END IF
+          ELSE IF (MAG.EQ.2) THEN
+            IF (MOD(I,7).EQ.0) THEN
+              CALL D2BAR
+              XORG = 0
+              YORG = YORG + 224
+              YBAR = YORG + 180
+            ELSE
+              XORG = XORG+164
+            END IF
+          ELSE IF (MAG.EQ.3) THEN
+            IF (MOD(I,4).EQ.0) THEN
+              CALL D2BAR
+              XORG = 48
+              YORG = YORG + 298
+              YBAR = YORG + 264
+            ELSE
+              XORG = XORG+285
+            END IF
+          ELSE IF (MAG.EQ.4 .OR. MAG.EQ.5) THEN
+            IF (DLOC+I.EQ.2) THEN
+              XORG = 530
+              YORG = 0
+            ELSE IF (DLOC+I.EQ.3) THEN
+              XORG = 0
+              YORG = 448
+            ELSE
+              XORG = 530
+              YORG = 448
+            END IF
+            IF (MAG.EQ.4) THEN
+              XBAR = XORG + 465
+              YBAR = YORG + 40
+            ELSE
+              XBAR = XORG + 438
+              YBAR = YORG + 30
+            END IF
+          END IF
+          SECTION = SECTION + SECTSTEP
+        END IF
+C
+400   CONTINUE
+C  --------------------------------------------------------------
+C
+      CALL D2BAR
+C
+      RETURN
+      END
+@
+
+
+1.7
+log
+@Added processing for ZORIGIN.
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d94 1
+a94 1
+      rcsheader = "$Header$";
+@
+
+
+1.6
+log
+@Added Processing for images with more than 49 slices.
+@
+text
+@d1 5
+a5 2
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+d27 1
+d91 1
+a91 1
+      rcsheader = "$Id: d2displa.f,v 1.5 1994/01/10 17:21:14 ty7777 Exp ty7777 $"
+d225 1
+a225 1
+              SNUM = 2 * (31 - SECTION)
+@
+
+
+1.5
+log
+@Updated for displaying images with more than 49 slices.
+@
+text
+@d22 2
+d87 1
+a87 1
+      rcsheader = "$Id: d2displa.f,v 1.4 1993/10/04 21:55:32 tom Exp ty7777 $"
+d216 1
+a216 1
+C     (stereotactic coordinates for images with SLICES = 49)
+d219 3
+a221 3
+          IF (SLICES.EQ.49) THEN
+            IF (ORIENT.EQ.'T') THEN
+              SNUM = 2*(31-SECTION)
+@
+
+
+1.4
+log
+@added rcsheader
+@
+text
+@d20 1
+d85 1
+a85 1
+      rcsheader = "$Id$"
+@
+
+
+1.3
+log
+@04/23/92 by Tom Yang
+@
+text
+@d79 1
+d84 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

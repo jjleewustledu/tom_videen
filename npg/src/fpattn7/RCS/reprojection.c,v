@@ -1,0 +1,949 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	2006.10.09.20.12.36;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2004.02.16.15.22.16;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2001.11.27.16.52.56;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2001.11.23.19.09.14;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2001.11.20.15.54.50;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2001.10.26.19.00.51;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.10.24.18.16.19;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2001.10.17.21.44.11;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2001.10.16.20.58.59;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2001.10.15.14.01.58;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@developing version
+@
+
+
+1.10
+log
+@test for 962
+@
+text
+@/* $Log: reprojection.c,v $
+ * Revision 1.9  2004/02/16  15:22:16  tom
+ * Feb 2004
+ *
+ * Revision 1.8  2001/11/27  16:52:56  tom
+ * gets left/right correct
+ * uses 15 degree offset
+ * based on zoom
+ *
+ * Revision 1.7  2001/11/23  19:09:14  tom
+ * works well with geometric uncorrection for centered and offcenter phantom
+ *
+ * Revision 1.6  2001/11/20  15:54:50  tom
+ * tests on Nov 19 2001
+ *
+ * Revision 1.5  2001/10/26  19:00:51  tom
+ * pretty good without arc-correction for off-center and centered phantoms
+ *
+ * Revision 1.4  2001/10/24  18:16:19  tom
+ * pretty good without arc-correction
+ * */
+/* ===============================================================================
+ *  Module:     reprojection
+ *  Date:       Oct 2006
+ *  Author:     Tom Videen
+ *	Purpose:	Forward project line integrals of an image onto projections.
+ *	Coordinate system:
+ *		Pixel img[pln][1][1] in lies at upper left corner of the image.
+ *		The forward projection of the image at theta=0 sums along pixels lying
+ *			along a vertical path in the image, (i.e., for all i, img[pln][y][i]).
+ *		The resulting projection would lie above the image
+ *			(i.e., sino[p][j][0] lies above img[p+1][1][1]).
+ *		Increasing theta would rotate the displayed projection CCW.
+ *	OFFSET	 15.0			 15 degree rotational offset for 961
+ *	Z1SIZE	 0.440484		 pixsize with zoom=1 for 961
+ *	OFFSET   0.0             15 degree rotational offset for 962
+ *	Z1SIZE   0.514851        pixsize with zoom=1 for 962
+ * ===============================================================================
+ */
+#include <stdio.h>
+#include <math.h>
+#include <nrutil.h>
+#include <myvalues.h>
+
+#define	XOFF	 1.1				 /* offset of x-ctr of proj bin (empirically) */
+#define	YOFF	-1.0				 /* offset of y-ctr of proj bin (empirically) */
+
+int             reprojection (img, dim, pix, sino, numang, numray, numpln, binsize, offset, z1size)
+	float        ***img;			 /* image, indexed from 1 */
+	int             dim;			 /* x- y-dimensions in img */
+	double          pix;			 /* img pixel width (cm) */
+	float        ***sino;			 /* sinogram, indexed from 0 */
+	int             numray, numang, numpln;	 /* dimensions of sino */
+	double          binsize;		 /* sinogram bin width (cm) */
+	float           offset;			 /* rotational offset */
+	float           z1size;			 /* pixsize with zoom=1 (cm) */
+{
+	double          theta;			 /* projection angle (radians) */
+	double          phi;			 /* theta - PI/2 */
+	double          radoff;			 /* projection offset (radians) */
+	long            p;				 /* index to plane in img and sino */
+	long            x, y;			 /* indices to pixel in img */
+	long            j;				 /* index to angle in sino */
+	long            r;				 /* indices to ray in sino */
+	double          r0;				 /* real index to ray in sino from pixel center */
+	long            r1, r2;			 /* indices to rays in sino on either side of r0 */
+	double          rdist;			 /* dist from pixel ctr to proj bin ctr (cm) */
+	double          rmin;			 /* ray dist from rayctr to corner of pix (cm) */
+	double          rmax;			 /* ray dist from rayctr to far corner of pix (cm) */
+	double          rdif;			 /* rmax - rmin (cm) */
+	double          halfpix;		 /* pix/2 (cm) */
+	double          diag;			 /* full diagonal across pixel (cm) */
+	double          fdiag;			 /* fractional diagonal across pixel at r1, r2 (cm) */
+	double          emin;			 /* dist along pixel edge for central diagonal (cm) */
+	double          emax;			 /* max edge dist for diagonal intersecting pixel */
+	double          rayctr;			 /* offset for sub-bins in projection (bin) */
+	double          raydist;		 /* distance to pixel from rayctr (cm) */
+	double          xyctr;			 /* pixel coords of center of img */
+	double          xydist;			 /* distance to pixel from image xyctr (cm) */
+	double          xd, yd;			 /* x-,y-distance to pixel from image x-ctr (cm) */
+	double          alpha;			 /* angle between m and vertical line though img */
+	double          beta;			 /* angle between m and projection lines (rad) */
+	int             sy;				 /* sign of yd */
+	double          ru;
+	double          radius;
+	double          zoom;
+	double          x0, y0;
+
+	halfpix = pix / 2;
+	rayctr = (double) numray / 2;
+	xyctr = (double) (dim - 1) / 2.;
+	radoff = numang * offset / 180.;
+	zoom = z1size / pix;
+	x0 = XOFF / zoom;
+	y0 = YOFF / zoom;
+
+	fprintf (stdout, "%d %d %f %.1f\n", numang, numpln, radoff, offset);
+
+	for (j = 0; j < numang; j++) {
+		if (fmod ((double) j, (double) 4) == 0) {
+			(void) fputc ('.', stdout);
+			(void) fflush (stdout);
+		}
+		for (p = 0; p < numpln; p++)	 /* initialize projections for angle j */
+			for (r = 0; r < numray; r++)
+				sino[p][j][r] = 0;
+
+		theta = (double) (j + radoff) * M_PI / (double) numang;	/* in radians */
+		phi = theta - M_PI / 2;
+
+		if (theta == 0 || theta == M_PI / 2 || theta == M_PI) {	/* right angles */
+			diag = pix;
+			emin = 0;
+			emax = halfpix;
+			rmin = halfpix;
+			rmax = halfpix;
+		} else if (theta < 0) {
+			diag = pix / fabs (cos (theta));
+			emin = halfpix * fabs (tan (theta));
+			emax = halfpix + pix * fabs (tan (theta));
+			rmin = fabs (halfpix - emin) * fabs (cos (theta));
+			rmax = fabs (emax - emin) * fabs (cos (theta));
+		} else if (theta <= M_PI / 4) {
+			diag = pix / fabs (cos (theta));
+			emin = halfpix * fabs (tan (theta));
+			emax = halfpix + pix * fabs (tan (theta));
+			rmin = fabs (halfpix - emin) * fabs (cos (theta));
+			rmax = fabs (emax - emin) * fabs (cos (theta));
+		} else if (theta < M_PI / 2) {
+			diag = pix / fabs (sin (theta));
+			emin = halfpix / fabs (tan (theta));
+			emax = halfpix + pix / fabs (tan (theta));
+			rmin = fabs (halfpix - emin) * fabs (sin (theta));
+			rmax = fabs (emax - emin) * fabs (sin (theta));
+		} else if (theta <= 3 * M_PI / 4) {
+			diag = pix / fabs (cos (phi));
+			emin = halfpix * fabs (tan (phi));
+			emax = halfpix + pix * fabs (tan (phi));
+			rmin = fabs (halfpix - emin) * fabs (cos (phi));
+			rmax = fabs (emax - emin) * fabs (cos (phi));
+		} else if (theta < M_PI) {
+			diag = pix / sin (phi);
+			emin = halfpix / fabs (tan (phi));
+			emax = halfpix + pix / fabs (tan (phi));
+			rmin = fabs (halfpix - emin) * fabs (sin (phi));
+			rmax = fabs (emax - emin) * fabs (sin (phi));
+		} else if (theta <= 5 * M_PI / 4) {
+			diag = pix / fabs (cos (theta));
+			emin = halfpix * fabs (tan (theta));
+			emax = halfpix + pix * fabs (tan (theta));
+			rmin = fabs (halfpix - emin) * fabs (cos (theta));
+			rmax = fabs (emax - emin) * fabs (cos (theta));
+		} else
+			fprintf (stderr, "ERROR [reprojection]: theta = %.2f\n", theta);
+
+		rdif = rmax - rmin;
+
+		radius = binsize * 784. / (0.5 * M_PI);
+		for (y = 0; y < dim; y++) {
+			for (x = 0; x < dim; x++) {
+				xd = (x - xyctr + x0) * pix;
+				yd = (y - xyctr + y0) * pix;
+				sy = yd / fabs (yd);
+				xydist = sqrt (xd * xd + yd * yd);
+				alpha = asin (xd / xydist);
+				beta = theta + sy * alpha;
+				raydist = sy * xydist * sin (beta);
+/*
+ *	Without geometric correction:
+ * 			ru = raydist / binsize;
+ *	For geometric correction, bin is located along the arc at the detector radius
+ */
+				ru = asin (raydist / radius) * (radius / binsize);
+				r0 = rayctr + ru;
+				r1 = (int) r0 - 1;
+				r2 = r1 + 5;
+				for (r = r1; r < r2; r++) {
+					if (r >= 0 && r < numray) {
+						rdist = binsize * fabs (r - r0);
+						if (rdist <= rmin) {
+							for (p = 0; p < numpln; p++)
+								sino[p][j][r] += diag * img[p + 1][y + 1][x + 1];
+						} else if (rdist <= rmax) {
+							fdiag = (1 - (rdist - rmin) / rdif) * diag;
+							for (p = 0; p < numpln; p++)
+								sino[p][j][r] += fdiag * img[p + 1][y + 1][x + 1];
+						}
+					}
+				}
+			}
+		}
+	}
+	(void) fprintf (stdout, "\n");
+	return (OK);
+}
+@
+
+
+1.9
+log
+@Feb 2004
+@
+text
+@d2 3
+d24 1
+a24 1
+ *  Date:       Nov-2001
+d34 4
+d45 2
+a46 5
+#define OFFSET	 15.0			 /* 15 degree rotational offset for 961 */
+#define Z1SIZE	 0.440484		 /* pixsize with zoom=1 for 961 */
+#define XOFF	 1.1			 /* offset of x-center of projection bin */
+#define YOFF	-1.0			 /* offset of y-center of projection bin */
+								 /* offsets were determined empirically */
+d48 5
+a52 5
+int             reprojection (img, dim, pix, sino, numang, numray, numpln, binsize)
+	float        ***img;		 /* image, indexed from 1 */
+	int             dim;		 /* x- y-dimensions in img */
+	double          pix;		 /* img pixel width (cm) */
+	float        ***sino;		 /* sinogram, indexed from 0 */
+d54 3
+a56 1
+	double          binsize;	 /* sinogram bin width (cm) */
+d58 26
+a83 26
+	double          theta;		 /* projection angle (radians) */
+	double          phi;		 /* theta - PI/2 */
+	double          radoff;		 /* projection offset (radians) */
+	long            p;			 /* index to plane in img and sino */
+	long            x, y;		 /* indices to pixel in img */
+	long            j;			 /* index to angle in sino */
+	long            r;			 /* indices to ray in sino */
+	double          r0;			 /* real index to ray in sino from pixel center */
+	long            r1, r2;		 /* indices to rays in sino on either side of r0 */
+	double          rdist;		 /* dist from pixel ctr to proj bin ctr (cm) */
+	double          rmin;		 /* ray dist from rayctr to corner of pix (cm) */
+	double          rmax;		 /* ray dist from rayctr to far corner of pix (cm) */
+	double          rdif;		 /* rmax - rmin (cm) */
+	double          halfpix;	 /* pix/2 (cm) */
+	double          diag;		 /* full diagonal across pixel (cm) */
+	double          fdiag;		 /* fractional diagonal across pixel at r1, r2 (cm) */
+	double          emin;		 /* dist along pixel edge for central diagonal (cm) */
+	double          emax;		 /* max edge dist for diagonal intersecting pixel */
+	double          rayctr;		 /* offset for sub-bins in projection (bin) */
+	double          raydist;	 /* distance to pixel from rayctr (cm) */
+	double          xyctr;		 /* pixel coords of center of img */
+	double          xydist;		 /* distance to pixel from image xyctr (cm) */
+	double          xd, yd;		 /* x-,y-distance to pixel from image x-ctr (cm) */
+	double          alpha;		 /* angle between m and vertical line though img */
+	double          beta;		 /* angle between m and projection lines (rad) */
+	int             sy;			 /* sign of yd */
+d92 2
+a93 2
+	radoff = numang * OFFSET / 180.;
+	zoom = Z1SIZE / pix;
+d97 2
+d122 1
+a122 1
+			rmax = fabs (emax - emin) * fabs(cos (theta));
+d128 1
+a128 1
+			rmax = fabs (emax - emin) * fabs(cos (theta));
+d147 1
+a147 1
+		} else if (theta <= 5*M_PI / 4) {
+d152 2
+a153 2
+			rmax = fabs (emax - emin) * fabs(cos (theta));
+		} else 
+d158 1
+a158 1
+		radius = binsize*784./(0.5*M_PI);
+d173 1
+a173 1
+				ru = asin(raydist/radius)*(radius/binsize);
+@
+
+
+1.8
+log
+@gets left/right correct
+uses 15 degree offset
+based on zoom
+@
+text
+@d2 5
+@
+
+
+1.7
+log
+@works well with geometric uncorrection for centered and offcenter phantom
+@
+text
+@d2 3
+d33 5
+a37 4
+#define OFFSET	23				 /* rotational offset for 961 */
+#define XOFF	 1.02			 /* offset of x-center of projection bin */
+#define YOFF	-0.67			 /* offset of y-center of projection bin */
+								 /* offsets were selected empirically */
+d49 1
+d75 2
+d81 4
+d95 1
+a95 1
+		theta = (double) (j - OFFSET) * M_PI / (double) numang;	/* in radians */
+d134 6
+d148 2
+a149 2
+				xd = (x - xyctr + XOFF) * pix;
+				yd = (y - xyctr + YOFF) * pix;
+@
+
+
+1.6
+log
+@tests on Nov 19 2001
+@
+text
+@d2 3
+d13 1
+a13 1
+ *  Date:       Oct-2001
+d31 3
+a33 4
+#define XOFF	 0.95			 /* offset of x-center of projection bin */
+#define YOFF	-0.55			 /* offset of y-center of projection bin */
+								 /* offsets were empirically estimated */
+#define NUMDQ   196.0			 /* number of detector pairs per quadrant (784/4) */
+d47 1
+a47 1
+	long            k, j;		 /* index to angle in sino */
+d68 1
+a68 1
+	double          ru, ang;
+a69 1
+	double          rinc;
+a73 1
+	/* fprintf (stdout, "Center: projection=%.1f  image= %.1f\n", rayctr, xyctr); */
+d128 1
+a128 2
+		radius = binsize*784./(M_PI);
+		/* if (j == 0) printf ("rad = %f  %f\n", radius, radius/binsize); */
+a137 3
+
+				ru = raydist / binsize;
+				r0 = rayctr + ru;
+d139 4
+a142 2
+*	Above is with no geometric correction;
+*	For geometric correction, bin is located along the arc at the detector radius
+a144 3
+				rinc = fabs(asin(raydist/radius));
+*/
+
+a165 4
+/*
+							for (k = 0; k < 3; k++) {
+								p = 23 * k;
+*/
+@
+
+
+1.5
+log
+@pretty good without arc-correction for off-center and centered phantoms
+@
+text
+@d2 3
+d27 3
+a29 3
+#define OFFSET	14				 /* rotational offset for 961 */
+#define XOFF	0.4				 /* offset of x-center of projection bin */
+#define YOFF	-0.9			 /* offset of x-center of projection bin */
+d31 1
+d45 1
+a45 1
+	long            k,j;			 /* index to angle in sino */
+d66 3
+a68 1
+	int             nn;
+d73 1
+a73 1
+	fprintf (stdout, "Center: projection=%.1f  image= %.1f\n", rayctr, xyctr);
+d76 1
+a76 1
+		if (fmod ((double) j, (double) 4) == 0) {	/* progress indicator */
+d85 1
+a85 1
+		phi = theta - M_PI/2;
+d87 1
+a87 1
+		if (theta == 0 || theta == M_PI/2 || theta == M_PI) {	/* right angles */
+a92 1
+
+d94 1
+a94 1
+			diag = pix;
+d96 3
+a98 3
+			emax = halfpix + pix / fabs (tan (theta));
+			rmin = halfpix;
+			rmax = halfpix;
+d104 1
+a104 1
+			rmax = fabs (emax - emin) * fabs (cos (theta));
+d118 1
+a118 1
+			diag = pix / sin(phi);
+d123 2
+a124 7
+		} else {
+			diag = pix;
+			emin = halfpix * fabs (tan (theta));
+			emax = halfpix + pix / fabs (tan (theta));
+			rmin = halfpix;
+			rmax = halfpix;
+		}
+d128 2
+d138 1
+a138 1
+				raydist = sy * xydist * sin(beta);
+d140 10
+a149 1
+				r0 = rayctr + (raydist / binsize);
+d153 9
+a161 8
+					rdist = binsize * fabs (r0 - (double) r);
+					if (rdist <= rmin) {
+						for (k = 0; k < 3; k++) {
+							p = 23*k;
+							sino[p][j][r] += diag * img[p + 1][y + 1][x + 1];
+							if (r == 168)
+								if (k == 0 && sino[p][j][r] > 2.3)
+									nn = 1;
+a162 8
+					} else if (rdist <= rmax) {
+						fdiag = (1 - (rdist - rmin) / rdif) * diag;
+						for (k = 0; k < 3; k++) {
+							p = 23*k;
+							sino[p][j][r] += fdiag * img[p + 1][y + 1][x + 1];
+							if (k == 0 && sino[p][j][r] > 2.3)
+								nn = 1;
+						}
+d172 2
+a173 1
+						for (p = 0; p < numpln; p++)
+@
+
+
+1.4
+log
+@pretty good without arc-correction
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d26 2
+a27 1
+#define YOFF	-1.0				 /* offset of x-center of projection bin */
+d41 1
+a41 1
+	long            j;			 /* index to angle in sino */
+d62 1
+a129 1
+				sy = yd / fabs (yd);
+d132 1
+a133 1
+
+d135 2
+a136 5
+				if (theta < M_PI/2)
+					beta = theta + sy * alpha;
+				else 
+					beta = phi + sy * alpha;
+				raydist = -sy * xydist *sin(beta);
+d144 2
+a145 1
+						for (p = 0; p < numpln; p++)
+d147 4
+d153 2
+a154 1
+						for (p = 0; p < numpln; p++)
+d156 3
+d167 3
+@
+
+
+1.3
+log
+@looks good except for missing arc correction 10/17/2001
+@
+text
+@d1 1
+a1 10
+/* $Log: reprojection.c,v $
+ * Revision 1.2  2001/10/16  20:58:59  tom
+ * pretty good
+ *
+ * Revision 1.3  2001/10/04  17:38:17  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2001/09/26  17:31:38  tom
+ * *** empty log message ***
+ * */
+d6 1
+a6 3
+ *	Purpose:	Forward project an image onto projections.
+ *		Uses nearest neighbor interpolation on an interpolated projection
+ *		followed by integration to give a length-of-intersection algorithm.
+d12 1
+a12 1
+ *			(i.e., proj[p][0] lies above img[p+1][1][1]).
+a13 3
+ *	Reference: R. Schwinger, S. Cool and M.A. King, "Area Weighted
+ *		 convolutional interpolation for data reprojection in SPECT,"
+ *		 Med Phys 13(3) May/June 1986 pp. 350-353.
+a20 1
+#define NSUB	1000				 /* interpolation factor (number of subbins per bin */
+d23 1
+d25 5
+a29 5
+int             reprojection (img, dim, pixsize, sino, numang, numray, numpln, binsize)
+	float        ***img;			 /* image, indexed from 1 */
+	int             dim;			 /* x- y-dimensions in img */
+	float           pixsize;		 /* img pixel width (cm) */
+	float        ***sino;			 /* sinogram, indexed from 0 */
+d31 1
+a31 1
+	float           binsize;		 /* sinogram bin width */
+d33 25
+a57 26
+	double          theta;			 /* projection angle in radians */
+	double          krnl[1000];		 /* projection area */
+	double        **proj;			 /* fine projections bins for each plane */
+	double          val;			 /* pixel value */
+	long            i, j, p;		 /* indices for sino */
+	long            x, y;			 /* indices for img (using p for plane) */
+	long            q, r;			 /* indices for proj */
+	long            nbins;			 /* number of sub-bins in proj */
+	long            bctr;			 /* offset for sub-bins in proj */
+	double          subwid;			 /* sub-bin width in proj */
+	double          phi;			 /* equivalent angle */
+	double          halfpix;		 /* half-width of image pixel */
+	double          d0;				 /* full diagonal across pixel */
+	double          d1;				 /* partial diagonals across pixel */
+	double          dd;				 /* change in length of partial diagonals */
+	double          a;				 /* offset at edge of first diagonal */
+	double          aa;				 /* current offset at edge */
+	double          b;				 /* step offset at edge of other diagonals */
+	double          c;				 /* last step offset at edge */
+	double          ctr;			 /* coords of center of img */
+	double          n;				 /* coords of center of img */
+	double          h, m, xd, yd;	 /* distances locating dist from central pixel */
+	double          alpha, beta;	 /* angles locating distance from central pixel */
+	long            knum;			 /* number of elements in krnl */
+	double          s1, s2, s3;		 /* signs of terms */
+	double          scale;			 /* pixelsize / projection sub-bin size */
+d59 4
+a62 7
+	halfpix = pixsize / 2;
+	subwid = binsize / NSUB;
+	nbins = numray * NSUB;
+	scale = pixsize / subwid;
+	bctr = nbins / 2;
+	ctr = (double) (dim-1) / 2.;
+	printf ("Center  %d  %f\n", (int) bctr, ctr);
+a63 7
+	if ((proj = dmatrix (0, numpln - 1, 0, nbins - 1)) == NULL) {
+		(void) fprintf (stderr, "ERROR [reprojection]: Cannot malloc proj\n");
+		return (ERROR);
+	}
+
+/*	Kernel is symmetric about 45 degrees (pi/4) */
+
+d65 1
+a65 14
+		theta = (double) (j - OFFSET) * M_PI / (double) numang;
+		if (theta < 0)
+			phi = -theta;
+		else if (theta <= M_PI / 4)
+			phi = theta;
+		else if (theta <= M_PI / 2)
+			phi = M_PI / 2 - theta;
+		else if (theta <= 3 * M_PI / 4)
+			phi = theta - M_PI / 2;
+		else if (theta <= M_PI)
+			phi = M_PI - theta;
+		else
+			phi = theta - M_PI;
+		if (fmod ((double) j, (double) 4) == 0) {
+d69 3
+d73 2
+a74 1
+/*	Compute pixel projection bins for single pixel */
+d76 6
+a81 3
+		a = halfpix * tan (phi);
+		b = subwid / cos (phi);
+		d0 = pixsize / cos (phi);
+d83 30
+a112 15
+		i = 0;
+		aa = a;
+		while (aa <= halfpix) {
+			krnl[i] = d0;
+			knum = i;
+			i++;
+			aa = a + (i * b);
+		}
+		c = halfpix - aa;
+		if (sin (phi) == 0.) {
+			if (c > 0) {
+				krnl[i] = d0;
+				knum = i;
+				i++;
+			}
+d114 5
+a118 14
+			d1 = d0 - (b - c) / sin (phi);
+			if (c > 0) {
+				krnl[i] = d1;
+				knum = i;
+				i++;
+			}
+			dd = b / sin (phi);
+			d1 -= dd;
+			while (d1 >= 0) {
+				krnl[i] = d1;
+				knum = i;
+				d1 -= dd;
+				i++;
+			}
+d121 1
+a121 1
+/*	Initialize projections for current theta */
+d123 6
+a128 3
+		for (p = 0; p < numpln; p++)
+			for (r = 0; r < nbins; r++)
+				proj[p][r] = 0;
+d130 6
+a135 1
+/*	Locate projection bin in proj for each pixel in image */
+d137 12
+a148 42
+		for (x = 0; x < dim; x++) {
+			for (y = 0; y < dim; y++) {
+				xd = (x - ctr + XOFF);
+				yd = (y - ctr);
+				m = sqrt (xd * xd + yd * yd);
+
+				if (j <= numang / 2) {
+					if (yd > 0)
+						s1 = -1;
+					else
+						s1 = 1;
+				} else {
+					if (yd < 0)
+						s1 = -1;
+					else
+						s1 = 1;
+				}
+				if (xd * yd > 0)
+					s2 = -1;
+				else
+					s2 = 1;
+				if (xd < 0)
+					s3 = -1;
+				else
+					s3 = 1;
+
+				alpha = asin (s3 * xd / m);
+				beta = theta + s2 * alpha;
+				h = s1 * m * sin (beta);
+				q = bctr + h * scale;
+
+/*	Add pixel line-integral to the sub-bin projection (for each plane of image) */
+
+				for (p = 0; p < numpln; p++) {
+					val = img[p + 1][y + 1][x + 1];
+					proj[p][q] += val * krnl[0];
+					for (r = 1; r < knum; r++) {
+						if (r <= q && r < nbins - q) {
+							proj[p][q + r] += val * krnl[r];
+							proj[p][q - r] += val * krnl[r];
+						} else
+							printf ("out of range %d\n", (int) r);
+d153 1
+a153 21
+
+/*	Select appropriate subbin of proj for sino line-integrals */
+
+		for (p = 0; p < numpln; p++) 
+			for (i = 0; i < numray; i++)
+				sino[p][j][i] = 0;
+	
+		n = NSUB / 2;
+		for (p = 0; p < numpln; p++) {
+			for (i = 0; i < numray; i++) {
+				if (j > numang / 2) {
+					q = NSUB * i + n;
+					sino[p][j][i] = proj[p][q];
+				} else {
+					q =  nbins - 1 - (NSUB * i + n);
+					sino[p][j][i] = proj[p][q];
+				}
+			}
+		}
+	}					 /* end for angle theta (loop over j) */
+
+a154 1
+	free_dmatrix (proj, 0, numpln - 1, 0, nbins - 1);
+@
+
+
+1.2
+log
+@pretty good
+@
+text
+@d2 3
+d187 1
+a187 1
+				for (p = 23; p < numpln-23; p++) {
+d208 1
+a208 1
+		for (p = 23; p < numpln-23; p++) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 3
+d10 1
+a10 1
+ *  Date:       Mar-2000
+d16 1
+a16 1
+ *		Pixel img[pln][0][0] in lies at upper left corner of the image.
+d20 1
+a20 1
+ *			(i.e., proj[p][0] lies above img[p][0][0]).
+d32 1
+a32 1
+#define NSUB	15				 /* interpolation factor (number of subbins per bin) */
+d34 1
+d37 4
+a40 4
+	float        ***img;		 /* image, indexed from 1 */
+	int             dim;		 /* x- y-dimensions in img */
+	float           pixsize;	 /* img pixel width */
+	float        ***sino;		 /* sinogram, indexed from 0 */
+d42 1
+a42 1
+	float           binsize;	 /* sinogram bin width */
+d44 21
+a64 24
+	double          theta;		 /* projection angle in radians */
+	double          krnl[1000];	 /* projection area */
+	double        **proj;		 /* fine projections bins for each plane */
+	double          val;		 /* pixel value */
+	int             i, j, p;	 /* indices for sino */
+	int             x, y;		 /* indices for img (using p for plane) */
+	int             q, r;		 /* indices for proj */
+	int             k;			 /* index for krnl */
+	long            nbins;		 /* number of sub-bins in proj */
+	long            bctr;		 /* offset for sub-bins in proj */
+	double          swid;		 /* sub-bin width in proj */
+	double          area;		 /* pixel area */
+	double          phi;		 /* equivalent angle */
+	double          hw;			 /* half-width of image pixel */
+	double          d0;			 /* full diagonal across pixel */
+	double          d1, d2;		 /* partial diagonals across pixel */
+	double          dd;			 /* change in length of partial diagonals */
+	double          a;			 /* offset at edge of first diagonal */
+	double          aa;			 /* current offset at edge */
+	double          b;			 /* step offset at edge of other diagonals */
+	double          c;			 /* last step offset at edge */
+	double          e;			 /* fraction of last area with d0 as one diagonal */
+	double          g, v, w;	 /* remaining offset after last step offset at edge */
+	double          ctr;		 /* coords of center of img */
+d69 1
+a69 1
+	double          scale;			 /* pixelsize / subbin size */
+d71 2
+a72 2
+	hw = pixsize / 2;
+	swid = binsize / NSUB;
+d74 1
+a74 2
+	scale = pixsize / swid;
+	area = pixsize * pixsize * scale * scale;	 /* OMIT scale for transmission sinograms */
+d76 2
+a77 1
+	ctr = (double) (dim - 1) / 2.;
+d107 2
+a108 2
+		a = hw * tan (phi);
+		b = swid / cos (phi);
+d113 3
+a115 2
+		while (aa <= hw) {
+			krnl[i] = swid * d0 / area;
+d119 1
+a119 1
+		c = hw - aa + b;
+d122 2
+a123 1
+				krnl[i] = (c * d0) / area;
+d129 2
+a130 2
+				e = c * cos (phi);
+				krnl[i] = ((e * d0) + ((swid - e) * (d0 + d1) * 0.5)) / area;
+d134 5
+a138 5
+			d2 = d1 - dd;
+			while (d2 >= 0) {
+				krnl[i] = swid * (d1 + d2) * 0.5 / area;
+				d1 = d2;
+				d2 = d1 - dd;
+a140 8
+
+			if (d2 < 0) {
+				v = -d2 * cos (phi);
+				w = v * sin (phi);
+				g = swid + -w;
+				krnl[i] = g * d1 / area;
+				i++;
+			}
+a141 1
+		knum = i;
+d153 1
+a153 1
+				xd = (x - ctr);
+d182 1
+a182 1
+/*	Add pixel intensity to the sub-bin projection (for each plane of image) */
+d184 1
+a184 5
+/*
+				for (p = 0; p < numpln; p++) {
+				}
+*/
+					p = 23;
+d191 2
+a192 1
+						}
+d194 1
+d198 1
+a198 1
+/*	Integrate sub-bins for each bin of proj */
+d200 6
+a205 1
+		for (p = 0; p < numpln; p++) {
+d207 7
+a213 13
+				sino[p][j][i] = 0;
+				if (j > numang / 2)
+					for (k = 0; k < NSUB; k++)
+						if ((NSUB * i + k) < nbins)
+							sino[p][j][i] += proj[p][NSUB * i + k];
+						else
+							printf ("Over %d\n", NSUB * i + k);
+				else
+					for (k = 0; k < NSUB; k++)
+						if (nbins - (NSUB * i + k) >= 0)
+							sino[p][j][i] += proj[p][nbins - (NSUB * i + k)];
+						else
+							printf ("Under %d\n", NSUB * i + k);
+d216 1
+a216 1
+	}					 /* end for angle theta */
+@

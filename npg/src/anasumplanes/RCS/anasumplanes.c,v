@@ -1,0 +1,211 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.18.18.40;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.12.15.23.09.10;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: anasumplanes.c,v $
+ * Revision 1.1  2003/12/15  23:09:10  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			anasumplanes.c
+ *	Date:			Dec 2003
+ *	Author:			Tom Videen
+ *	Description:	Sum planes of an Analyze image
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anasumplanes/RCS/anasumplanes.c,v 1.1 2003/12/15 23:09:10 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <values.h>
+#include <myvalues.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_hdr;			 /* file for ANALYZE hdr */
+	FILE           *fd_img;			 /* file for ANALYZE image */
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	long            dim1, dim2, dim3; /* dimensions of image */
+	long            i,j,k,pln;
+	long            first, last;
+	long            num;
+	float          *imga;
+	float         **imgb;
+	float        ***image;
+	float           fmax, fmin, scl;
+
+	if (argc != 7) {
+		printf ("Usage: anasumplanes inhdr inimg outhdr outimg firstpln lastpln\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	first = atoi(argv[5]);
+	last = atoi(argv[6]);
+
+/*	Read image */
+
+	if ((fd_hdr = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anasumplanes]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anasumplanes]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fd_hdr);
+	num = dim1 * dim2 * dim3;
+	imga = (float *) calloc (num, sizeof (float));
+	if (imga == NULL) {
+		fprintf (stderr, "ERROR [anasumplanes]: Cannot calloc imga\n");
+		return (ERROR);
+	}
+	if ((fd_img = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anasumplanes]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((fread (imga, sizeof (float), num, fd_img)) != num) {
+		fprintf (stderr, "ERROR [anasumplanes]: Reading: %s\n", img1);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+
+	if ((image = f3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [anasumplanes]: Cannot malloc image\n");
+		return (NULL);
+	}
+	fmax = 0;
+	fmin = 0;
+	k = 0;
+	for (pln = 1; pln <= dim3; pln++) {
+		for (j = 1; j <= dim2; j++) {
+			for (i = 1; i <= dim1; i++) {
+				image[pln][j][i] = imga[k];
+				k++;
+				if (image[pln][j][i] > fmax)
+					fmax = image[pln][j][i];
+				if (image[pln][j][i] < fmin)
+					fmin = image[pln][j][i];
+			}
+		}
+	}
+	free (imga);
+	fprintf (stdout, "%s  Max = %.1f  Min = %.1f\n", img1, fmax, fmin);
+
+	if ((imgb = matrix (1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [anasumplanes]: Cannot malloc imgb\n");
+		return (NULL);
+	}
+	fmax = 0;
+	for (j = 1; j <= dim2; j++) {
+		for (i = 1; i <= dim1; i++) {
+			imgb[j][i] = 0;
+			for (pln = first; pln <= last; pln++)
+				imgb[j][i] += image[pln][j][i];
+			if (imgb[j][i] > fmax) 
+					fmax = imgb[j][i];
+		}
+	}
+	free (image);
+
+	if (fmax > (float) MAXSHORT)
+		scl = (float) MAXSHORT / fmax;
+	else
+		scl = 1;
+	printf ("Projection Max = %.1f  scaled by %.4f to %.1f\n", fmax, scl, scl*fmax);
+	imga = (float *) calloc (dim1 * dim2, sizeof (float));
+	if (imga == NULL) {
+		fprintf (stderr, "ERROR [anasumplanes]: Cannot calloc imga\n");
+		return (ERROR);
+	}
+	k = 0;
+	for (j = 1; j <= dim2; j++) {
+		for (i = 1; i <= dim1; i++) {
+			imga[k] = scl * imgb[j][i];
+			k++;
+		}
+	}
+	free (imgb);
+
+	if ((fd_hdr = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anasumplanes]: Unable to open %s\n", hdr2);
+		return (ERROR);
+	}
+	hdr.dime.dim[1] = dim1;
+	hdr.dime.dim[2] = dim2;
+	hdr.dime.dim[3] = 1;
+	hdr.dime.pixdim[1] = hdr.dime.pixdim[1];
+	hdr.dime.pixdim[2] = hdr.dime.pixdim[2];
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [anasumplanes]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+
+	if ((fd_img = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anasumplanes]: Unable to open %s\n", img2);
+		return (ERROR);
+	}
+	if ((fwrite (imga, sizeof (float), dim1 * dim2, fd_img)) != dim1 * dim2) {
+		fprintf (stderr, "ERROR [anasumplanes]: Error writing to: %s\n", img2);
+		return (ERROR);
+	}
+	(void) fclose (fd_img);
+	free (imga);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anasumplanes/RCS/anasumplanes.c,v 1.4 1999/12/16 18:03:08 tom Exp $";
+d128 4
+@

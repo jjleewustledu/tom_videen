@@ -1,0 +1,203 @@
+#!/bin/csh
+#	Name:	pvcorr
+#	Date:	09-Jun-99
+#	Author:	Tom Videen
+#	Use:	Coregister & Reslice CT to PET
+#			Partial Volume Correct PET
+#
+#	Input images:
+#		p5000ct_n.img	 - CT
+#		p5000brain_n.img - CT segmented to brain
+#		p5000tis_n.img	 - CT segmented to tissue
+#		rp5000ho1_g3.v	 - realigned PET
+#	Creates:
+#		p5000ct.img		 - corrected for gantry tilt
+#		p5000brain.img	 - 	"
+#		p5000tis.img	 - 	"
+#		rp5000ct.v		 - resliced to PET
+#		rp5000brain.v	 -	"
+#		rp5000mask.v	 - tissue image
+#		rp5000tis04.v	 - convolved tissue image
+#		rp5000tis16.v	 - 	"
+#		pvc5000ho1_g3.v	 - fully corrected image
+#		p5000_ct2ho1.air - alignment matrix (CT-to-PET)
+#		align_ct2pet.log - alignment fit
+#		Processing.log   - processing log
+# ==============================================================
+
+if ($#argv != 3) then
+    echo "Usage:  pvcorr pid ho step(1-5)"
+    echo " e.g.,  pvcorr p5000 ho1 1"
+    echo ""
+    echo "Steps must be run sequentially:"
+	echo "	1) Correct CT images for gantry tilt"
+	echo "	2) Coregister CT with PET"
+	echo "	3) Create tissue correction images"
+	echo "	4) Create PVC image on filtered PET (run for each ho)"
+	echo "	5) Delete temporary processing files"
+    exit
+endif
+
+set PID  = $1
+set HO   = $2
+set STEP = STEP$3
+
+set RID  = r$PID
+set FIL  = _g3
+set PNUM = `echo $PID | cut -c 2-`
+set PVID  = pvc$PNUM
+set AIR  = ${PID}_ct2${HO}
+set PHO  = ${PID}${HO}${FIL}.v
+set PHDR = ${PID}${HO}${FIL}.hdr
+set RHO  = ${RID}${HO}${FIL}.v
+set RHDR = ${RID}${HO}${FIL}.hdr
+set CT_N = ${PID}ct_n
+set BRAIN_N = ${PID}brain_n
+set TIS_N = ${PID}tis_n
+set CT = ${PID}ct
+set BRAIN = ${PID}brain
+set TIS = ${PID}tis
+
+set CTPATH  = /data/cvl/ct/ich/$PID
+set PETPATH = /data/cvl/ich/$PID
+set PVCPATH = $PETPATH/PVC_processing
+
+goto $STEP
+
+# ==============================================================
+STEP1:
+echo "STEP1: Correct CT images for gantry tilt"
+
+# gantry tilt should be in the Processing.log for this subject
+
+if (! -e $CTPATH/Processing.log) then
+	echo "ERROR [pvcorr]: Cannot find $CTPATH/Processing.log"
+	echo "Determine gantry tilt before proceeding."
+	exit (-1)
+else
+	set GT = `cat $CTPATH/Processing.log | grep GT | cut -f2- -d" "`
+	echo Gantry Tilt = $GT
+endif
+if (! -e $CTPATH/$CT_N.img) then
+	echo "ERROR [pvcorr]: Cannot find $CTPATH/$CT_N.img"
+	exit (-1)
+endif
+if (! -e $CTPATH/$BRAIN_N.img) then
+	echo "ERROR [pvcorr]: Cannot find $CTPATH/$BRAIN_N.img"
+	exit (-1)
+endif
+if (! -e $CTPATH/$TIS_N.img) then
+	echo "ERROR [pvcorr]: Cannot find $CTPATH/$TIS_N.img"
+	exit (-1)
+endif
+if (! -e $PETPATH/$RHO) then
+	if (! -e $PETPATH/$PHO) then
+		echo "ERROR [pvcorr]: Cannot find $PETPATH/$RHO"
+		exit (-1)
+	else
+		cp $PETPATH/$PHO $PETPATH/$RHO
+		cp $PETPATH/$PHDR $PETPATH/$RHDR
+	endif
+endif
+
+if (! -e $PVCPATH) mkdir $PVCPATH
+cd $PVCPATH
+
+# Correct CT images for gantry tilt; Check sagittal view of ${PID}ct.img
+# (Tilt angle in Processing.log or original CT files as GT)
+
+cttilt_all $CTPATH $PID $GT
+echo "Run:    vidi"
+echo "Image1: ${PID}ct.img"
+echo "   Orientation Sagittal: Check gantry tilt and alignment of CT slices"
+echo "   Orientation Coronal:  Check alignment of CT slices"
+echo "Then run: pvcorr $PID $HO 2"
+exit 0
+
+# ==============================================================
+STEP2:
+echo "STEP2: Coregister CT with PET"
+
+# Coregister CT with PET; then reslice CT images
+
+cd $PVCPATH
+if (! -e $RHO) cp $PETPATH/$RHO .
+if (! -e $RHDR) cp $PETPATH/$RHDR .
+align_ct2pet $PID $RID $HO
+
+# View PET (${RID}${HO}${FIL}.v) on CT (${RID}ct.v) to check alignment!
+
+echo "Run:    vidi"
+echo "Image1: ${RID}ct.v"
+echo "Image2: ${RID}${HO}${FIL}.v"
+echo "   Composite 2 on 1: Check alignment in all orientations"
+echo "Then run: pvcorr $PID $HO 3"
+exit 0
+
+# ==============================================================
+STEP3:
+echo "STEP3: Create tissue correction images"
+
+# Set all tissue pixels = 1000
+
+cd $PVCPATH
+maskand ${PID}tis ${PID}mask 1 1000 1000
+
+# Convolve tissue images to PET resolution
+
+imgconvol ${PID}mask.img ${PID}tis04.img 4.3
+imgconvol ${PID}mask.img ${PID}tis16.img 15.6
+
+# Reslice and convert the tissue images
+
+imgreslice ${PID}tis04 $AIR
+imgreslice ${PID}tis16 $AIR
+imgreslice ${PID}mask $AIR
+analyze2img ${RID}tis04 ${RID}tis04.v
+analyze2img ${RID}tis16 ${RID}tis16.v
+analyze2img ${RID}mask ${RID}mask.v
+echo "Run correction on a filtered image: pvcorr $PID $HO 4"
+exit 0
+
+# ==============================================================
+STEP4:
+echo "STEP4: Create PVC image on filtered PET"
+
+# Correct filtered PET image with convolved tissue image
+
+cd $PVCPATH
+if (! -e $RHO) cp $PETPATH/$RHO .
+if (! -e $RHDR) cp $PETPATH/$RHDR .
+img2analyze ${RID}${HO}${FIL}.v ra${PID}${HO}${FIL}
+pvc ra${PID}${HO}${FIL}.img ${RID}tis16.img ${RID}mask.img 1000
+analyze2img pvcra${PID}${HO}${FIL} ${PVID}${HO}${FIL}.v
+
+# Compare corrected and uncorrected images (processed as CBF)
+
+echo "Run:    vidi"
+echo "Image1: ${RID}${HO}${FIL}.v"
+echo "Image2: ${PVID}${HO}${FIL}.v"
+echo "Process as CBF and compare"
+echo "Then either run again on another ho: pvcorr $PID ho2 4"
+echo "or remove processing files with:     pvcorr $PID $HO 5"
+exit 0
+
+# ==============================================================
+STEP5:
+echo "STEP5: Delete temporary processing files"
+
+cd $PVCPATH
+rm ${PID}mask.???
+rm ${PID}tis04.???
+rm ${PID}tis16.???
+rm pvcra${PID}ho*${FIL}.???
+rm ra${PID}ho*${FIL}.???
+rm ${RID}brain.???
+rm ${RID}ct.???
+rm ${RID}mask.???
+rm ${RID}tis.???
+rm ${RID}tis04.???
+rm ${RID}tis16.???
+mv ${RID}* ..
+mv ${PVID}* ..
+

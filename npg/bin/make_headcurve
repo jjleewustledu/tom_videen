@@ -1,0 +1,113 @@
+#!/bin/csh
+#   Name:   make_headcurve
+#   Author: Tom Videen
+#   Date:   Nov 2007
+#   Intent: View time-activity curve and determine frames to sum 
+#   	Activity plotted as mean counts/pixel/sec.
+
+if ($#argv != 6) then
+	echo "Usage:  make_headcurve PID tracer scan  X Y Z"
+	echo " e.g.,  make_headcurve p7000 ho 1 64 56 22"
+	exit 1
+endif
+
+set PID = $1
+set TRACER = $2
+set SCN = $3
+set X = $4
+set Y = $5
+set Z = $6
+
+set DIAMETER = 80
+set PREFIX = `echo $PID | cut -c1`
+set SUBJ   = `echo $PID | cut -c2-`
+set FNAME = $PID$TRACER$SCN
+set IN    = $FNAME.v
+set LST   = $FNAME.lst
+set PRM   = $FNAME.prm
+set REG   = $FNAME.reg
+set RGT   = $FNAME.rgt
+set PLT   = $FNAME.plt
+set DURA  = $FNAME.duration
+set CNTS  = $FNAME.cnts
+set TMP   = make_headcurve$$.tmp
+
+if (! -e $IN) then
+	echo "ERROR [make_headcurve]: missing $IN"
+	exit 1
+endif
+
+# Compare choice of Z to image size
+
+set PLANE_SEP = `imghdr $IN | grep Plane_separation | cut -f2 -d= | cut -f1 -dc`
+set NPLANES = `imghdr $IN | grep slices | cut -f1 -ds`
+set RADIUS = `echo $DIAMETER / 20 / $PLANE_SEP | bc`
+set MAX_Z = `echo $NPLANES - $RADIUS - 1 | bc`
+set MIN_Z = `echo $RADIUS + 2 | bc`
+if ($Z < $MIN_Z) then
+    echo ">>> ================================================================================" 
+	echo ">>> WARNING: Z-coordinate may be too low and place the VOI partly outside the image"
+	echo ">>>          Z should be between $MIN_Z and $MAX_Z"
+    echo ">>> ================================================================================" 
+else if ($Z > $MAX_Z) then
+    echo ">>> ================================================================================" 
+	echo ">>> WARNING: Z-coordinate may be too high and place the VOI partly outside the image"
+	echo ">>>          Z should be between $MIN_Z and $MAX_Z"
+    echo ">>> ================================================================================" 
+endif
+
+imgfrms $IN | cut -c1-3 >! $TMP
+set FIRST = `head -5 $TMP | tail -1`
+set LAST  = `tail -1 $TMP`
+set NFRMS = `echo $LAST - $FIRST + 1 | bc`
+set MISSING = `echo $FIRST - 1 | bc`
+echo "$IN    Frames $FIRST to $LAST"
+
+# Create lst, prm, and reg files:
+
+echo "$SUBJ $SCN" >! $LST
+
+echo "species:    $PREFIX"	>! $PRM
+echo "tracer:     $TRACER"	>> $PRM
+echo "extension:  v"		>> $PRM
+echo "imgfilter:  none"		>> $PRM
+echo "voi:        new_sphere $DIAMETER" >> $PRM
+
+echo "30  voifile"                  >! $REG
+echo "center of brain for $IN"      >> $REG
+echo "1"                            >> $REG
+echo "center_of_brain   $X  $Y  $Z" >> $REG
+
+echo 0 >! $TMP
+chklist_nosxr $PRM $LST 1
+voistat $PRM $LST $RGT $REG < $TMP
+
+set SIZE = `wc -l $RGT | cut -f1 -d$PREFIX`
+set NN = `echo $SIZE - 2 | bc`
+tail -$NN $RGT | head -$NFRMS | cut -c14-24 >! $DURA
+tail -$NN $RGT | head -$NFRMS | cut -c25-40 >! $CNTS
+set DURATION = `cat $DURA`
+set COUNTS = `cat $CNTS`
+
+unalias rm
+if (-e $PLT) rm $PLT
+touch $PLT
+set i = 1
+while ($i <= $NFRMS)
+	set MEAN = `echo $COUNTS[$i] / $DURATION[$i] | bc -l`
+	echo $MEAN | cut -c1-12 >> $PLT
+	@ i++
+end
+
+set STRING = "$DIAMETER-mm sphere at $X,$Y,$Z"
+cos_plot $PLT $FIRST $LAST $FNAME.v $STRING
+
+rm $LST
+rm $PRM
+rm $RGT
+rm $REG
+rm $DURA
+rm $CNTS
+rm $TMP
+rm idl.ps
+

@@ -1,0 +1,341 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.14.19;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      TABGEN6.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         01-Sep-88
+C  Written For:  PETT VI Reconstruction
+C                                                                                
+C  Intent:                                                                       
+C     Create binning table for image reconstruction.                             
+C     See TAB6ANEW.FIL for output file structure.                                
+C                                                                                
+C     Knowing the detector radius and wobble radius dimensions,                  
+C     for each bank pair, detector-detector pair, and wobble position,           
+C     compute the profile angle, bin, and weighting factor required to           
+C     construct PETT VI profile data given a raw data file.                      
+C                                                                                
+C     The table created by this program is read and used by the program          
+C     BINPROF to bin raw PETT VI data into profiles.  Changes in this            
+C     program should therefore be checked against BINPROF.FTN.                   
+C     It is also used by ATENPROF to create transmissions profiles from          
+C     a reconstructed transmissions image.                                       
+C                                                                                
+C  History:                                                                      
+C     This program was reconstructed 31-Mar-88 by Tom Videen as TABGEN6A         
+C     using code supplied by Joanne Markham.  TABGEN6A was believed              
+C     to be equivalent to the original (ca. 1981) programs GEN6LK and MERGE6.
+C     Its output was compared with the existing TAB6A table dating 8/16/85
+C     and found to be identical in the angles and bins.  For unknown reasons
+C     it differs in the scaling factors (records 164 to end of table).
+C     As the scaling factors depend entirely on the bins + weights, this
+C     makes no sense since the first 163 records of the output file is
+C     identical to TAB6A.  However, since the factors that differ are all
+C     in bins 1 or 110, this should have no significant effect on
+C     reconstructed images.
+C                                                                          
+C     TABGEN6A was modified 24-May-88 by TOV to assign a fixed
+C        value to WOBRADIUS instead of allowing it to vary with RADIUS.
+C        The output file was also altered to eliminate packing of
+C        integers.  Weighting factors and scaling factors are now
+C        REAL*4 instead of INTEGER*2.  The output table is NOT
+C        COMPATIBLE with BINAL and must be used with BINPROF.
+C     Additional explanatory notes added by TOV 01-Sep-88.
+C                                                          
+C  Logical Units:
+C     1 = output table to be used in binning program (FILE)
+C     4 = user input  (USERIN)
+C     5 = user output (USEROUT)
+C                                                          
+C  Uses Subroutines:                                                          
+C                                                          
+C  TERMINAL.LIB library of terminal I/O primitives
+C     GETREAL                                                          
+C                                                          
+C  Instructions for Linking:
+C     LINK7T TABGEN6                                                          
+C                                                          
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C                                                          
+      PROGRAM TABGEN6                                                          
+C                                                          
+      INTEGER*4     PB(6)        ! parameter block used in SYSIO
+      INTEGER*4     IOREAD       ! SYSIO read sequential binary wait
+      INTEGER*4     IOWRITE      ! SYSIO write sequential binary wait
+      INTEGER*4     FILE         ! logical unit assigned to output file
+      INTEGER*4     USERIN       ! logical unit assigned for user input
+      INTEGER*4     USEROUT      ! logical unit assigned for user output
+C                                                          
+      INTEGER*4     BANKPAIR     ! bank pair (1-18)
+      INTEGER*4     DETPAIR      ! detector pair (1-64)
+      INTEGER*4     WOBBLE       ! wobble position (number) (1-16)
+      INTEGER*4     BANK1(18)    ! no. of 1st bank of a bankpair (BANKPAIR)
+      INTEGER*4     BANK2(18)    ! no. of 2nd bank of a bankpair (BANKPAIR)
+      INTEGER*4     ANGBYTES     ! no. of bytes to write for ANGNUM
+      INTEGER*4     BINBYTES     ! no. of bytes to write for BIN
+      INTEGER*4     FACBYTES     ! no. of bytes to write for FACTOR
+      INTEGER*4     WTBYTES      ! no. of bytes to write for WEIGHT
+      INTEGER*4     ANG          ! local variable for ANGNUM(i)
+      INTEGER*4     BN           ! local variable for BIN(i)
+      INTEGER*4     J,K          ! local variables in loops
+      INTEGER*4     ANGNUM(64)   ! angle number of profile (1-72) (DETPAIR)
+C                                                                                
+      INTEGER*2     BIN(16,64)   ! profile bin number (1-110) (WOBBLE,DETPAIR)
+C                                                          
+      REAL*4        WEIGHT(16,64)! weighting factor (WOBBLE,DETPAIR)
+      REAL*4        WT           ! local variable for WEIGHT(i,j)
+      REAL*4        FACTOR(110,72) ! normalization factor (BIN,ANGNUM)
+      REAL*4        ANGLE(18,64) ! angle of profile (degrees)(BANKPAIR,DETPAIR)
+C                                  (0.0 to 177.5 in increments of 2.5)
+      REAL*4        DETANGLE1    ! angle of first detector of pair (0.-360.)
+      REAL*4        DETANGLE2    ! angle of second detector of pair (0.-360.)
+      REAL*4        D1ANGLE      ! angle of first detector of pair with respect
+C                                  to the 1st detector of the bank (0.-35.)
+      REAL*4        D2ANGLE      ! angle of second detector of pair with respect
+C                                  to the 1st detector of the bank (0.-35.)
+      REAL*4        BANK1ANGLE   ! angle of 1st detector of 1st bank of  pair
+      REAL*4        BANK2ANGLE   ! angle of 1st detector of 2nd bank of pair
+      REAL*4        WOBANGLE1    ! initial wobble position (0.-360. degrees)
+      REAL*4        WOBANGLE2    ! final wobble position (0.-360. degrees)
+      REAL*4        PHI1         ! diff. between ANGLE and WOBANGLE1 (radians)
+      REAL*4        PHI2         ! diff. between ANGLE and WOBANGLE2 (radians)
+      REAL*4        DELTAPHI     ! diff. between PHI1 and PHI2 (radians)
+      REAL*4        DPRIME(18,64)! component of DISTANCE with no wobble
+C                                  (BANKPAIR,DETPAIR)
+      REAL*4        DIST(16,64)  ! total distance of profile from origin
+C                                  (WOBBLE,DETPAIR)
+      REAL*4        DISTANCE     ! local variable for DIST for a given
+C                                   detector-detector wobble position
+      REAL*4        RADIUS       ! detector radius from center of scanner (mm)
+      REAL*4        WOBRADIUS    ! radius of wobble (mm)
+      REAL*4        PROFSEP      ! distance between centers of adjacent profiles
+      REAL*4        BANKSEP      ! distance between banks (radians)
+      REAL*4        DETSEP       ! distance between detectors (radians)
+      REAL*4        THETA        ! temporary for ANGLE (-180. to +360.)
+      REAL*4        DEGTORAD     ! conversion factor: degrees to radians
+C
+      CHARACTER*80  Q            ! query to user
+C
+      COMMON /USRIO/ USERIN,USEROUT
+C
+C Changed userin and userout from 4->5 and 5->6 when porting to HP  KMG 4-11-91
+C      DATA FILE,USERIN,USEROUT /1,4,5/
+      DATA FILE,USERIN,USEROUT /1,5,6/
+      DATA IOWRITE,IOREAD  /56,88/
+      DATA WOBRADIUS /12.50/     ! shop specs from John Hood,Sr. 11-Apr-88
+      DATA PROFSEP   /2.5/
+      DATA BANKSEP   /40.0/
+      DATA DETSEP    /5.0/
+      DATA BANK1 /1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,5,5,6/
+      DATA BANK2 /4,5,6,7,5,6,7,8,6,7,8,9,7,8,9,8,9,9/
+C
+C  Initializations
+C
+      ANGBYTES = 64*4       ! 64 det-det pairs * 4 bytes
+      BINBYTES = 16*64*2    ! 16 wobbles * 64 det-det pairs * 2 bytes
+      WTBYTES  = 16*64*4    ! 16 wobbles * 64 det-det pairs * 4 bytes
+      FACBYTES = 72*110*4   ! 72 angles * 110 bins * 4 bytes
+C
+      DEGTORAD = 2.0*3.14159/360.0   ! 2 pi / 360 degrees
+C
+      WRITE(USEROUT,*) '*** TABGEN6  01-Sep-88  {create PETT VI ',
+     2  'profile binning table}'
+C
+C  The effective radius of 290 mm is the same as that used in the
+C  binning table (TAB6A) used in the original PETT VI reconstruction
+C  stream (1981-1988).  Some data suggests that it should be greater
+C  (more like 305 mm), but 290 is used for consistency with the
+C  existent reconstructed images.
+C  The radius to the detector crystal faces is 285 mm and the crystals
+C  are 65 mm long.
+C
+      RADIUS = 290.
+      Q = 'Effective detector radius (mm)'
+      CALL GETREAL(Q,RADIUS,285.,350.)
+C
+C  Compute ANGLE, DPRIME for all bankpairs and detector-detector pairs
+C
+      DO 100 BANKPAIR=1,18
+        BANK1ANGLE = (BANK1(BANKPAIR)-1)*BANKSEP
+        BANK2ANGLE = (BANK2(BANKPAIR)-1)*BANKSEP
+        DO 90 J=1,8
+          D1ANGLE = (J-1)*DETSEP
+          DETANGLE1 = D1ANGLE + BANK1ANGLE
+          DO 80 K=1,8
+            DETPAIR = (J-1)*8 + K
+            D2ANGLE = (K-1)*DETSEP
+            DETANGLE2 = BANK2ANGLE +  D2ANGLE
+            THETA = (DETANGLE1-DETANGLE2)*0.5 + 90.
+            DPRIME(BANKPAIR,DETPAIR) = RADIUS * SIN(DEGTORAD*THETA)
+            THETA = (DETANGLE1+DETANGLE2)*0.5 - 90.
+            IF (THETA.LT.0.) THEN
+              THETA = THETA + 180.
+              DPRIME(BANKPAIR,DETPAIR) = -DPRIME(BANKPAIR,DETPAIR)
+            ELSE IF (THETA.GE.180) THEN
+              THETA = THETA - 180.
+              DPRIME(BANKPAIR,DETPAIR) = -DPRIME(BANKPAIR,DETPAIR)
+            END IF
+            ANGLE(BANKPAIR,DETPAIR) = THETA
+80        CONTINUE
+90      CONTINUE
+100   CONTINUE
+C
+C  Get WOBANGLE1, WOBANGLE2 and compute DIST
+C  (DPRIME + wobble contribution to profile distance)
+C
+      DELTAPHI = 22.5*DEGTORAD
+      DO 500 BANKPAIR=1,18
+        DO 300 WOBBLE=1,16
+          WOBANGLE1 = 180. + (WOBBLE-1)*22.5
+          IF (WOBANGLE1.GT.360.) WOBANGLE1 = WOBANGLE1-360.
+          WOBANGLE2 = WOBANGLE1 + 22.5
+          IF (WOBANGLE2.GT.360.) WOBANGLE2 = WOBANGLE2-360.
+          DO 200 DETPAIR=1,64
+            THETA = ANGLE(BANKPAIR,DETPAIR)
+            PHI1 = DEGTORAD*(WOBANGLE1-THETA)
+            PHI2 = DEGTORAD*(WOBANGLE2-THETA)
+            DIST(WOBBLE,DETPAIR) = DPRIME(BANKPAIR,DETPAIR) +
+     2         WOBRADIUS*(COS(PHI1)-COS(PHI2))/DELTAPHI
+200       CONTINUE
+300     CONTINUE
+C
+        DO 450 DETPAIR=1,64
+C
+C  Assign angles 0.0 to 177.5 to ANGNUM 1-72:
+C     Want angle 0.0 --> ANGNUM = 1
+C     Want angle 2.5 --> ANGNUM = 2
+C        . . .
+C     Want angle 177.5 --> ANGNUM = 72
+C
+          ANGNUM(DETPAIR) = NINT(ANGLE(BANKPAIR,DETPAIR)/2.5) + 1
+C
+C  [Internal check for condition which should never occur]
+C
+          IF (ANGNUM(DETPAIR).LT.1 .OR. ANGNUM(DETPAIR).GT.72)
+     2      WRITE(USEROUT,*) '*** ERROR Angle = ',ANGNUM(DETPAIR),
+     3      ' for BP = ',BANKPAIR,'  DP = ',DETPAIR
+C
+          DO 440 WOBBLE=1,16
+            DISTANCE = DIST(WOBBLE,DETPAIR)
+C
+C  Reconstructed image is 270.0 mm in diameter.
+C  Max. distance is half this plus half a profile width.
+C
+            IF (ABS(DISTANCE).LT.136.25) THEN
+C
+C  Shift distances -136.25 to 136.25 to -1.25 to 271.25
+C
+              DISTANCE = DISTANCE + 135. + PROFSEP*0.5
+C
+C  1 is added as bins of interest range from 2-109.
+C  Bins 1 and 110 are just outside the 270 mm diameter.
+C  (i.e., Bin 1 = -1.25 to 0. and Bin 110 = 270. to 271.25)
+C
+              BN = INT(DISTANCE/PROFSEP) + 1
+C
+C  This operation performs a triangular weighting between adjacent bins.
+C
+              WEIGHT(WOBBLE,DETPAIR) = (BN*PROFSEP-DISTANCE)/PROFSEP
+C
+C  [Internal check for condition which should never occur]
+C
+              IF (WEIGHT(WOBBLE,DETPAIR).LE.0.0)
+     2          WRITE(USEROUT,*) '*** ERROR Weight = ',
+     3          WEIGHT(WOBBLE,DETPAIR),' for BP = ',BANKPAIR,
+     4          '  DP = ',DETPAIR,'  Wob = ',WOBBLE
+            ELSE
+              BN = 1
+              WEIGHT(WOBBLE,DETPAIR) = 0.0
+            END IF
+            BIN(WOBBLE,DETPAIR) = BN
+C
+C  [Internal check for condition which should never occur]
+C
+            IF (BN.LT.1 .OR. BN.GT.110)
+     2        WRITE(USEROUT,*) '*** ERROR Bin = ',BN,
+     3        ' for BP = ',BANKPAIR,'  DP = ',DETPAIR,' Wob = ',WOBBLE
+440       CONTINUE
+450     CONTINUE
+C
+C  Write to output file
+C
+        OPEN(1,FILE='tab6anew')
+        CALL SYSIO(PB,IOWRITE,FILE,ANGNUM,ANGBYTES,0)
+        CALL SYSIO(PB,IOWRITE,FILE,BIN,BINBYTES,0)
+        CALL SYSIO(PB,IOWRITE,FILE,WEIGHT,WTBYTES,0)
+C
+500   CONTINUE
+C
+C  Read the table and compute normalization factors for each bin.
+C
+      REWIND(FILE)
+C
+C  Read and process one bank pair at a time.
+C
+      DO 800 BANKPAIR=1,18
+C
+C  Read angles, bins, and weights for this BP
+C
+        CALL SYSIO(PB,IOREAD,FILE,ANGNUM,ANGBYTES,0)
+        CALL SYSIO(PB,IOREAD,FILE,BIN,BINBYTES,0)
+        CALL SYSIO(PB,IOREAD,FILE,WEIGHT,WTBYTES,0)
+C
+C  Sum all WEIGHTs in the array FACTOR
+C
+        DO 700 DETPAIR=1,64
+          ANG = ANGNUM(DETPAIR)
+          DO 600 WOBBLE=1,16
+            IF (WEIGHT(WOBBLE,DETPAIR).GT.0.0) THEN
+              WT = WEIGHT(WOBBLE,DETPAIR)
+              BN = BIN(WOBBLE,DETPAIR)
+              FACTOR(BN,ANG) = FACTOR(BN,ANG) + WT
+              FACTOR(BN+1,ANG) = FACTOR(BN+1,ANG) + 1.0-WT
+            END IF
+600       CONTINUE
+700     CONTINUE
+800   CONTINUE
+C
+C  Compute reciprocal of FACTORs so BINPROF can compute with
+C  multiplications instead of divisions.
+C
+      DO 1000 ANG=1,72
+        DO 900 BN=1,110
+          IF (FACTOR(BN,ANG).GT.0.0) THEN
+            FACTOR(BN,ANG) = 1.0/FACTOR(BN,ANG)
+          ELSE
+            WRITE(USEROUT,*) 'Factor = ',FACTOR(BN,ANG),
+     2        ' for ANG = ',ANG,' BN = ',BN
+          END IF
+900     CONTINUE
+1000  CONTINUE
+C
+C  Write to output file
+C
+      CALL SYSIO (PB,IOWRITE,FILE,FACTOR,FACBYTES,0)
+      CLOSE(1)
+C
+      STOP
+      END
+@

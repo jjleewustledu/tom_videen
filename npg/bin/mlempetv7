@@ -1,0 +1,313 @@
+#!/bin/csh
+#   Name:   mlempetv7
+#   Author: J Nuyts
+#   Date:   May 1999
+#   Intent: MLEM reconstruction of ECAT data
+#   Modifications:
+#       Mar 2009 (TOV)
+#		Simplified for single gate and bed, defined paths to commands, simplified output when action=1
+
+set BINDIR   = /usr/local/npg/bin
+set mlempet  = $BINDIR/mlempetv7_solaris
+set copypln  = $BINDIR/copy_imagev7_solaris
+set gminmax  = $BINDIR/get_minmaxv7_solaris
+set convolg  = $BINDIR/convolgaussv7_solaris
+set ncmaxval = $BINDIR/NCmaxval
+
+set sinoname = ""
+set imgname  = ""
+set nrmname  = ""
+set atnname  = ""
+
+set plane     = 1
+set frame     = 1
+set gate      = 1
+set bed       = 0
+set imsize    = 128
+set xoffset   = 0
+set yoffset   = 0
+set rotation  = 0
+set version   = 70
+
+# defaults for HR+
+set zoom      = 2.57
+set arcradius = 42.2
+
+set decay     = "y"
+set action    = 1
+set gauss     = ""
+set verb      = ""
+set lik       = ""
+set sumd      = 1
+set lsrelax   = 0
+set iters     = ""
+set default_iters = "-i 1 -j 16 -i 1 -j 12 -i 1 -j 4 -i 2 -j 1"
+
+# --------------------------------------
+# Check all arguments
+
+@ i = 1
+set nargs = $#argv
+while ($i <= $nargs)
+  switch ($argv[$i])
+    case "-s":
+      @ i++; set sinoname = $argv[$i]
+      breaksw
+
+    case "-o":
+      @ i++;  set imgname = $argv[$i]
+      breaksw
+
+    case "-n":
+      @ i++;  set nrmname = $argv[$i]
+      breaksw
+
+    case "-a":
+      @ i++;  set atnname = $argv[$i]
+      breaksw
+
+    case "-p":
+      @ i++;  set plane = $argv[$i]
+      breaksw
+
+    case "-f":
+      @ i++;  set frame = $argv[$i]
+      breaksw
+
+    case "-z":
+      @ i++;  set zoom = $argv[$i]
+      breaksw
+
+    case "-X":
+      @ i++;  set imsize = $argv[$i]
+      breaksw
+
+    case "-x":
+      @ i++;  set xoffset = $argv[$i]
+      breaksw
+
+    case "-y":
+      @ i++;  set yoffset = $argv[$i]
+      breaksw
+
+    case "-r":     
+      @ i++;  set rotation = $argv[$i]
+      breaksw
+
+    case "-i":
+      @ i++;  set iters = "$iters -i $argv[$i]"
+      breaksw
+
+     case "-j":
+      @ i++;  set iters = "$iters -j $argv[$i]"
+      breaksw
+
+     case "-d":
+      @ i++;  set decay = $argv[$i]
+      breaksw
+
+      case "-sumd":
+      @ i++;  set sumd = $argv[$i]
+      breaksw
+
+      case "-ls":
+      @ i++;  set lsrelax = $argv[$i]
+      breaksw
+
+    case "-R":
+      @ i++;  set arcradius = $argv[$i]
+      breaksw
+
+     case "-test":
+      set action = 0
+      breaksw
+
+     case "-v":
+      set verb = "-v"
+      set lik = "-lik"
+      breaksw
+
+     case "-lik":
+      set lik = "-lik"
+      breaksw
+
+# gauss-smoothing
+
+     case "-sx":
+      @ i++;  set gauss = "$gauss -sx $argv[$i]"
+      breaksw
+     case "-fx":
+      @ i++;  set gauss = "$gauss -fx $argv[$i]"
+      breaksw
+     case "-fz":
+      @ i++;  set gauss = "$gauss -fz $argv[$i]"
+      breaksw
+     case "-sz":
+      @ i++;  set gauss = "$gauss -sz $argv[$i]"
+      breaksw
+     case "-ns":
+      @ i++;  set gauss = "$gauss -ns $argv[$i]"
+      breaksw
+
+    case "-h":
+     echo "Syntax: mlempetv7.com -s sinogram -o outputfile"
+     echo "          [-a attenuation]  [-n normalization]"
+     echo "          [-i nriter -j nrsubiter] [-i nriter -j nrsubiter] ..."
+     echo "          [-p plane(s)] [-f frame(s)]"
+     echo "          [-z zoom] [-X imagesize] [-x xoffset] [-y yoffset]"
+     echo "          [-r rotation] [-d decay] [-R arc_radius]"
+     echo "          [-sx sigma] [-fx fwhm] [-sz sigma_z] [-fz fwhm_z]"
+     echo "          [-ns nsigma] [-v] [-sumd sumd] [-ls lsrelax]"
+     echo "For plane, frame, gate, bed: supply single value (x) or range (x-y)"
+     echo "Multiple <-i nriter -j subiter> may be supplied and are executed"
+     echo "in the same order."
+     echo "Offsets in cm, rotation in degrees."
+     echo "With version == 70, a set of intermediate float files is created"
+     echo "Arcradius [cm] should include 1 cm depth of interaction:"
+     echo "   for Ecat931: 52, Ecat962: 42.2, no arc-correction: 0."
+     echo "Decay correction: <-d y> apply,  <-d n> do not apply"
+     echo "-v: verb"
+     echo ""
+     echo "Post filtering with 3D Gaussian smooth: "
+     echo "  sigma:   transaxial standard deviation in cm."
+     echo "  fwhm:    transaxial fwhm in cm (use either sigma or fwhm\!) "
+     echo "  sigma_z: axial standard deviation in cm."
+     echo "  fwhm_z:  axial fwhm in cm (use either sigma_z or fwhm_z\!) "
+     echo "     when  axial width not specified, same as transaxial is used"
+     echo "  nsigma:  truncate mask at nsigma st.devs. Default 2"
+     echo "  sumd:    number of detectors to be added before reconstruction"
+     echo "  lsrelax: when not zero, MLEM is replaced by a least squares "
+     echo "           gradient ascent method. This allows negative values."
+     echo "           Default = 0 ==> MLEM. Use value of 1 for Least-squares."
+     echo "           Only interesting for non-attenuation corrected studies,"
+     echo "           because then, negative values may contain information;"
+     echo "           do not use <lsrelax 1> in other cases."
+     echo ""
+     echo "Default: no atten, no norm, -p 1 -f 1 -g 1 -b 0 -X 128 -V 70 -R 0"
+     echo "         -xoffset 0 -yoffset 0 -r 0 -d y -sumd 1"
+     echo "         $default_iters"
+     echo "         no Gaussian smoothing"
+     goto stopermee
+     breaksw
+
+   default:
+      echo "ERROR: Illegal argument. Use -h to get some help."
+      goto stopermee
+      breaksw
+  endsw
+  @ i++
+end
+
+set nsimgname = "$imgname"_ns  # un-smoothed image.
+
+set firstplane = `echo $plane | cut -f1 -d-`
+set lastplane  = `echo $plane | cut -f2 -d-`
+set firstframe = `echo $frame | cut -f1 -d-`
+set lastframe  = `echo $frame | cut -f2 -d-`
+
+if (("$sinoname" == "") || ("$imgname" == "")) then
+	echo "Usage: mlempetv7 -s sino -o image -a atten -n norm -p 1-63"
+	echo "e.g.,  mlempetv7 -s p7396ho1_f7to26.S -o p7396ho1_f7to26_mlem.v -a p7396tr1_map.a -n p7396_2D.N -p 1-63"
+	echo 
+	echo "Note: scatter correction is not an option"
+	goto stopermee
+endif
+
+if ("$iters" == "") set iters = "$default_iters"
+
+# --------------------------------------
+set curframe = $firstframe
+while ($curframe <= $lastframe)
+
+#	Apply MLEM for every plane
+
+	set curplane = $firstplane
+	while ($curplane <= $lastplane)
+		set curimgname = "$imgname"_"$curplane"_"$curframe"_"$gate"_"$bed"
+		set cmdstring = "$mlempet -s $sinoname -o $curimgname"
+		if ($atnname != "") set cmdstring = "$cmdstring -a $atnname"
+		if ($nrmname != "") set cmdstring = "$cmdstring -n $nrmname"
+		set cmdstring = "$cmdstring $iters"
+		set cmdstring = "$cmdstring -p $curplane -f $curframe"
+		set cmdstring = "$cmdstring -g $gate -b $bed"
+		set cmdstring = "$cmdstring -SP -V 70 -R $arcradius -d $decay -ls $lsrelax"
+		set cmdstring = "$cmdstring -z $zoom -X $imsize -sumd $sumd $lik"
+		set cmdstring = "$cmdstring -x $xoffset -y $yoffset -r $rotation $verb"
+		if ($action) then
+			$cmdstring
+		else
+			echo $cmdstring
+		endif
+		@ curplane++
+	end
+
+#	Look at all the planes and find the global maximum
+
+	if ($action) then
+		set maxval = 0
+		set curplane = $firstplane
+		while ($curplane <= $lastplane)
+			set curimgname = "$imgname"_"$curplane"_"$curframe"_"$gate"_"$bed"
+			set minmax = `$gminmax -i $curimgname -min -max`
+			set curmin = `echo $minmax | cut -f1 -d,`
+			set curmax = `echo $minmax | cut -f2 -d,`
+			set maxval = `$ncmaxval $maxval $curmax`
+			# echo "$curmin, $curmax ==> $maxval"
+			@ curplane++
+		end
+		echo Frame Max = $maxval
+	else
+		set maxval =  123
+	endif
+   
+#	Copy the planes from the individual
+		
+	set curplane = $firstplane
+	while ($curplane <= $lastplane)
+		set cpystr = "$copypln"
+		set curimgname = "$imgname"_"$curplane"_"$curframe"_"$gate"_"$bed"
+		set cpystr = "$cpystr -i $curimgname -o $nsimgname -msi 1,1,1,0,0"
+		set cpystr = "$cpystr -mso $curframe,$curplane,$gate,0,$bed"
+		set cpystr = "$cpystr -dt s -V 70 -np $lastplane"
+		set cpystr = "$cpystr -rm $maxval $verb -rev 2"
+		if ($action) then
+			$cpystr
+			rm $curimgname
+		else
+			echo $cpystr
+		endif
+		@ curplane++
+	end
+	@ curframe++
+end
+goto gauss_smooth
+
+# --------------------------------------
+gauss_smooth: 
+if ("$gauss" == "") then
+	set cmdstring = "mv $nsimgname $imgname"
+	if ($action) then
+		$cmdstring
+		fix_header -i $imgname -e 1.0
+	else
+		echo $cmdstring
+	endif
+else
+	set curframe = $firstframe
+	while ($curframe <= $lastframe)
+		set cmdstring = "$convolg -i $nsimgname -o $imgname"
+		set cmdstring = "$cmdstring $gauss -cm -p0 $firstplane -p1 $lastplane"
+		set cmdstring = "$cmdstring -f $curframe -b $bed -g $gate"
+		set cmdstring = "$cmdstring -V $version $verb"
+		if ($action) then
+			$cmdstring
+		else
+			echo $cmdstring
+		endif
+		@ curframe++
+	end
+	rm $nsimgname
+endif
+
+stopermee: 
+

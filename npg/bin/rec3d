@@ -1,0 +1,152 @@
+#!/bin/csh
+#	Name:	rec3d
+#	Author:	Tom Videen
+#	Intent: Reconstruct 953B 3D sinograms
+#			Version of /usr/local/bin/recon3D_scat with fewer assumptions.
+#	Requires:
+#		p2000sp1.scn
+#		p2000tr1l.scn
+#		980701bl1.scn
+#		normal3d_80x80_980701.nrm (or...)
+#		plane_eff_3d_980701.scn   (if no normalization file exists)
+#
+#	Scatter files created and reused:
+#		p2000sp1_scat.ifh
+#		p2000sp1_scat.scat
+#		scat_80x80_96_psi13_psiatt25_h0.20_mult.ifh
+#		scat_80x80_96_psi13_psiatt25_h0.20_mult.scat
+#
+#	Calls to:
+#		/usr/local/npg/bin/nframes
+#		/usr/local/bin/recon3d_scat
+#		/usr/local/bin/makenorm_f3d
+#	and indirectly to: (/usr/local/bin)
+#		cti_getparam
+#		scat.csh
+#		ctistat
+#		floatmath
+#		bkproj
+#		list_sinograms
+#		fproj_volume
+#		import_3dscan_nonorm
+#		arc_corr
+#		extract_summed_planes
+#		ctiscl
+
+setenv TABLES /usr/local/lib/tables
+setenv ND /data/pethp2/recon/norm
+
+if ($#argv < 5) then
+	echo "Usage: rec3d emis trans blank eff frames [-s -p pixsize -n normpath]"
+	echo "    where:"
+	echo "      emis   = emission scan name(s)"
+	echo "      trans  = transmission scan"
+	echo "      blank  = blank scan"
+	echo "      eff    = date of plane efficiency scan"
+	echo "      frames = frame number(s) to reconstruct"
+	echo "      -s  scatter correct (default = no scatter correction)"
+	echo "      -n  path for normalization files (default = /data/pethp2/recon/norm)"
+	echo "      -p  pixel size in millimeters (default = 2.08575 mm)"
+	echo ""
+	echo "E.g.: rec3d p2000ho1.scn p2000tr1 980311bl1 980304  2"
+	echo "      rec3d p2000ho{1,2,3}.scn p2000tr1 980311bl1 980304 2"
+	echo "      rec3d p2000ho*.scn p2000tr1 980311bl1 980304 2 -s"
+	echo "      rec3d m700sp1.scn m700tr1 980311bl1 980304 1-44 -s -p 1.95583"
+	exit
+endif
+
+set PIXSIZE = 2.08575
+set dpath   = `pwd`
+set scat    = -norm
+set offset  = 5
+set imgdim  = 40
+set scans   = $1
+set tran    = $2.scn
+set tranl   = $2l.scn
+set blank   = $3.scn
+set ndate   = $4
+set plneff  = plane_eff_3d_$4.scn
+set frame   = $5
+
+set i = 5
+while ($i <= $#argv)
+	switch ($argv[$i])
+		case -s:
+			set scat = -scat
+			set imgdim = 80
+			breaksw
+		case -p:
+			@ i++
+			set PIXSIZE = $argv[$i]
+			echo "Pixel size set to " $PIXSIZE
+			set offset = `expr $offset + 2`
+			breaksw
+		case -n:
+			@ i++
+			setenv ND $argv[$i]
+			breaksw
+		endsw
+	@ i++
+end
+
+# Check that all files exist.
+
+echo "Files to reconstruct:"
+foreach scanfile ($scans)
+	echo "  " $scanfile
+	set image3d	= $dpath/$scanfile:r\.img
+	if (!(-e ${scanfile})) then
+		echo ${scanfile} does not exist
+		exit
+	endif
+end
+if (!(-e ${tranl})) then
+	echo ${tranl} does not exist
+	exit
+endif
+if (!(-e ${blank})) then
+	echo ${blank} does not exist
+	exit
+endif
+
+# If normalization file doesn't exist, create it.
+
+set norm  = normal3d_${imgdim}x${imgdim}_{$ndate}.nrm
+set imgdim_fctr = `expr $imgdim / 40`
+if (! -e $ND\/$norm) then
+	if (! -e $plneff) then
+		echo "${plneff} does not exist"
+		exit
+	endif
+	touch $ND/junk$$
+	if (! -e $ND\/junk$$) then
+		echo "Cannot create normalization file in $ND (permissions)"
+		exit
+	else
+		/usr/bin/rm $ND/junk$$
+	endif
+	makenorm_f3d $ndate $imgdim_fctr
+	mv $norm $ND
+endif
+
+if (`echo $frame | grep '-'` != "") then
+	set frm1 = `echo $frame | awk -F- '{print $1}'`
+	set frm2 = `echo $frame | awk -F- '{print $2}'`
+else
+	set frm1 = $frame
+	set frm2 = $frame
+endif
+set numframes = `expr $frm2 - $frm1 + 1`
+
+foreach scanfile ($scans)
+	set frm = $frm1
+	while($frm <= $frm2)
+		echo Reconstructing Frame $frm
+		set ARGS = ($dpath $scanfile:r $ND\/$norm:r $tran:r $blank:r \
+			$scat $imgdim_fctr $frm $frm $numframes -p $PIXSIZE)
+ 		rec3d_953 $ARGS
+		@ frm++
+	end
+	nframes $image3d $numframes
+	/usr/bin/rm -f /tmp/{$scanfile:r}*
+end

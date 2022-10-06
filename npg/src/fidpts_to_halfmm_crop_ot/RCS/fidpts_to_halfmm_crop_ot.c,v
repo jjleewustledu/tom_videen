@@ -1,0 +1,338 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2007.01.16.14.20.55;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Log$ */
+/*	===============================================================================
+ *	Module:		fidpts_to_halfmm_crop_ot.c
+ *	Date:		Feb 2006
+ *	Author:		Tom Videen
+ *	Intent:		Create image with fiducial lines on halfmm images
+ *				300x128x64 0.5x0.5x0.5 mm voxels
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/fidpts_to_halfmm_crop_ot/RCS/fidpts_to_halfmm_crop_ot.c,v 1.3 2006/02/11 16:06:25 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <image.h>
+#include <nrutil.h>
+#include <matrixlib.h>
+#include <myvalues.h>
+#include <ANALYZE.h>
+
+/*	----------------------------
+ *	Function:			fidpts_to_halfmm_crop_ot
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	void            plot_xz_vs_y ();
+	void            plot_yz_vs_x ();
+	struct dsr      hdr;			 /* ANALYZE.h */
+	FILE           *fd_pts;			 /* file for points */
+	FILE           *fd_hdr;			 /* file for Analyze hdr */
+	FILE           *fd_img;			 /* file for Analyze image */
+	char           *img1, *hdr1;		 /* output file */
+	char           *pts;			 /* input fiducial points file */
+	char            line[MAXLINE];
+	char            name[4];
+
+	float           fx, fy, fz;		 /* fiducial coords	 */
+	float           tan0, sin0, cos0; /* tilt around y-axis	 */
+	float           tan1, cos1;		 /* rotation around z-axis	 */
+	float           tan2, sin2;		 /* nod around x-axis	 */
+
+	int             side;			 /* 0 = bilateral, 1 = left, 2 = right	 */
+	int             x, y, z;		 /* loop indices */
+	int             mx, my, mz;
+	int             x0, y0, z0;		 /* AC */
+	int             x1, y1, z1;		 /* PC */
+	int             x2, y2, z2;		 /* left anterior computed at AC		 */
+	int             x3, y3, z3;		 /* left posterior computed at PC		 */
+	int             x4, y4, z4;		 /* right anterior computed at AC	 */
+	int             x5, y5, z5;		 /* right posterior computed at PC	 */
+
+	int             xa, ya, za;		 /* left OT */
+	int             xb, yb, zb;		 /* right OT */
+	int             xc, yc, zc;		 /* mean midline OT */
+	int             x6, y6, z6;		 /* midline OT projected below AC */
+	int             x7, y7, z7;		 /* midline OT projected below PC */
+
+	short        ***simg;			 /* image array */
+	short          *row;			 /* single row for output */
+
+	struct point {
+		char            name[4];
+		int             x;
+		int             y;
+		int             z;
+	};
+	struct point    pt[13];			 /* array of fiducial points	 */
+	int             npt, n;
+
+	int             val = 30000;
+
+	int             nx = 300;		 /* dimensions of halfmm_crop image */
+	int             ny = 128;
+	int             nz = 64;
+
+	int             nxc0 = 257;		 /* origin of halfmm image (256x256x256)	 */
+	int             nyc0 = 257;
+	int             nzc0 = 200;
+
+	int             nx0 = 150;		 /* origin of halfmm_crop image (300x128x64)	 */
+	int             ny0 = 35;
+	int             nz0 = 17;
+
+	if (argc != 5) {
+		fprintf (stdout, "Usage: fidpts_to_halfmm_crop_ot in.pts out.img out.hdr hemisphere\n");
+		return (ERROR);
+	}
+	pts = argv[1];
+	hdr1 = argv[2];
+	img1 = argv[3];
+	side = atoi (argv[4]);
+
+	simg = s3tensor (1, nz, 1, ny, 1, nx);
+	if (simg == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_ot]: malloc simg\n");
+		return (ERROR);
+	}
+/*	=========================================================
+ *	Read fiducial points
+ */
+	if ((fd_pts = fopen (pts, "r")) == 0) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_ot]: opening %s\n", pts);
+		return (ERROR);
+	}
+	if (fgets (line, MAXLINE, fd_pts) == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_ot]: Reading %s\n", pts);
+		return (ERROR);
+	}
+	if (fgets (line, MAXLINE, fd_pts) == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_ot]: Reading %s\n", pts);
+		return (ERROR);
+	}
+/*	Interpolate to half-mm voxels  (2*input);
+ *	Shift to new origin (nxc0,nyc0,nzc0) for cropped image;
+ *	Reverse directions for Analyze array: new x increases right-to-left;
+ *	new y increases posterior-to-anterior; new z increases inferior-to-superior
+ *	--------------------------------------------------------------------------- */
+
+	n = 0;
+	while (fgets (line, MAXLINE, fd_pts) != NULL) {
+		fprintf (stderr, "%s",line);
+		if (sscanf (line, "%3s %f %f %f", name, &fx, &fy, &fz) == 4) {
+			(void) strcpy (pt[n].name, name);
+			pt[n].x = (nx + 1) - nx0 + (nxc0 - 2 * fx);
+			pt[n].y = (ny + 1) - ny0 + (nyc0 - 2 * fy);
+			pt[n].z = (nz + 1) - nz0 + (nzc0 - 2 * fz);
+			n++;
+		}
+	}
+	(void) fclose (fd_pts);
+	npt = n;
+
+/*	=========================================================
+ *	Use 4 fiducial points
+ *		AC = x0, y0, z0
+ *		PC = x1, y1, z1
+ *		OTL = xa, ya, za
+ *		OTR = xb, yb, zb
+ *	------------------------------------------------------- */
+
+	x0 = pt[0].x;
+	y0 = pt[0].y;
+	z0 = pt[0].z;
+	x1 = pt[1].x;
+	y1 = pt[1].y;
+	z1 = pt[1].z;
+	xa = pt[3].x;
+	ya = pt[3].y;
+	za = pt[3].z;
+	xb = pt[4].x;
+	yb = pt[4].y;
+	zb = pt[4].z;
+
+/*	-------------------------------------------------------------
+ *	Tilt adjustment for left, right, and OX lines:
+ *		angle 0 is tilt on y-axis (positive is up on left)
+ *		angle 1 is rotation on z-axis (positive is CW; nose right)
+ *		angle 2 is nod on x-axis (positive is nose up)
+ *	Angles are assumed to be small
+ *	positive x,y,z = left,anterior,up
+ *	------------------------------------------------------------- */
+
+	tan0 = (float) (pt[11].z - pt[12].z) / (float) (pt[11].x - pt[12].x);
+	sin0 = sin (atan (tan0));
+	cos0 = cos (atan (tan0));
+	if (y0 != y1) {
+		tan1 = (float) (x1 - x0) / (float) (y0 - y1);
+		tan2 = (float) (z0 - z1) / (float) (y0 - y1);
+	} else {
+		fprintf (stderr, "AC and PC must have different y-coordinates\n");
+		return (ERROR);
+	}
+	cos1 = cos (atan (tan1));
+	sin2 = sin (atan (tan2));
+
+/*	-------------------------------------------------------
+ *	Plot 4 AP lines and 4 RL lines:
+ *	Compute adjusted coordinates for ends of lines:
+ *		ACL:  [x0,y0,z0]  to [x2,y2,z2]
+ *		ACR:  [x4,y4,z4]  to [x0,y0,z0]
+ *		PCL:  [x1,y1,z1]  to [x3,y3,z3]
+ *		PCR:  [x5,y5,z5]  to [x0,y0,z0]
+ *		ACPC: [x0,y0,z0]  to [x1,y1,z1]
+ *		LEFT: [x2,y2,z2]  to [x3,y3,z3]
+ *		RIGHT:[x4,y4,z4]  to [x5,y5,z5]
+ *		OTM:  [x6,y6,z6]  to [x7,y7,z7]
+ *	------------------------------------------------------- */
+
+	x2 = x0 + (xa - x0) * cos0;
+	y2 = y0 + (x2 - x0) * tan1;
+	z2 = z0 + (xa - x0) * sin0;
+
+	x4 = x0 + (xb - x0) * cos0;
+	y4 = y0 + (x4 - x0) * tan1;
+	z4 = z0 + (xb - x0) * sin0;
+
+	x3 = x1 + (xa - x0) * cos0;
+	y3 = y1 + (x2 - x0) * tan1;
+	z3 = z1 + (xa - x0) * sin0;
+
+	x5 = x1 + (xb - x0) * cos0;
+	y5 = y1 + (x4 - x0) * tan1;
+	z5 = z1 + (xb - x0) * sin0;
+
+/*	Mean OT depth at mid-commissural line	*/
+/*	x and y will be offset by angles 0,1,2	*/
+
+	zc = (za + zb) / 2;
+	mx = (x0 + x1) / 2;
+	my = (y0 + y1) / 2;
+	mz = (z0 - zc);
+	xc = mx + mz * sin0;
+	yc = my + mz * sin2;
+
+	x6 = xc + (yc - ny) * tan1;
+	y6 = ny;
+	z6 = zc + (ny - yc) * tan2;
+
+	x7 = xc + (yc - 1) * tan1;
+	y7 = 1;
+	z7 = zc + (1 - yc) * tan2;
+
+	plot_xz_vs_y (simg, x0, y0, z0, x1, y1, z1, nx, ny, nz, val);
+	plot_xz_vs_y (simg, x6, y6, z6, x7, y7, z7, nx, ny, nz, val);
+
+	if (side <= 1) {			 /* left hemisphere	 */
+		plot_xz_vs_y (simg, x2, y2, z2, x3, y3, z3, nx, ny, nz, val);
+		plot_yz_vs_x (simg, x0, y0, z0, x2, y2, z2, nx, ny, nz, val);
+		plot_yz_vs_x (simg, x1, y1, z1, x3, y3, z3, nx, ny, nz, val);
+	}
+	if (side != 1) {			 /* right hemisphere or bilateral	 */
+		plot_xz_vs_y (simg, x4, y4, z4, x5, y5, z5, nx, ny, nz, val);
+		plot_yz_vs_x (simg, x0, y0, z0, x4, y4, z4, nx, ny, nz, val);
+		plot_yz_vs_x (simg, x1, y1, z1, x5, y5, z5, nx, ny, nz, val);
+	}
+/*	=========================================================
+ *	Create and write Analyze hdr
+ */
+
+	(void) strncpy (hdr.hk.db_name, img1, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr);
+	hdr.hk.extents = 16384;
+	hdr.hk.regular = 'r';
+	hdr.dime.dim[0] = 4;
+	hdr.dime.dim[1] = nx;
+	hdr.dime.dim[2] = ny;
+	hdr.dime.dim[3] = nz;
+	hdr.dime.dim[4] = 1;
+	hdr.dime.unused8 = 0;
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 4;
+	hdr.dime.bitpix = 16;
+	hdr.dime.pixdim[1] = 0.5;
+	hdr.dime.pixdim[2] = 0.5;
+	hdr.dime.pixdim[3] = 0.5;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = (int) val;
+	hdr.dime.glmin = 0;
+	hdr.hist.orient = 0;
+	if ((fd_hdr = fopen (hdr1, "w")) == 0) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_ot]: opening %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd_hdr)) != 1) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_ot]: writing %s\n", hdr1);
+		return (ERROR);
+	}
+	(void) fclose (fd_hdr);
+
+/*	=========================================================
+ *	Write Image
+ */
+
+	if ((fd_img = fopen (img1, "w")) == 0) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_ot]: opening %s\n", img1);
+		return (ERROR);
+	}
+	row = (short *) calloc (nx, sizeof (short));
+	if (row == NULL) {
+		fprintf (stderr, "ERROR [fidpts_to_halfmm_crop_ot]: calloc row\n");
+		return (ERROR);
+	}
+	for (z = 1; z <= nz; z++) {
+		for (y = 1; y <= ny; y++) {
+			for (x = 1; x <= nx; x++)
+				row[x - 1] = simg[z][y][x];
+			if (fwrite (row, sizeof (short), nx, fd_img) != nx) {
+				fprintf (stderr, "ERROR [mai_fiducials]: writing %s\n", img1);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd_img);
+	free_s3tensor (simg, 1, nz, 1, ny, 1, nx);
+	free (row);
+	return (OK);
+}
+@

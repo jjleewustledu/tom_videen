@@ -1,0 +1,1369 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2000.07.18.16.22.19;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: imatoanalyze.c,v 1.15 1997/04/28 00:58:03 yang Exp $*/
+/*$Log: imatoanalyze.c,v $
+ * Revision 1.15  1997/04/28  00:58:03  yang
+ * Working Solaris version.
+ *
+ * Revision 1.14  1996/07/05  16:44:22  yang
+ * Working version.
+ *
+ * Revision 1.13  1996/06/17  22:22:07  yang
+ * Updated to calculate the real zpixel size.
+ *
+ * Revision 1.12  1996/05/20  18:03:34  ty7777
+ * Updated to process burn-in vlaues.
+ *
+ * Revision 1.11  1996/04/03  21:42:19  ty7777
+ * Added errfile.
+ *
+ * Revision 1.10  1996/03/29  22:34:42  ty7777
+ * Added processing for slice-tilt.
+ *
+ * Revision 1.9  1996/03/29  22:05:00  ty7777
+ * Updated to take care of slice tilt.
+ *
+ * Revision 1.8  1996/03/11  23:03:19  ty7777
+ * Fixed bug for the transverse sections.
+ *
+ * Revision 1.7  1996/02/27  17:56:59  ty7777
+ * Commented out the status lines.
+ *
+ * Revision 1.6  1996/02/27  17:53:14  ty7777
+ * Use calloc () instead of malloc ().
+ *
+ * Revision 1.5  1996/02/19  21:01:33  ty7777
+ * Changed the status line.
+ *
+ * Revision 1.4  1996/01/08  21:45:26  ty7777
+ * Updated to take care of the distance factor.
+ *
+ * Revision 1.3  1996/01/05  19:41:35  ty7777
+ * Added the verbose flag.
+ *
+ * Revision 1.2  1996/01/05  19:18:08  ty7777
+ * Updated to read phase images.
+ *
+ * Revision 1.1  1995/12/15  17:08:01  ty7777
+ * Initial revision
+ **/
+
+/*_________________________________________________________________________________
+ *  Program:		imatoanalyze.c
+ *  Date:		16-Oct-95
+ *  Author:		Tom Yang
+ *  Description:	Transform Siemens MRI images into Analyze format.
+ *			An Analyze header file is created. The headres from
+ *			individual .ima files are separated from the .ima files.
+ *
+ *
+ *                      IMATOANALYZE
+ * Copyright 1994. Washington University, Mallinckrodt Institute of Radiology.
+ *                       All Rights Reserved
+ *
+ * This software may not be reproduced, copied, or distributed without written
+ *               permission of Washington University.
+ *
+ *       For more information contact Tongzeng (Tom) Yang, Ph.D.
+ *________________________________________________________________________________*/
+
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <lib3_file_transform.h>		 /* Numaris 3 User's Library */
+#include <petutil/petutil.h>			 /* dsr */
+#include <petutil/ANALYZE.h>			 /* dsr */
+
+#define U_LONG unsigned long
+#define U_SHORT unsigned short
+#define BytesPerPixelShort 2
+#define BytesPerPixelLong 4
+#define U3_isStatusError(s,e) (((s)^(e)) == 0)
+#define MAXSTR	256
+#define PERMS	0666
+#define BELL	'\x7'
+
+static char     rcsid[] = "$Header: /data/petsun4/src_solaris/imatoanalyze/RCS/imatoanalyze.c,v 1.15 1997/04/28 00:58:03 yang Exp $";
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	BOOLEAN			overlaping_slices_flag;
+	FILE			*errfp;				/* file pointer for err file */
+	FILE			*hdrfp;				/* file pointer for ANALYZE hdr */
+	FILE			*iffp;				/* file pointer for Interfile Format header */
+	FILE			*imafp;		 		/* file pointer for .ima files */
+	FILE			*magnitude_imgfp;		/* file pointer for magnitude Analyze image */
+	FILE			*phase_imgfp;			/* file pointer for phase Analyze image */
+	FILE			*recfp;				/* file pointer for recfiles */
+	U3_data_type_t		DataType;
+	U3_header_type_t	HeadType;
+	U3_size_type_t		DataSize;
+	U_SHORT			*DataBuffer;		 /* pixel data buffer */
+	char			ParameterFileName [MAXSTR];
+	char			SequenceFileName [MAXSTR];
+	char			SequenceDescription [MAXSTR];
+	char			cbuffer [MAXSTR];
+	char			error_file [MAXSTR];
+	char			imafile [MAXSTR];		/* ima file name */
+	char			imafile_root [MAXSTR];		/* ima file root */
+	char			institution [MAXSTR];
+	char			magnitude_ANALYZE_hdr [MAXSTR];	/* magnitude Analyze header filename */
+	char			magnitude_4dint [MAXSTR];	/* magnitude output filename */
+	char			magnitude_ifhdrfile [MAXSTR];	/* mag Interfile header filename */
+	char			*magnitude_recfile;
+	char			model [MAXSTR];
+	char			num [12];
+	char			order [4];
+	char			*patient_id;
+	char			patient_position [MAXSTR];
+	char			phase_ANALYZE_hdr [MAXSTR];	/* phase Analyze header filename */
+	char			phase_4dint [MAXSTR];	 	/* phase output filename */
+	char			phase_ifhdrfile [MAXSTR];	/* phase Interfile Format header filename */
+	char			*phase_recfile;
+	char			program_date [12];
+	char			*ptr;
+	char			study_date [12];
+	char			version [5];
+	double			distance_factor;
+	float			xpix, ypix, zpix;	 /* pixel sizes (mm) */
+	header_t		*HeadBuffer;		 /* header buffer */
+	int			bitsperpix;
+	int			burn_in_flag;
+	int			burn_in_value;
+	int			current_image_id;
+	int			end_image_id;
+	int			first_study;
+	int			*global_min;		 	/* global minimum for image */
+	int			*global_max;		 	/* global maximum for image */
+	int			i, j, n;
+	int			image_index;
+	int			last_study;
+	int			magnitude_global_min;		 /* global minimum for mag image */
+	int			magnitude_global_max;		 /* global maximum for mag image */
+	int			magnitude_vdim;
+	int			magnitude_zdim;
+	int			orientation;
+	int			phase_global_min;		 /* global minimum for phase image */
+	int			phase_global_max;		 /* global maximum for phase image */
+	int			phase_image_flag;
+	int			start_image_id;
+	int			study_index;
+	int			time_series_flag;
+	int			verbose_flag;
+	long			Status;			 /* shows an actual status */
+	long unsigned		NumPixels_ul, NumBytes_ul, NumRows_ul, NumColumns_ul, StartOffset_ul;
+	short			datum;
+	short			**img;
+	short			magnitude_num_slices;	 /* number of slices in MRI magnitude image */
+	short			phase_num_slices;	 /* number of slices in MRI phase image */
+	short			xdim, ydim, zdim;	 /* image dimensions */
+	struct dsr		hdr;			 /* header for ANALYZE */
+
+	/*
+	 * Get command line arguments and initialize filenames:
+	 */
+	if (argc != 15) 
+	{
+		fprintf (stderr, 
+			"Usage: imatoanalyze.bin patient_id first_study last_study mag_root mag_recfile phase_root phase_recfile start_image_id end_image_id phase_image_flag time_series_flag verbose_flag burn_in_flag burn_in_value.\n");
+		exit (1);
+	}
+
+	patient_id		= argv [1];
+	first_study		= atoi (argv [2]);
+	last_study		= atoi (argv [3]);
+
+	strcpy (magnitude_4dint, argv [4]);
+	strcat (magnitude_4dint, ".img");
+	strcpy (error_file, magnitude_4dint);
+	strcat (error_file, ".err");
+	strcpy (magnitude_ANALYZE_hdr, argv [4]);
+	strcat (magnitude_ANALYZE_hdr, ".hdr");
+	strcpy (magnitude_ifhdrfile, argv [4]);
+	strcat (magnitude_ifhdrfile, ".ifh");
+	magnitude_recfile	= argv [5];
+
+	strcpy (phase_4dint, argv [6]);
+	strcat (phase_4dint, ".img");
+	phase_recfile		= argv [7];
+
+	start_image_id		= atoi (argv [8]);
+	end_image_id		= atoi (argv [9]);
+	phase_image_flag	= atoi (argv [10]);
+	time_series_flag	= atoi (argv [11]);
+	verbose_flag		= atoi (argv [12]);
+	burn_in_flag		= atoi (argv [13]);
+	burn_in_value		= atoi (argv [14]);
+
+	if (phase_image_flag)
+	{
+		strcpy (phase_ANALYZE_hdr, argv [6]);
+		strcat (phase_ANALYZE_hdr, ".hdr");
+		strcpy (phase_ifhdrfile, argv [6]);
+		strcat (phase_ifhdrfile, ".ifh");
+	}
+
+	/*
+	 * Find the orientation of the images.
+	 */
+	strcpy (imafile, patient_id);
+	strcat (imafile, "-");
+	sprintf (num, "%d", first_study);
+	strcat (imafile, num);
+	strcat (imafile, "-");
+	sprintf (num, "%d", start_image_id);
+	strcat (imafile, num);
+	strcat (imafile, ".ima");
+
+	/*
+	 * Create error file.
+	 */
+	if ((errfp = fopen (error_file, "w")) == 0) 
+	{
+		fprintf (stderr, "Error: Unable to create error file %s\n", error_file);
+		exit (1);
+	}
+
+	if (U3Open (&imafp, imafile, "r") != 0)
+	{
+		fprintf (stderr, "Error reading ima file %s\n", imafile);
+		fprintf (errfp, "Error reading ima file %s\n", imafile);
+		fclose (errfp);
+		exit (1);
+	}
+
+	/* 
+	 * Determine header type. 
+	 */
+	if ((Status = U3GetHeaderType (imafp, &HeadType)) != 0) 
+	{
+		fprintf (stderr, "\nerror: imatoanalyze : unknown header type.\n");
+		exit (1);
+	}
+
+	if (HeadType != U3_internal_head_type && HeadType != U3_nema_head_type
+	&& HeadType != U3_numaris1_head_type && HeadType != U3_numaris2_head_type) 
+	{
+		fprintf (stderr, "\nThe data file format is unknown.\n");
+		fprintf (errfp, "\nThe data file format is unknown.\n");
+		fclose (errfp);
+		exit (1);
+	}
+
+	/* 
+	 * Check data type and data size. 
+	 */
+	if ((Status = U3GetDataType (imafp, &DataType, &DataSize)) != 0) 
+	{
+		fprintf (stderr, "Error: imatoanalyze : unknown data type.\n");
+		fprintf (errfp, "Error: imatoanalyze : unknown data type.\n");
+		fclose (errfp);
+		exit (1);
+	}
+
+	/* 
+	 * Make sure it is an image file. 
+	 */
+	if (DataType != U3_image_data_type) 
+	{
+		fprintf (stderr, "Error: imatoanalyze : Data file is not an image file.\n");
+		fprintf (errfp, "Error: imatoanalyze : Data file is not an image file.\n");
+		fclose (errfp);
+		exit (1);
+	}
+
+	/* 
+	 * Allocate memory space for the header buffer. 
+	 */
+	if ((HeadBuffer = (header_t *) calloc (1, sizeof (header_t))) == NULL) 
+	{
+		fprintf (stderr, "Error : imatoanalyze : unable to allocate memory.\n");
+		fprintf (errfp, "Error : imatoanalyze : unable to allocate memory.\n");
+		fclose (errfp);
+		exit (1);
+	}
+
+	/* 
+	 * Get the header buffer. 
+	 */
+	if ((Status = U3GetHeader (imafp, HeadBuffer)) != 0) 
+	{
+		free (HeadBuffer);
+		fprintf (stderr, "Error: imatoanalyze : unable to get the header.\n");
+		fprintf (errfp, "Error: imatoanalyze : unable to get the header.\n");
+		fclose (errfp);
+		exit (1);
+	}
+
+	/* 
+	 * Get the orientation, image dimensions, and voxel size. 
+	 */
+	orientation		= HeadBuffer->G21.Rel1.CM.ViewDirection;
+	overlaping_slices_flag	= FALSE;
+	if (pkg_abs (HeadBuffer->G21.Rel2.Mr.CurrentSliceDistanceFactor + 1.0) < ERROR_BOUND)
+	{
+		overlaping_slices_flag	= TRUE;
+	}
+	if (orientation < View_FEET && orientation > View_RtoL) 
+	{
+		fprintf (stderr, "Error: Incompatible View Direction.\n");
+		fprintf (errfp, "Error: Incompatible View Direction.\n");
+		fclose (errfp);
+		exit (1);
+	}
+
+	fclose (imafp);
+	free (HeadBuffer);
+
+	/*
+	 * Loop for all images in all studies. 
+	 */
+	if ((magnitude_imgfp = fopen (magnitude_4dint, "a+b")) == 0) 
+	{
+		fprintf (stderr, "Error: Unable to create magnitude 4DFP image %s\n", magnitude_4dint);
+		fprintf (errfp, "Error: Unable to create magnitude 4DFP image %s\n", magnitude_4dint);
+		fclose (errfp);
+		exit (1);
+	}
+	if (phase_image_flag)
+	{
+		if ((phase_imgfp = fopen (phase_4dint, "a+b")) == 0) 
+		{
+			fprintf (stderr, "Error: Unable to create phase 4DFP image %s\n", phase_4dint);
+			fprintf (errfp, "Error: Unable to create phase 4DFP image %s\n", phase_4dint);
+			fclose (errfp);
+			exit (1);
+		}
+	}
+
+	magnitude_global_max	= 0;
+	magnitude_global_min	= 32000;
+	phase_global_max	= 0;
+	phase_global_min	= 32000;
+
+	if ((orientation == View_FEET || orientation == View_HEAD) && !overlaping_slices_flag) 
+		current_image_id	= end_image_id;
+	else
+		current_image_id	= start_image_id;
+	magnitude_num_slices		= 0;
+	phase_num_slices		= 0;
+
+if ((orientation == View_FEET || orientation == View_HEAD) && !overlaping_slices_flag) /* Transverse */
+{
+	for (study_index = first_study; study_index <= last_study; study_index++) 
+	{
+		/*
+		 * Construct .ima file name and .ima header file name.
+		 */
+		current_image_id	= end_image_id;
+		strcpy (imafile_root, patient_id);
+		strcat (imafile_root, "-");
+		sprintf (num, "%d", study_index);
+		strcat (imafile_root, num);
+		strcat (imafile_root, "-");
+
+		strcpy (imafile, imafile_root);
+		sprintf (num, "%d", current_image_id);
+		strcat (imafile, num);
+		strcat (imafile, ".ima");
+
+		while (current_image_id >= start_image_id 
+		&& (imafp = fopen (imafile, "rb")) == (FILE *) NULL) 
+		{
+			current_image_id--;
+
+			strcpy (imafile, imafile_root);
+			sprintf (num, "%d", current_image_id);
+			strcat (imafile, num);
+			strcat (imafile, ".ima");
+		}
+
+		fclose (imafp);
+		if (current_image_id < start_image_id)
+			continue;
+
+		while (current_image_id >= start_image_id && U3Open (&imafp, imafile, "r") == 0)
+		{
+			if (verbose_flag)
+				fprintf (stdout, "Reading %s\n", imafile);
+
+			/* 
+			 * Determine header type. 
+			 */
+			if ((Status = U3GetHeaderType (imafp, &HeadType)) != 0) 
+			{
+				fprintf (stderr, "\nerror: imatoanalyze : unknown header type.\n");
+				exit (1);
+			}
+			switch (HeadType) 
+			{
+				case U3_internal_head_type:
+				case U3_nema_head_type:
+				case U3_numaris1_head_type:
+				case U3_numaris2_head_type:
+					break;
+				default:
+					fprintf (stderr, "\nThe data file format is unknown.\n");
+					fprintf (errfp, "\nThe data file format is unknown.\n");
+					fclose (errfp);
+					exit (1);
+			}
+
+			/* 
+			 * Check data type and data size. 
+			 */
+			if ((Status = U3GetDataType (imafp, &DataType, &DataSize)) != 0) 
+			{
+				fprintf (stderr, "Error: imatoanalyze : unknown data type.\n");
+				fprintf (errfp, "Error: imatoanalyze : unknown data type.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			/* 
+			 * Make sure it is an image file 
+			 */
+			if (DataType != U3_image_data_type) 
+			{
+				fprintf (stderr, "Error: imatoanalyze : Data file is not an image file.\n");
+				fprintf (errfp, "Error: imatoanalyze : Data file is not an image file.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			/* 
+			 * Allocate memory space for the header buffer 
+			 */
+			if ((HeadBuffer = (header_t *) calloc (1, sizeof (header_t))) 
+			== NULL) 
+			{
+				fprintf (stderr, "Error : imatoanalyze : unable to allocate memory.\n");
+				fprintf (errfp, "Error : imatoanalyze : unable to allocate memory.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			/* 
+			 * Get the header buffer. 
+			 */
+			if ((Status = U3GetHeader (imafp, HeadBuffer)) != 0) 
+			{
+				free (HeadBuffer);
+				fprintf (stderr, "Error: imatoanalyze : unable to get the header.\n");
+				fprintf (errfp, "Error: imatoanalyze : unable to get the header.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			/* 
+			 * Get the orientation, image dimensions, and voxel size. 
+			 */
+			orientation = HeadBuffer->G21.Rel1.CM.ViewDirection;
+			if (orientation < View_FEET && orientation > View_RtoL) 
+			{
+				fprintf (stderr, "Error: Incompatible View Direction.\n");
+				fprintf (errfp, "Error: Incompatible View Direction.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			xdim	= HeadBuffer->G28.Pre.Columns;
+			ydim	= HeadBuffer->G28.Pre.Rows;
+			xpix	= HeadBuffer->G28.Pre.PixelSize.Row;
+			ypix	= HeadBuffer->G28.Pre.PixelSize.Row;
+			if (HeadBuffer->G21.Rel2.Mr.NumberOf3DImaPart == 0)
+				distance_factor	
+				= HeadBuffer->G21.Rel2.Mr.CurrentSliceDistanceFactor; 
+			else
+				distance_factor	= 0.0;
+			zpix	= HeadBuffer->G18.Acq.SliceThickness 
+				* (1.0 + distance_factor); 
+
+			n	= 0;
+			sscanf (HeadBuffer->G51.Txt.SliceOrientationNo1,
+				"%s %d", cbuffer, &n);
+			if (strncmp (cbuffer, "Sag/Cor", 7) == 0 && n == 45)
+			{
+				printf ("%c%c%c", BELL, BELL, BELL);
+				fprintf (stderr, 
+			"WARNING: there is a 45-degree slice tilt in %s.\n", imafile);
+				fprintf (stderr, "Display orientation may not be correct.\n");
+				fprintf (errfp, 
+			"WARNING: there is a 45-degree slice tilt in %s.\n", imafile);
+			}
+
+			/* 
+			 * Calculate the number of bytes per pixel. 
+			 */
+			NumRows_ul	= HeadBuffer->G28.Pre.Rows;
+			NumColumns_ul	= HeadBuffer->G28.Pre.Columns;
+			NumPixels_ul	= NumRows_ul * NumColumns_ul;
+
+			if (current_image_id == start_image_id)
+			{
+				strcpy (institution, HeadBuffer->G08.Ide.InstitutionID);
+				strcpy (model, HeadBuffer->G08.Ide.ManufacturerModel);
+				sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Year);
+				strcpy (study_date, num);
+				strcat (study_date, ":");
+				sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Month);
+				strcat (study_date, num);
+				strcat (study_date, ":");
+				sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Day);
+				strcat (study_date, num);
+				strcpy (patient_position, HeadBuffer->G51.Txt.PatientPosition);
+				strcpy (ParameterFileName, HeadBuffer->G19.Acq4.CM.ParameterFileName);
+				strcpy (SequenceFileName, HeadBuffer->G19.Acq4.CM.SequenceFileName);
+				strcpy (SequenceDescription, HeadBuffer->G19.Acq4.CM.SequenceDescription);
+			}
+
+			/* 
+			 * Set the offset to start reading the data. 
+			 */
+			StartOffset_ul = 0;
+
+			/* 
+			 * Allocate memory space according to the data size. 
+			 */
+			switch (DataSize) 
+			{
+				case U3_set_m_short:
+					if ((DataBuffer = (U_SHORT *) calloc (NumPixels_ul, 
+					BytesPerPixelShort)) == 0) 
+					{
+						fprintf (stderr, 
+						"Error: unable to allocate memory space for the data.");
+						fprintf (errfp, 
+						"Error: unable to allocate memory space for the data.");
+						fclose (errfp);
+						exit (1);
+					}
+					break;
+				case U3_set_m_long:
+					fprintf (stderr, "Error: long integer format not acceptable.");
+					fprintf (errfp, "Error: long integer format not acceptable.");
+					fclose (errfp);
+					exit (1);
+				default:
+					fprintf (stderr, "Error: imatoanalyze: Incompatible data type.\n");
+					fprintf (errfp, "Error: imatoanalyze: Incompatible data type.\n");
+					fclose (errfp);
+				exit (1);
+			}
+
+			/* 
+			 * Read the pixel data into the buffer 
+			 */
+			if ((Status = U3ReadPixData (imafp, StartOffset_ul,
+			NumPixels_ul, &DataSize, DataBuffer)) != 0) 
+			{
+				free (HeadBuffer);
+				free (DataBuffer);
+				fprintf (stderr, "Error: unable to read the pixel data.\n");
+				fprintf (errfp, "Error: unable to read the pixel data.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			if (NULL == (img = (short **) calloc (ydim, sizeof (short *)))) 
+			{
+				fprintf (stderr, "Error: could not calloc memory for **img\n");
+				fprintf (errfp, "Error: could not calloc memory for **img\n");
+				fclose (errfp);
+				exit (1);
+			}
+			for (j = 0; j < ydim; j++) 
+			{
+				if (NULL == (img [j] = (short *) calloc (xdim, sizeof (short)))) 
+				{
+					fprintf (stderr, "Error: could not calloc memory for *img\n");
+					fprintf (errfp, "Error: could not calloc memory for *img\n");
+					fclose (errfp);
+					exit (1);
+				}
+			}
+
+			bitsperpix = HeadBuffer->G28.Pre.BitsAllocated;
+			memset (order, 0, 4); 
+			strncpy (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.X, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Y, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Z, 1);
+
+			if (phase_image_flag && HeadBuffer->G09.Ide.DataObjectSubtype.M == Object_m_MRS)
+			{
+				global_max	= &phase_global_max;
+				global_min	= &phase_global_min;
+			}
+			else
+			{
+				global_max	= &magnitude_global_max;
+				global_min	= &magnitude_global_min;
+			}
+
+			n	= 0;
+			for (j = ydim - 1; j >= 0; j--) 
+			{
+				for (i = 0; i < xdim; i++) 
+				{
+					datum		= DataBuffer [n];
+					img [j][i]	= datum;
+					if (!burn_in_flag || datum != burn_in_value)
+					{
+						if (datum > *global_max)
+							*global_max = datum;
+						if (datum < *global_min)
+							*global_min = datum;
+					}
+					n++;
+				}
+			}
+
+			free (DataBuffer);
+			Status = U3Close (imafp);
+
+			/*
+			 * Write the slice pixel data.
+			 */
+			if (phase_image_flag && HeadBuffer->G09.Ide.DataObjectSubtype.M == Object_m_MRS)
+			{
+				for (j = 0; j < ydim; j++)  
+				{
+					if ((fwrite (img [j], sizeof (short), xdim, phase_imgfp)) != xdim) 
+					{
+						fprintf (stderr, "Error writing to: %s\n", phase_4dint);
+						fprintf (errfp, "Error writing to: %s\n", phase_4dint);
+						fclose (errfp);
+						exit (1);
+					}
+				}
+			}
+			else
+			{
+				for (j = 0; j < ydim; j++)  
+				{
+					if ((fwrite (img [j], sizeof (short), xdim, magnitude_imgfp)) != xdim) 
+					{
+						fprintf (stderr, "Error writing to: %s\n", magnitude_4dint);
+						fprintf (errfp, "Error writing to: %s\n", magnitude_4dint);
+						fclose (errfp);
+						exit (1);
+					}
+				}
+			}
+
+			if (HeadBuffer->G09.Ide.DataObjectSubtype.M == Object_m_MRS)
+			{
+				phase_num_slices++;
+			}
+			else
+			{
+				magnitude_num_slices++;
+			}
+			/*
+			if (!verbose_flag)
+			{
+				j	= magnitude_num_slices + phase_num_slices;
+				if (j % 20 == 0)
+					fprintf (stdout, "%4d\n", j);
+				else
+					fprintf (stdout, "%4d", j);
+			}
+			*/
+
+			/* 
+			 * Free allocated memories.
+			 */
+			for (j = 0; j < ydim; j++) 
+			{
+				free (img [j]);
+			}
+			free (img);
+			free (HeadBuffer);
+
+			/* 
+			 * Make preparations for the second loop.
+			 */
+			current_image_id--;
+			strcpy (imafile, imafile_root);
+			sprintf (num, "%d", current_image_id);
+			strcat (imafile, num);
+			strcat (imafile, ".ima");
+
+			if ((imafp = fopen (imafile, "rb")) == (FILE *) NULL) 
+				break;
+			fclose (imafp);
+		}
+	}
+}
+else	/* Coronal, Sagittal or Overlaping Slices */
+{
+	for (study_index = first_study; study_index <= last_study; study_index++) 
+	{
+		/*
+		 * Construct .ima file name and .ima header file name.
+		 */
+		strcpy (imafile_root, patient_id);
+		strcat (imafile_root, "-");
+		sprintf (num, "%d", study_index);
+		strcat (imafile_root, num);
+		strcat (imafile_root, "-");
+
+		strcpy (imafile, imafile_root);
+		sprintf (num, "%d", current_image_id);
+		strcat (imafile, num);
+		strcat (imafile, ".ima");
+
+		if ((imafp = fopen (imafile, "rb")) == (FILE *) NULL) 
+			continue;
+		fclose (imafp);
+
+		while (current_image_id <= end_image_id && U3Open (&imafp, imafile, "r") == 0)
+		{
+			if (verbose_flag)
+				fprintf (stdout, "Reading %s\n", imafile);
+
+			/* 
+			 * Determine header type. 
+			 */
+			if ((Status = U3GetHeaderType (imafp, &HeadType)) != 0) 
+			{
+				fprintf (stderr, "\nerror: imatoanalyze : unknown header type.\n");
+				exit (1);
+			}
+			switch (HeadType) 
+			{
+				case U3_internal_head_type:
+				case U3_nema_head_type:
+				case U3_numaris1_head_type:
+				case U3_numaris2_head_type:
+					break;
+				default:
+					fprintf (stderr, "\nThe data file format is unknown.\n");
+					fprintf (errfp, "\nThe data file format is unknown.\n");
+					fclose (errfp);
+					exit (1);
+			}
+
+			/* 
+			 * Check data type and data size. 
+			 */
+			if ((Status = U3GetDataType (imafp, &DataType, &DataSize)) != 0) 
+			{
+				fprintf (stderr, "Error: imatoanalyze : unknown data type.\n");
+				fprintf (errfp, "Error: imatoanalyze : unknown data type.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			/* 
+			 * Make sure it is an image file 
+			 */
+			if (DataType != U3_image_data_type) 
+			{
+				fprintf (stderr, "Error: imatoanalyze : Data file is not an image file.\n");
+				fprintf (errfp, "Error: imatoanalyze : Data file is not an image file.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			/* 
+			 * Allocate memory space for the header buffer 
+			 */
+			if ((HeadBuffer = (header_t *) calloc (1, sizeof (header_t))) == 0) 
+			{
+				fprintf (stderr, "Error : imatoanalyze : unable to allocate memory.\n");
+				fprintf (errfp, "Error : imatoanalyze : unable to allocate memory.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			/* 
+			 * Get the header buffer. 
+			 */
+			if ((Status = U3GetHeader (imafp, HeadBuffer)) != 0) 
+			{
+				free (HeadBuffer);
+				fprintf (stderr, "Error: imatoanalyze : unable to get the header.\n");
+				fprintf (errfp, "Error: imatoanalyze : unable to get the header.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			/* 
+			 * Get the orientation, image dimensions, and voxel size. 
+			 */
+			orientation = HeadBuffer->G21.Rel1.CM.ViewDirection;
+			if (orientation < View_FEET && orientation > View_RtoL) 
+			{
+				fprintf (stderr, "Error: Incompatible View Direction.\n");
+				fprintf (errfp, "Error: Incompatible View Direction.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			xdim	= HeadBuffer->G28.Pre.Columns;
+			ydim	= HeadBuffer->G28.Pre.Rows;
+			xpix	= HeadBuffer->G28.Pre.PixelSize.Row;
+			ypix	= HeadBuffer->G28.Pre.PixelSize.Row;
+			if (HeadBuffer->G21.Rel2.Mr.NumberOf3DImaPart == 0)
+				distance_factor	
+				= HeadBuffer->G21.Rel2.Mr.CurrentSliceDistanceFactor; 
+			else
+				distance_factor	= 0.0;
+			zpix	= HeadBuffer->G18.Acq.SliceThickness 
+				* (1.0 + distance_factor); 
+
+			n	= 0;
+			sscanf (HeadBuffer->G51.Txt.SliceOrientationNo1,
+				"%s %d", cbuffer, &n);
+			if (strncmp (cbuffer, "Sag/Cor", 7) == 0 && n == 45)
+			{
+				printf ("%c%c%c", BELL, BELL, BELL);
+				fprintf (stderr, 
+			"WARNING: there is a 45-degree slice tilt in %s.\n", imafile);
+				fprintf (stderr, "Display orientation may not be correct.\n");
+				fprintf (errfp, 
+			"WARNING: there is a 45-degree slice tilt in %s.\n", imafile);
+				fprintf (errfp, "Display orientation may not be correct.\n");
+			}
+
+			/* 
+			 * Calculate the number of bytes per pixel. 
+			 */
+			NumRows_ul	= HeadBuffer->G28.Pre.Rows;
+			NumColumns_ul	= HeadBuffer->G28.Pre.Columns;
+			NumPixels_ul	= NumRows_ul * NumColumns_ul;
+
+			if (current_image_id == start_image_id)
+			{
+				strcpy (institution, HeadBuffer->G08.Ide.InstitutionID);
+				strcpy (model, HeadBuffer->G08.Ide.ManufacturerModel);
+				sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Year);
+				strcpy (study_date, num);
+				strcat (study_date, ":");
+				sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Month);
+				strcat (study_date, num);
+				strcat (study_date, ":");
+				sprintf (num, "%d", HeadBuffer->G08.Ide.StudyDate.Day);
+				strcat (study_date, num);
+				strcpy (ParameterFileName, HeadBuffer->G19.Acq4.CM.ParameterFileName);
+				strcpy (SequenceFileName, HeadBuffer->G19.Acq4.CM.SequenceFileName);
+				strcpy (patient_position, HeadBuffer->G51.Txt.PatientPosition);
+				strcpy (SequenceDescription, HeadBuffer->G19.Acq4.CM.SequenceDescription);
+			}
+
+			/* 
+			 * Set the offset to start reading the data. 
+			 */
+			StartOffset_ul = 0;
+
+			/* 
+			 * Allocate memory space according to the data size. 
+			 */
+			switch (DataSize) 
+			{
+				case U3_set_m_short:
+					if ((DataBuffer = (U_SHORT *) calloc (NumPixels_ul, 
+					BytesPerPixelShort)) == 0) 
+					{
+						fprintf (stderr, 
+						"Error: unable to allocate memory space for the data.");
+						fprintf (errfp, 
+						"Error: unable to allocate memory space for the data.");
+						fclose (errfp);
+						exit (1);
+					}
+					break;
+				case U3_set_m_long:
+					fprintf (stderr, "Error: long integer format not acceptable.");
+					fprintf (errfp, "Error: long integer format not acceptable.");
+					fclose (errfp);
+					exit (1);
+				default:
+					fprintf (stderr, "Error: imatoanalyze: Incompatible data type.\n");
+					fprintf (errfp, "Error: imatoanalyze: Incompatible data type.\n");
+					fclose (errfp);
+					exit (1);
+			}
+
+			/* 
+			 * Read the pixel data into the buffer 
+			 */
+			if ((Status = U3ReadPixData (imafp, StartOffset_ul,
+			NumPixels_ul, &DataSize, DataBuffer)) != 0) 
+			{
+				free (HeadBuffer);
+				free (DataBuffer);
+				fprintf (stderr, "Error: unable to read the pixel data.\n");
+				fprintf (errfp, "Error: unable to read the pixel data.\n");
+				fclose (errfp);
+				exit (1);
+			}
+
+			if (NULL == (img = (short **) calloc (ydim, sizeof (short *)))) 
+			{
+				fprintf (stderr, "Error: could not calloc memory for **img\n");
+				fprintf (errfp, "Error: could not calloc memory for **img\n");
+				fclose (errfp);
+				exit (1);
+			}
+			for (j = 0; j < ydim; j++) 
+			{
+				if (NULL == (img [j] = (short *) calloc (xdim, sizeof (short)))) 
+				{
+					fprintf (stderr, "Error: could not calloc memory for *img\n");
+					fprintf (errfp, "Error: could not calloc memory for *img\n");
+					fclose (errfp);
+					exit (1);
+				}
+			}
+
+			bitsperpix = HeadBuffer->G28.Pre.BitsAllocated;
+			memset (order, 0, 4); 
+			strncpy (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.X, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Y, 1);
+			strncat (order, HeadBuffer->G21.Rel1.CM.PatientOrientationSet1.Z, 1);
+
+			if (phase_image_flag && HeadBuffer->G09.Ide.DataObjectSubtype.M == Object_m_MRS)
+			{
+				global_max	= &phase_global_max;
+				global_min	= &phase_global_min;
+			}
+			else
+			{
+				global_max	= &magnitude_global_max;
+				global_min	= &magnitude_global_min;
+			}
+
+			n	= 0;
+			if (orientation == View_LtoR || orientation == View_RtoL)
+			{
+				for (j = ydim - 1; j >= 0; j--) 
+				{
+					for (i = xdim - 1; i >= 0; i--) 
+					{
+						datum		= DataBuffer [n];
+						img [j][i]	= datum;
+						if (!burn_in_flag 
+						|| datum != burn_in_value)
+						{
+							if (datum > *global_max)
+								*global_max = datum;
+							if (datum < *global_min)
+								*global_min = datum;
+						}
+						n++;
+					}
+				}
+			}
+			else
+			{
+				for (j = ydim - 1; j >= 0; j--) 
+				{
+					for (i = 0; i < xdim; i++) 
+					{
+						datum		= DataBuffer [n];
+						img [j][i]	= datum;
+						if (!burn_in_flag 
+						|| datum != burn_in_value)
+						{
+							if (datum > *global_max)
+								*global_max = datum;
+							if (datum < *global_min)
+								*global_min = datum;
+						}
+						n++;
+					}
+				}
+			}
+
+			free (DataBuffer);
+			Status = U3Close (imafp);
+
+			/*
+			 * Write the slice pixel data.
+			 */
+			if (phase_image_flag && HeadBuffer->G09.Ide.DataObjectSubtype.M == Object_m_MRS)
+			{
+				for (j = 0; j < ydim; j++)  
+				{
+					if ((fwrite (img [j], sizeof (short), xdim, phase_imgfp)) != xdim) 
+					{
+						fprintf (stderr, "Error writing to: %s\n", phase_4dint);
+						fprintf (errfp, "Error writing to: %s\n", phase_4dint);
+						fclose (errfp);
+						exit (1);
+					}
+				}
+			}
+			else
+			{
+				for (j = 0; j < ydim; j++)  
+				{
+					if ((fwrite (img [j], sizeof (short), xdim, magnitude_imgfp)) != xdim) 
+					{
+						fprintf (stderr, "Error writing to: %s\n", magnitude_4dint);
+						fprintf (errfp, "Error writing to: %s\n", magnitude_4dint);
+						fclose (errfp);
+						exit (1);
+					}
+				}
+			}
+
+			if (HeadBuffer->G09.Ide.DataObjectSubtype.M == Object_m_MRS)
+			{
+				phase_num_slices++;
+			}
+			else
+			{
+				magnitude_num_slices++;
+			}
+			/*
+			if (!verbose_flag)
+			{
+				j	= magnitude_num_slices + phase_num_slices;
+				if (j % 20 == 0)
+					fprintf (stdout, "%4d\n", j);
+				else
+					fprintf (stdout, "%4d", j);
+			}
+			*/
+
+			/* 
+			 * Free allocated memories.
+			 */
+			for (j = 0; j < ydim; j++) 
+			{
+				free (img [j]);
+			}
+			free (img);
+			free (HeadBuffer);
+
+			/* 
+			 * Make preparations for the second loop.
+			 */
+			current_image_id++;
+			strcpy (imafile, imafile_root);
+			sprintf (num, "%d", current_image_id);
+			strcat (imafile, num);
+			strcat (imafile, ".ima");
+
+			if ((imafp = fopen (imafile, "rb")) == (FILE *) NULL) 
+				break;
+			fclose (imafp);
+		}
+	}
+}
+
+	fclose (magnitude_imgfp);
+	if (phase_image_flag)
+		fclose (phase_imgfp);
+
+	/*
+	 * Create Analyze hdr file.
+	 */
+	if ((hdrfp = fopen (magnitude_ANALYZE_hdr, "w")) == 0) 
+	{
+		fprintf (stderr, "Error: Unable to create ANALYZE header %s\n", magnitude_ANALYZE_hdr);
+		fprintf (errfp, "Error: Unable to create ANALYZE header %s\n", magnitude_ANALYZE_hdr);
+		fclose (errfp);
+		exit (1);
+	}
+
+	strncpy (hdr.hk.db_name, imafile, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	hdr.hk.extents = 16384;			 /* recommended by developers  */
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.dime.dim [0] = 4;			 /* 4 dimensions  */
+	hdr.dime.dim [1] = xdim;
+	hdr.dime.dim [2] = ydim;
+	if (time_series_flag)
+	{
+		hdr.dime.dim [3] = last_study - first_study + 1;	 
+		hdr.dime.dim [4] = magnitude_num_slices / (last_study - first_study + 1);
+	}
+	else
+	{
+		hdr.dime.dim [3] = magnitude_num_slices / (last_study - first_study + 1);
+		hdr.dime.dim [4] = last_study - first_study + 1;	 
+	}
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = 4;			 /* 16 bit signed integer  */
+	hdr.dime.bitpix = bitsperpix;
+	hdr.dime.pixdim [1] = xpix;
+	hdr.dime.pixdim [2] = ypix;
+	hdr.dime.pixdim [3] = zpix;
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = pkg_max (pkg_abs (magnitude_global_max), pkg_abs (magnitude_global_min));
+	hdr.dime.glmin = -hdr.dime.glmax;
+	strncpy (hdr.hist.descrip, imafile, 79);
+	strcpy (hdr.hist.originator, "imatoanalyze");
+	strncpy (hdr.hist.patient_id, patient_id, 4);
+	hdr.hist.orient = '\000';
+
+	magnitude_zdim	= hdr.dime.dim [3]; 
+	magnitude_vdim	= hdr.dime.dim [4]; 
+
+
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, hdrfp)) != 1)
+	{
+		printf ("Error writing to: %s\n", magnitude_ANALYZE_hdr);
+		exit (1);
+	}
+
+	fclose (hdrfp);
+
+	if (phase_image_flag)
+	{
+		if ((hdrfp = fopen (phase_ANALYZE_hdr, "w")) == 0) 
+		{
+			fprintf (stderr, "Error: Unable to create phase ANALYZE header %s\n", 
+				phase_ANALYZE_hdr);
+			fprintf (errfp, "Error: Unable to create phase ANALYZE header %s\n", 
+				phase_ANALYZE_hdr);
+			fclose (errfp);
+			exit (1);
+		}
+
+		if (time_series_flag)
+		{
+			hdr.dime.dim [4] = phase_num_slices / (last_study - first_study + 1);
+		}
+		else
+		{
+			hdr.dime.dim [3] = phase_num_slices / (last_study - first_study + 1);
+		}
+
+		hdr.dime.glmax = pkg_max (pkg_abs (phase_global_max), pkg_abs (phase_global_min));
+		hdr.dime.glmin = -hdr.dime.glmax;
+
+		if ((fwrite (&hdr, sizeof (struct dsr), 1, hdrfp)) != 1)
+		{
+			fprintf (stderr, "Error writing to: %s\n", phase_ANALYZE_hdr);
+			fprintf (errfp, "Error writing to: %s\n", phase_ANALYZE_hdr);
+			fclose (errfp);
+			exit (1);
+		}
+
+		fclose (hdrfp);
+	}
+
+	/*
+	 * Create Interfile header.
+	 */
+	if ((iffp = fopen (magnitude_ifhdrfile, "w")) == 0) 
+	{
+		fprintf (stderr, "Unable to create Interfile header %s\n", magnitude_ifhdrfile);
+		fprintf (errfp, "Unable to create Interfile header %s\n", magnitude_ifhdrfile);
+		fclose (errfp);
+		exit (1);
+	}
+
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	strncpy (version, ptr, 4);
+	ptr = strstr (ptr, " ");
+	ptr++;
+	strncpy (program_date, ptr, 10);
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+
+	fprintf (iffp, "INTERFILE :=\n");
+	fprintf (iffp, "version of keys	:= 3.3\n");
+	fprintf (iffp, "image modality	:= mri\n");
+	fprintf (iffp, "originating system	:= %s", model);
+	fprintf (iffp, "conversion program	:= imatoanalyze\n");
+	fprintf (iffp, "program version	:= %s\n", version);
+	fprintf (iffp, "program date	:= %s\n", program_date);
+	fprintf (iffp, "original institution	:= %s\n", institution);
+	fprintf (iffp, "name of data file	:= %s\n", magnitude_4dint);
+	fprintf (iffp, "patient ID := %s\n", patient_id);
+	fprintf (iffp, "study date	:= %s\n", study_date);
+
+	fprintf (iffp, "number format	:= signed integer\n");
+	fprintf (iffp, "number of bytes per pixel	:= %d\n", bitsperpix / 8);
+	fprintf (iffp, "number of dimensions	:= 4\n");
+	fprintf (iffp, "matrix size [1]	:= %d\n", xdim);
+	fprintf (iffp, "matrix size [2]	:= %d\n", ydim);
+	fprintf (iffp, "matrix size [3]	:= %d\n", hdr.dime.dim [3]);
+	fprintf (iffp, "matrix size [4]	:= %d\n", hdr.dime.dim [4]);
+	fprintf (iffp, "scaling factor (mm/pixel) [1]	:= %f\n", xpix);
+	fprintf (iffp, "scaling factor (mm/pixel) [2]	:= %f\n", ypix);
+	fprintf (iffp, "scaling factor (mm/pixel) [3]	:= %f\n", zpix);
+	fprintf (iffp, "matrix initial element [1]	:= right\n");
+	fprintf (iffp, "matrix initial element [2]	:= posterior\n");
+	fprintf (iffp, "matrix initial element [3]	:= inferior\n");
+	fprintf (iffp, "global minimum	:= %d\n", magnitude_global_min);
+	fprintf (iffp, "global maximum	:= %d\n", magnitude_global_max);
+	fprintf (iffp, "mri parameter file name	:= %s\n", ParameterFileName);
+	fprintf (iffp, "mri sequence file name	:= %s\n", SequenceFileName);
+	fprintf (iffp, "mri sequence description	:= %s\n", SequenceDescription);
+
+	fclose (iffp);
+
+	if (phase_image_flag)
+	{
+		if ((iffp = fopen (phase_ifhdrfile, "w")) == 0) 
+		{
+			fprintf (stderr, "Unable to create phase Interfile Format header %s\n", 
+				phase_ifhdrfile);
+			fprintf (errfp, "Unable to create phase Interfile Format header %s\n", 
+				phase_ifhdrfile);
+			fclose (errfp);
+			exit (1);
+		}
+
+		fprintf (iffp, "INTERFILE :=\n");
+		fprintf (iffp, "version of keys	:= 3.3\n");
+		fprintf (iffp, "image modality	:= mri\n");
+		fprintf (iffp, "originating system	:= %s", model);
+		fprintf (iffp, "conversion program	:= imatoanalyze\n");
+		fprintf (iffp, "program version	:= %s\n", version);
+		fprintf (iffp, "program date	:= %s\n", program_date);
+		fprintf (iffp, "original institution	:= %s\n", institution);
+		fprintf (iffp, "name of data file	:= %s\n", phase_4dint);
+		fprintf (iffp, "patient ID := %s\n", patient_id);
+		fprintf (iffp, "study date	:= %s\n", study_date);
+		fprintf (iffp, "first study	:= %d\n", first_study);
+		fprintf (iffp, "last study	:= %d\n", last_study);
+		fprintf (iffp, "start image id	:= %d\n", start_image_id);
+		fprintf (iffp, "end image id	:= %d\n", end_image_id);
+		fprintf (iffp, "number format	:= float\n");
+		fprintf (iffp, "number of bytes per pixel	:= %d\n", sizeof (float));
+		fprintf (iffp, "time series flag	:= %d\n", time_series_flag);
+		fprintf (iffp, "number of dimensions	:= 4\n");
+		fprintf (iffp, "matrix size [1]	:= %d\n", hdr.dime.dim [1]);
+		fprintf (iffp, "matrix size [2]	:= %d\n", hdr.dime.dim [2]);
+		fprintf (iffp, "matrix size [3]	:= %d\n", hdr.dime.dim [3]);
+		fprintf (iffp, "matrix size [4]	:= %d\n", hdr.dime.dim [4]);
+		fprintf (iffp, "scaling factor (mm/pixel) [1]	:= %f\n", xpix);
+		fprintf (iffp, "scaling factor (mm/pixel) [2]	:= %f\n", ypix);
+		fprintf (iffp, "scaling factor (mm/pixel) [3]	:= %f\n", zpix);
+		fprintf (iffp, "matrix initial element [1]	:= right\n");
+		fprintf (iffp, "matrix initial element [2]	:= posterior\n");
+		fprintf (iffp, "matrix initial element [3]	:= inferior\n");
+		fprintf (iffp, "global minimum	:= %d\n", phase_global_min);
+		fprintf (iffp, "global maximum	:= %d\n", phase_global_max);
+		fprintf (iffp, "mri parameter file name	:= %s\n", ParameterFileName);
+		fprintf (iffp, "mri sequence file name	:= %s\n", SequenceFileName);
+		fprintf (iffp, "mri sequence description	:= %s\n", SequenceDescription);
+
+		fclose (iffp);
+	}
+
+	/*
+	 * Write critical information to recfile.
+	 */
+	if ((recfp = fopen (magnitude_recfile, "a")) == 0) 
+	{
+		fprintf (stderr, "Unable to create magnitude recfile %s\n", magnitude_recfile);
+		fprintf (errfp, "Unable to create magnitude recfile %s\n", magnitude_recfile);
+		fclose (errfp);
+		exit (1);
+	}
+
+	fprintf (recfp, "patient_id:		%s\n", patient_id);
+	fprintf (recfp, "first_study:		%d\n", first_study);
+	fprintf (recfp, "last_study:		%d\n", last_study);
+	fprintf (recfp, "start_image_id:		%d\n", start_image_id);
+	fprintf (recfp, "end_image_id:		%d\n", end_image_id);
+	fprintf (recfp, "patient_position:	%s\n", patient_position);
+	fprintf (recfp, "time_series_flag	%d\n", time_series_flag);
+	fprintf (recfp, "xdim:			%d\n", hdr.dime.dim [1]);
+	fprintf (recfp, "ydim:			%d\n", hdr.dime.dim [2]);
+	fprintf (recfp, "zdim:			%d\n", magnitude_zdim);
+	fprintf (recfp, "vdim:			%d\n", magnitude_vdim);
+	fprintf (recfp, "xpix:			%f\n", xpix);
+	fprintf (recfp, "ypix:			%f\n", ypix);
+	fprintf (recfp, "zpix:			%f\n", zpix);
+	fprintf (recfp, "bitsperpix:		%d\n", bitsperpix);
+	fprintf (recfp, "orientation:		%d\n", orientation);
+	fprintf (recfp, "institution:		%s\n", institution);
+	fprintf (recfp, "model:			%s\n", model);
+	fprintf (recfp, "study_date:		%s\n", study_date);
+	fprintf (recfp, "parameter_file_name:	%s\n", ParameterFileName);
+	fprintf (recfp, "sequence_file_name:	%s\n", SequenceFileName);
+	fprintf (recfp, "sequence_description:	%s\n", SequenceDescription);
+
+	fclose (recfp);
+
+	if (phase_image_flag)
+	{
+		if ((recfp = fopen (phase_recfile, "a")) == 0) 
+		{
+			fprintf (stderr, "Unable to create phase recfile %s\n", phase_recfile);
+			fprintf (errfp, "Unable to create phase recfile %s\n", phase_recfile);
+			fclose (errfp);
+			exit (1);
+		}
+
+		fprintf (recfp, "patient_id:		%s\n", patient_id);
+		fprintf (recfp, "first_study:		%d\n", first_study);
+		fprintf (recfp, "last_study:		%d\n", last_study);
+		fprintf (recfp, "start_image_id:		%d\n", start_image_id);
+		fprintf (recfp, "end_image_id:		%d\n", end_image_id);
+		fprintf (recfp, "patient_position:	%s\n", patient_position);
+		fprintf (recfp, "time_series_flag	%d\n", time_series_flag);
+		fprintf (recfp, "xdim:			%d\n", hdr.dime.dim [1]);
+		fprintf (recfp, "ydim:			%d\n", hdr.dime.dim [2]);
+		fprintf (recfp, "zdim:			%d\n", hdr.dime.dim [3]);
+		fprintf (recfp, "vdim:			%d\n", hdr.dime.dim [4]);
+		fprintf (recfp, "xpix:			%f\n", xpix);
+		fprintf (recfp, "ypix:			%f\n", ypix);
+		fprintf (recfp, "zpix:			%f\n", zpix);
+		fprintf (recfp, "bitsperpix:		%d\n", bitsperpix);
+		fprintf (recfp, "orientation:		%d\n", orientation);
+		fprintf (recfp, "institution:		%s\n", institution);
+		fprintf (recfp, "model:			%s\n", model);
+		fprintf (recfp, "study_date:		%s\n", study_date);
+		fprintf (recfp, "parameter_file_name:	%s\n", ParameterFileName);
+		fprintf (recfp, "sequence_file_name:	%s\n", SequenceFileName);
+		fprintf (recfp, "sequence_description:	%s\n", SequenceDescription);
+
+		fclose (recfp);
+	}
+
+	if (phase_image_flag)
+		fprintf (stdout, "\nimatoanalyze completed successfully. %s and %s created.\n", 
+			magnitude_4dint, phase_4dint);
+	else
+		fprintf (stdout, "\nimatoanalyze completed successfully. %s created.\n", magnitude_4dint);
+
+	exit (0);
+}
+@

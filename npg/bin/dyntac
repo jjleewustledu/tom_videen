@@ -1,0 +1,99 @@
+#!/bin/csh
+#   Name:   dyntac
+#   Author: Tom Videen
+#   Date:   Dec 2002
+#   Intent: Create time-activity curve from dynamic image
+#   Creates: fname.plt
+
+if ($#argv != 9) then
+	echo "Usage: dyntac path prefix subject tracer scan ext X Y Z"
+	echo " e.g.  dyntac .. p 5660 oo 1 v 65 60 24"
+	exit 1
+endif
+
+set DPATH  = $1
+set PREFIX = $2
+set ID     = $3
+set TRACER = $4
+set NUM    = $5
+set EXT    = $6
+set X      = $7
+set Y      = $8
+set Z      = $9
+
+set DIAMETER = 80
+
+set PID  = $PREFIX$ID
+set SCAN = $TRACER$NUM
+set NAME = $PID$SCAN
+set IN   = $DPATH/$NAME.$EXT
+set LST  = $NAME.lst
+set PRM  = $NAME.prm
+set REG  = $NAME.reg
+set RGT  = $NAME.rgt
+set PLT  = $NAME.plt
+set LEN  = $NAME.len
+set CNTS = $NAME.cnts
+set DELIM = `echo $PREFIX | cut -c1`
+
+if (! -e $IN) then
+	echo "ERROR [dyntac] file not found: $IN"
+	exit 1
+endif
+
+imgfrms $IN | cut -c1-3 >! junk
+
+set FIRST = `head -5 junk | tail -1`
+set LAST  = `tail -1 junk`
+set NFRMS = `echo $LAST - $FIRST + 1 | bc`
+set MISSING = `echo $FIRST - 1 | bc`
+
+# Create lst, prm, and reg files:
+
+echo "$ID $NUM" >! $LST
+
+echo "datapath:   $DPATH"        >! $PRM
+echo "species:    $PREFIX"       >> $PRM
+echo "tracer:     $TRACER"       >> $PRM
+echo "extension:  $EXT"          >> $PRM
+echo "imgfilter:  none"          >> $PRM
+echo "voi:        new_sphere $DIAMETER" >> $PRM
+
+echo "30  voifile"                  >! $REG
+echo "center of brain for $PID"     >> $REG
+echo "1"                            >> $REG
+echo "center_of_brain   $X  $Y  $Z" >> $REG
+
+echo 0 >! junk
+voistat $PRM $LST $RGT $REG < junk
+unalias rm
+rm junk
+
+set SIZE = `wc -l $RGT | cut -f1 -d$DELIM`
+set NN = `echo $SIZE - 2 | bc`
+tail -$NN $RGT | head -$NFRMS | cut -c14-24 >! $LEN
+tail -$NN $RGT | head -$NFRMS | cut -c28-40 >! $CNTS
+set DURATION = `cat $LEN`
+set COUNTS = `cat $CNTS`
+
+if (-e $PLT) rm $PLT
+touch $PLT
+set i = 1
+while ($i <= $NFRMS)
+	set SEC = `echo $DURATION[$i] | bc -l`
+	set CNTRATE = `echo $COUNTS[$i] / $SEC | bc -l`
+	echo $CNTRATE | cut -c1-8 >> $PLT
+	@ i++
+end
+set STRING = "$DIAMETER-mm sphere at $X,$Y,$Z"
+
+cos_plot $PLT $FIRST $LAST $NAME.$EXT $STRING
+
+rm $LST
+rm $PRM
+rm $REG
+rm $RGT
+rm $LEN
+rm $CNTS
+if (-e idl.ps) rm idl.ps
+

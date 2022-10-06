@@ -1,0 +1,109 @@
+#ifndef _CLASS_DISPLACEMENT_H_
+#define _CLASS_DISPLACEMENT_H_
+
+
+/** \file Displacement.h
+\date 28/04/2005
+\author Stefan Heldmann, Nils Papenberg
+*/
+#include "Array.h"
+
+namespace flirt {
+
+class Displacement;
+
+void swapDisplacements( Displacement &U1, Displacement &U2);
+
+/**
+ * \brief Abstract Class for Displacements u = (u1, u2, ..., ud)
+ * \author Nils Papenberg, Stefan Heldmann
+ */
+class Displacement : public virtual Array  {
+public:
+    Displacement();
+
+    Displacement( const double*);
+
+    Displacement( const Displacement&);
+
+    virtual ~Displacement();
+
+  /**
+   * \brief returns Voxelsize
+   */
+  virtual const double* getVoxelSize() const;
+
+  /**
+   * \brief friend method to swap displacement U1 with displacement U2
+   */
+  friend void swapDisplacements(Displacement &U1, Displacement &U2);
+
+ protected:
+  double *h;
+};
+
+/**
+ * \brief Class for twodimensional Displacements U = (U1, U2)
+ */
+class Displacement2D : public Displacement, public Array3D {
+
+public:
+    /**
+     * \brief Constructor
+     */
+    Displacement2D();
+
+    Displacement2D( int, int, double, double);
+
+    Displacement2D(const int* _dims, double h1, double h2);
+
+    Displacement2D(const int*, const double*);
+
+    //MeVis.MK added init and reset (reset may not be ok?)
+    void init(int, int, double, double);
+    void reset();
+
+    /**
+     * \brief Copyconstructor
+     */
+    Displacement2D( const Displacement2D&);
+
+    /**
+     * \brief Destructor
+     */
+    ~Displacement2D();
+
+};
+
+/**
+ * \brief Class for threedimensional Displacements U = (U1, U2, U3)
+ */
+class Displacement3D : public Displacement, public Array4D {
+
+public:
+    /**
+     * \brief Constructor
+     */
+    Displacement3D();
+
+    Displacement3D( int, int, int, double, double, double);
+
+    Displacement3D(const int* _dims, double h1, double h2, double h3);
+
+    Displacement3D(const int*, const double*);
+
+    /**
+     * \brief Copyconstructor
+     */
+    Displacement3D( const Displacement3D&);
+
+    /**
+     * \brief Destructor
+     */
+    ~Displacement3D();
+
+};
+
+}
+
+#endif

@@ -1,0 +1,260 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.0
+date	2004.02.13.18.00.37;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2000.10.09.20.00.18;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@/*	$Log: anamaskshrink.c,v $
+ * Revision 1.1  2000/10/09  20:00:18  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			anamaskshrink.c
+ *	Date:			Oct 2000
+ *	Author:			Tom Videen
+ *	Description:	Strip pixels from edges of a template
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anamaskshrink/RCS/anamaskshrink.c,v 1.1 2000/10/09 20:00:18 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <image.h>
+#include <libnrimg.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	FILE           *fp;
+	struct dsr      hdr;			 /* ANALYZE.h */
+	char           *img1, *hdr1;	 /* input file */
+	char           *img2, *hdr2;	 /* output file */
+	long            dim1, dim2, dim3; /* dimensions of image */
+	short        ***image;			 /* image */
+	short          *row;			 /* single row of input image */
+	long            i, j, k, n;
+	int             npix;
+
+	if (argc != 6) {
+		fprintf (stderr, "Usage: anamaskshrink img1 hdr1 img2 hdr2 npix\n");
+		return (ERROR);
+	}
+	hdr1 = argv[1];
+	img1 = argv[2];
+	hdr2 = argv[3];
+	img2 = argv[4];
+	npix = atoi (argv[5]);
+
+/*
+ * Read Analyze hdr file
+ */
+
+	if ((fp = fopen (hdr1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Cannot open: %s\n", hdr1);
+		return (ERROR);
+	}
+	if ((fread (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Reading: %s\n", hdr1);
+		return (ERROR);
+	}
+	if (hdr.dime.dim[0] != 4) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Dimensions = %d\n", hdr.dime.dim[0]);
+		return (ERROR);
+	}
+	if (hdr.dime.datatype != 4) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Datatype = %d\n", hdr.dime.datatype);
+		return (ERROR);
+	}
+	if (hdr.dime.bitpix != 16) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Reading: %s\n", hdr1);
+		fprintf (stderr, "Bits/pixel = %d\n", hdr.dime.bitpix);
+		return (ERROR);
+	}
+	dim1 = hdr.dime.dim[1];
+	dim2 = hdr.dime.dim[2];
+	dim3 = hdr.dime.dim[3];
+	(void) fclose (fp);
+
+/*
+ *	Read image
+ */
+
+	if ((fp = fopen (img1, "r")) == 0) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Cannot open: %s\n", img1);
+		return (ERROR);
+	}
+	if ((image = s3tensor (1, dim3, 1, dim2, 1, dim1)) == NULL) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Cannot calloc image\n");
+		return (ERROR);
+	}
+	if (NULL == (row = (short *) calloc (dim1, sizeof (short)))) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Cannot malloc memory for row\n");
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			if ((fread (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [anamaskshrink]: Reading: %s\n", img1);
+				return (ERROR);
+			}
+			for (k = 1; k <= dim1; k++)
+				image[i][j][dim1 - (k - 1)] = row[k - 1];
+		}
+	}
+	(void) fclose (fp);
+
+
+/*	Remove pixels from edges */
+
+	for (k = 1; k <= dim3; k++) {
+
+/*	Reduce upper row */
+
+		for (j = 1; j <= dim2; j++) {
+			n = npix;
+			for (i = 1; i <= dim1; i++) {
+				if (image[k][j][i] > 0) {
+					image[k][j][i] = 0;
+					n = n - 1;
+					if (n <= 0)
+						break;
+				}
+			}
+		}
+
+/*	Reduce lower row */
+
+		for (j = 1; j <= dim2; j++) {
+			n = npix;
+			for (i = dim1; i >= 1; i--) {
+				if (image[k][j][i] > 0) {
+					image[k][j][i] = 0;
+					n = n - 1;
+					if (n <= 0)
+						break;
+				}
+			}
+		}
+
+/*	Reduce left column */
+
+		for (i = 1; i <= dim1; i++) {
+			n = npix;
+			for (j = 1; j <= dim2; j++) {
+				if (image[k][j][i] > 0) {
+					image[k][j][i] = 0;
+					n = n - 1;
+					if (n <= 0)
+						break;
+				}
+			}
+		}
+
+/*	Reduce right column */
+
+		for (i = 1; i <= dim1; i++) {
+			n = npix;
+			for (j = dim2; j >= 1; j--) {
+				if (image[k][j][i] > 0) {
+					image[k][j][i] = 0;
+					n = n - 1;
+					if (n <= 0)
+						break;
+				}
+			}
+		}
+	}
+
+/*
+ * Write to output file
+ */
+
+	if ((fp = fopen (hdr2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Unable to create ANALYZE header %s\n", hdr2);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fp)) != 1) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Error writing to: %s\n", hdr2);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+
+	if ((fp = fopen (img2, "w")) == 0) {
+		fprintf (stderr, "ERROR [anamaskshrink]: Unable to create ANALYZE image %s\n", img2);
+		return (ERROR);
+	}
+	for (i = dim3; i > 0; i--) {
+		for (j = dim2; j > 0; j--) {
+			for (k = 1; k <= dim1; k++)
+				row[k - 1] = image[i][j][dim1 - (k - 1)];
+			if ((fwrite (row, sizeof (short), dim1, fp)) != dim1) {
+				fprintf (stderr, "ERROR [anamaskshrink]: Writing: %s\n", img2);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fp);
+
+	fprintf (stdout, "Converted: %s to %s\n", img1, img2);
+	free_s3tensor (image, 1, dim3, 1, dim2, 1, dim1);
+	free (row);
+	return (OK);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d12 1
+d14 1
+a14 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/anamaskshrink/RCS/anamaskshrink.c,v 1.3 1999/12/16 17:57:52 tom Exp $";
+d79 1
+a79 1
+	fclose (fp);
+d107 1
+a107 1
+	fclose (fp);
+d183 1
+a183 1
+	fclose (fp);
+d199 1
+a199 1
+	fclose (fp);
+@

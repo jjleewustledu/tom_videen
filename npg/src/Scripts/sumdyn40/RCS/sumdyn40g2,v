@@ -1,0 +1,203 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	2004.05.20.13.47.54;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/bin/csh
+#   Name:   sumdyn40g2
+#   Author: Tom Videen
+#   Date:   Sep 2001
+#   Intent: View time-activity curve and determine frames to sum for 40-sec scan
+
+if ($#argv != 6 && $#argv != 7 && $#argv != 9) then
+	echo "Usage:  sumdyn40g2 path prefix subject tracer scan ext [reference or X Y Z]"
+	echo " e.g.   sumdyn40g2 . p 5660 ho 1 v"
+	echo "  or    sumdyn40g2 . p 5660 oo 1 v p5660ho1_g2.v"
+	echo "  or    sumdyn40g2 /data/npggw/data1/COSS/p5660/Raw p 5660 oo 1 v 65 60 24"
+	exit 1
+endif
+
+set DATAPATH = $1
+set PREFIX   = $2
+set ID       = $3
+set TRACER   = $4
+set NUM      = $5
+set EXT      = $6
+set REF      = ''
+set CTR      = 0
+set DIAMETER = 80
+set NFRAMES  = 20
+
+if ($#argv == 7) then
+	set REF = $7
+	if (! -e $REF) then
+		echo "ERROR [sumdyn40g2] file not found: $REF"
+		exit 1
+	endif
+endif
+
+if ($#argv == 9) then
+	set CTR = 1
+	set X = $7
+	set Y = $8
+	set Z = $9
+endif
+
+set COB  = _center_of_brain
+set FIL  = _g2
+set PID  = $PREFIX$ID
+set SCAN = $TRACER$NUM
+set NAME = $PID$SCAN
+set IN   = $DATAPATH/$NAME.$EXT
+set FIN  = $NAME$FIL.$EXT
+set TMP  = ${NAME}all.$EXT
+set FTMP = ${NAME}all$FIL.$EXT
+set LST  = $NAME.lst
+set PRM  = $NAME.prm
+set REG  = $NAME.reg
+set RGT  = $NAME.rgt
+set PLT  = $NAME.cnt
+set STRT = $NAME.start
+set DURA = $NAME.duration
+set CNTS = $NAME.cnts
+set HCRV = $NAME.r
+
+if (! -e $IN) then
+	echo "ERROR [sumdyn40g2] file not found: $IN"
+	exit 1
+endif
+
+imgfrms $IN | cut -c1-3 >! junk
+set FIRST = `head -5 junk | tail -1`
+set LAST  = `tail -1 junk`
+/usr/bin/rm junk
+set NFRMS = `echo $LAST - $FIRST + 1 | bc`
+set MISSING = `echo $FIRST - 1 | bc`
+echo "$IN    Frames $FIRST to $LAST"
+echo "================================================================="
+if ($CTR == 0) then
+	if ($REF == '') then
+		sumimgframes $IN $TMP $FIRST $LAST
+		gauss $TMP $REF 0.2
+	endif
+	echo "Using vidi"
+	echo "   Image #1:  $REF"
+	echo "   Locate approx center of brain in 3-D"
+	echo "X center: "
+	set   X = `line`
+	echo "Y center: "
+	set   Y = `line`
+	echo "Z center: "
+	set   Z = `line`
+	echo "[X,Y,Z]:  $X  $Y  $Z"
+	echo "Continue?"
+	set data = `line`
+endif
+
+# Create lst, prm, and reg files:
+
+echo "$ID $NUM" >! $LST
+
+echo "datapath:   $DATAPATH"     >! $PRM
+echo "species:    $PREFIX"       >> $PRM
+echo "tracer:     $TRACER"       >> $PRM
+echo "extension:  $EXT"          >> $PRM
+echo "imgfilter:  none"          >> $PRM
+echo "voi:        new_sphere $DIAMETER" >> $PRM
+
+echo "30  voifile"                  >! $REG
+echo "center of brain for $PID"     >> $REG
+echo "1"                            >> $REG
+echo "center_of_brain   $X  $Y  $Z" >> $REG
+
+echo "Zero Time is the start time of the first frame (typically 0)."
+echo "================================================================="
+voistat $PRM $LST $RGT $REG
+set ZERO = $status
+echo "zero time = "$ZERO
+
+set SIZE = `wc -l $RGT | cut -f1 -d$PREFIX`
+set NN = `echo $SIZE - 2 | bc`
+tail -$NN $RGT | head -$NFRMS | cut -c2-12 >! $STRT
+#tail -$NN $RGT | head -$NFRMS | cut -c14-24 | cut -f1 -d. >! $DURA
+tail -$NN $RGT | head -$NFRMS | cut -c14-24 >! $DURA
+tail -$NN $RGT | head -$NFRMS | cut -c28-40 >! $CNTS
+set START = `cat $STRT`
+set DURATION = `cat $DURA`
+set COUNTS = `cat $CNTS`
+set TIME = `echo $ZERO \* 1000 | bc`
+set STRING = 'time    prompt  delayed p_rate  d_rate  dtime   frame   singles'
+echo $STRING >! $HCRV
+set STRING = "$TIME 0 0 0 0 0 0 0"
+echo $STRING >> $HCRV
+set i = 1
+while ($i <= $NFRMS)
+	set TIME = `echo $TIME + $DURATION[$i] \* 1000 | bc -l`
+	set MEAN = `echo 1000 \* $COUNTS[$i] / $DURATION[$i] | bc -l`
+	echo $TIME 0 0 $MEAN 0 0 1 0 >> $HCRV
+	@@ i++
+end
+tail -$NFRMS $HCRV | cut -f4 -d' ' >! $PLT
+
+echo "================================================================="
+echo "Note the first frame with counts above background"
+echo "(to be used as the first frame of 40-sec integration)"
+echo "================================================================="
+set STRING = "$DIAMETER-mm sphere at $X,$Y,$Z"
+plotcol $PLT $FIRST $LAST $PID$SCAN.$EXT $STRING
+
+echo "$IN    Frames $FIRST to $LAST"
+set STR = 'y'
+prompt1:
+echo "================================================================="
+echo "First frame of 40-sec integration?"
+set FIRST = `line`
+if ($STR == 'n' || $STR == 'N') then
+	echo "Last frame number?"
+	set LAST = `line`
+else
+	set LAST = `echo $FIRST + $NFRAMES - 1 | bc`
+endif
+set T1 = $START[$FIRST]
+set T2 = $START[$LAST]
+set T3 = $DURATION[$LAST]
+set TOT = `echo $T2 - $T1 + $T3 | bc -l`
+echo "Integration time for frames $FIRST-$LAST = $TOT sec"
+echo "Use this range? <y/n>"
+set STR = `line`
+if ($STR == 'n' || $STR == 'N') goto prompt1
+
+set OUT  = $PID${SCAN}_f${FIRST}to${LAST}.$EXT
+echo "Summing frames $FIRST to $LAST --> $OUT"
+sumimgframes $IN $OUT $FIRST $LAST
+gauss $OUT $FIN 0.2
+
+if (-e idl.ps) /usr/bin/rm idl.ps
+if (-e $TMP) /usr/bin/rm $TMP
+if (-e $TMP.rec) /usr/bin/rm $TMP.rec
+if (-e $FTMP) /usr/bin/rm $FTMP
+if (-e $FTMP.rec) /usr/bin/rm $FTMP.rec
+/usr/bin/rm $LST
+/usr/bin/rm $PRM
+/usr/bin/rm $RGT
+/usr/bin/rm $STRT
+/usr/bin/rm $DURA
+/usr/bin/rm $CNTS
+@

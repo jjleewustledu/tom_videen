@@ -1,0 +1,485 @@
+head	2.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+2.3
+date	2004.02.20.16.15.35;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	99.12.17.16.06.32;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	96.10.11.14.43.43;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.05.10.21.57.57;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.11.10.18.47.50;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.10.03.16.17.13;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Separated this function from atlas_transform;
+@
+
+
+2.3
+log
+@Feb 2004
+@
+text
+@/* $Log: atlas_scalers.c,v $
+ * Revision 2.2  1999/12/17  16:06:32  tom
+ * lint cleaning
+ *
+ * Revision 2.1  1996/10/11  14:43:43  tom
+ * added zref for atlas.xdim, atlas.ydim
+ *
+ * Revision 2.0  1996/05/10  21:57:57  tom
+ * new libimage
+ * indexing from 1 on images and atlas
+ *
+ * Revision 1.2  1995/11/10  18:47:50  tom
+ * remove petutil parent directory from include statements
+ *
+ * Revision 1.1  1994/10/03  16:17:13  tom
+ * Initial revision
+ *
+ */
+/*	========================================================================
+ *	Module:			atlas_scalers.c
+ *	Date:			Sep 1994
+ *	Author:			Tom Videen
+ *	Description:	Determine the transformation scalers from PET -> Atlas.
+ *
+ *  Input:
+ *      sxr 	-   sxr file structure;
+ *		atlas	-	brain atlas structure;
+ *		center	-	reference point in PET image which has a known displacement from the atlas;
+ *		angle	-	transformation angles PET -> atlas;
+ *		last_slice	-	last slice from which an x-scaler may be accepted; (Unused)
+ *  Output:
+ *		scale	-	scalers for PET -> atlas;
+ *	Return:
+ *		OK or ERROR
+ *
+ *	History:
+ *		Sep 1994	separated module from atlas_transform in t88mean
+ *	========================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/atlas_scalers.c,v 2.2 1999/12/17 16:06:32 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <nrutil.h>
+#include <imgutil.h>		 /* SXR_DATA */
+#include <matrixlib.h>		 /* vector_mult */
+#include <atlas.h>			 /* BRAIN_ATLAS */
+
+/*	-----------------------
+ *	Function atlas_scalers
+ *	-----------------------
+ */
+
+int             atlas_scalers (sxr, atlas, center, angle, scale, last_slice)
+	SXR_DATA        sxr;
+	BRAIN_ATLAS     atlas;
+	float          *center;
+	float          *angle;
+	float          *scale;
+	int            *last_slice;
+
+{
+	int             matrix_transform ();
+	float         **map;		 /* conversion matrix Atlas -> PET	 */
+	float          *a;			 /* vector in ATL-space; a[4] */
+	float          *p;			 /* vector in PET-space; p[4] */
+	float           x_width;	 /* pet width for atlas 0 */
+	float           a_width;	 /* atlas width for pet slice zmin or zmax */
+	float           f;			 /* weighting factor */
+	float           pz;			 /* PET z-location for a vector defined in atlas space */
+	int             zmin, zmax;	 /* range of PET slices permitted for computing x-scaler */
+								 /* (indexed from 1) */
+	int             i;
+	int        		not_in_brain;
+
+/*
+ *	Initializations
+ */
+
+	if (*last_slice == 1 || *last_slice > sxr.number_slices)
+		*last_slice = sxr.number_slices;
+	x_width = 0;
+	if (sxr.number_slices >= 31) {
+		zmin = 3;
+		zmax = sxr.number_slices - 2;
+	} else {
+		zmin = 1;
+		zmax = sxr.number_slices;
+	}
+	if ((map = matrix (1, 4, 1, 4)) == NULL) {
+		fprintf (stderr, "ERROR [atlas_scaler]: Cannot malloc memory for matrix\n");
+		return (ERROR);
+	}
+/*
+ *	Calculate y- and z-scalers from sxr file
+ */
+
+	scale[0] = sxr.xscale;
+	scale[1] = sxr.magnification_factor * sxr.apxray / atlas.ydim[atlas.zref];
+	scale[2] = sxr.magnification_factor * sxr.zxray / atlas.zdim;
+
+/*
+ *	If there is an x-scaler in the sxr file, use it
+ */
+
+	if (scale[0] > 0) {
+		free_matrix (map, 1, 4, 1, 4);
+		return (OK);
+	}
+/*
+ *	If no x-scaler in sxr file, then it must be estimated:
+ *	Get the transformation matrix MAP for given translation, rotations, and y- and z-scalers
+ */
+
+	if ((matrix_transform (sxr, atlas, center, angle, scale, map)) == ERROR)
+		return (ERROR);
+
+/*
+ *	Determine the PET slice which intersects the ac-pc plane at y = 0.
+ *	Compute X width and Scaling for X using the PET slice (interpolated if necessary).
+ *	p[] is the atlas origin tranformed into PET coordinates; pz is its z-coordinate;
+ */
+
+	a = vector (1, 4);
+	p = vector (1, 4);
+	a[1] = (float) (atlas.x0);
+	a[2] = (float) (atlas.y0);
+	a[3] = (float) (atlas.z0);
+	a[4] = 1;
+	vector_mult (map, a, p, 4, 4);
+	pz = p[3];
+
+/*
+ *	NOTE:  sxr.rlpetdim is indexed starting with 0.
+ *	Everything else is referenced starting with 1:
+ *		(zmin, zmax, sxr.xdim, sxr.ydim, atlas.z0, a, p)
+ */
+
+/*
+ *	If all PET slices are below the AC-PC plane, take the most superior PET slice
+ *	and determine which atlas slices it falls between; then compute the x-scaler
+ *	from this PET slice and the interpolated width of the atlas slices.
+ */
+ 
+	not_in_brain = 1;
+	if (pz <= zmin) {
+		x_width = sxr.rlpetdim[zmin-1] * sxr.pixel_size;
+		for (i = atlas.z0; i < atlas.nz; i++) {
+			a[3] = (float) (i);
+			vector_mult (map, a, p, 4, 4);
+			pz = p[3];
+			if (pz >= zmin) {
+				f = pz - zmin;
+				a_width = ((1 - f) * atlas.xdim[i]) + (f * atlas.xdim[i - 1]);
+				scale[0] = x_width / a_width;
+				not_in_brain = 0;
+				break;
+			}
+		}
+
+/*
+ *	If all PET slices are above the AC-PC plane, take the most inferior PET slice
+ *	and determine which atlas slices it falls between; then compute the x-scaler
+ *	from this PET slice and the interpolated width of the atlas slices.
+ */
+
+	} else if (pz >= (float) zmax) {
+		x_width = sxr.rlpetdim[zmax-1] * sxr.pixel_size;
+		for (i = atlas.z0 - 1; i >= 0; i--) {
+			a[3] = (float) (i);
+			vector_mult (map, a, p, 4, 4);
+			pz = p[3];
+			if (pz <= zmax) {
+				f = zmax - pz;
+				a_width = ((1 - f) * atlas.xdim[i + 1]) + (f * atlas.xdim[i]);
+				scale[0] = x_width / a_width;
+				not_in_brain = 0;
+				break;
+			}
+		}
+
+/*
+ *	Compute x-scaler using interpolated PET slice width corresponding to the AC-PC plane
+ */
+
+	} else {
+		for (i = zmin + 1; i <= zmax; i++) {
+			if (pz <= (float) i) {
+				f = pz - (float) (i - 1);
+				x_width = ((1 - f) * sxr.rlpetdim[i-2]) + (f * sxr.rlpetdim[i-1]);
+				scale[0] = x_width * sxr.pixel_size / atlas.xdim[atlas.zref];
+				not_in_brain = 0;
+				break;
+			}
+		}
+	}
+	if (not_in_brain) {
+		printf ("ERROR: No PET slice found within the Atlas Brain\n");
+		scale[0] = 0;
+		free_vector (a, 1, 4);
+		free_vector (p, 1, 4);
+		free_matrix (map, 1, 4, 1, 4);
+		return (ERROR);
+	} else {
+		free_vector (a, 1, 4);
+		free_vector (p, 1, 4);
+		free_matrix (map, 1, 4, 1, 4);
+		return (OK);
+	}
+}
+@
+
+
+2.2
+log
+@lint cleaning
+@
+text
+@d2 3
+d21 1
+a21 1
+ *	Date:			22-Sep-94
+d37 1
+a37 1
+ *		22-Sep-94	separated module from atlas_transform in t88mean
+d40 1
+d42 1
+a42 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/atlas_scalers.c,v 2.1 1996/10/11 14:43:43 tom Exp tom $";
+a47 1
+#include <myvalues.h>		 /* BOOLEAN, TRUE, FALSE */
+d76 1
+a76 1
+	BOOLEAN        	not_in_brain;
+d147 1
+a147 1
+	not_in_brain = TRUE;
+d158 1
+a158 1
+				not_in_brain = FALSE;
+d179 1
+a179 1
+				not_in_brain = FALSE;
+d194 1
+a194 1
+				not_in_brain = FALSE;
+@
+
+
+2.1
+log
+@added zref for atlas.xdim, atlas.ydim
+@
+text
+@d2 3
+a27 1
+ *
+a29 1
+ *
+d37 4
+a41 2
+#include <math.h>
+#include <nr.h>
+a47 4
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/atlas_scalers.c,v 2.0 1996/05/10 21:57:57 tom Exp tom $";
+#endif
+
+d53 1
+a53 1
+int             atlas_scalers (sxr, atlas, center, angle, scale, last_slice, zorigin)
+d73 1
+a73 1
+	BOOLEAN         not_in_brain;
+@
+
+
+2.0
+log
+@new libimage
+indexing from 1 on images and atlas
+@
+text
+@d2 4
+d46 1
+a46 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88mean/RCS/atlas_scalers.c,v 1.2 1995/11/10 18:47:50 tom Exp tom $";
+d54 1
+a54 1
+int             atlas_scalers (sxr, atlas, center, angle, scale, last_slice)
+d99 1
+a99 1
+	scale[1] = sxr.magnification_factor * sxr.apxray / atlas.ydim[atlas.z0];
+d191 1
+a191 1
+				scale[0] = x_width * sxr.pixel_size / atlas.xdim[atlas.z0 - 1];
+@
+
+
+1.2
+log
+@remove petutil parent directory from include statements
+@
+text
+@d2 3
+d20 2
+a21 2
+ *		first_slice, last_slice	-	range of slices from which an x-scaler may be accepted;
+ *	
+d26 2
+a27 2
+ *		SUCCEED or FAIL
+ *	
+a31 1
+
+d34 6
+a39 3
+#include <petutil.h>	/* SXR_OUTPUT */
+#include <package.h>	/* BOOLEAN, TRUE, FALSE */
+#include "atlas.h"		/* BRAIN_ATLAS, MATRIX, DIM, MATDIM, POINT */
+d41 3
+a43 1
+#define ATLAS_Z0  30		/* xdim and ydim for scaling use this slice in the structure "atlas" */
+a44 2
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/t88mean/RCS/atlas_scalers.c,v 1.1 1994/10/03 16:17:13 tom Exp tom $";
+
+d50 2
+a51 3
+int 
+atlas_scalers (sxr, atlas, center, angle, scale, first_slice, last_slice)
+	SXR_OUTPUT      sxr;
+d53 4
+a56 5
+	float           center[3];
+	float           angle[3];
+	float           scale[3];
+    int             first_slice;
+    int             last_slice;
+d59 11
+a69 13
+	extern          matrix_mult ();	/* matrix multiplication */
+	void			matrix_transform ();
+	MATRIX          map;	/* conversion matrix Atlas -> PET	*/
+	POINT           a;	/* point in ATL-space; a[MATDIM] */
+	POINT           p;	/* point in PET-space; p[MATDIM] */
+
+	float           x_width;	/* pet width for atlas 0 */
+	float           a_width;	/* atlas width for pet slice zmin or zmax */
+	float           f;	/* weighting factor */
+	float           pz;	/* PET z-location for point defined in atlas space */
+
+	int				zmin, zmax; /* range of PET slices permitted for computing x-scaler */
+	int             i, j, k;
+d76 14
+a89 11
+    if (last_slice == 0 || last_slice > sxr.number_slices - 1)
+        last_slice = sxr.number_slices - 1;
+    x_width = 0;
+    if (sxr.number_slices >= 31) {
+        zmin = 2;
+        zmax = sxr.number_slices - 3;
+    } else {
+        zmin = 0;
+        zmax = sxr.number_slices;
+    }
+
+d95 2
+a96 2
+    scale[1] = sxr.magnification_factor * sxr.apxray / atlas.ydim[ATLAS_Z0];
+    scale[2] = sxr.magnification_factor * sxr.zxray / atlas.zdim;
+d102 4
+a105 3
+	if (scale[0] > 0)
+		return (SUCCEED);
+
+d111 2
+a112 1
+	matrix_transform (sxr, atlas, center, angle, scale, map);
+d120 8
+a127 6
+	a[0] = (float) (atlas.x0);
+	a[1] = (float) (atlas.y0);
+	a[2] = (float) (atlas.z0);
+	a[3] = 1;
+	matrix_mult (map, a, p, MATDIM, 1, MATDIM);
+	pz = p[2];
+d130 6
+d140 1
+a140 1
+
+d143 5
+a147 5
+		x_width = sxr.rlpetdim[zmin] * sxr.pixel_size;
+		for (i = atlas.z0 + 1; i < atlas.nz; ++i) {
+			a[2] = (float) (i);
+			matrix_mult (map, a, p, MATDIM, 1, MATDIM);
+			pz = p[2];
+d164 5
+a168 5
+		x_width = sxr.rlpetdim[zmax] * sxr.pixel_size;
+		for (i = atlas.z0 - 1; i >= 0; --i) {
+			a[2] = (float) (i);
+			matrix_mult (map, a, p, MATDIM, 1, MATDIM);
+			pz = p[2];
+d183 1
+a183 1
+		for (i = zmin + 1; i <= zmax; ++i) {
+d186 2
+a187 2
+				x_width = ((1 - f) * sxr.rlpetdim[i - 1]) + (f * sxr.rlpetdim[i]);
+				scale[0] = x_width * sxr.pixel_size / atlas.xdim[ATLAS_Z0];
+d196 10
+a205 3
+		return (FAIL);
+	} else
+		return (SUCCEED);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$
+d32 2
+a33 2
+#include <petutil/petutil.h>	/* SXR_OUTPUT */
+#include <petutil/package.h>	/* BOOLEAN, TRUE, FALSE */
+d38 1
+a38 1
+static char     rcsid[] = "$Header$";
+@

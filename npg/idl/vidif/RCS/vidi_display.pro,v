@@ -1,0 +1,155 @@
+head	1.1;
+access;
+symbols;
+locks
+	tom:1.1; strict;
+comment	@# @;
+
+
+1.1
+date	2003.10.08.21.23.59;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@FUNCTION VIDI_DISPLAY_SCALE, image, type, i, xsize, ysize, sample, stype
+   COMMON VIDI
+   
+   IF (dsp[i].type EQ 1) THEN BEGIN ; Manual scaling
+      mini = dsp[i].min
+      maxi = dsp[i].max
+   ENDIF ELSE BEGIN             ; Auto scaling
+      IF (dsp[i].range EQ 0) THEN BEGIN
+         mini = 0
+         maxi = max(image)
+      ENDIF ELSE IF (dsp[i].range EQ 1) THEN BEGIN
+         mini = 0
+         maxi = -min(image)
+      ENDIF ELSE BEGIN
+         mini = min(image)
+         maxi = max(image)
+         IF (-mini GT maxi) THEN maxi = -mini
+      ENDELSE
+   ENDELSE
+   dsp[i].amin = mini
+   dsp[i].amax = maxi
+   nc = dsp[i].nc
+   IF (stype EQ 0) THEN BEGIN
+      IF (dsp[i].range EQ 1) THEN $
+         temp1 = bytscl(rebin(-(image), xsize, ysize, SAMPLE=sample), $
+                        MIN=mini, MAX=maxi, TOP=(nc-1)) $
+      ELSE temp1 = bytscl(rebin(image, xsize, ysize, SAMPLE=sample), $
+                          MIN=mini, MAX=maxi, TOP=(nc-1))
+   ENDIF ELSE BEGIN 
+      IF (dsp[i].range EQ 1) THEN $
+         temp1 = bytscl(congrid(-(image), xsize, ysize, /INTERP), $
+                        MIN=mini, MAX=maxi, TOP=(nc-1)) $
+      ELSE temp1 = bytscl(congrid(image, xsize, ysize, /INTERP), $
+                          MIN=mini, MAX=maxi, TOP=(nc-1))
+   ENDELSE
+   RETURN, temp1
+END
+      
+PRO VIDI_DISPLAY, uv
+   ;; Scale and display image i
+   ;; uv = the info structure for this display
+   COMMON IMAGE_UTILS
+   COMMON VIDI
+   
+   IF ((uv.img[0].dim[0] NE uv.img[1].dim[0]) OR $
+       (uv.img[0].dim[1] NE uv.img[1].dim[1]) OR $
+       (uv.img[0].dim[2] NE uv.img[1].dim[2])) THEN BEGIN
+      widget_control, uv.wid.msg, set_value='Cannot display composite of different sized images'
+      RETURN
+   ENDIF
+   i = 0
+   CASE orient OF
+      0: BEGIN
+         x0 = 0
+         y0 = 1
+      END
+      1: BEGIN
+         x0 = 0
+         y0 = 2
+      END
+      2: BEGIN
+         x0 = 1
+         y0 = 2
+      END
+   ENDCASE
+   slice = uv.img[i].p - uv.img[i].fp
+   frame = uv.img[i].f - uv.img[i].ff
+   xsize = uv.img[i].dim[x0] * dsp[i].zoom
+   ysize = uv.img[i].dim[y0] * dsp[i].zoom
+   stype = 1
+   IF (uv.img[i].pdim[y0] GT uv.img[i].pdim[x0]) THEN BEGIN 
+      fact = (uv.img[i].pdim[y0])/(uv.img[i].pdim[x0])
+      ysize = fact * uv.img[i].dim[y0] * dsp[i].zoom
+   ENDIF ELSE IF (uv.img[i].pdim[0] GT uv.img[i].pdim[y0]) THEN BEGIN 
+      fact = (uv.img[i].pdim[x0])/(uv.img[i].pdim[y0])
+      xsize = fact * uv.img[i].dim[x0] * dsp[i].zoom
+   ENDIF ELSE stype = 0
+
+   FOR i= 0, 1 DO BEGIN
+      IF (uv.img[i].data EQ ptr_new()) THEN BEGIN
+         RETURN
+      ENDIF ELSE BEGIN
+         CASE orient OF
+            0: image = reform((*uv.img[i].data)[*,*,slice,frame])
+            1: image = reform((*uv.img[i].data)[*,slice,*,frame])
+            2: image = reform((*uv.img[i].data)[slice,*,*,frame])
+         ENDCASE
+         temp1 = VIDI_DISPLAY_SCALE (image, uv.img[i].itype, i, xsize, ysize, sample, stype)
+         temp1 = temp1 + dsp[i].bot
+         widget_control, uv.wid.win[i], draw_xsize=xsize, draw_ysize=ysize
+         wset, dsp[i].id
+         tv, temp1
+         widget_control,uv.wid.max[i],set_value=dsp[i].amax
+      ENDELSE
+   ENDFOR
+   
+   i = 2
+   IF (uv.img[i].data NE ptr_new() AND uv.img[i].data NE ptr_new()) THEN BEGIN
+      CASE orient OF
+         0: image = reform((*uv.img[i].data)[*,*,slice,frame])
+         1: image = reform((*uv.img[i].data)[*,slice,*,frame])
+         2: image = reform((*uv.img[i].data)[slice,*,*,frame])
+      ENDCASE
+      widget_control, uv.wid.win[i], draw_xsize=xsize, draw_ysize=ysize
+      IF (dsp[2].set EQ 0) THEN temp = image $
+      ELSE temp = smooth(image,3) 
+      temp1 = VIDI_DISPLAY_SCALE (temp, uv.img[i].itype, i, xsize, ysize, sample, stype)
+
+      IF (dsp[0].set EQ 0) THEN BEGIN
+         temp = temp1 + dsp[0].nc
+      ENDIF ELSE BEGIN
+         j = dsp[0].set - 1
+         CASE orient OF
+            0:  image = reform((*uv.img[j].data)[*,*,slice,frame])
+            1:  image = reform((*uv.img[j].data)[*,slice,*,frame])
+            2:  image = reform((*uv.img[j].data)[slice,*,*,frame])
+         ENDCASE
+         temp2 = VIDI_DISPLAY_SCALE (image, uv.img[j].itype, j, xsize, ysize, sample, stype)
+         uthresh =  (0.5 + (0.005 * dsp[0].cut)) * dsp[0].nc
+         lthresh =  (0.5 - (0.005 * dsp[0].cut)) * dsp[0].nc
+         idx1 = where((temp1 LT uthresh) AND (temp1 GT lthresh), count1)
+         idx2 = where((temp1 GE uthresh) OR (temp1 LE lthresh), count2)
+         IF (count1 GT 0) THEN temp1[idx1] = 0
+         IF (count2 GT 0) THEN temp2[idx2] = dsp[0].nc
+         temp = temp1 + temp2
+      ENDELSE
+      wset, dsp[2].id
+      tv, temp
+      widget_control,uv.wid.max[2],set_value=dsp[2].amax
+   ENDIF
+END
+@

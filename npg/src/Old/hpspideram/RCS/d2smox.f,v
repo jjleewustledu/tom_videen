@@ -1,0 +1,149 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.23.15.42.49;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@C$Id: d2smox.f,v 1.5 1994/06/10 15:04:37 ty7777 Exp $
+C$Log: d2smox.f,v $
+c Revision 1.5  1994/06/10  15:04:37  ty7777
+c Use the PCFLAG in RAMIMG ().
+c
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   D2SMOX.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         01-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  History:
+C     Modified by Tom Yang 26-Sep-91 to port to Unix and X Windows systems.
+C
+C  Intent:
+C     This routine displays a sagittal or coronal image on the Ramtek.
+C     The image is magnified MAG times.
+C     The image is interpolated to the maximum extent allowed by the
+C     Ramtek resolution (linear interpolation).
+C
+C     The subroutine D2SCALER must have been called previous to
+C     D2SMOX.  D2SCALER scales the image in the array XIMAGE and
+C     stores the result in the common array IARRAY.
+C
+C  NOTE:
+C     No zoom is permitted in the current version.
+C
+C  Common Blocks from SPIDERAM.INC:
+C     **IMAGEDAT - image arrays                   (write)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (write)
+C     **FILES    - scan file list                 (read only)
+C
+C  Local Variables:
+C     XST,YST = location to write to on the Ramtek;
+C     YLAST = last line to erase;
+C     XDIM,YDIM = x- and y-dimensions of array sent to RAMIMG;
+C     YEND = last y-coordinate of the displayed portion of the image;
+C     SCAN,TYPE = variables sent to RAMIMG to determine the
+C        order in which to fill the region on the Ramtek screen
+C        with the array of values (see Ramtek manual);
+C     PLANES   - planes to erase;
+C
+C   Uses:
+C     D2GENLIN  - generate a single line of the image;
+C     D2INTER   - get an intermediate line by interpolation;
+C     D2MASKX   - threshold one line of a cross-sectional image;
+C     YRAMTEK - returns Ramtek y-coordinate of a point;
+C     RAMIMG    - write an image to the Ramtek;
+C
+C  Called by:  D2DISPLA
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE D2SMOX
+C
+      INTEGER*4  XST,YST,YLAST,XDIM,YDIM,SCAN,TYPE,PLANES,I,L,
+     &           YRAMTEK
+      character*256 rcsheader
+C
+      INCLUDE 'spideram.inc'
+      rcsheader = "$Header: /home/npggw/tom/src/spideram/RCS/d2smox.f,v 1.5 1994/06/10 15:04:37 ty7777 Exp $"
+
+      DATA SCAN,TYPE,YDIM /0,0,1/
+      DATA PLANES  /4095/
+C
+C  Initializations
+C
+      XST = XORG
+      YST = YORG
+      XDIM = MAG*SIZE
+C
+C  Erase lines above the image
+C
+      YLAST = YRAMTEK(YLOW) - 1
+      CALL RAMERASE(XST,YST,XST+XDIM-1,YLAST,PLANES,RMD)
+      YST = YLAST + 1
+C
+C  Create intermediate lines and send them to the Ramtek.
+C     LINE(n,1) is always the top line of a group;
+C     LINE(n,2) is an intermediate line;
+C     LINE(n,3) is always the bottom line of a group;
+C     LINE(n,4) is only used for thresholded images;
+C
+      CALL D2GENLIN(1,1,0)
+      DO 400 L=2,((SLICES-1)*SLCLINES)+1
+        CALL D2GENLIN(3,L,0)
+        IF (TEMPLATE.EQ.1) THEN
+          CALL D2MASKX(1)
+          CALL RAMIMG (LINE (1, 4), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+        ELSE
+          CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+        END IF
+        YST = YST+1
+        DO 200 I=1,MAG-1
+          CALL D2INTER(I,MAG,XDIM)
+          IF (TEMPLATE.EQ.1) THEN
+            CALL D2MASKX(2)
+            CALL RAMIMG (LINE (1, 4), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+          ELSE
+            CALL RAMIMG (LINE (1, 2), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+          END IF
+          YST = YST+1
+200     CONTINUE
+        DO 300 I=1,XDIM
+          LINE(I,1) = LINE(I,3)
+300     CONTINUE
+400   CONTINUE
+      IF (TEMPLATE.EQ.1) THEN
+        CALL D2MASKX(1)
+        CALL RAMIMG (LINE (1, 4), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+      ELSE
+        CALL RAMIMG (LINE (1, 1), XDIM, YDIM, XST, YST, SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+      END IF
+      YST = YST+1
+C
+C  Erase lines below the image
+C
+      YLAST = YORG + XDIM - 1
+      CALL RAMERASE(XST,YST,XST+XDIM-1,YLAST,PLANES,RMD)
+C
+      RETURN
+      END
+@

@@ -1,0 +1,953 @@
+
+/* driver.c */
+
+/* 1991 August 01  GCJ started port to HP */
+/* log messages will now go to logfile in the current dirctory */
+/* 12 September 1990  Gerald C. Johns */
+
+/* generate a list of shell commands to reconstruct a PETT VI */
+/* image using a fast HP uniprocessor */
+
+
+#include <sys/types.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <math.h>
+#include <stdlib.h>
+
+#define TRUE 1
+#define FALSE 0
+#define SINOSIZE 220416
+#define NORMSIZE 256
+#define Nslices 7
+#define MIRSCALE 1.0
+#define argcmin 6
+#define progarg 0
+#define rootarg 1
+#define comparg 2
+#define rangarg 3
+#define pixlarg 4
+#define rangall 0
+#define rangevn 1
+#define rangodd 2
+#define rangrang 3
+#define rangenm 4
+#define COMPSIZE 33
+#define REC2_00mm 903
+#define REC2_87mm 560
+
+
+FILE *shout;    /* file of shell commands */
+FILE *peout;    /* file of Perkin-Elmer .CSS commands */
+
+int inrange ();
+/* Built-In Program Names */
+
+char peret [16];  /* construct file name for PE return CSS */
+
+char compath [] = "/users/ml/bin/";  /* command path */
+
+char ap2mm [] = "pt6sievecirc_2.00mm";
+char ap2_87mm [] = "pt6sievecirc_2.87mm";
+
+char ml2mm [] = "pt6ml_2.00mm";
+char ml2_87mm [] = "pt6ml_2.87mm";
+
+char mirim2mm [] = "pt6mirimage_2.00mm";
+char mirim [] = "pt6mirimage_2.87mm";
+
+char fbp2mm [] = "pt6fbp_2.00mm";
+char fbp2_87mm [] = "pt6fbp_2.87mm";
+
+char precor [] = "pt6precorfbp";
+
+char ufp [] = "uniform";  /* base name of uniform input iterate */
+
+char alltxt [] = "all";
+char evntxt [] = "even";
+char oddtxt [] = "odd";
+
+int emflag;
+int mlnflag;
+int tok;
+int nok;
+float pixel;
+float resolution[16];
+char resext [16];  /* resolution encoded as a character */
+int nintresol;
+int rescount;
+char rootname [16];
+char rootcname [16]; /* root name + compound letters */
+int rootclen;
+char norm [16];
+char trans [16];
+/*
+char rand [16];
+*/
+char emis [16];
+char blank [16];
+char outname [16];  /* carry up to 8 char name from emission file */
+char peoutname [16];  /* full name.extension of PE output name */
+char *pindex;  /* pointer to the period in a filename */
+char *cp;      /* moving character pointer */
+char extension;
+int select;
+char randoms [128] [16];
+char emissions [128] [16];
+/*char compname [33];  /* single letter representation of compound names */
+char compname [COMPSIZE] [3];  /* compound names */
+char cmpnd [3];  /* temporary for compound name comparison */
+int cmplen;
+int nsnglm;  /* number of single char matches */
+int ndblm;   /* number of double char matches */
+int snglm [COMPSIZE];
+int dblm  [COMPSIZE];
+int ncmpnd;  /* number of compounds to process */
+int rootlen;
+DIR *dirp;
+struct dirent *dp;
+struct stat sbuf;
+struct stat *sbufp = &sbuf;
+char path [256];
+char *ecompath;  /* command path from UNIX environment */
+int filesize;
+int emiscnt;
+int temiscnt;  /* total of studies across all compounds */
+int randcnt;
+
+int rangtype;
+int rangenum [128];
+int nrange;
+int ranglow;
+int ranghigh;
+
+
+main ( argc, argv )
+int argc;
+char ** argv;
+{
+	int i;
+	int ires;
+	int j;
+	int k;
+	int l;
+	int cspn;  /* count of characters in a span not containing a pattern */
+	int icomp;
+	int togo; /* studies to go */
+	int stdone;  /* studies done */
+	int twomm;  /* logical flag for 2mm pixel size */
+
+	char ext1;  /* characters of the three char extension */
+	char ext2;
+	char ext3;
+	int perec;  /* record size of Perkin-Elmer output files */
+	char *cpr;
+
+
+	char *app;  /* apsieve name pointer */
+	/* apsieve (apply sieve) has been renamed sievecirc */
+	char *mlp;  /* maximum likelihood name pointer */
+	char *mip;  /* mirimage name pointer */
+	char *fbp;  /* pt6fbp name pointer */
+
+
+
+
+
+
+
+
+
+
+	twomm = FALSE;
+	emflag = FALSE;
+	mlnflag = FALSE;
+	tok = FALSE;
+	nok = FALSE;
+
+
+	ext1 = 'F';  /* filtered back projection by default */
+	if ( strcmp ( argv[progarg], "mlnew" ) == 0  )
+	{
+		/* the idea behind "mlnew" is that a small shell script */
+		/* will run in the background and issue one */
+		/* mlnew rootname all all 12     command after another */
+		/* until several different rootname studies have been completed. */
+		emflag = TRUE;
+		mlnflag = TRUE;
+		ext1 = 'M';  /* Maximum Likelihood */
+	}
+	else if ( ( strcmp ( argv[progarg], "em" ) == 0 ) || ( strcmp ( argv[progarg], "ml" ) == 0 ) )
+	{
+		emflag = TRUE;
+		ext1 = 'M';  /* Maximum Likelihood */
+
+	}
+	else if ( strcmp ( argv[progarg], "fbp" ) != 0 )
+	{
+		fprintf(stderr,"driver: Fatal Name Error\n");
+		fprintf(stderr,"Legal names are  mlnew, ml, em, and fbp\n");
+		exit (-1);
+	}
+	if ( argc < argcmin )
+	{
+		fprintf(stderr,"%s: Usage   %s rootname compound studies pixel resolution [resolution]\n",
+		    argv[progarg], argv[progarg] );
+		exit (-1);
+	}
+
+	if (  (rootlen = strlen ( argv[rootarg] )) > 8 )
+	{
+		fprintf(stderr,"The root name '%s' is too long\n",argv[rootarg]);
+		exit (-1);
+	}
+	if ( (ecompath = getenv ( "IBCML" ) ) == NULL )
+	{
+		fprintf(stderr,"%s needs an environment variable  IBCML\n",rootname);
+		exit (-1);
+	}
+	strcpy ( rootname, argv[rootarg] );
+	strcpy ( norm, rootname );
+	strcpy ( trans, rootname );
+	strcpy ( blank, rootname );
+	strcat ( blank, ".B" );
+	strcat ( norm, ".N" );
+	strcat ( trans, ".T" );
+
+
+	if ( sscanf( argv[pixlarg],  "%f", &pixel ) != 1 )
+	{
+		fprintf(stderr,"Pixel size of %s is not a legal number\n",argv[pixlarg]);
+		exit (-1);
+	}
+	if ( ! ( (twomm = (pixel == 2.00) ) || ( (pixel > 2.855) && ( pixel < 2.875 ) ) ) )
+	{
+		fprintf(stderr,"Pixel size of %.2f is unknown\n",pixel);
+		exit (-1);
+	}
+	if ( twomm )
+	{
+		app = ap2mm;
+		mlp = ml2mm;
+		mip = mirim2mm;
+		fbp = fbp2mm;
+		ext3 = 'S';  /* encode 2mm in extension */
+		perec = REC2_00mm;
+	}
+	else
+	{
+		app = ap2_87mm;
+		mlp = ml2_87mm;
+		mip = mirim;
+		fbp = fbp2_87mm;
+		ext3 = 'P';
+		perec = REC2_87mm;
+	}
+
+
+	rescount = argc - argcmin + 1;
+	for ( i = 0; i < rescount; i++ )
+	{
+		ires = i + argcmin - 1;  /* resolution arg index */
+		if ( sscanf( argv[ires],  "%f", &resolution[i] ) != 1 )
+		{
+			fprintf(stderr,"Resolution of %s is not a legal number\n",argv[ires]);
+			exit (-1);
+		}
+		nintresol = floor ( resolution[i] + 0.5 );
+		if ( nintresol < 10 )
+		{
+			resext [i] = (char) ( ( (int) '0' + nintresol ) & 0xff );
+		}
+		else if ( nintresol < 36 )
+		{
+			resext [i] = (char) ( ( (int) 'A' + nintresol - 10 ) & 0xff );
+		}
+		else
+		{
+			fprintf(stderr,"Resolution of %s is not in range\n",argv[ires]);
+			exit (-1);
+		}
+	}
+
+
+	/* process the compound here */
+	ncmpnd = 0;
+	for ( i = 0; i < COMPSIZE; i++ )
+		compname [i] [0] = '\0';
+	cp = argv[comparg];
+	if ( strcmp ( cp, alltxt ) == 0 )
+		findcomp ();
+	else
+	{  /* parse the compound specification */
+		prscomp ( compname[ncmpnd++], cp );
+		while ( (cp = strchr ( cp, ',' )) != NULL )
+		{
+			cp++;
+			prscomp ( compname[ncmpnd++], cp );
+		}
+	}
+
+
+	/* process the study range here */
+
+	cp = argv[rangarg];
+	nrange = 0;
+	if ( strcmp ( cp, alltxt ) == 0 )
+		rangtype = rangall;
+	else if ( strcmp ( cp, evntxt ) == 0 )
+		rangtype = rangevn;
+	else if ( strcmp ( cp, oddtxt ) == 0 )
+		rangtype = rangodd;
+	else if ( (cpr = strchr ( cp, ',' )) != NULL )
+	{
+		/* look for one or more study numbers separated by commas */
+		rangtype = rangenm;  /* enumerated */
+		while ( sscanf( cp, "%d", &rangenum[nrange]) == 1 )
+		{
+			nrange++;
+			if ( ( cp = strchr ( cp, ',')) == NULL )
+				break;
+			cp++;
+		}
+	}
+
+	else if ( (cpr = strchr ( cp, '-' )) != NULL )
+	{
+		/* look for a monotonic range of studies, low-high */
+		rangtype = rangrang;
+		if ( sscanf ( cp, "%d", &ranglow ) != 1 )
+		{
+			fprintf(stderr,"Incorrect studies argument:  %s\n",cp);
+			exit (-1);
+		}
+		cp = cpr + 1;
+		if ( sscanf ( cp, "%d", &ranghigh ) != 1 )
+		{
+			fprintf(stderr,"Incorrect studies argument:  %s\n",cp);
+			exit (-1);
+		}
+		if ( ranghigh < ranglow )
+		{
+			fprintf(stderr,"Incorrect study range specification:  %s",argv[rangarg]);
+			exit (-1);
+		}
+	}
+	else if ( isdigit ( *cp ) )
+	{
+		/* enumeration, with only one study */
+		rangtype = rangenm;  /* enumerated */
+		nrange = 1;
+		if ( sscanf ( cp, "%d", &rangenum[0]) != 1 )
+		{
+			fprintf(stderr,"Incorrect studies argument:  %s\n",cp);
+			exit (-1);
+		}
+	}
+
+	else
+	{
+		fprintf(stderr,"ERROR in studies argument:  %s\n",cp);
+		exit (-1);
+	}
+
+
+
+	/* search the directory and find the .N and .T files */
+	dirp = opendir (".");
+	if ( dirp == NULL )
+		exit (-1);
+	for ( dp=readdir(dirp); dp!=NULL; dp = readdir(dirp) )
+	{
+		strcpy ( path, dp->d_name );  /* file name */
+		if ( strncmp ( path, rootname, rootlen ) != 0 )
+			continue;  /* skip any names not starting with rootname */
+		/* get file status */
+		if ( stat ( path, sbufp ) != 0 )
+			exit (-1);
+		filesize = sbufp->st_size;
+		if ( strcmp ( path, blank ) == 0 )
+			continue;  /* do nothing with the BLANK scan */
+		if ( strcmp ( path, trans ) == 0 )
+		{
+			if ( filesize != SINOSIZE )
+			{
+				fprintf(stderr,"The file %s is the wrong size.\n",path);
+				exit (-1);
+			}
+			tok = TRUE;
+			continue;
+		}
+		if ( strcmp ( path, norm ) == 0 )
+		{
+			if ( filesize != NORMSIZE )
+			{
+				fprintf(stderr,"The file %s is the wrong size.\n",path);
+				fprintf(stderr,"filesize %d\n",filesize);
+				exit (-1);
+			}
+			nok = TRUE;
+			continue;
+		}
+	}
+	closedir(dirp);
+	if ( nok == FALSE )
+	{
+		fprintf(stderr,"Cannot find %s\n",norm);
+		exit (-1);
+	}
+	if ( tok == FALSE )
+	{
+		fprintf(stderr,"Cannot find %s\n",trans);
+		exit (-1);
+	}
+
+	/* Start a Perkin-Elmer/Concurrent CSS file with FTP commands */
+	/* for the transfer of reconstructed images from the transputer */
+	/* host to the Perkin-Elmer. */
+
+	strcpy ( peret, rootname );
+	strcat ( peret, ".COM" );
+	if ( ( peout = fopen ( peret, "w" ) ) == NULL )
+	{
+		fprintf(stderr,"Cannot open Perkin-Elmer .CSS file\n");
+		exit (-1);
+	}
+	/* initialize the Perkin-Elmer FTP command file */
+	fprintf( peout, "user pet\r\nflow\r\ntype i\r\n");
+
+
+
+	/* generate a shell script */
+
+	if ( ( shout = fopen ( ".pett_recon", "w" ) ) == NULL )
+	{
+		fprintf(stderr,"Cannot open Pett Reconstruction shell file\n");
+		exit (-1);
+	}
+
+	fprintf(shout,"#!/bin/csh\n");
+	if ( mlnflag )
+	{
+		fprintf(shout,"date >> logfile\n");  /* add to old logfile */
+	}
+	else
+	{
+		fprintf(shout,"rm logfile\n");
+		fprintf(shout,"date > logfile\n");  /* start a new logfile */
+	}
+	/* regenerate the command line */
+	sprintf(path,"\0");
+	for ( i = 0; i < argc; i++ )
+		sprintf(path+strlen(path),"%s ",argv[i]);
+	fprintf(shout,"#%s\n",path);
+	fprintf(shout,"echo \"%s\" >> logfile\n",path);
+
+
+	if ( emflag )
+	{
+		/* generate the survival probabilities only once, */
+		/* as they are independent of the number of compounds, */
+		/* number of studies, and number of resolutions. */
+
+		for ( i=1; i <= Nslices; i++ )
+		{
+			fprintf(shout,"%spt6gensurvprob %s %s .survprob%d %d >>& logfile\n",
+			    compath, norm, trans, i, i);
+		}
+	}
+	fflush ( shout );
+
+	/* Find the total number of studies which match the */
+	/* specified compounds and study number ranges.     */
+	stdone = 0;
+	temiscnt = 0;
+	/* The outer loop selects each compound in turn, */
+	/* and finds the .E  files which match the */
+	/* compound and specified studies.  */
+	for ( icomp = 0; icomp < ncmpnd; icomp++ )
+	{
+		emiscnt = 0;
+		randcnt = 0;
+		strcpy ( rootcname, rootname );
+		strcat ( rootcname, compname[icomp] );
+		rootclen = strlen ( rootcname );
+
+		findTE ();
+
+	}
+#ifdef VERBOSE
+	fprintf(stderr,"After   findTE ()  \n");
+#endif
+
+	/* The outer loop selects each compound in turn, */
+	/* and finds the .E and .R files which match the */
+	/* compound and specified studies.  */
+	for ( icomp = 0; icomp < ncmpnd; icomp++ )
+	{
+		emiscnt = 0;
+		randcnt = 0;
+		/* initialize the emission and random name arrays */
+		for ( i = 0; i < 128; i++ )
+		{
+			emissions [i][0] = '\0';
+			randoms [i][0] = '\0';
+		}
+		strcpy ( rootcname, rootname );
+		strcat ( rootcname, compname[icomp] );
+		rootclen = strlen ( rootcname );
+#ifdef VERBOSE
+		fprintf(stderr,"Searching on %s\n",rootcname);
+#endif
+
+		findER ();
+
+		if ( randcnt != emiscnt )
+		{
+			fprintf(stderr,"Mismatch between .E and .R files for %s\n", rootcname);
+			exit (-1);
+		}
+		if ( ! ( (randcnt >= 1) && (emiscnt >= 1) ) )
+		{
+			fprintf(stderr,"No emission or randoms files for basename %s\n",rootcname);
+			exit (-1);
+		}
+
+
+		if ( emflag )
+		{  /* start of EM-specific script generation */
+			/* generate the commands for a complete study */
+
+			k = 1;  /* index for study filenames */
+			for ( j = 0; j < emiscnt; j++ )
+			{
+				while ( emissions [k] [0] == '\0' ) k++;   /* find next study name */
+
+				/* extract the root name of the emission file for use as the */
+				/* name of the output files for this study.  */
+				/* this code added because strncpy does not null terminate s1 */
+				/* if s2 is longer than count n  */
+				cspn = strcspn ( emissions [k], "." );
+				outname [cspn] = '\0';
+				strncpy ( outname, emissions [k], cspn );
+
+
+				stdone++;
+				togo = temiscnt - stdone;
+
+				for ( i = 1; i <= Nslices; i++ )
+				{
+					fprintf(shout,"%spt6intfloat %s .emission %d >>& logfile\n", compath,
+					    emissions[k],i);
+					fprintf(shout,"%spt6intfloat %s .randoms %d >>& logfile\n", compath,
+					    randoms[k],i);
+					/* generate the pt6ml command suitable for the reconstructed resolution */
+					fprintf(shout,"%s%s %s%s .hpiter%d .emission .survprob%d .randoms 200 >>& logfile\n",
+					    compath, mlp, compath, ufp, i, i);
+					if ( (j == 0) && (i == 1) )  /* send reassuring message to logfile */
+						{
+							fprintf(shout,"date >> logfile\n");
+							fprintf(shout,"echo \"Slice 1 of study %s complete, 6 more slices are being processed\" >> logfile\n",
+							    outname);
+
+						}
+				}
+				/* sieve all slices for each of the requested reconstructed resolutions, */
+				/* and then collect each group of sieved slices into a single */
+				/* record-oriented file to return to Mallinckrodt. */
+				for ( l = 0; l < rescount; l++ )
+				{
+					for ( i = 1; i <= Nslices; i++ )
+					{
+						fprintf(shout,"%s%s .hpiter%d .hpiter%d.s %s >>& logfile\n",
+						    compath,app,i,i,
+						    argv[l+argcmin-1]);
+					}
+					fprintf(shout,
+					    "%s%s %.1f .hpiter1.s .hpiter2.s .hpiter3.s \\\n .hpiter4.s .hpiter5.s .hpiter6.s .hpiter7.s %s.%c%c%c >>& logfile\n",
+					    compath, mip, MIRSCALE, outname, ext1, resext[l], ext3 );
+					sprintf( peoutname, "%s.%c%c%c",outname,ext1, resext[l],ext3);
+					fprintf( peout, "allo %3d r\r\nretr\r\n%s\r\n%s\r\n",
+					    perec, peoutname, peoutname );
+				}
+				fprintf(shout,"rm .hpiter?.s\n");
+
+				fprintf(shout,"date >> logfile\n");
+				fprintf(shout,"echo \"Study %s complete, %d more studies are being processed\" >> logfile\n",
+				    outname,
+				    togo);
+
+				k++;  /* move on to next study name */
+			}
+
+
+
+
+		}  /* end of EM-specific script generation */
+else
+{  /* start of fbp-specific script generation */
+	/* generate the commands for a complete study */
+
+	k = 1;  /* index for study filenames */
+	for ( j = 0; j < emiscnt; j++ )
+	{
+		while ( emissions [k] [0] == '\0' ) k++;   /* find next study name */
+
+		/* extract the root name of the emission file for use as the */
+		/* name of the output files for this study.  */
+		/* this code added because strncpy does not null terminate s1 */
+		/* if s2 is longer than count n  */
+		cspn = strcspn ( emissions [k], "." );
+		outname [cspn] = '\0';
+		strncpy ( outname, emissions [k], cspn );
+
+
+
+		for ( i = 1; i <= Nslices; i++ )
+		{
+			fprintf(shout,"%s%s %s %s %s %s .pcoremis%d %d >>& logfile\n",
+			    compath, precor, norm, trans, emissions[k], randoms[k], i, i);
+		}
+		/* backproject all slices for each of the requested reconstructed resolutions, */
+		/* and then collect each group of backprojectd slices into a single */
+		/* record-oriented file to return to Mallinckrodt. */
+		for ( l = 0; l < rescount; l++ )
+		{
+			for ( i = 1; i <= Nslices; i++ )
+			{
+				fprintf(shout,"%s%s .pcoremis%d .fbpim%d %s >>& logfile\n",
+				    compath, fbp, i, i, argv[l+argcmin-1]);
+			}
+			fprintf(shout,
+			    "%s%s %.1f .fbpim1 .fbpim2 .fbpim3 .fbpim4 \\\n .fbpim5 .fbpim6 .fbpim7 %s.%c%c%c >>& logfile\n",
+			    compath, mip, MIRSCALE, outname, ext1, resext[l], ext3 );
+			sprintf( peoutname, "%s.%c%c%c",outname,ext1, resext[l],ext3);
+			fprintf( peout, "allo %3d r\r\nretr\r\n%s\r\n%s\r\n",
+			    perec, peoutname, peoutname );
+		}
+		fprintf(shout,"rm .fbpim?\n");
+
+		fprintf(shout,"date >> logfile\n");
+		stdone++;
+		togo = temiscnt - stdone;
+		fprintf(shout,"echo \"Study %s complete, %d more studies are being processed\" >> logfile\n",
+		    outname,
+		    togo);
+
+		k++;  /* move on to next study name */
+	}
+}  /* end of fbp-specific script generation */
+	}  /* end of compound loop */
+
+	if ( emflag )
+	{
+		/* clean up the mess */
+		fprintf(shout,"rm .survprob*\n");
+		fprintf(shout,"rm .hpiter*\n");
+		fprintf(shout,"rm .emission\n");
+		fprintf(shout,"rm .randoms\n");
+	}
+	else
+	{
+		/* clean up */
+		fprintf(shout,"rm .pcoremis?\n");
+	}
+
+
+	fprintf(shout,"date >> logfile\n");  /* terminate the logfile */
+	fprintf(shout,"echo \"All %d studies completed\" >> logfile\n",temiscnt);
+	fclose ( shout );
+	fprintf( peout, "end\r\n" );
+	fclose ( peout );
+
+	if ( mlnflag )
+	{
+		/* run in foreground */
+		system ( "csh .pett_recon" ); /* start the reconstruction */
+	}
+	else
+	{
+		/* run in background */
+		system ( "csh .pett_recon&" ); /* start the reconstruction */
+	}
+
+
+}
+
+
+findcomp ()  /* find all compounds */
+{
+	char compchar;
+	char *cp;
+	int i;
+
+
+	/* take a spin through the directory */
+	dirp = opendir (".");
+	if ( dirp == NULL )
+		exit (-1);
+	for ( dp=readdir(dirp); dp!=NULL; dp = readdir(dirp) )
+	{
+		strcpy ( path, dp->d_name );  /* file name */
+		if ( strncmp ( path, rootname, rootlen ) != 0 )
+			continue;  /* skip any names not starting with rootname */
+		pindex = strchr ( path, '.' );
+		if ( *(pindex+2) != '\0' )
+			continue;  /* ignore complex extensions */
+		extension = *(pindex+1);
+		if ( extension != 'E' )
+			continue;  /* take compounds only from emission files */
+		cp = &path [rootlen]; /* first char of compound */
+		i = 0;
+		while ( (isupper(*cp)) && (i < 2) )
+			cmpnd[i++] = *cp++;
+
+		cmpnd[i] = '\0';
+
+#ifdef VERBOSE
+		fprintf(stderr,"%s\n",cmpnd);
+#endif
+		if ( ncmpnd == 0 )
+		{
+			strcpy ( compname[0], cmpnd );
+			ncmpnd++;
+		}
+		else
+		{
+			/* search existing compound names */
+			match ( cmpnd );
+			if ( (nsnglm == 0) && (ndblm == 0) )  /* the simple case */
+				{
+					/* add the current compound to the table */
+					strcpy (compname[ncmpnd], cmpnd);
+					ncmpnd++;
+				}
+			else
+			{
+				if ( cmplen == 1 )
+				{
+					if ( nsnglm > 1 )
+					{
+						fprintf(stderr,"Compound name conflict\n");
+						fprintf(stderr,"%s\n",cmpnd);
+						for ( i = 0; i < ncmpnd; i++ )
+							fprintf(stderr,"%s\n",compname[i]);
+						exit (-1);
+					}
+					/* replace the name in compname with the single-char compound */
+					for ( i = 0; i < ncmpnd; i++ )
+						if ( snglm[i] == TRUE )
+						{
+							strcpy ( compname[i], cmpnd );
+							break;
+						}
+				}
+				else
+					/* cmplen > 1 */
+					{
+					}
+			}
+		}
+	}
+	closedir(dirp);
+#ifdef VERBOSE
+	fprintf(stderr,"Compound Names\n");
+	for ( i = 0; i < ncmpnd; i++ )
+		fprintf(stderr,"%s\n",compname[i]);
+#endif
+}
+
+findER ()  /* find .E and .R files for a given compound */
+{
+	dirp = opendir (".");
+	if ( dirp == NULL )
+		exit (-1);
+	for ( dp=readdir(dirp); dp!=NULL; dp = readdir(dirp) )
+	{
+		strcpy ( path, dp->d_name );  /* file name */
+		if ( strncmp ( path, rootcname, rootclen ) != 0 )
+			continue;  /* skip any names not starting with rootcname */
+		/* get file status */
+		if ( stat ( path, sbufp ) != 0 )
+			exit (-1);
+		filesize = sbufp->st_size;
+		pindex = strchr ( path, '.' );
+		if ( *(pindex+2) != '\0' )
+			continue;  /* ignore complex extensions */
+		if ( filesize != SINOSIZE )
+		{
+			fprintf(stderr,"The file %s is the wrong size.\n",path);
+			exit (-1);
+		}
+		extension = *(pindex+1);
+		if ( ! ( (extension == 'R') || (extension == 'E') ) )
+			continue;  /* ignore any but EMISSION and RANDOMS */
+		cp = pindex - 1;
+		while ( isdigit ( *cp ) ) cp--;
+		cp++;
+		if ( sscanf ( cp, "%d", &select) != 1 )
+			fprintf(stderr,"Warning, no study number in %s\n",path);
+		if ( (select < 1) || (select > 99 ) )
+			fprintf(stderr, "Warning, incorrect study number in %s\n",path);
+
+		if ( inrange ( select ) )
+		{
+			if ( extension == 'E' )
+			{
+				strcpy ( emissions[select], path );
+#ifdef VERBOSE
+				fprintf(stderr,"%s\n",emissions[select]);
+#endif
+				emiscnt++;
+			}
+			else if (extension == 'R' )
+			{
+				strcpy ( randoms[select], path );
+#ifdef VERBOSE
+				fprintf(stderr,"%s\n",randoms[select]);
+#endif
+				randcnt++;
+			}
+		}
+
+	}
+	closedir(dirp);
+}
+
+int inrange ( sel )  /* see if study has been requested */
+int sel;
+{
+
+	int i;
+
+	switch ( rangtype )
+	{
+	case rangall:
+		return 1;
+		break;
+
+	case rangevn:
+		if ( (sel % 2) == 0 )
+			return ( 1 );
+		else 
+			return ( 0 );
+		break;
+	case rangodd:
+		if ( (sel % 2) == 1 )
+			return ( 1 );
+		else 
+			return ( 0 );
+		break;
+	case rangrang:
+		if ( (sel >= ranglow) && ( sel <= ranghigh) )
+			return ( 1 );
+		else 
+			return ( 0 );
+		break;
+	case rangenm:
+		for ( i = 0; i < nrange; i++ )
+			if ( sel == rangenum[i] )
+				return (1);
+
+		return ( 0 );
+		break;
+	default:
+		fprintf(stderr,"program error\n");
+		exit (-1);
+	}
+}
+
+match ( cp )
+char *cp;
+{
+
+	int i;
+	int tbllen;
+
+	/* initialize */
+	nsnglm = 0;
+	ndblm = 0;
+	for ( i = 0; i < COMPSIZE; i++ )
+	{
+		snglm [i] = FALSE;
+		dblm [i] = FALSE;
+	}
+	cmplen = strlen ( cp );
+	if ( cmplen == 1 )
+	{
+		for ( i = 0; i < ncmpnd; i++ )
+		{
+			if ( (strncmp ( cp, compname[i], 1 )) == 0 )
+			{
+				snglm[i] = TRUE;
+				nsnglm++;
+			}
+		}
+	}
+	else
+	{
+		for ( i = 0; i < ncmpnd; i++ )
+		{
+			tbllen = strlen ( compname[i] );
+			if ( tbllen == 1 )
+			{
+				if ( (strncmp ( cp, compname[i], 1 )) == 0 )
+				{
+					snglm[i] = TRUE;
+					nsnglm++;
+				}
+			}
+			if ( (strcmp ( cp, compname[i] )) == 0 )
+			{
+				dblm[i] = TRUE;
+				ndblm++;
+			}
+		}
+	}
+
+}
+
+prscomp ( cn, cp )
+char *cn;
+char *cp;
+{
+	char c;
+
+	while ( isupper(c = *cp) )
+	{
+		*cn++ = *cp++;
+	}
+}
+findTE ()  /* find Total Emission   get count of total studies to be done */
+{
+	dirp = opendir (".");
+	if ( dirp == NULL )
+		exit (-1);
+	for ( dp=readdir(dirp); dp!=NULL; dp = readdir(dirp) )
+	{
+		strcpy ( path, dp->d_name );  /* file name */
+		if ( strncmp ( path, rootcname, rootclen ) != 0 )
+			continue;  /* skip any names not starting with rootcname */
+		pindex = strchr ( path, '.' );
+		extension = *(pindex+1);
+		if ( extension != 'E' )
+			continue;
+		cp = pindex - 1;
+		while ( isdigit ( *cp ) ) cp--;
+		cp++;
+		if ( sscanf ( cp, "%d", &select) != 1 )
+			fprintf(stderr,"Warning, no study number in %s\n",path);
+		if ( (select < 1) || (select > 99 ) )
+			fprintf(stderr, "Warning, incorrect study number in %s\n",path);
+
+		if ( inrange ( select ) )
+		{
+			temiscnt++;
+		}
+
+	}
+	closedir(dirp);
+}

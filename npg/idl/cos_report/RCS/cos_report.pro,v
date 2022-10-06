@@ -1,0 +1,424 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.8
+date	2005.03.29.22.56.28;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2005.03.11.15.02.27;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2003.04.14.19.21.35;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2003.04.02.23.06.31;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2003.04.02.22.56.15;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2003.01.29.18.45.05;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.10.31.16.16.56;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2002.10.30.19.59.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@change ipln
+@
+text
+@PRO COS_REPORT
+@@IMAGE_UTILS.h
+
+   on_error, 2
+   study = getenv('STUDY')
+   scan = getenv('SCAN')
+   oefmax = 100
+   oefmax = getenv('OEFMAX')
+   studyname = [study+'-ho'+scan+'.msk', study+'-oo'+scan+'.msk', study+'-oo'+scan+'ho'+scan+'.msk']
+   desc = ['Oxygen-15 Water Blood Flow Image', $
+           'Oxygen-15 Oxygen Metabolism Image', $
+           'Count-Based Oxygen Extraction Image']
+
+   device, decompose=0, retain=2
+   device, get_visual_name=name, get_visual_depth=depth
+
+   ;; Read first image to get dimensions
+
+   msg = ''
+   img = {VIMAGE}
+   img.ff = 1
+   img.lf = 1
+   img.fp = 1
+   img.lp = 38
+   img.proc = 0
+   img.fname = studyname[0]
+   IF (getframe(img, msg) NE 0) THEN BEGIN
+      print, msg
+      RETURN
+   ENDIF
+
+   ;; Display Initialization
+   
+   ipln = [20,23,25,31,32,36]
+   zoom = 2
+   nrow = 3
+   ncol = 6
+   xshift = 52
+   xsize = img.dim[0] * zoom
+   xstep = xsize-xshift
+   label_offset = 50
+   xoffset = 10
+   ysize = img.dim[1] * zoom
+   ystep = ysize
+   xscrn = ncol*xsize - (ncol-1)*xshift -xoffset
+   yscrn = nrow*ysize + label_offset
+   
+   viewbase = widget_base(TITLE='VOI Display', group_leader=tlb)
+   win = widget_draw(viewbase, xsize=xscrn, ysize=yscrn)
+   !p.background = 0
+   widget_control, viewbase, /realize, xoffset=0, yoffset=0
+   widget_control, win, get_value=windowIndex
+   
+   ;; Load color table + black
+
+   nc = 20
+   ;loadct, 36, ncolors=nc, bottom=0, file='/usr/local/npg/idl/color_tables/videen.tbl'
+   color44,r,g,b,nc
+   tvlct,r,g,b
+   red    = rotate([255,200,0],4)
+   black  = rotate([0,0,0],4)
+   tvlct, red, nc
+   tvlct, black, nc+1
+   
+   ;; Display 6 PET Planes for 3 images
+
+   maxoef = string(format='(F3.1)', oefmax/100.)
+   maxlab = ['Max','Max',maxoef]
+   minlab = ['0','0','0']
+   FOR n=0, 2 DO BEGIN
+      img.fname = studyname[n]
+      IF (getframe(img, msg) NE 0) THEN BEGIN
+         print, msg
+         RETURN
+      ENDIF
+      y0 = (nrow-n-1)*ystep + label_offset
+      FOR k=0, 5 DO BEGIN
+         image = reform((*img.data)[*,*,ipln[k]])
+         IF (n EQ 2) THEN maxi=oefmax ELSE maxi = max(image)
+         temp = bytscl(rebin(image, xsize, ysize), MIN=0, MAX=maxi, TOP=(nc-1))
+         x0 = xstep*k -xoffset
+         tv, temp, x0, y0
+      ENDFOR 
+
+      ;; Color Bar
+      cbar = rotate(findgen(nc),3)
+      yn = ysize/20
+      temp = rebin(cbar, 20, 20*yn, /sample)
+      tv,temp,xscrn-25,y0
+
+      str = maxlab[n]
+      ytxt = y0 + ystep - 35
+      xyouts, xscrn-30, ytxt, str, charsize=2, charthick=2,/device,color=nc+1, alignment=1.0
+      str = minlab[n]
+      ytxt = y0 + 10
+      xyouts, xscrn-30, ytxt, str, charsize=2, charthick=2,/device,color=nc+1, alignment=1.0
+
+      ;; Label
+      ytxt = y0 + ystep - 25
+      str = desc[n]+'  ('+study+')'
+      xyouts, 300, ytxt, str, charsize=2, charthick=2,/device,color=nc+1
+      xyouts, 50, y0+10, 'L', charsize=2, charthick=2,/device,color=nc+1
+      xyouts, xstep-30, y0+10, 'R', charsize=2, charthick=2,/device,color=nc+1
+   ENDFOR 
+
+   ;; Label Slices
+
+   zloc = ['Z=34','Z=28','Z=24','Z=12','Z=10','Z=2']
+   ytxt = label_offset - 30
+   FOR k=0, 5 DO BEGIN
+      xtxt = k*xstep + 100
+      xyouts, xtxt, ytxt, zloc[k], charsize=2, charthick=2,/device,color=nc+1
+   ENDFOR
+
+   ch = ''
+   read,prompt='Save Image and Exit ',ch
+   arr = tvrd()
+   IF (depth EQ 24) THEN BEGIN
+      xarr = (size(arr))[1]
+      yarr = (size(arr))[2]
+      rgb = lonarr(3,xarr,yarr)
+      rgb[0,*,*] = tvrd(0,0,xarr,yarr,1)
+      rgb[1,*,*] = tvrd(0,0,xarr,yarr,2)
+      rgb[2,*,*] = tvrd(0,0,xarr,yarr,3)
+      fname = study + '-report.tif'
+      write_tiff,fname,rgb,compression=1
+      print, 'Window saved in TIF format:  '+fname
+   ENDIF ELSE BEGIN
+      tvlct,r,g,b,/get
+      fname = study + '-report.gif'
+      write_gif, fname, rotate(tvrd(),7), r,g,b
+      print, 'Window saved in GIF format:  '+fname
+   ENDELSE
+
+END 
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d34 1
+a34 1
+   ipln = [21,24,26,31,33,37]
+@
+
+
+1.6
+log
+@change label
+@
+text
+@d7 2
+d67 2
+a68 1
+   maxlab = ['Max','Max','1.0']
+d79 1
+a79 1
+         IF (n EQ 2) THEN maxi=100 ELSE maxi = max(image)
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d8 2
+a9 2
+   desc = ['Oxygen-15 Water Cerebral Blood Flow Image', $
+           'Oxygen-15 Oxygen Metabolism Flow Image', $
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d52 1
+a52 1
+   ;; Load color table + white 
+d55 3
+a57 1
+   loadct, 36, ncolors=nc, bottom=0, file='/usr/local/npg/idl/color_tables/videen.tbl'
+d59 1
+a59 1
+   white  = rotate([255,255,255],4)
+d61 1
+a61 1
+   tvlct, white, nc+1
+@
+
+
+1.3
+log
+@fix to display ho2, oo2
+@
+text
+@d12 3
+d52 1
+a52 1
+   ;; Load color table + yellow + white 
+d55 1
+a55 3
+   ;;loadct, 36, ncolors=nc, bottom=0, file='/usr/local/npg/idl/color_tables/videen.tbl'
+   color44,r,g,b,nc
+   tvlct,r,g,b
+a56 1
+   yellow = rotate([255,255,0],4)
+d88 1
+a88 1
+      xyouts, xscrn-30, ytxt, str, charsize=2, charthick=2,/device,color=1, alignment=1.0
+d91 1
+a91 1
+      xyouts, xscrn-30, ytxt, str, charsize=2, charthick=2,/device,color=1, alignment=1.0
+d96 3
+a98 3
+      xyouts, 300, ytxt, str, charsize=2, charthick=2,/device,color=1
+      xyouts, 50, y0+10, 'L', charsize=2, charthick=2,/device,color=1
+      xyouts, xstep-30, y0+10, 'R', charsize=2, charthick=2,/device,color=1
+d107 1
+a107 1
+      xyouts, xtxt, ytxt, zloc[k], charsize=2, charthick=2,/device,color=1
+d111 18
+a128 5
+   read,prompt='Save as GIF ',ch
+   tvlct,r,g,b,/get
+   fname = study+'-report.gif'
+   write_gif, fname, rotate(tvrd(),7), r,g,b
+   print, 'Window saved in GIF format:  '+fname
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d6 2
+a7 1
+   studyname = [study+'-ho1.msk', study+'-oo1.msk', study+'-oo1ho1.msk']
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d7 3
+a9 1
+   tifname = [study+'-ho.tif', study+'-oo.tif', study+'-oef.tif']
+a25 53
+   ;; Read VOI
+
+   vname = study + '-mca.voi'
+   openr,lun, vname, ERROR=err, /GET_LUN
+   IF (err NE 0) THEN BEGIN
+      print, 'Cannot open '+vname
+      RETURN
+   ENDIF
+   peaks = {PEAK_STR, $
+            id: '', $
+            x:  0, $
+            y:  0, $
+            z:  0 $
+           }
+
+   str = ''
+   npeaks =  0L
+   id = ''
+   x = 0.0
+   y = 0.0
+   z = 0.0
+   listing = ['']
+   readf, lun, str
+   readf, lun, str
+   readf, lun, npeaks
+   FOR n=0,npeaks-1 DO BEGIN
+      readf, lun, str
+      IF (min('' EQ listing) EQ 1) THEN BEGIN
+         listing = [str]
+         peak = [peaks]
+      ENDIF ELSE BEGIN
+         listing = [listing,str]
+         peak = [peak, peaks]
+      ENDELSE
+      k = strpos(str,' ')
+      id = strmid(str,0,k)
+      str = strmid(str,k)
+      reads, str, x, y, z
+      peak[n].id = id
+      peak[n].x = x
+      peak[n].y = y
+      peak[n].z = z
+   ENDFOR
+   close, lun
+   free_lun, lun
+
+   FOR n=0,npeaks-1 DO BEGIN
+      id = peak[n].id
+      x = peak[n].x
+      y = peak[n].y
+      z = peak[n].z
+   ENDFOR
+
+d30 1
+d35 1
+d38 1
+d40 1
+a40 1
+   yscrn = ysize 
+d51 1
+a51 1
+   ;loadct, 36, ncolors=nc, bottom=0, file="/usr/local/npg/idl/color_tables/videen.tbl"
+d62 2
+d70 1
+a75 1
+         y0 = 0
+d83 1
+a83 1
+      tv,temp,xscrn-25,0
+d85 7
+d93 5
+a97 37
+      ytxt = ysize-25
+      xyouts, 10, ytxt, study, charsize=2, charthick=2,/device,color=1
+      
+      ;; Display VOIs 
+      
+      npts = 32
+      radius = 5
+      a = findgen(npts+1) * (2 * !pi/(npts-1))
+      FOR k=0, npeaks-1 DO BEGIN
+         id = peak[k].id
+         x  = peak[k].x
+         y  = peak[k].y
+         z  = peak[k].z
+         CASE z of
+            21: dsp = 0
+            24: dsp = 1
+            26: dsp = 2
+            31: dsp = 3
+            33: dsp = 4
+            37: dsp = 5
+         ENDCASE
+         xy = zoom * transpose([[x + radius * cos(a)], [y + radius * sin(a)]])
+         xy[0,*] = xy[0,*] + xstep*dsp -xoffset
+         xy[1,*] = ysize - xy[1,*]
+         plots, xy, /device, color=nc+1
+         xy[1,*] = xy[1,*] + ysize 
+         plots, xy, /device, color=0
+         xy[1,*] = xy[1,*] + ysize 
+         plots, xy, /device, color=0
+      ENDFOR
+
+      ch = ''
+      read,prompt='Save as TIF ',ch
+      fname = tifname[n]
+      tvlct,r,g,b,/get
+      write_tiff, fname, tvrd(), compression=1, red=r, green=g, blue=b
+      print, 'Window saved in TIF format:  '+fname
+d100 16
+@

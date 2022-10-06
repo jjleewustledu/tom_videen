@@ -1,0 +1,476 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.5
+date	2003.11.24.22.43.12;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2003.10.14.21.29.23;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2003.10.10.16.44.45;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.10.09.20.07.47;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@check that default_zoom > 0
+@
+text
+@FUNCTION VIDIF_DISPLAY_SCALE, image, i, xsize, ysize, stype
+   COMMON VIDI
+   
+   mini = dsp[i].min            ; Manual scaling
+   maxi = dsp[i].max
+   dsp[i].amin = mini
+   dsp[i].amax = maxi
+   nc = dsp[i].nc
+   IF (stype EQ 0) THEN BEGIN
+      IF (dsp[i].range EQ 1) THEN $
+         tmp = bytscl(rebin(-(image), xsize, ysize), MIN=mini, MAX=maxi, TOP=(nc-1)) $
+      ELSE tmp = bytscl(rebin(image, xsize, ysize), MIN=mini, MAX=maxi, TOP=(nc-1))
+   ENDIF ELSE BEGIN 
+      IF (dsp[i].range EQ 1) THEN $
+         tmp = bytscl(congrid(-(image), xsize, ysize, /INTERP), $
+                      MIN=mini, MAX=maxi, TOP=(nc-1)) $
+      ELSE tmp = bytscl(congrid(image, xsize, ysize, /INTERP), $
+                        MIN=mini, MAX=maxi, TOP=(nc-1))
+   ENDELSE
+   RETURN, tmp
+END
+      
+PRO VIDIF_DISPLAY, uv
+   ;; Scale and display 3 images
+   ;; uv = the info structure for this display
+   COMMON IMAGE_UTILS
+   COMMON VIDI
+   
+   IF ((uv.img[0].dim[0] NE uv.img[1].dim[0]) OR $
+       (uv.img[0].dim[1] NE uv.img[1].dim[1]) OR $
+       (uv.img[0].dim[2] NE uv.img[1].dim[2])) THEN BEGIN
+      widget_control, uv.wid.msg, set_value='Cannot display composite of different sized images'
+      RETURN
+   ENDIF
+   CASE orient OF
+      0: BEGIN
+         x0 = 0
+         y0 = 1
+      END
+      1: BEGIN
+         x0 = 0
+         y0 = 2
+      END
+      2: BEGIN
+         x0 = 1
+         y0 = 2
+      END
+   ENDCASE
+   slice = uv.img[0].p - uv.img[0].fp
+   frame = uv.img[0].f - uv.img[0].ff
+   xsize = uv.img[0].dim[x0] * dsp[0].zoom
+   ysize = uv.img[0].dim[y0] * dsp[0].zoom
+   stype = 1
+   IF (uv.img[0].pdim[y0] GT uv.img[0].pdim[x0]) THEN BEGIN 
+      fact = (uv.img[0].pdim[y0])/(uv.img[0].pdim[x0])
+      ysize = fact * uv.img[0].dim[y0] * dsp[0].zoom
+   ENDIF ELSE IF (uv.img[0].pdim[0] GT uv.img[0].pdim[y0]) THEN BEGIN 
+      fact = (uv.img[0].pdim[x0])/(uv.img[0].pdim[y0])
+      xsize = fact * uv.img[0].dim[x0] * dsp[0].zoom
+   ENDIF ELSE stype = 0
+
+   ;; Format 3 Images
+   CASE orient OF
+      0: BEGIN
+         img0 = reform((*uv.img[0].data)[*,*,slice,frame])
+         img1 = reform((*uv.img[1].data)[*,*,slice,frame])
+         img2 = reform((*uv.img[2].data)[*,*,slice,frame])
+      ENDCASE
+      1: BEGIN
+         img0 = reform((*uv.img[0].data)[*,slice,*,frame])
+         img1 = reform((*uv.img[1].data)[*,slice,*,frame])
+         img2 = reform((*uv.img[2].data)[*,slice,*,frame])
+      ENDCASE
+      2: BEGIN
+         img0 = reform((*uv.img[0].data)[slice,*,*,frame])
+         img1 = reform((*uv.img[1].data)[slice,*,*,frame])
+         img2 = reform((*uv.img[2].data)[slice,*,*,frame])
+      ENDCASE
+   ENDCASE
+
+   display_type = dsp[0].set
+   smoothed = dsp[2].set
+
+   ;; Max/Min
+   CASE display_type OF
+      3: BEGIN                  ; Image 2 over Image 1
+         dsp[2].max = dsp[1].max
+         dsp[2].min = 0
+      ENDCASE
+      ELSE: BEGIN	
+         dsp[2].max = dsp[0].max * percent / 100
+         dsp[2].min = -dsp[2].max
+      ENDCASE
+   ENDCASE
+
+   img0 = VIDIF_DISPLAY_SCALE (img0, 0, xsize, ysize, stype)
+   img1 = VIDIF_DISPLAY_SCALE (img1, 1, xsize, ysize, stype)
+   img2 = VIDIF_DISPLAY_SCALE (img2, 2, xsize, ysize, stype)
+
+   ;; Color Bars
+   len = ysize*9/10
+   width = xsize/20
+   offset = ysize*1/20
+   cbar0 = bytscl(indgen(len), TOP=(dsp[0].nc-1)) ; Color Bar 0
+   cbar2 = bytscl(indgen(len), TOP=(dsp[2].nc-1)) ; Color Bar 2
+
+   FOR j=1, width DO FOR k=1, len DO img0[xsize-j, ysize-k-offset] = cbar0[k-1]
+   widget_control,uv.wid.max[0],set_value=dsp[0].amax
+   widget_control, uv.wid.win[0], draw_xsize=xsize, draw_ysize=ysize
+   wset, dsp[0].id
+   tv, img0
+
+   FOR j=1, width DO FOR k=1, len DO img1[xsize-j, ysize-k-offset] = cbar0[k-1]
+   widget_control,uv.wid.max[1],set_value=dsp[1].amax
+   widget_control, uv.wid.win[1], draw_xsize=xsize, draw_ysize=ysize
+   wset, dsp[1].id
+   tv, img1
+   
+   ;; Image specification
+   CASE display_type OF
+      0: BEGIN                  ; Difference Image Alone
+         tmp2 = img2
+      ENDCASE
+      1: BEGIN                  ; Difference Image over Image 1
+         tmp1 = img0
+         tmp2 = img2
+      ENDCASE
+      2: BEGIN                  ; Difference Image over Image 2
+         tmp1 = img1
+         tmp2 = img2
+      ENDCASE
+      3: BEGIN                  ; Image 2 over Image 1
+         tmp1 = img0
+         tmp2 = img1
+      ENDCASE
+   ENDCASE
+
+   IF (smoothed EQ 1) THEN tmp2 = smooth(tmp2, 3)
+   img2 = VIDIF_DISPLAY_SCALE (tmp2, 2, xsize, ysize, stype)
+
+   ;; Combine with Color Bar, Threshold, Cutoff
+   CASE display_type OF
+      0: BEGIN                  ; Difference Image Alone
+         FOR j=1, width DO FOR k=1, len DO tmp2[xsize-j, ysize-k-offset] = cbar2[k-1]
+         tmp1 = dsp[2].bot
+      ENDCASE
+      1: BEGIN                  ; Difference Image over Image 1
+         FOR j=1, width DO FOR k=1, len DO BEGIN
+            tmp1[xsize-j, ysize-k-offset] = 0
+            tmp2[xsize-j, ysize-k-offset] = cbar2[k-1]
+         ENDFOR
+         uthresh = (0.5 + (0.005 * dsp[0].cut)) * dsp[0].nc
+         lthresh = (0.5 - (0.005 * dsp[0].cut)) * dsp[0].nc
+         idx1 = where((tmp2 LT uthresh) AND (tmp2 GT lthresh), count1)
+         idx2 = where((tmp2 GE uthresh) OR (tmp2 LE lthresh), count2)
+         IF (count1 GT 0) THEN tmp2[idx1] = 0
+         IF (count2 GT 0) THEN tmp1[idx2] = dsp[2].bot
+      ENDCASE
+      2: BEGIN                  ; Difference Image over Image 2
+         FOR j=1, width DO FOR k=1, len DO BEGIN
+            tmp1[xsize-j, ysize-k-offset] = 0
+            tmp2[xsize-j, ysize-k-offset] = cbar2[k-1]
+         ENDFOR
+         uthresh = (0.5 + (0.005 * dsp[0].cut)) * dsp[0].nc
+         lthresh = (0.5 - (0.005 * dsp[0].cut)) * dsp[0].nc
+         idx1 = where((tmp2 LT uthresh) AND (tmp2 GT lthresh), count1)
+         idx2 = where((tmp2 GE uthresh) OR (tmp2 LE lthresh), count2)
+         IF (count1 GT 0) THEN tmp2[idx1] = 0
+         IF (count2 GT 0) THEN tmp1[idx2] = dsp[2].bot
+      ENDCASE
+      3: BEGIN                  ; Image 2 over Image 1
+         FOR j=1, width DO FOR k=1, len DO BEGIN
+            tmp1[xsize-j, ysize-k-offset] = 0
+            tmp2[xsize-j, ysize-k-offset] = cbar0[k-1]
+         ENDFOR
+         cutoff =  0.01 * dsp[0].cut * dsp[1].nc
+         idx1 = where(tmp2 LT cutoff, count1)
+         idx2 = where(tmp2 GE cutoff, count2)
+         IF (count1 GT 0) THEN tmp2[idx1] = 0
+         IF (count2 GT 0) THEN tmp1[idx2] = dsp[2].bot
+      ENDCASE
+   ENDCASE
+
+   tmp3 = tmp1 + tmp2
+   widget_control,uv.wid.max[2],set_value=dsp[2].amax
+   widget_control, uv.wid.win[2], draw_xsize=xsize, draw_ysize=ysize
+   wset, dsp[2].id
+   tv, tmp3
+END
+@
+
+
+1.4
+log
+@tested display_types
+@
+text
+@d1 1
+a1 1
+FUNCTION VIDIF_DISPLAY_SCALE, image, i, xsize, ysize, sample, stype
+d11 2
+a12 4
+         tmp = bytscl(rebin(-(image), xsize, ysize, SAMPLE=sample), $
+                      MIN=mini, MAX=maxi, TOP=(nc-1)) $
+      ELSE tmp = bytscl(rebin(image, xsize, ysize, SAMPLE=sample), $
+                        MIN=mini, MAX=maxi, TOP=(nc-1))
+d96 3
+a98 3
+   img0 = VIDIF_DISPLAY_SCALE (img0, 0, xsize, ysize, sample, stype)
+   img1 = VIDIF_DISPLAY_SCALE (img1, 1, xsize, ysize, sample, stype)
+   img2 = VIDIF_DISPLAY_SCALE (img2, 2, xsize, ysize, sample, stype)
+d139 1
+a139 1
+   img2 = VIDIF_DISPLAY_SCALE (tmp2, 2, xsize, ysize, sample, stype)
+@
+
+
+1.2
+log
+@add color bars, image 2 on image 1, cutoff%
+@
+text
+@d1 1
+a1 1
+FUNCTION VIDIF_DISPLAY_SCALE, image, type, i, xsize, ysize, sample, stype
+d11 4
+a14 4
+         temp1 = bytscl(rebin(-(image), xsize, ysize, SAMPLE=sample), $
+                        MIN=mini, MAX=maxi, TOP=(nc-1)) $
+      ELSE temp1 = bytscl(rebin(image, xsize, ysize, SAMPLE=sample), $
+                          MIN=mini, MAX=maxi, TOP=(nc-1))
+d17 4
+a20 4
+         temp1 = bytscl(congrid(-(image), xsize, ysize, /INTERP), $
+                        MIN=mini, MAX=maxi, TOP=(nc-1)) $
+      ELSE temp1 = bytscl(congrid(image, xsize, ysize, /INTERP), $
+                          MIN=mini, MAX=maxi, TOP=(nc-1))
+d22 1
+a22 1
+   RETURN, temp1
+d26 1
+a26 1
+   ;; Scale and display image i
+a36 1
+   i = 0
+d51 4
+a54 4
+   slice = uv.img[i].p - uv.img[i].fp
+   frame = uv.img[i].f - uv.img[i].ff
+   xsize = uv.img[i].dim[x0] * dsp[i].zoom
+   ysize = uv.img[i].dim[y0] * dsp[i].zoom
+d56 6
+a61 6
+   IF (uv.img[i].pdim[y0] GT uv.img[i].pdim[x0]) THEN BEGIN 
+      fact = (uv.img[i].pdim[y0])/(uv.img[i].pdim[x0])
+      ysize = fact * uv.img[i].dim[y0] * dsp[i].zoom
+   ENDIF ELSE IF (uv.img[i].pdim[0] GT uv.img[i].pdim[y0]) THEN BEGIN 
+      fact = (uv.img[i].pdim[x0])/(uv.img[i].pdim[y0])
+      xsize = fact * uv.img[i].dim[x0] * dsp[i].zoom
+d64 18
+a81 10
+   FOR i= 0, 1 DO BEGIN
+      IF (uv.img[i].data EQ ptr_new()) THEN BEGIN
+         RETURN
+      ENDIF ELSE BEGIN
+         CASE orient OF
+            0: image = reform((*uv.img[i].data)[*,*,slice,frame])
+            1: image = reform((*uv.img[i].data)[*,slice,*,frame])
+            2: image = reform((*uv.img[i].data)[slice,*,*,frame])
+         ENDCASE
+         temp1 = VIDIF_DISPLAY_SCALE (image, uv.img[i].itype, i, xsize, ysize, sample, stype)
+d83 2
+a84 6
+         nc = dsp[i].nc         ; Color Bar
+         wid = xsize/20
+         len = ysize*9/10
+         off = ysize*1/20
+         temp = bytscl(indgen(len), TOP=(nc-1))
+         FOR j=1, wid DO FOR k=1, len DO temp1[xsize-j, ysize-k-off] = temp[k-1]
+d86 11
+a96 12
+         temp1 = temp1 + dsp[i].bot
+         widget_control, uv.wid.win[i], draw_xsize=xsize, draw_ysize=ysize
+         wset, dsp[i].id
+         tv, temp1
+         widget_control,uv.wid.max[i],set_value=dsp[i].amax
+      ENDELSE
+   ENDFOR
+   
+   ;; dsp[0].set = 0 -> display difference image alone
+   ;; dsp[0].set = 1 -> display difference image over image 1
+   ;; dsp[0].set = 2 -> display difference image over image 2
+   ;; dsp[0].set = 3 -> display image 2 over image 1
+d98 3
+a100 9
+   IF (dsp[0].set EQ 3) THEN BEGIN
+      i = 1
+      dsp[2].max = dsp[1].max
+      dsp[2].min = 0
+   ENDIF ELSE BEGIN
+      i = 2
+      dsp[2].max = dsp[0].max * percent / 100
+      dsp[2].min = -dsp[2].max
+   ENDELSE
+d102 6
+a107 10
+   IF (uv.img[i].data NE ptr_new() AND uv.img[i].data NE ptr_new()) THEN BEGIN
+      CASE orient OF
+         0: image = reform((*uv.img[i].data)[*,*,slice,frame])
+         1: image = reform((*uv.img[i].data)[*,slice,*,frame])
+         2: image = reform((*uv.img[i].data)[slice,*,*,frame])
+      ENDCASE
+      widget_control, uv.wid.win[2], draw_xsize=xsize, draw_ysize=ysize
+      IF (dsp[2].set EQ 0 OR dsp[2].set EQ 3) THEN temp = image $
+      ELSE temp = smooth(image,3) 
+      temp1 = VIDIF_DISPLAY_SCALE (temp, uv.img[i].itype, i, xsize, ysize, sample, stype)
+d109 5
+a113 17
+      IF (dsp[0].set EQ 0) THEN BEGIN
+         nc = dsp[i].nc         ; Color Bar
+         wid = xsize/20
+         len = ysize*9/10
+         off = ysize*1/20
+         temp = bytscl(indgen(len), TOP=(nc-1))
+         FOR j=1, wid DO FOR k=1, len DO temp1[xsize-j, ysize-k-off] = temp[k-1]
+         temp = temp1 + dsp[0].nc
+         widget_control,uv.wid.max[2],set_value=dsp[2].amax
+      ENDIF ELSE IF (dsp[0].set EQ 3) THEN BEGIN
+         ii = 1
+         CASE orient OF
+            0:  image = reform((*uv.img[ii].data)[*,*,slice,frame])
+            1:  image = reform((*uv.img[ii].data)[*,slice,*,frame])
+            2:  image = reform((*uv.img[ii].data)[slice,*,*,frame])
+         ENDCASE
+         temp2 = VIDIF_DISPLAY_SCALE (image, uv.img[ii].itype, ii, xsize, ysize, sample, stype)
+d115 24
+a138 9
+         nc = dsp[i].nc         ; Color Bar
+         wid = xsize/20
+         len = ysize*9/10
+         off = ysize*1/20
+         temp = bytscl(indgen(len), TOP=(nc-1))
+         FOR j=1, wid DO FOR k=1, len DO BEGIN
+            temp2[xsize-j, ysize-k-off] = temp[k-1]
+            temp1[xsize-j, ysize-k-off] = 0
+         ENDFOR
+d140 2
+a141 15
+         thresh =  0.01 * dsp[0].cut * dsp[1].nc
+         idx1 = where(temp2 LT thresh, count1)
+         idx2 = where(temp2 GE thresh, count2)
+         IF (count1 GT 0) THEN temp2[idx1] = 0
+         IF (count2 GT 0) THEN temp1[idx2] = dsp[0].nc
+         temp = temp1 + temp2
+         widget_control,uv.wid.max[2],set_value=dsp[2].max
+      ENDIF ELSE BEGIN
+         ii = dsp[0].set - 1
+         CASE orient OF
+            0:  image = reform((*uv.img[ii].data)[*,*,slice,frame])
+            1:  image = reform((*uv.img[ii].data)[*,slice,*,frame])
+            2:  image = reform((*uv.img[ii].data)[slice,*,*,frame])
+         ENDCASE
+         temp2 = VIDIF_DISPLAY_SCALE (image, uv.img[ii].itype, ii, xsize, ysize, sample, stype)
+d143 10
+a152 8
+         nc = dsp[i].nc         ; Color Bar
+         wid = xsize/20
+         len = ysize*9/10
+         off = ysize*1/20
+         temp = bytscl(indgen(len), TOP=(nc-1))
+         FOR j=1, wid DO FOR k=1, len DO BEGIN
+            temp1[xsize-j, ysize-k-off] = temp[k-1]
+            temp2[xsize-j, ysize-k-off] = 0
+d154 31
+d186 5
+a190 12
+         uthresh =  (0.5 + (0.005 * dsp[0].cut)) * dsp[0].nc
+         lthresh =  (0.5 - (0.005 * dsp[0].cut)) * dsp[0].nc
+         idx1 = where((temp1 LT uthresh) AND (temp1 GT lthresh), count1)
+         idx2 = where((temp1 GE uthresh) OR (temp1 LE lthresh), count2)
+         IF (count1 GT 0) THEN temp1[idx1] = 0
+         IF (count2 GT 0) THEN temp2[idx2] = dsp[0].nc
+         temp = temp1 + temp2
+         widget_control,uv.wid.max[2],set_value=dsp[2].amax
+      ENDELSE
+      wset, dsp[2].id
+      tv, temp
+   ENDIF
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 2
+a5 16
+   IF (dsp[i].type EQ 1) THEN BEGIN ; Manual scaling
+      mini = dsp[i].min
+      maxi = dsp[i].max
+   ENDIF ELSE BEGIN             ; Auto scaling
+      IF (dsp[i].range EQ 0) THEN BEGIN
+         mini = 0
+         maxi = max(image)
+      ENDIF ELSE IF (dsp[i].range EQ 1) THEN BEGIN
+         mini = 0
+         maxi = -min(image)
+      ENDIF ELSE BEGIN
+         mini = min(image)
+         maxi = max(image)
+         IF (-mini GT maxi) THEN maxi = -mini
+      ENDELSE
+   ENDELSE
+d75 8
+d91 15
+a105 1
+   i = 2
+d112 2
+a113 2
+      widget_control, uv.wid.win[i], draw_xsize=xsize, draw_ysize=ysize
+      IF (dsp[2].set EQ 0) THEN temp = image $
+d118 6
+d125 27
+d153 1
+a153 1
+         j = dsp[0].set - 1
+d155 3
+a157 3
+            0:  image = reform((*uv.img[j].data)[*,*,slice,frame])
+            1:  image = reform((*uv.img[j].data)[*,slice,*,frame])
+            2:  image = reform((*uv.img[j].data)[slice,*,*,frame])
+d159 12
+a170 1
+         temp2 = VIDIF_DISPLAY_SCALE (image, uv.img[j].itype, j, xsize, ysize, sample, stype)
+d178 1
+a181 1
+      widget_control,uv.wid.max[2],set_value=dsp[2].amax
+@

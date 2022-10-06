@@ -1,0 +1,143 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2005.08.29.16.27.35;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* $Log$
+ */
+/*	===============================================================================
+ *	Module:			scntest.c
+ *	Date:			Aug 2005
+ *	Author:			Tom Videen
+ *	Description:	Compare counts in header with total counts in an ECAT Matrix 7 scan file
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: scntest.c,v 1.4 2005/08/08 15:30:02 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+#include <myvalues.h>
+
+#define TESTLEN 28
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	FILE           *fp;
+	Index           indx;
+	ImageFile      *file;
+	Main_header7   *mh7;
+	Scan3D_subheader7 *sh7;
+	char           *fname;
+	short          *matrix;
+	short           nfrms, i;
+	long            trues, duration, total, sum, sizepln, k;
+	long            dim1, dim2, dim3, pln;
+
+	union conv {
+		short           s[TESTLEN];
+		char            c[2 * TESTLEN];
+	}               test;
+
+	fname = argv[1];
+
+	if ((fp = fopen (fname, "r")) == NULL) {
+		(void) fprintf (stderr, "ERROR [scntest]: opening %s\n", fname);
+		return (ERROR);
+	}
+	if (fread (test.s, sizeof (short), TESTLEN, fp) != TESTLEN) {
+		(void) fprintf (stderr, "ERROR [scntest]: reading %s\n", fname);
+		return (ERROR);
+	}
+	(void) fclose (fp);
+	test.c[TESTLEN - 1] = (char) NULL;
+	if (strncmp (test.c, "MATRIX7", 7) != 0) {
+		(void) fprintf (stderr, "ERROR [scntest]]: not an ECAT 7 file: %s\n", fname);
+		return (ERROR);
+	}
+	file = make_imgfile (fname);
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [scntest]: opening %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [scntest]: reading MainHeader from %s\n", fname);
+		return (ERROR);
+	}
+	mh7 = file->m7->mh;
+	nfrms = mh7->num_frames;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+	trues = 0;
+	duration = 0;
+	total = 0;
+
+	fprintf (stdout, "Frm     Start  Duration    Prompts    Delayed  Net Trues  Summed Trues\n");
+	for (i = 1; i <= nfrms; i++) {
+		indx.frm = i;
+		sum = 0;
+		if (get_ss7 (file, &indx) == ERROR) {
+			fprintf (stderr, "ERROR [scntest]: reading Scan3D_subheader7 from %s\n", fname);
+			return (ERROR);
+		}
+		sh7 = file->m7->s3d;
+		dim1 = (long) sh7->num_r_elements;
+		dim2 = (long) sh7->num_angles;
+		dim3 = (long) sh7->num_z_elements[0];
+		sizepln = dim1 * dim2;
+
+		for (pln = 0; pln < dim3; pln++) {
+			indx.pln = pln + 1;
+			if ((matrix = rdscan7 (file, indx)) == NULL) {
+				fprintf (stdout, "ERROR [scancnts]: reading frame %d plane %ld of %s\n",
+					 indx.frm, pln + 1, fname);
+				return (ERROR);
+			}
+			for (k = 0; k < sizepln; k++)
+				sum += matrix[k];
+			free (matrix);
+		}
+		if (sum != sh7->net_trues)
+			fprintf (stdout, "%3d %9d %9d %10d %10d %10d %10ld ***\n", i, sh7->frame_start_time, sh7->frame_duration,
+				 sh7->prompts, sh7->delayed, sh7->net_trues, sum);
+		else
+			fprintf (stdout, "%3d %9d %9d %10d %10d %10d %10ld\n", i, sh7->frame_start_time, sh7->frame_duration,
+				 sh7->prompts, sh7->delayed, sh7->net_trues, sum);
+		trues = trues + (long) sh7->net_trues;
+		duration = duration + (long) sh7->frame_duration;
+		total = total + sum;
+	}
+	if (total != trues)
+		fprintf (stdout, "Total %17ld %32ld %10ld ***\n", duration, trues, total);
+	else
+		fprintf (stdout, "Total %17ld %32ld %10ld\n", duration, trues, total);
+	return (OK);
+}
+@

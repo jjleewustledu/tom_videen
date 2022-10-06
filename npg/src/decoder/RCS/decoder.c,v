@@ -1,0 +1,351 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	2004.02.13.21.57.46;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.07.03.19.18.17;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2001.07.02.20.11.51;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2001.07.02.19.44.08;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.12.01.22.33.00;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@Feb 2004
+@
+text
+@/* $Log: decoder.c,v $
+ * Revision 1.4  2001/07/03  19:18:17  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  2001/07/02  20:11:51  tom
+ * expand in for large files
+ *
+ * Revision 1.2  2001/07/02  19:44:08  tom
+ * decode files beginning with ENCODED
+ *
+ * Revision 1.1  1999/12/01  22:33:00  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			decoder.c
+ *	Date:			Dec 1999
+ *	Author:			Tom Videen
+ *	Description:
+ *		Decode PETT image files encoded with ENCODE.
+ *		This program takes image files that have been encoded by
+ *		ENCODE and restores them to their conventional form by
+ *		adding leading and trailing zeros on all image lines.
+ *		Deblocking is performed to remove extra space that was necessary
+ *		to make headers align on OS32 record boundaries. The new file
+ *		is written out with each slice preceded by its corresponding header.
+ *	History:
+ *		Oct 1990 M. Todd Gamble, decode1;
+ *		Dec 1999 TOV revision for MAM encode algorithm;
+ *		Jul 2001 TOV revision for files beginning with ENCODED
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/decoder/RCS/decoder.c,v 1.4 2001/07/03 19:18:17 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <math.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include "pett6.h"
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	struct stat     sbuf;
+	FILE           *encoded_file;	 /* input file */
+	FILE           *decoded_file;	 /* output file */
+	char           *infile;			 /* input filename */
+	char           *outfile;		 /* output filename */
+	short           in[1000000];	 /* encoded image */
+	short           out[100][100];	 /* decoded image */
+	short           pad[112];		 /* padding bytes */
+	pett6hdr        slice_hdrs[49];	 /* headers for each slice */
+	encodedhdr      chdr;
+	short           first, last;	 /* first & last non-zero pixels on line */
+	int             i, x, y;		 /* counters */
+	double          f;
+	long            nbytes, n;
+	off_t           slices;			 /* number of images */
+
+	if (argc != 3) {
+		(void) fprintf (stderr, "Usage: decoder input output\n");
+		return 1;
+	}
+	infile = argv[1];
+	outfile = argv[2];
+
+	for (i = 0; i < 112; i++)
+		pad[i] = 0;
+
+	encoded_file = fopen (infile, "rb");
+	if (encoded_file == (FILE *) NULL) {
+		(void) fprintf (stderr, "ERROR: opening %s\n", infile);
+		return 1;
+	}
+	if (fread (&chdr, sizeof (chdr), 1, encoded_file) != 1) {
+		(void) fprintf (stderr, "ERROR: reading encoded hdr from %s\n", infile);
+		return 1;
+	}
+	if (chdr.code != 1) {
+		(void) fprintf (stderr, "ERROR: unrecognized encoding in %s\n", infile);
+		return 1;
+	}
+	slices = chdr.nslcs;
+	decoded_file = fopen (outfile, "wb+");
+	if (decoded_file == (FILE *) NULL) {
+		(void) fprintf (stderr, "ERROR: opening %s\n", outfile);
+		return 1;
+	}
+	for (i = 0; i < slices; i++) {
+		if ((fread (&slice_hdrs[i], sizeof (short), 128, encoded_file) != 128)) {
+			(void) fprintf (stderr, "ERROR: reading slice %d header from %s\n", i, infile);
+			return 1;
+		}
+	}
+	if (stat (infile, &sbuf) < 0) {
+		(void) fprintf (stderr, "ERROR: stat on %s\n", infile);
+		return 1;
+	}
+	nbytes = (sbuf.st_size - 256 - (slices * sizeof (pett6hdr))) / 2;
+	n = fread (&in, sizeof (short), nbytes, encoded_file);
+	if (n != nbytes) {
+		(void) fprintf (stderr, "ERROR: reading %s (%d of %d)\n", infile, (int) n, (int) nbytes);
+		return 1;
+	}
+	(void) fclose (encoded_file);
+
+	n = 0;
+	for (i = 0; i < slices; i++) {
+		/* (void) fprintf (stdout, "Slice %d\n", i + 1); */
+		(void) strcpy (slice_hdrs[i].file_flag, "**");
+		if (fwrite (&slice_hdrs[i], sizeof (short), 128, decoded_file) != 128) {
+			(void) fprintf (stderr, "ERROR: writing slice #%d header to %s\n", i + 1, outfile);
+			return 1;
+		}
+		if (modf ((float) n / 128., &f) != 0) {
+			while (modf ((float) n / 128., &f) != 0)
+				n++;
+		}
+		for (x = 0; x < 100; x++) {
+			for (y = 0; y < 100; y++)
+				out[x][y] = 0;
+			first = in[n];
+			n++;
+			last = in[n];
+			n++;
+			if (last > 0 && first <= last) {
+				for (y = first; y <= last; y++) {
+					out[x][y] = in[n];
+					n++;
+				}
+			}
+		}
+		if (fwrite (out, sizeof (short), 10000, decoded_file) != 10000) {
+			(void) fprintf (stderr, "ERROR: writing %s", outfile);
+			return 1;
+		}
+		if (fwrite (&pad, sizeof (short), 112, decoded_file) != 112) {
+			(void) fprintf (stderr, "ERROR: writing %s", outfile);
+			return 1;
+		}
+	}
+	(void) fclose (decoded_file);
+	return 0;
+}
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d16 1
+a16 1
+ *	Date:			Dec-99
+d32 1
+d34 1
+a34 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/decoder/RCS/decoder.c,v 1.3 2001/07/02 20:11:51 tom Exp tom $";
+@
+
+
+1.3
+log
+@expand in for large files
+@
+text
+@d2 3
+d30 1
+a30 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/decoder/RCS/decoder.c,v 1.2 2001/07/02 19:44:08 tom Exp tom $";
+a49 1
+	char            str[257];		 /* output filename */
+d53 2
+a54 1
+	pett6hdr       *slice_hdrs;		 /* headers for each slice */
+d59 1
+a59 1
+	off_t           slices = 7;		 /* number of images */
+d76 2
+a77 2
+	if (fread (&str, sizeof (char), 256, encoded_file) != 256) {
+		(void) fprintf (stderr, "ERROR: reading key string ENCODED from %s\n", infile);
+d80 2
+a81 2
+	if (strncmp (str, "ENCODED", 7) != 0) {
+		(void) fprintf (stderr, "ERROR: %s not ENCODED with encode1\n", infile);
+d84 1
+a89 4
+	if ((slice_hdrs = (pett6hdr *) malloc (slices * sizeof (pett6hdr))) == (pett6hdr *) NULL) {
+		(void) fprintf (stderr, "ERROR: malloc slice_hdrs\n");
+		return 1;
+	}
+d91 1
+a91 1
+		if ((fread (&slice_hdrs[i], sizeof (pett6hdr), 1, encoded_file) != 1)) {
+d101 3
+a103 2
+	if (fread (&in, sizeof (short), nbytes, encoded_file) != nbytes) {
+		(void) fprintf (stderr, "ERROR: reading %s\n", infile);
+d110 3
+a112 2
+		(void) fprintf (stdout, "Slice %d\n", i + 1);
+		if (fwrite (&slice_hdrs[i], sizeof (pett6hdr), 1, decoded_file) != 1) {
+@
+
+
+1.2
+log
+@decode files beginning with ENCODED
+@
+text
+@d2 3
+d27 1
+a27 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/decoder/RCS/decoder.c,v 1.1 1999/12/01 22:33:00 tom Exp tom $";
+d48 1
+a48 1
+	short           in[75000];		 /* encoded image */
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d20 1
+d24 1
+a24 1
+	static char     rcsid[] = "$Header: /home/npggw/tom/src/decoder/RCS/decoder.c,v 1.1 1999/12/01 22:12:00 tom Exp tom $";
+d29 2
+d39 1
+a39 1
+	struct stat		sbuf;
+d44 1
+d51 1
+d56 2
+a57 2
+		printf ("Usage: encoded_file decoded_file\n");
+		return (-1);
+d67 2
+a68 2
+		fprintf (stderr, "ERROR: Can't open %s\n", infile);
+		return (-1);
+d70 8
+d80 2
+a81 2
+		fprintf (stderr, "ERROR: Can't open %s\n", outfile);
+		return (-1);
+d84 2
+a85 2
+		fprintf (stderr, "ERROR: Can't malloc slice_hdrs\n");
+		return (-1);
+d89 2
+a90 2
+			fprintf (stderr, "ERROR: Can't read slice %d header from %s\n", i, infile);
+			return (-1);
+d94 2
+a95 2
+		fprintf (stderr, "ERROR: stat on %s\n", infile);
+		return (-1);
+d97 1
+a97 1
+	nbytes = (sbuf.st_size - (slices * sizeof (pett6hdr)))/2;
+d99 2
+a100 2
+		fprintf (stderr, "ERROR: Can't read %s\n", infile);
+		return (-1);
+d102 1
+a102 1
+	fclose (encoded_file);
+d106 4
+a109 4
+		printf ("Slice %d\n", i + 1);
+		if ((fwrite (&slice_hdrs[i], sizeof (pett6hdr), 1, decoded_file) != 1)) {
+			fprintf (stderr, "ERROR: Can't write slice #%d header to %s\n", i + 1, outfile);
+			return (-1);
+d111 6
+a116 2
+		for (y = 0; y < 100; y++) {
+			for (x = 0; x < 100; x++)
+d123 1
+a123 1
+				for (x = first; x <= last; x++) {
+d129 3
+a131 3
+		if ((fwrite (out, sizeof (short), 10000, decoded_file) != 10000)) {
+			fprintf (stderr, "ERROR: Can't write to %s", outfile);
+			return (-1);
+d133 3
+a135 3
+		if ((fwrite (&pad, sizeof (short), 112, decoded_file) != 112)) {
+			fprintf (stderr, "ERROR: Can't write to %s", outfile);
+			return (-1);
+d138 2
+a139 2
+	fclose (decoded_file);
+	return (0);
+@

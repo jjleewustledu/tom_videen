@@ -1,0 +1,329 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.16.21.28.53;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2002.11.27.16.14.05;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.10.26.21.02.58;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.18.19.11.58;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/*	$Id: matdir.c,v 1.3 2002/11/27 16:14:05 tom Exp tom $
+	$Log: matdir.c,v $
+ * Revision 1.3  2002/11/27  16:14:05  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  1999/10/26  21:02:58  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1995/10/18  19:11:58  tom
+ * Initial revision
+ * */
+/* ===============================================================================
+ *  Module:         matdir.c
+ *  Date:           Jun 1995
+ *  Author:         Tom Videen
+ *  Description:
+ *		Get matrix info from an Analyze dircos and mat files.
+ *		Determine & print position of 2 points in atlas space.
+ *		To obtain the position of point X in the original array corresponding
+ *		to point X' in atlas space:
+ *			1) translate to the atlas origin
+ *			2) rotate using the inverse rotation matrix
+ *			3) translate to the image origin
+ *
+ *	Notes:
+ *		Center of Analyze image (dc values) are referenced 0 to dim-1;
+ *			matdir changes reference to 1 to dim.
+ *		Write the point in the original matrix which is mapped to the specified pt.
+ *		Origin of original matrix is up, posterior, left.
+ * ===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/matdir/RCS/matdir.c,v 1.3 2002/11/27 16:14:05 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "dircos.h"				 /* DIRCOS */
+#include <nrutil.h>				 /* matrix */
+#include "matlib.h"
+#define  N 4
+#define	AX 81.0
+#define	AY 129.0
+#define	AZ 129.0
+
+char            truename[128];
+
+main (argc, argv)
+	int             argc;
+	char          **argv;
+{
+	void			vecprint();
+	char           *root;
+	char            fname[100];
+	char            slicename[20];
+	int             i, j;
+	float         	xlen, ylen, zlen;
+	float         **atmat;			 /* atlas-translation matrix */
+	float         **itmat;			 /* image-translation matrix */
+	float         **rmat;			 /* rotation matrix */
+	float         **irmat;			 /* inverse-rotation matrix */
+	float         **tmpmat;			 /* temp matrix */
+	float         **mat;			 /* composite matrix */
+	float          *pt, *npt;		 /* vectors */
+	FILE           *fp;
+	DIRCOS          dc;				 /* oblique plane description  */
+
+	if (argc != 5) {
+		(void) fprintf (stderr, "Usage: matdir filename (no extension) xwidth ylength zheight\n");
+		return (1);
+	}
+	root = argv[1];
+	xlen = atof(argv[2]);
+	ylen = atof(argv[3]);
+	zlen = atof(argv[4]);
+
+/* Allocate matrices */
+
+	itmat = matrix (1, N, 1, N);
+	atmat = matrix (1, N, 1, N);
+	rmat = matrix (1, N, 1, N);
+	irmat = matrix (1, N, 1, N);
+	tmpmat = matrix (1, N, 1, N);
+	mat = matrix (1, N, 1, N);
+	pt = vector (1, N);
+	npt = vector (1, N);
+
+/* Output scalers */
+
+	pt[1] = xlen;
+	pt[2] = ylen;
+	pt[3] = zlen;
+	pt[4] = 0;
+	fprintf (stdout,"          X           Y           Z\n");
+	vecprint ("scl", pt, N);
+
+/* Get the image origin and create the image- and atlas-translation matrices */
+
+	(void) strcpy (fname, root);
+	(void) strcat (fname, "bc.dircos");
+	fp = fopen (fname, "r");
+	if (fp == (FILE *) NULL) {
+		fprintf (stderr, "Error: cannot open %s\n", fname);
+		return (1);
+	}
+	(void) fread (&dc, sizeof (DIRCOS), 1, fp);
+	(void) fread (slicename, sizeof (char), 20, fp);
+	(void) fclose (fp);
+
+	for (i = 1; i <= N; i++) {
+		for (j = 1; j <= N; j++) {
+			if (i == j) {
+				atmat[i][j] = 1;
+				itmat[i][j] = 1;
+			} else {
+				atmat[i][j] = 0;
+				itmat[i][j] = 0;
+			}
+		}
+	}
+/*
+	fprintf (stdout, "%f %f %f\n", dc.xc, dc.yc, dc.zc);
+*/
+	itmat[1][4] = (int) (dc.xc) + 1;
+	itmat[2][4] = (int) (dc.yc) + 1;
+	itmat[3][4] = (int) (dc.zc) + 1;
+	atmat[1][4] = -AX;
+	atmat[2][4] = -AY;
+	atmat[3][4] = -AZ;
+/*
+	matprint ("itmat", itmat, N, N);
+	matprint ("atmat", atmat, N, N);
+*/
+
+/* Get the rotation matrix and invert it */
+
+	(void) strcpy (fname, root);
+	(void) strcat (fname, "bc.mat");
+	fp = fopen (fname, "r");
+	if (fp == (FILE *) NULL) {
+		fprintf (stderr, "Error: cannot open %s\n", fname);
+		return (1);
+	}
+	for (i = 1; i <= N; i++)
+		for (j = 1; j <= N; j++)
+			(void) fscanf (fp, "%f ", &rmat[i][j]);
+	(void) fclose (fp);
+	matinv (rmat, irmat, N);
+/*
+	matprint ("rmat", rmat, N, N);
+	matprint ("irmat", irmat, N, N);
+*/
+	matmul (irmat, atmat, tmpmat, N, N, N);
+	matmul (itmat, tmpmat, mat, N, N, N);
+/*
+	matprint ("mat", mat, N, N);
+*/
+
+/* Compute location of 2 points */
+
+	pt[1] = AX;
+	pt[2] = AY;
+	pt[3] = AZ;
+	pt[4] = 1;
+	matvecmul (mat, pt, npt, N);
+	vecprint ("ac0", npt, N);
+	pt[1] = AX + 65.0;
+	pt[2] = AY;
+	pt[3] = AZ;
+	pt[4] = 1;
+	matvecmul (mat, pt, npt, N);
+	vecprint ("rgt", npt, N);
+	pt[1] = AX;
+	pt[2] = AY + 102.0;
+	pt[3] = AZ;
+	pt[4] = 1;
+	matvecmul (mat, pt, npt, N);
+	vecprint ("pos", npt, N);
+	return (0);
+}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*	$Id: matdir.c,v 1.2 1999/10/26 21:02:58 tom Exp tom $
+d3 3
+d14 1
+a14 1
+ *  Date:           06-Jun-95
+d32 1
+d34 1
+a34 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/matdir/RCS/matdir.c,v 1.2 1999/10/26 21:02:58 tom Exp tom $";
+a53 1
+	char            Usage[] = "Usage: matdir filename (no extension) xwidth ylength zheight\n";
+d71 1
+a71 1
+		fprintf (stderr, Usage);
+d101 2
+a102 2
+	strcpy (fname, root);
+	strcat (fname, "bc.dircos");
+d139 2
+a140 2
+	strcpy (fname, root);
+	strcat (fname, "bc.mat");
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*	$Id: matdir.c,v 1.1 1995/10/18 19:11:58 tom Exp tom $
+d3 3
+d29 3
+a35 1
+#include <petutil/ANALYZE.h>			 /* dsr */
+d37 1
+a37 2
+#include <nrecipes/kr/nr.h>
+#include <nrecipes/kr/nrutil.h>			 /* matrix */
+a43 3
+static char     rcsid[] = "$Header: /home/npggw/tom/src/matdir/RCS/matdir.c,v 1.1 1995/10/18 19:11:58 tom Exp tom $";
+
+char            Usage[] = "Usage: matdir filename (no extension) xwidth ylength zheight\n";
+d50 2
+a62 2
+	int            *indx;
+	float           a;
+d65 1
+a65 2
+	DIRCOS          dc;			 /* oblique plane description  */
+	struct dsr      hdr;			 /* header for ANALYZE */
+a66 2
+	static char     rcsid[] = "$Header: /home/npggw/tom/src/matdir/RCS/matdir.c,v 1.1 1995/10/18 19:11:58 tom Exp tom $";
+
+d69 1
+a69 1
+		exit (1);
+d103 1
+a103 1
+		exit (1);
+d105 3
+a107 3
+	fread (&dc, sizeof (DIRCOS), 1, fp);
+	fread (slicename, sizeof (char), 20, fp);
+	fclose (fp);
+d141 1
+a141 1
+		exit (1);
+d145 2
+a146 2
+			fscanf (fp, "%f ", &rmat[i][j]);
+	fclose (fp);
+d178 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*	$Id$
+	$Log$ */
+d40 1
+a40 1
+static char     rcsid[] = "$Header$";
+d67 1
+a67 1
+	static char     rcsid[] = "$Header$";
+d101 1
+a101 1
+	strcat (fname, ".dircos");
+d139 1
+a139 1
+	strcat (fname, ".mat");
+@

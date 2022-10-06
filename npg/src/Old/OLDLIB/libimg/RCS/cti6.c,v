@@ -1,0 +1,1286 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	96.03.12.22.43.07;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.12.15.21.23.54;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.12.14.14.33.59;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.12.14.14.25.19;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.12.13.21.11.24;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.12.11.19.04.38;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.11.30.18.19.00;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.11.28.20.11.33;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@/*  $Id: cti6.c,v 1.7 1995/12/15 21:23:54 tom Exp tom $
+    $Log: cti6.c,v $
+ * Revision 1.7  1995/12/15  21:23:54  tom
+ * add scale_ish6
+ *
+ * Revision 1.6  1995/12/14  14:33:59  tom
+ * remove debugging printf
+ *
+ * Revision 1.5  1995/12/14  14:25:19  tom
+ * putmhdr6 works now
+ *
+ * Revision 1.4  1995/12/13  21:11:24  tom
+ * *** empty log message ***
+ *
+ * Revision 1.3  1995/12/11  19:04:38  tom
+ * add existfrm6
+ *
+ * Revision 1.2  1995/11/30  18:19:00  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1995/11/28  20:11:33  tom
+ * Initial revision
+ *
+ */
+/* =============================================================================
+ *  Module:         cti6.c
+ *  Date:           Nov-95
+ *  Author:         John Ollinger
+ *  Description:    Routines for ECAT Version 6 matrix file I/O
+ *	Functions:
+ *		getsbhdr6	-	Read subheader (ver 6).
+ *		putsbhdr6	-	Write subheader (ver 6).
+ *		putmhdr6	-	Write main header (ver 6).
+ *		getmhdr6	-	Read main header (ver 6).
+ *		rdimg6		-	Read image (ver 6).
+ *		wrimg6		-	Write image (ver 6).
+ *		write_fp6	-	Add file pointer to file_list (ver 6).
+ *		getfp6		-	Get file pointer from file_list (ver 6).
+ *		close_fp6	-	Close file (Ver 6).
+ *		plnnum_f3d	-	Convert ring numbers to plane number.
+ *		ringnum		-	Convert plane number to ring number.
+ *		existfrm6	-	Check if an image frame exists (without issuing error messages).
+ *		scale_ish6	-	Scale image subheader quant_factor.
+ *	History:
+ *		Dec-95	Modified by TOV.
+ * =============================================================================
+ */
+
+#ifndef lint
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/libimg/RCS/cti6.c,v 1.7 1995/12/15 21:23:54 tom Exp tom $";
+
+#endif
+
+#include <stdio.h>
+#include <string.h>
+#include <libimg.h>
+
+MatrixFile     *fp_list6[MAX_FILES] =
+{NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+char            file_list[MAX_FILES][MAXFNAME];
+char            mode_list[MAX_FILES][4];	 /* Access modes of opened files. */
+
+/* =============================================================================
+ *	Function:		getsbhdr6
+ *	Description:	Read Version 6 ECAT file subheader
+ * =============================================================================
+ */
+void           *getsbhdr6 (mh6, filnam, plane, frame, gate, data, bed)
+	Main_header    *mh6;
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+
+{
+	int             matnum;
+	DataSetType     dtype;
+	char           *mode = "r";
+	Scan_subheader *scansh;
+	Image_subheader *imgsh;
+	Norm_subheader *nrmsh;
+	Attn_subheader *atnsh;
+	void           *sh6;
+	struct MatDir  *matdir;
+	MatrixFile     *mfp;
+
+	dtype = (DataSetType) mh6->file_type;
+	matnum = mat_numcod (frame, plane, gate, data, bed);
+
+	if ((mfp = getfp6 (filnam, mode)) == NULL) {
+		fprintf (stderr, "ERROR [getsbhdr6]: Could not get file pointer for ",
+			 "%s, plane = %d frame=%d\n", filnam, plane, frame);
+		return (NULL);
+	}
+	if ((matdir = matrix_find (matnum, mfp)) == NULL) {
+		fprintf (stderr, "ERROR [getsbhdr6]: Could not find matrix directory for ",
+			 "%s, plane = %d frame=%d\n", filnam, plane, frame);
+		return (NULL);
+	}
+	if ((matnum = mat_numcod (frame, plane, gate, data, bed)) == NULL) {
+		fprintf (stderr, "ERROR [getsbhdr6]: Could not get matrix number for ",
+			 "%s, plane = %d frame=%d\n", filnam, plane, frame);
+		return (NULL);
+	}
+	if (dtype == Sinogram) {
+		scansh = (Scan_subheader *) malloc (sizeof (Scan_subheader));
+		if (scansh == NULL)
+			fprintf (stderr, "ERROR [getsbhdr6]: Could not malloc memory for scansh\n");
+		else
+			mat_read_scan_subheader (mfp->fptr, matdir->strtblk, scansh);
+		sh6 = (void *) scansh;
+	} else if (dtype == PetImage) {
+		imgsh = (Image_subheader *) malloc (sizeof (Image_subheader));
+		if (imgsh == NULL)
+			fprintf (stderr, "ERROR [getsbhdr6]: Could not malloc memory for imgsh\n");
+		else
+			mat_read_image_subheader (mfp->fptr, matdir->strtblk, imgsh);
+		sh6 = (void *) imgsh;
+	} else if (dtype == Normalization) {
+		nrmsh = (Norm_subheader *) malloc (sizeof (Norm_subheader));
+		if (nrmsh == NULL)
+			fprintf (stderr, "ERROR [getsbhdr6]: Could not malloc memory for nrmsh\n");
+		else
+			mat_read_norm_subheader (mfp->fptr, matdir->strtblk, nrmsh);
+		sh6 = (void *) nrmsh;
+	} else if (dtype == AttenCor) {
+		atnsh = (Attn_subheader *) malloc (sizeof (Attn_subheader));
+		if (atnsh == NULL)
+			fprintf (stderr, "ERROR [getsbhdr6]: Could not malloc memory for atnsh\n");
+		else
+			mat_read_attn_subheader (mfp->fptr, matdir->strtblk, atnsh);
+		sh6 = (void *) atnsh;
+	} else {
+		fprintf (stderr, "ERROR [getsbhdr6]: Unsupported data type %d in %s\n", dtype, filnam);
+		sh6 = NULL;
+	}
+	free (matdir);
+	return (sh6);
+}
+
+/* =============================================================================
+ *	Function:		putsbhdr6
+ *	Description:	Write Version 6 ECAT file subheader
+ * =============================================================================
+ */
+int             putsbhdr6 (mh6, sh6, filnam, plane, frame, gate, data, bed)
+	Main_header    *mh6;
+	void           *sh6;
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+
+{
+	int             matnum;
+	DataSetType     dtype;
+	char           *mode = "r+";
+	Scan_subheader *scansh;
+	Image_subheader *imgsh;
+	Norm_subheader *nrmsh;
+	struct MatDir  *matdir;
+	MatrixFile     *mfp;
+
+	dtype = (DataSetType) mh6->file_type;
+	matnum = mat_numcod (frame, plane, gate, data, bed);
+
+	if ((mfp = getfp6 (filnam, mode)) == NULL) {
+		fprintf (stderr, "ERROR [putsbhdr6]: Could not get file pointer for %s\n", filnam);
+		return (ERROR);
+	}
+	if ((matdir = matrix_find (matnum, mfp)) == NULL) {
+		fprintf (stderr, "ERROR [putsbhdr6]: Could not find matrix directory for %s\n", filnam);
+		return (ERROR);
+	}
+	if ((matnum = mat_numcod (frame, plane, gate, data, bed)) == NULL) {
+		fprintf (stderr, "ERROR [putsbhdr6]: Could not get matrix number for %s\n", filnam);
+		return (ERROR);
+	}
+	if (dtype == Sinogram) {
+		scansh = (Scan_subheader *) sh6;
+		mat_write_scan_subheader (mfp->fptr, matdir->strtblk, scansh);
+	} else if (dtype == PetImage) {
+		imgsh = (Image_subheader *) sh6;
+		mat_write_image_subheader (mfp->fptr, matdir->strtblk, imgsh);
+	} else if (dtype == Normalization) {
+		nrmsh = (Norm_subheader *) sh6;
+		mat_write_norm_subheader (mfp->fptr, matdir->strtblk, nrmsh);
+	} else {
+		fprintf (stderr, "ERROR [putsbhdr6]: Unsupported data type %d in %s\n", dtype, filnam);
+		return (ERROR);
+	}
+	return (OK);
+}
+
+/* =============================================================================
+ *	Function:		putmhdr6
+ *	Description:	Write Version 6 ECAT main header
+ * =============================================================================
+ */
+int             putmhdr6 (filnam, mh6)
+	char           *filnam;
+	Main_header    *mh6;
+
+{
+	MatrixFile     *mfp;
+	int             status;
+	char           *mode = "r+";
+
+	if ((mfp = getfp6 (filnam, mode)) == NULL) {
+		fprintf (stderr, "ERROR [putmhdr6]: Could not get file pointer for %s\n", filnam);
+		return (ERROR);
+	}
+	if ((status = mat_write_main_header (mfp->fptr, mh6)) != 0)
+		fprintf (stderr, "ERROR [putmhdr6]: Could not write header to %s\n", filnam);
+	return (status);
+}
+
+/* =============================================================================
+ *	Function:		getmhdr6
+ *	Description:	Read Version 6 ECAT main header
+ * =============================================================================
+ */
+Main_header    *getmhdr6 (filnam)
+	char           *filnam;
+
+{
+	char           *mode = "r";
+	Main_header    *mh6;
+	MatrixFile     *mfp;
+
+	if ((mfp = getfp6 (filnam, mode)) == NULL) {
+		fprintf (stderr, "ERROR [getmhdr6]: Could not get file pointer for %s\n", filnam);
+		return (NULL);
+	}
+	mh6 = (Main_header *) malloc (sizeof (Main_header));
+	if (mh6 == NULL) {
+		fprintf (stderr, "ERROR [getmhdr6]: Could not malloc memory for mh6\n");
+		return (NULL);
+	}
+	if (mat_read_main_header (mfp->fptr, mh6) != 0) {
+		fprintf (stderr, "ERROR [getmhdr6]: Could not read mainheader for %s\n", filnam);
+		return (NULL);
+	}
+	return (mh6);
+}
+
+/* =============================================================================
+ *	Function:		rdimg6
+ *	Description:	Read Version 6 ECAT image data
+ * =============================================================================
+ */
+float          *rdimg6 (mh6, filnam, plane, frame, gate, data, bed)
+	Main_header    *mh6;
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+
+{
+	int             matnum, i, xdim, ydim, data_type;
+	DataSetType     dtype;
+	short          *simg;
+	char           *mode = "r";
+	float          *matrix, scl;
+	Scan_subheader *shscan;
+	Attn_subheader *shattn;
+	Image_subheader *shimg;
+	Norm_subheader *shnrm;
+	MatrixFile     *mfp;
+	MatrixData     *mdata;
+
+	dtype = (DataSetType) mh6->file_type;
+	if ((mfp = getfp6 (filnam, mode)) == NULL) {
+		fprintf (stderr, "ERROR [rdimg6]: Could not get file pointer for %s\n", filnam);
+		return (NULL);
+	}
+	if ((matnum = mat_numcod (frame, plane, gate, data, bed)) == NULL) {
+		fprintf (stderr, "ERROR [rdimg6]: Could not get matrix number for %s\n", filnam);
+		return (NULL);
+	}
+	mdata = matrix_read (mfp, matnum);
+	if (mdata == NULL) {
+		fprintf (stderr, "ERROR [rdimg6]: Could not read mdata for %s\n", filnam);
+		return (NULL);
+	}
+	if (dtype == Sinogram) {
+		shscan = (Scan_subheader *) mdata->shptr;
+		if (shscan->loss_correction_fctr > 0)
+			scl = shscan->scale_factor * shscan->loss_correction_fctr;
+		else
+			scl = shscan->scale_factor;
+		xdim = shscan->dimension_1;
+		ydim = shscan->dimension_2;
+		data_type = shscan->data_type;
+	} else if (dtype == AttenCor) {
+		shattn = (Attn_subheader *) mdata->shptr;
+		scl = shattn->scale_factor;
+		xdim = shattn->dimension_1;
+		ydim = shattn->dimension_2;
+		data_type = shattn->data_type;
+	} else if (dtype == PetImage) {
+		shimg = (Image_subheader *) mdata->shptr;
+		if (shimg->quant_scale > 0)
+			scl = shimg->quant_scale;
+		else
+			scl = 1.;
+		if (shimg->ecat_calibration_fctr > 0)
+			scl *= shimg->ecat_calibration_fctr;
+		xdim = shimg->dimension_1;
+		ydim = shimg->dimension_2;
+		data_type = shimg->data_type;
+	} else if (NORM_DATA) {
+		shnrm = (Norm_subheader *) mdata->shptr;
+		scl = 1.;
+		xdim = shnrm->dimension_1;
+		ydim = shnrm->dimension_2;
+		data_type = shnrm->data_type;
+	} else {
+		fprintf (stderr, "ERROR [rdimg6]: Unsupported data type %d in %s\n", dtype, filnam);
+		return (NULL);
+	}
+
+	if (data_type == SUN_I2 | data_type == VAX_I2) {
+		matrix = (float *) malloc (xdim * ydim * sizeof (float));
+		if (matrix == NULL) {
+			fprintf (stderr, "ERROR [rdimg6]: Could not malloc memory for matrix\n");
+			return (NULL);
+		}
+		simg = (short *) mdata->data_ptr;
+		for (i = 0; i < xdim * ydim; i++)
+			matrix[i] = scl * simg[i];
+	} else if (data_type == IEEE_R4) {
+		matrix = (float *) mdata->data_ptr;
+		for (i = 0; i < xdim * ydim; i++)
+			matrix[i] *= scl;
+		mdata->data_ptr = NULL;
+	} else {
+		fprintf (stderr, "ERROR [rdimg6]: Unsupported data type in %s plane %d\n",
+			 filnam, plane);
+		if (dtype == PetImage || dtype == Sinogram) {
+			fprintf (stderr, "ERROR [rdimg6]: Guessing that data type is short integer\n");
+			matrix = (float *) malloc (xdim * ydim * sizeof (float));
+			if (matrix == NULL) {
+				fprintf (stderr, "ERROR [rdimg6]: Could not malloc memory for matrix\n");
+				return (NULL);
+			}
+			simg = (short *) mdata->data_ptr;
+			for (i = 0; i < xdim * ydim; i++)
+				matrix[i] = scl * simg[i];
+		} else if (dtype == Normalization) {
+			fprintf (stderr, "ERROR [rdimg6]: Guessing that data type is IEEE float\n");
+			matrix = (float *) mdata->data_ptr;
+			for (i = 0; i < xdim * ydim; i++)
+				matrix[i] *= scl;
+			mdata->data_ptr = NULL;
+		}
+	}
+	free_matrix_data (mdata);
+	return (matrix);
+}
+
+/* =============================================================================
+ *	Function:		wrimg6
+ *	Description:	Write Version 6 ECAT image data
+ * =============================================================================
+ */
+int             wrimg6 (filnam, matrix, mh6, sh6, plane, frame, gate, data, bed)
+	char           *filnam;
+	float          *matrix;
+	Main_header    *mh6;
+	char           *sh6;
+	int             plane, frame, gate, data, bed;
+
+{
+	int             matnum, i, xdim, ydim, data_type;
+	DataSetType     dtype;
+	short          *smatrix;
+	float           scl, max, min;
+	Scan_subheader *shscan;
+	Image_subheader *shimg;
+	Norm_subheader *shnrm;
+	Attn_subheader *shatn;
+	MatrixData     *mdata;
+	MatrixFile     *mfp;
+
+	dtype = (DataSetType) mh6->file_type;
+	if ((matnum = mat_numcod (frame, plane, gate, data, bed)) == NULL) {
+		fprintf (stderr, "ERROR [wrimg6]: Could not get matrix number for %s\n", filnam);
+		return (NULL);
+	}
+	mdata = (MatrixData *) malloc (sizeof (MatrixData));
+	if (mdata == NULL) {
+		fprintf (stderr, "ERROR [wrimg6]: Could not malloc memory for mdata\n");
+		return (NULL);
+	}
+	if (dtype == Sinogram) {
+		shscan = (Scan_subheader *) sh6;
+		xdim = shscan->dimension_1;
+		ydim = shscan->dimension_2;
+		if (shscan->data_type != IEEE_R4)
+			data_type = SUN_I2;
+		else
+			data_type = IEEE_R4;
+	} else if (dtype == Normalization) {
+		shnrm = (Norm_subheader *) sh6;
+		xdim = shnrm->dimension_1;
+		ydim = shnrm->dimension_2;
+		data_type = IEEE_R4;
+	} else if (dtype == AttenCor) {
+		shatn = (Attn_subheader *) sh6;
+		xdim = shatn->dimension_1;
+		ydim = shatn->dimension_2;
+		data_type = IEEE_R4;
+	} else if (dtype == PetImage || dtype == PetVolume) {
+		dtype = PetImage;
+		mh6->file_type = PetImage;
+		shimg = (Image_subheader *) sh6;
+		xdim = shimg->dimension_1;
+		ydim = shimg->dimension_2;
+		if (shimg->data_type != IEEE_R4)
+			data_type = SUN_I2;
+		else
+			data_type = IEEE_R4;
+	} else {
+		fprintf (stderr, "ERROR [wrimg6]: Unsupported data type %d in %s\n", dtype, filnam);
+		return (NULL);
+	}
+
+	max = -1.e20;
+	min = 1.e20;
+	for (i = 0; i < xdim * ydim; i++) {
+		if (matrix[i] > max)
+			max = matrix[i];
+		if (matrix[i] < min)
+			min = matrix[i];
+	}
+
+	if (data_type == SUN_I2 || data_type == VAX_I2) {
+		if (max > -min) {
+			scl = 32767 / max;
+			max = 32767;
+			min = min * scl;
+		} else {
+			scl = -32767 / min;
+			max = max * scl;
+			min = -32767;
+		}
+
+		smatrix = (short *) malloc (xdim * ydim * sizeof (short));
+		if (smatrix == NULL) {
+			fprintf (stderr, "ERROR [wrimg6]: Could not malloc memory for smatrix\n");
+			return (NULL);
+		}
+		for (i = 0; i < xdim * ydim; i++)
+			smatrix[i] = (short) (scl * matrix[i]);
+
+		if (dtype == Sinogram) {
+			shscan->scan_min = (short) min;
+			shscan->scan_max = (short) max;
+			shscan->scale_factor = 1. / scl;
+		} else if (dtype == PetImage) {
+			shimg->image_min = (short) min;
+			shimg->image_max = (short) max;
+			shimg->quant_scale = 1. / scl / shimg->ecat_calibration_fctr;
+		}
+		mdata->nblks = xdim * ydim * sizeof (short) / 512;
+		mdata->data_ptr = (char *) smatrix;
+	} else if (data_type == IEEE_R4) {
+		if (dtype == Sinogram) {
+			if (min < 32768 && min > -32768)
+				shscan->scan_min = (short) min;
+			else
+				shscan->scan_min = 0.;
+			if (max < 32768 && max > -32768)
+				shscan->scan_max = (short) max;
+			else
+				shscan->scan_max = 32767;
+			shscan->scale_factor = 1.;
+		} else if (dtype == PetImage) {
+			if (min < 32768 && min > -32768)
+				shimg->image_min = (short) min;
+			else
+				shimg->image_min = 0.;
+			if (max < 32768 && max > -32768)
+				shimg->image_max = (short) max;
+			else
+				shimg->image_max = 32767;
+			shimg->quant_scale = 1.;
+			shimg->ecat_calibration_fctr = 1.;
+		}
+		mdata->nblks = xdim * ydim * sizeof (float) / 512;
+		mdata->data_ptr = (char *) matrix;
+	}
+	mdata->mat_type = (int) dtype;
+	mdata->shptr = (char *) sh6;
+	mdata->matnum = matnum;
+	mdata->nviews = ydim;
+	mdata->nelements = xdim * ydim;
+	mdata->data_type = data_type;
+	if ((mfp = write_fp6 (filnam, mh6, "r+")) == NULL) {
+		fprintf (stderr, "ERROR [wrimg6]: Could not create file %s\n", filnam);
+		return (ERROR);
+	}
+	/* matrix_write uses file_type in mfp rather than in mdata */
+	if (dtype == PetImage) {
+		mfp->mhptr->file_type = PetImage;
+		mfp->mhptr->sw_version = mh6->sw_version;
+	}
+	if (matrix_write (mfp, matnum, mdata) == ERROR) {
+		fprintf (stderr, "ERROR [wrimg6]: Could not write mdata for %s\n", filnam);
+		return (ERROR);
+	}
+	if (data_type == SUN_I2 || data_type == VAX_I2)
+		free (smatrix);
+	free (mdata);
+	return (OK);
+}
+
+/* =============================================================================
+ *	Function:		write_fp6
+ *	Description:	Add file pointer to the file_list.
+ * =============================================================================
+ */
+MatrixFile     *write_fp6 (filnam, mh6, mode)
+	char           *filnam;
+	MatrixData     *mh6;
+	char           *mode;
+
+{
+	int             fn;
+	char            cmd[MAXFNAME];
+	FILE           *fp;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list[fn])) {
+			if (!strcmp ("r", mode_list[fn])) {
+				/* File opened in read-only mode. */
+				fp_list6[fn]->mhptr = NULL;
+				matrix_close (fp_list6[fn]);
+				fp_list6[fn] = NULL;
+			} else
+				return (fp_list6[fn]);
+		}
+	}
+
+/* File not open, assign it available slot. */
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list6[fn] == NULL)
+			break;
+	}
+	if (fn == MAX_FILES) {
+		fprintf (stderr, "ERROR [write_fp6]: Maximum number of open files exceeded\n");
+		return (NULL);
+	}
+	if ((fp = fopen (filnam, "r")) != NULL) {/* File exists. */
+		if (!strcmp (mode, "w")) {
+			/* Delete the file if mode is write. */
+			fclose (fp);
+			sprintf (cmd, "rm %s\n", filnam);
+			system (cmd);
+			fprintf (stderr, "Warning: Deleted %s\n", filnam);
+		}
+	} else {
+		if (!strcmp (mode, "r+")) {
+			/* Can't open in mode r+ since it doesn't exist, change mode to w. */
+			mode = "w";
+		}
+	}
+
+	if (!strcmp (mode, "r+")) {
+		if ((fp_list6[fn] = matrix_open (filnam, mode)) == NULL)
+			return (NULL);
+	} else {				 /* Write mode. */
+		if ((fp_list6[fn] = matrix_create (filnam, mh6)) == NULL)
+			return (NULL);
+	}
+
+	strcpy (file_list[fn], filnam);
+	strcpy (mode_list[fn], mode);
+	return (fp_list6[fn]);
+}
+
+/* =============================================================================
+ *	Function:		getfp6
+ *	Description:	Get a file pointer from the file_list.
+ * =============================================================================
+ */
+MatrixFile     *getfp6 (filnam, mode)
+	char           *filnam, *mode;
+
+{
+	int             fn;
+	MatrixFile     *fptest;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list[fn])) {
+			if (!strcmp (mode, mode_list[fn]))
+				return (fp_list6[fn]);
+			if (!strcmp (mode, "r") && !strcmp (mode_list[fn], "r+"))
+				return (fp_list6[fn]);
+			else {
+				/* File opened with wrong read/write mode. */
+				fp_list6[fn]->mhptr = NULL;
+				matrix_close (fp_list6[fn]);
+				fp_list6[fn] = matrix_open (file_list[fn], mode);
+				strcpy (mode_list[fn], mode);
+				return (fp_list6[fn]);
+			}
+		}
+	}
+
+/* File not open, assign it available slot. */
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (fp_list6[fn] == NULL)
+			break;
+	}
+	if (fn == MAX_FILES) {
+		fprintf (stderr, "ERROR [getfp6]: Maximum number of open files exceeded\n");
+		return (NULL);
+	}
+	if (!strcmp (mode, "r+")) {
+		if ((fptest = matrix_open (filnam, "r")) != NULL)	/* File exists. */
+			matrix_close (fptest);
+		else
+			mode = "w";
+	}
+	if ((fp_list6[fn] = matrix_open (filnam, mode)) != NULL) {
+		strcpy (file_list[fn], filnam);
+		strcpy (mode_list[fn], mode);
+		return (fp_list6[fn]);
+	} else
+		return (NULL);
+}
+
+/* =============================================================================
+ *	Function:		close_fp6
+ *	Description:	Close a file and free its pointer from the file_list.
+ * =============================================================================
+ */
+void            close_fp6 (filnam)
+	char           *filnam;
+
+{
+	int             fn;
+
+	for (fn = 0; fn < MAX_FILES; fn++) {
+		if (!strcmp (filnam, file_list[fn])) {
+			matrix_close (fp_list6[fn]);
+			fp_list6[fn] = NULL;
+			strcpy (file_list[fn], " ");
+		}
+	}
+}
+
+/* =============================================================================
+ *	Function:		plnnum_f3d
+ *	Description:	Convert ring1 and ring2 to plane number.
+ * =============================================================================
+ */
+int             plnnum_f3d (ring1, ring2, system_type)
+	int             ring1, ring2, system_type;	/* System type as stored in main header */
+
+{
+	int             i, plane, *mat_xlate;
+	static int      first = TRUE;
+
+	ring1 -= 1;
+	ring2 -= 1;
+	if ((system_type == 953) || (system_type == 951)) {
+		plane = (((ring2 & 0x10) << 5) | ((ring2 & 0x08) << 4) | (ring2 & 0x07) |
+			 ((ring1 & 0x10) << 4) | ((ring1 & 0x0f) << 3)) + 1;
+	} else if ((system_type == 961)) {
+		if (first == TRUE) {
+			mat_xlate = (int *) malloc (1024 * sizeof (int));
+			for (i = plane = 0; i < 1024; i++) {
+				mat_xlate[i] = -1;
+				if ((i >= 0 && i < 320) || (i >= 384 && i < 448) ||
+				    (i >= 512 && i < 640) || (i >= 768 && i < 832))
+					mat_xlate[i] = plane++;
+			}
+		}
+		plane = (((ring2 & 0x10) << 5) | ((ring2 & 0x08) << 4) | (ring2 & 0x07) |
+			 ((ring1 & 0x10) << 4) | ((ring1 & 0x0f) << 3));
+		plane = mat_xlate[plane] + 1;
+	} else {
+		fprintf (stderr, "ERROR [plnnum_fd3]: Invalid system type: %d\n", system_type);
+		plane = -1;
+	}
+	return (plane);
+}
+
+/* =============================================================================
+ *	Function:		ringnum
+ *	Description:	Convert plane number to ring number.
+ * =============================================================================
+ */
+int             ringnum (plane, ring, system_type)
+	int             plane, ring[],		 /* Ring numbers numbered as 0,1,2,... */
+	                system_type;		 /* System type as stored in the main header. */
+
+{
+	int             i, pln, *mat_xlate;
+	static int      first = TRUE;
+
+	pln = plane - 1;
+	if ((system_type == 953) || (system_type == 951)) {
+		ring[0] = ((pln & 0x100) >> 4) | (pln & 0x78) >> 3;
+		ring[1] = ((pln & 0x200) >> 5) | ((pln & 0x80) >> 4) | pln & 0x07;
+	} else if ((system_type == 961)) {
+		if (first == TRUE) {
+			mat_xlate = (int *) malloc (576 * sizeof (int));
+			for (i = plane = 0; i < 576; i++) {
+				mat_xlate[i] = -1;
+				if (i >= 0 && i < 320)
+					mat_xlate[i] = plane++;
+				else if (i >= 320 && i < 384) {
+					mat_xlate[i] = plane + 64;
+					++plane;
+				} else if (i >= 384 && i < 512) {
+					mat_xlate[i] = plane + 128;
+					++plane;
+				} else if (i >= 512 && i < 576) {
+					mat_xlate[i] = plane + 256;
+					++plane;
+				}
+			}
+		}
+		pln = mat_xlate[plane - 1];
+		ring[0] = ((pln & 0x100) >> 4) | (pln & 0x78) >> 3;
+		ring[1] = ((pln & 0x200) >> 5) | ((pln & 0x80) >> 4) | pln & 0x07;
+	} else {
+		fprintf (stderr, "ERROR [ringnum]: Invalid system type: %d\n", system_type);
+		plane = -1;
+	}
+
+	return;
+}
+
+
+/* =============================================================================
+ *  Function:       existfrm6
+ *  Description:    Check if an image frame and plane exists.
+ *                  Bypasses calls with error messages.
+ * =============================================================================
+ */
+
+int             existfrm6 (mh, filnam, plane, frame, gate, data, bed)
+	MainHeader     *mh;
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+
+{
+	MatrixFile     *mfp;
+	struct MatDir  *matdir;
+	DataSetType     datatype;
+	char           *mode = "r";
+	int             matnum;
+
+	datatype = (DataSetType) mh->filtyp;
+	if (datatype != PetImage)
+		return (ERROR);
+	if ((mfp = getfp6 (filnam, mode)) == NULL)
+		return (ERROR);
+	matnum = mat_numcod (frame, plane, gate, data, bed);
+	if ((matdir = matrix_find (matnum, mfp)) == NULL)
+		return (ERROR);
+	else
+		return (OK);
+}
+
+/* =============================================================================
+ *	Function:		scale_ish6
+ *	Description:	Scale image subheader quant_factor.
+ *	Note:	This avoids the assumption of SUN_I2 format which putsbhdr6 makes.
+ * =============================================================================
+ */
+int             scale_ish6 (mh6, filnam, plane, frame, gate, data, bed, factor)
+	Main_header    *mh6;
+	char           *filnam;
+	int             plane, frame, gate, data, bed;
+	float           factor;
+
+{
+	MatrixFile     *mfp;
+	MatrixData     *mdata;
+	DataSetType     dtype;
+	Image_subheader *sh6;
+	int             matnum;
+	char           *mode = "r+";
+
+	dtype = (DataSetType) mh6->file_type;
+	if (dtype != PetImage) {
+		fprintf (stderr, "ERROR [scale_ish6]: Unsupported data type %d in %s\n", dtype, filnam);
+		return (ERROR);
+	}
+	if ((mfp = getfp6 (filnam, mode)) == NULL) {
+		fprintf (stderr, "ERROR [scale_ish6]: Could not get file pointer for ",
+			 "%s, plane = %d frame=%d\n", filnam, plane, frame);
+		return (NULL);
+	}
+	if ((matnum = mat_numcod (frame, plane, gate, data, bed)) == NULL) {
+		fprintf (stderr, "ERROR [scale_ish6]: Could not get matrix number for %s,%d,%d\n",
+			 filnam, plane, frame);
+		return (NULL);
+	}
+	if ((mdata = matrix_read (mfp, matnum)) == NULL) {
+		fprintf (stderr, "ERROR [scale_ish6]: Could not read mdata for %s\n", filnam);
+		return (NULL);
+	}
+	sh6 = (Image_subheader *) mdata->shptr;
+	sh6->quant_scale *= factor;
+	if (matrix_write (mfp, matnum, mdata) == ERROR) {
+		fprintf (stderr, "ERROR [scale_ish6]: Could not write mdata for %s\n", filnam);
+		return (ERROR);
+	}
+	free_matrix_data (mdata);
+	return (OK);
+}
+@
+
+
+1.7
+log
+@add scale_ish6
+@
+text
+@d1 1
+a1 1
+/*  $Id: cti6.c,v 1.6 1995/12/14 14:33:59 tom Exp tom $
+d3 3
+d50 1
+a50 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimg/RCS/cti6.c,v 1.6 1995/12/14 14:33:59 tom Exp tom $";
+d85 1
+a85 1
+	dtype = (DataSetType) mh6->data_type;
+d160 1
+a160 1
+	dtype = (DataSetType) mh6->data_type;
+d266 1
+a266 1
+	dtype = (DataSetType) mh6->data_type;
+d380 1
+a380 1
+	dtype = (DataSetType) mh6->data_type;
+d408 3
+a410 1
+	} else if (dtype == PetImage) {
+d498 5
+d787 1
+a787 1
+	dtype = (DataSetType) mh6->data_type;
+@
+
+
+1.6
+log
+@remove debugging printf
+@
+text
+@d1 1
+a1 1
+/*  $Id: cti6.c,v 1.5 1995/12/14 14:25:19 tom Exp tom $
+d3 3
+d40 1
+d42 1
+a42 1
+ *		Nov-95	Modified by TOV.
+d45 1
+d47 2
+a48 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimg/RCS/cti6.c,v 1.5 1995/12/14 14:25:19 tom Exp tom $";
+d56 1
+a56 1
+					{NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+d72 1
+a72 1
+	DataSetType		dtype;
+a184 3
+/*
+	free (matdir);
+*/
+d206 1
+a206 1
+	if ((status = mat_write_main_header (mfp->fptr, mh6)) != 0) 
+d246 1
+a246 1
+	Main_header	   *mh6;
+d252 1
+a252 1
+	DataSetType		dtype;
+d367 1
+a367 1
+	DataSetType		dtype;
+d733 4
+a736 4
+int      existfrm6 (mh, filnam, plane, frame, gate, data, bed)
+    MainHeader     *mh;
+    char           *filnam;
+    int             plane, frame, gate, data, bed;
+d739 1
+a739 1
+    MatrixFile     *mfp;
+d741 1
+a741 1
+    DataSetType     datatype;
+d743 1
+a743 1
+    int             matnum;
+d745 59
+a803 10
+    datatype = (DataSetType) mh->filtyp;
+    if (datatype != PetImage)
+        return (ERROR);
+    if ((mfp = getfp6 (filnam, mode)) == NULL)
+        return (ERROR);
+    matnum = mat_numcod (frame, plane, gate, data, bed);
+    if ((matdir = matrix_find (matnum, mfp)) == NULL)
+        return (ERROR);
+    else
+        return (OK);
+@
+
+
+1.5
+log
+@putmhdr6 works now
+@
+text
+@d1 1
+a1 1
+/*  $Id: cti6.c,v 1.4 1995/12/13 21:11:24 tom Exp tom $
+d3 3
+d42 1
+a42 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimg/RCS/cti6.c,v 1.4 1995/12/13 21:11:24 tom Exp tom $";
+a610 1
+		printf ("OPEN %s %s\n",filnam,mode);
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: cti6.c,v 1.3 1995/12/11 19:04:38 tom Exp tom $
+d3 3
+d39 1
+a39 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimg/RCS/cti6.c,v 1.3 1995/12/11 19:04:38 tom Exp tom $";
+d192 2
+a194 3
+	int             stat;
+	FILE     *fp;
+	MatrixFile     *mfp;
+d196 1
+a196 2
+/*
+	if ((fp = (FILE *) getfp6 (filnam, mode)) == NULL) {
+d200 1
+a200 1
+	if ((stat = mat_write_main_header (fp, mh6)) != 0) 
+d202 1
+a202 7
+	return (stat);
+*/
+	if ((mfp = write_fp6 (filnam, mh6, "r+")) == NULL) {
+		fprintf (stderr, "ERROR [putmhdr6]: Could not write main header to %s\n", filnam);
+		return (ERROR);
+	}
+	return (OK);
+d608 1
+@
+
+
+1.3
+log
+@add existfrm6
+@
+text
+@d1 1
+a1 1
+/*  $Id: cti6.c,v 1.2 1995/11/30 18:19:00 tom Exp tom $
+d3 3
+d36 1
+a36 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimg/RCS/cti6.c,v 1.2 1995/11/30 18:19:00 tom Exp tom $";
+d173 1
+d175 1
+d192 1
+d194 1
+d202 6
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+/*  $Id: cti6.c,v 1.1 1995/11/28 20:11:33 tom Exp tom $
+d3 3
+d27 1
+d33 1
+a33 1
+static char     rcsid[] = "$Header$";
+d709 32
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*  $Id$
+    $Log$
+d11 1
+a11 1
+ *  Description:    Routines for ECAT image I/O
+d13 9
+a21 9
+ *		getsbhdr6	-	Read subheader; Version 6.
+ *		putsbhdr6	-	Write subheader; Version 6.
+ *		putmhdr6	-	Write main header; Version 6.
+ *		getmhdr6	-	Read main header; Version 6.
+ *		rdimg6		-	Read image; Version 6.
+ *		wrimg6		-	Write image; Version 6.
+ *		write_fp6	-	Add file pointer to file_list; Version 6.
+ *		getfp6		-	Get file pointer from file_list; Version 6.
+ *		close_fp6	-	Close file.
+d24 2
+a25 1
+ *
+a27 1
+
+a35 5
+#define MAX_FILES 50
+#define MAXNAME 120
+#define TRUE 1
+#define FALSE 0
+
+d38 1
+a38 1
+char            file_list[MAX_FILES][MAXNAME];
+d46 2
+a47 1
+void           *getsbhdr6 (filnam, plane, frame, gate, data, bed)
+d53 1
+d59 1
+a59 1
+	void           *sh;
+d63 1
+d81 1
+a81 1
+	if (strstr (filnam, ".scn")) {		 /* Read scan subheader. */
+d87 2
+a88 2
+		sh = (void *) scansh;
+	} else if (strstr (filnam, ".img") || strstr (filnam, ".t88")) {
+d94 2
+a95 2
+		sh = (void *) imgsh;
+	} else if (strstr (filnam, ".nrm")) {
+d101 2
+a102 2
+		sh = (void *) nrmsh;
+	} else if (strstr (filnam, ".atn")) {
+d108 1
+a108 1
+		sh = (void *) atnsh;
+d110 2
+a111 2
+		fprintf (stderr, "ERROR [getsbhdr6]: file type is not supported, %s\n", filnam);
+		sh = NULL;
+d114 1
+a114 1
+	return (sh);
+d122 3
+a124 2
+int             putsbhdr6 (sh, filnam, plane, frame, gate, data, bed)
+	void           *sh;
+d130 1
+d138 1
+d153 2
+a154 2
+	if (strstr (filnam, ".scn")) {
+		scansh = (Scan_subheader *) sh;
+d156 2
+a157 2
+	} else if (strstr (filnam, ".img") || strstr (filnam, ".t88")) {
+		imgsh = (Image_subheader *) sh;
+d159 2
+a160 2
+	} else if (strstr (filnam, ".nrm")) {
+		nrmsh = (Norm_subheader *) sh;
+d163 1
+a163 1
+		fprintf (stderr, "ERROR [putsbhdr6]: file type is not supported, %s\n", filnam);
+d175 1
+a175 1
+int             putmhdr6 (filnam, mh)
+d177 1
+a177 1
+	Main_header    *mh;
+d182 1
+a182 1
+	MatrixFile     *mfp;
+d184 1
+a184 1
+	if ((mfp = getfp6 (filnam, mode)) == NULL) {
+d188 2
+a189 1
+	stat = mat_write_main_header (mfp, mh);
+d203 1
+a203 1
+	Main_header    *mhdr;
+d210 3
+a212 3
+	mhdr = (Main_header *) malloc (sizeof (Main_header));
+	if (mhdr == NULL) {
+		fprintf (stderr, "ERROR [getmhdr6]: Could not malloc memory for mhdr\n");
+d215 5
+a219 3
+	mat_read_main_header (mfp->fptr, mhdr);
+
+	return (mhdr);
+d227 2
+a228 1
+float          *rdimg6 (filnam, plane, frame, gate, data, bed)
+d234 1
+d245 1
+d259 1
+a259 1
+	if (strstr (filnam, ".scn")) {
+d268 1
+a268 1
+	} else if (strstr (filnam, ".atn")) {
+d274 1
+a274 1
+	} else if (strstr (filnam, ".img") || strstr (filnam, ".t88")) {
+d285 1
+a285 1
+	} else if (strstr (filnam, ".nrm")) {
+d292 1
+a292 1
+		fprintf (stderr, "ERROR [rdimg6]: Invalid file extension, %s\n", filnam);
+d313 1
+a313 1
+		if (strstr (filnam, ".img") || strstr (filnam, ".scn") || strstr (filnam, ".t88")) {
+d323 1
+a323 1
+		} else if (strstr (filnam, ".nrm")) {
+d340 1
+a340 1
+int             wrimg6 (filnam, matrix, mh, sh, plane, frame, gate, data, bed)
+d343 2
+a344 2
+	Main_header    *mh;
+	char           *sh;
+d349 1
+d359 1
+d369 2
+a370 2
+	if (strstr (filnam, ".scn")) {
+		shscan = (Scan_subheader *) sh;
+d377 2
+a378 3
+		mh->file_type = RAW_DATA;
+	} else if (strstr (filnam, ".nrm")) {
+		shnrm = (Norm_subheader *) sh;
+d382 2
+a383 3
+		mh->file_type = NORM_DATA;
+	} else if (strstr (filnam, ".atn")) {
+		shatn = (Attn_subheader *) sh;
+d387 2
+a388 3
+		mh->file_type = ATTN_DATA;
+	} else {
+		shimg = (Image_subheader *) sh;
+d395 3
+a397 1
+		mh->file_type = IMAGE_DATA;
+d428 1
+a428 1
+		if (strstr (filnam, ".scn")) {
+d432 1
+a432 1
+		} else if (strstr (filnam, ".img") || strstr (filnam, ".t88")) {
+d440 1
+a440 1
+		if (strstr (filnam, ".scn")) {
+d450 1
+a450 1
+		} else if (strstr (filnam, ".img") || strstr (filnam, ".t88")) {
+d465 2
+a466 2
+	mdata->mat_type = mh->file_type;
+	mdata->shptr = (char *) sh;
+d471 1
+a471 1
+	if ((mfp = write_fp6 (filnam, mh, "r+")) == NULL) {
+d490 1
+a490 1
+MatrixFile     *write_fp6 (filnam, mh, mode)
+d492 1
+a492 1
+	MatrixData     *mh;
+d497 1
+a497 1
+	char            cmd[MAXNAME];
+a499 4
+	if (strstr (filnam, ".scn") && strstr (filnam, ".img") && strstr (filnam, ".t88")) {
+		fprintf (stderr, "ERROR [write_fp6]: Invalid CTI file name, %s\n", filnam);
+		return (NULL);
+	}
+d541 1
+a541 1
+		if ((fp_list6[fn] = matrix_create (filnam, mh)) == NULL)
+a561 4
+	if (strstr (filnam, ".scn") && strstr (filnam, ".img") && strstr (filnam, ".t88")) {
+		fprintf (stderr, "ERROR [getfp6]: Invalid CTI file name, %s\n", filnam);
+		return (NULL);
+	}
+@

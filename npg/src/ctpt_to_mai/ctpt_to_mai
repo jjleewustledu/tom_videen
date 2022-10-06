@@ -1,0 +1,75 @@
+#!/bin/csh
+#	Module:	ctpt_to_mai
+#	Author:	Tom Videen
+#	Date:	Feb 2006
+#	Use:	Convert contact point in original CT image to final MaiAtlas 
+#			std = MaiAtlas 
+#			res = CT image 
+
+if ($#argv != 5) then
+	echo "Usage:  ctpt_to_mai air output x y z"
+	echo " e.g.,  ctpt_to_mai db106_MaiAtlas_ct_left db106_left 264 271 47"
+	exit 1
+endif
+
+set AIR = $1.air
+set LOC = $2.loc
+set ATL = $2.atl
+set xp  = $3
+set yp  = $4
+set zp  = $5
+
+if (! -e $AIR) then
+	echo "ERROR [ctpt_to_mai]: missing $AIR"
+	exit 1
+endif
+
+echo ctpt_to_mai $1 $2 $3 $4 $5 >! $LOC
+echo ctpt_to_mai $1 $2 $3 $4 $5 >! $ATL
+
+# CT image in which contact locations are defined
+set axdim = `dumpair $AIR | grep "res xdim" | cut -f2 -d:`
+set aydim = `dumpair $AIR | grep "res ydim" | cut -f2 -d:`
+set azdim = `dumpair $AIR | grep "res zdim" | cut -f2 -d:`
+set axsize = `dumpair $AIR | grep "res xsize" | cut -f2 -d:`
+set aysize = `dumpair $AIR | grep "res ysize" | cut -f2 -d:`
+set azsize = `dumpair $AIR | grep "res zsize" | cut -f2 -d:`
+
+# MaiAtlas image
+set mxdim = `dumpair $AIR | grep "std xdim" | cut -f2 -d:`
+set mydim = `dumpair $AIR | grep "std ydim" | cut -f2 -d:`
+set mzdim = `dumpair $AIR | grep "std zdim" | cut -f2 -d:`
+set mxsize = `dumpair $AIR | grep "std xsize" | cut -f2 -d:`
+set mysize = `dumpair $AIR | grep "std ysize" | cut -f2 -d:`
+set mzsize = `dumpair $AIR | grep "std zsize" | cut -f2 -d:`
+
+# MaiAtlas atlas origin
+set mx0 = 483
+set my0 = 17
+set mz0 = 586
+
+# convert coordinates to Analyze order in mm
+set xc = `echo "($axdim - $xp) * $axsize" | bc -l | cut -c1-6`
+set yc = `echo "($aydim - $yp) * $aysize" | bc -l | cut -c1-6`
+set zc = `echo "($azdim - $zp) * $azsize" | bc -l | cut -c1-6`
+echo $xc $yc $zc >! ptmp
+
+# reslice from CT to MaiAtlas
+reslice_ucf $AIR ptmp rtmp y
+
+# convert final locations from Analyze order
+set xc = `head -1 rtmp | cut -f1 -d' '`
+set yc = `head -1 rtmp | cut -f2 -d' '`
+set zc = `head -1 rtmp | cut -f3 -d' '`
+set rxc = `echo "$mxdim - ($xc / $mxsize)" | bc -l | cut -c1-6`
+set ryc = `echo "$mydim - ($yc / $mysize)" | bc -l | cut -c1-5`
+set rzc = `echo "$mzdim - ($zc / $mzsize)" | bc -l | cut -c1-6`
+echo $rxc $ryc $rzc >> $LOC
+set x0 = `echo "($mx0 - $rxc) * $mxsize" | bc -l | cut -c1-8`
+set y0 = `echo "($my0 - $ryc) * $mysize" | bc -l | cut -c1-8`
+set z0 = `echo "($mz0 - $rzc) * $mzsize" | bc -l | cut -c1-8`
+echo $x0 $y0 $z0 >> $ATL
+
+unalias rm
+rm ptmp rtmp 
+

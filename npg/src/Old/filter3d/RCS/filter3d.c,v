@@ -1,0 +1,389 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	94.04.12.17.59.33;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.11.08.18.59.00;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.11.08.18.02.21;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.10.29.22.02.44;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@initial release, working version.
+@
+
+
+1.4
+log
+@CUse imglist_mode.
+@
+text
+@/*$Id: filter3d.c,v 1.3 1993/11/08 18:59:00 ty7777 Exp ty7777 $*/
+/*$Log: filter3d.c,v $
+ * Revision 1.3  1993/11/08  18:59:00  ty7777
+ * Use only imgfilter and mskfilter.
+ *
+ * Revision 1.2  1993/11/08  18:02:21  ty7777
+ * Added rec file.
+ *
+ * Revision 1.1  1993/10/29  22:02:44  ty7777
+ * Initial revision
+ **/
+
+#include <petutil/imglist.h>
+
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/filter3d/RCS/filter3d.c,v 1.3 1993/11/08 18:59:00 ty7777 Exp ty7777 $";
+
+/*____________________________________________________________________________
+File Name:	filter.c
+ 
+Description:	filter a list of images by Gaussian or Butterworth filters.
+
+Input Parameters:
+
+1. image list file.
+
+2. image parameter file which contains:
+	mskfilter: string [real]	# e.g. mskfilter: gauss 0.2; 
+					# mskfilter: butterworth 0.7 5;  
+					# mskfilter: none. 
+					# Recommended: gauss 0.2 for ECAT; 
+					# none for PETT VI.
+	imgfilter: string [real]	# e.g. imgfilter: gauss 0.2; 
+					# imgfilter: butterworth 0.7 5;  
+					# imgfilter: none. 
+					# Recommended: butterworth 0.7 5;
+					# none for PETT VI.
+
+   Other parameters used for determining path are:
+        species:        
+        tracer:         
+        category:       
+        datatype:       
+        scanner:        
+        acquisition:    
+        reconstruction: 
+        recfilter:      
+
+3. filter_mode
+
+Algorithm for filter:
+
+a) Read image parameter file and put parameters in a structure.
+
+b) Read image list file and put image pairs in a list of structures.
+
+c) Construct short image names from image list and parameters.
+
+d) Get the complete image name for each short image name.
+
+e) Create the filtered images.
+
+Calling:	buildfiles () in buildfiles.c	
+		pkg_malloc () in libhp.a
+		readimglist () in readimglist.c	
+		readparm () in readparm.c
+
+Creator:	Tom Yang. 
+
+History:	Created by Tom Yang on 10/29/1993.
+
+____________________________________________________________________________*/
+
+PUBLIC int GetFilterParms ();
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+	BOOLEAN			demigrate;
+	BOOLEAN			imgfilter_found;
+	FILE			*recfp;
+	IMAGE_LIST_DATA		*image_list;
+	PARAMETER_DATA		parameter_data;
+	char			complete_image_files [6][MAXPATH];
+	char			date [MAXLINE];
+	char			*image_list_file;
+	char			*filter_specification;
+	char			*parameter_list_file;
+	char			complete_filter_filename [MAXPATH];
+	char			recfile [MAXPATH];
+	char			short_filter_filename [MAXLINE];
+	char			short_image_files [6][MAXLINE];
+	char			short_sxrfile [MAXLINE];
+	char			subject_id [MAXNAME];
+	char			*uid;
+	float			cutoff;
+	int			filter_mode;
+	int			filter_type;
+	int			i;
+	int			image_mode;
+	int			j;
+	int			num_image_files;
+	int			num_image_list;
+	int			order;
+	struct INFO_TYPE	finfo;
+
+
+	/*
+	 * Get command line arguments.
+	 */
+	parameter_list_file	= argv [1];
+	image_list_file		= argv [2];
+	filter_specification	= argv [3];
+	sprintf (date, "%s %s %s %s %s %s", argv[4], argv[5], argv[6], argv[7], argv[8], argv[9]);
+	uid			= argv [10];
+
+	/* 
+	 * Read the parameters in the image parameters file to a structure.
+	 */
+	if (readparm (parameter_list_file, &parameter_data) == FAIL)
+	{
+		fprintf (stderr, "Error: from readparm ().\n");
+		free (image_list);
+		exit (FAIL);
+	}
+
+	/* 
+	 * Allocate memory for an array of image list structures. 
+	 */
+	image_list	= (IMAGE_LIST_DATA *) pkg_malloc (sizeof (IMAGE_LIST_DATA) 
+			* MAX_IMAGE_LIST_SIZE, "filter", "image_list");
+
+	/* 
+	 * Read list from image_list_file to IMAGE_LIST_DATA structure list
+	 * image_list for manipulation.
+	 */
+	if (readimglist (image_list_file, image_list, &num_image_list) == FAIL)
+	{
+		fprintf (stderr, "Error: from readimglist ().\n");
+		free (image_list);
+		exit (FAIL);
+	}
+
+	/*
+	 * Get the filter parameters.
+	 */
+	if (strcmp (filter_specification, "imgfilter") == 0)
+		filter_mode	= IMGFILTER_MODE;
+	else if (strcmp (filter_specification, "mskfilter") == 0)
+		filter_mode	= MSKFILTER_MODE;
+	else
+	{
+		fprintf (stderr, "Unrecongnized filter mode %s\n", filter_specification);
+		exit (FAIL);
+	}
+
+	if (GetFilterParms (filter_mode, parameter_data, &filter_type, &cutoff, &order) == FAIL)
+	{
+		fprintf (stderr, "Error for in getting filter parameters.\n");
+		exit (FAIL);
+	}
+
+	/* 
+	 * Fill the finfo structure for searching in archive.
+	 */
+	get_finfo (parameter_data, &finfo);
+
+	/* 
+	 * Fitering the images for each list.
+	 */
+	demigrate	= TRUE;
+	image_mode	= parameter_data.imglist_mode;	
+	for (i = 0; i < num_image_list; i++)
+	{
+		if (build_shortnames (parameter_data, image_list [i], image_mode, 
+		RECFILTER_MODE, &num_image_files, short_image_files, short_sxrfile) == FAIL)
+		{
+			fprintf (stderr, 
+				"Error in building short names from image list %s %s %f %s %f %s\n",
+				image_list [i].subject_id, 
+				image_list [i].scanset1_id, image_list [i].mean1, 
+				image_list [i].scanset2_id, image_list [i].mean2, 
+				image_list [i].sxrid);
+		}
+
+		/*
+		 * Clean the array of complete image files.
+		 */
+		for (j = 0; j < num_image_files; j++)
+			strcpy (complete_image_files [j], "");
+
+		if (checkimg (parameter_data, image_list [i], image_mode, demigrate, 
+		num_image_files, short_image_files, complete_image_files) == FAIL)
+		{
+			fprintf (stderr, 
+				"Error in checking files from image list %s %s %f %s %f %s\n\n",
+				image_list [i].subject_id, 
+				image_list [i].scanset1_id, image_list [i].mean1, 
+				image_list [i].scanset2_id, image_list [i].mean2, 
+				image_list [i].sxrid);
+		}
+
+		/* 
+	 	 * Construct the subject id.
+	 	 */
+		strcpy (subject_id, parameter_data.species);
+		strcat (subject_id, image_list [i].subject_id);
+
+		/*
+		 * Filtering the images.
+		 */
+		for (j = 0; j < num_image_files; j++)
+		{
+			/*
+		 	 * Construct filtered mask image name.
+		 	 */
+			strncpy (short_filter_filename, "\0", MAXLINE);
+			build_filter_filename (complete_image_files [j], filter_type, 
+				cutoff, order, short_filter_filename);
+
+			/*
+		 	 * Filter the raw image if it the filterd image cannot be found.
+		 	 */
+			if (imgfilter_found = setpath (parameter_data.datapath, short_filter_filename, 
+			subject_id, &finfo, complete_filter_filename, TRUE) != SUCCEED)
+			{
+				if (filter_image (complete_image_files [j], filter_type, 
+				cutoff, order, short_filter_filename) == FAIL)
+				{
+					fprintf (stderr, "Error in filtering image %s.\n", 
+						complete_image_files [j]);
+					exit (FAIL);
+				}
+
+				/*
+			 	 * Construct the rec file name and creates the rec file header.
+			 	 */
+				strcpy (recfile, short_filter_filename);
+				strcat (recfile, REC_EXT);
+
+				recfp	= fopen (recfile, "w");
+				if (recfp == (FILE *) NULL)
+				{
+					fprintf (stderr, "Error in opening rec file %s\n", recfile);
+					exit (FAIL);
+				}
+				fprintf (recfp, "rec %s %s %s\n", short_filter_filename, date, uid);
+				fprintf (recfp, "filter3d %s %s %s\n", parameter_list_file, 
+					image_list_file, filter_specification);
+				fprintf (recfp, "   %s\n\n", rcsid);
+
+				/*
+			 	 * Copy the parameter file to the rec file.
+			 	 */
+				fprintf (recfp, "prm\n");
+				copyrec (recfp, parameter_list_file);
+				fprintf (recfp, "endprm\n\n");
+
+				/*
+			 	 * Copy the relevant line from the image list file 
+			 	 * to the rec file.
+			 	 */
+				fprintf (recfp, "imglist\n");
+				fprintf (recfp, "%s %s %.2f %s %.2f %s\n",
+					image_list [i].subject_id, 
+					image_list [i].scanset1_id, image_list [i].mean1, 
+					image_list [i].scanset2_id, image_list [i].mean2, 
+					image_list [i].sxrid);
+				fprintf (recfp, "endimglist\n\n");
+
+				fprintf (recfp, "endrec\n");
+			}
+			else
+			{
+				fprintf (stdout, 
+				"The filtered image %s can be found in %s.\n",
+				short_filter_filename, complete_filter_filename);
+			}
+		}
+	}
+
+	free (image_list);
+}
+@
+
+
+1.3
+log
+@Use only imgfilter and mskfilter.
+@
+text
+@d1 1
+a1 1
+/*$Id: filter3d.c,v 1.2 1993/11/08 18:02:21 ty7777 Exp ty7777 $*/
+d3 3
+d15 1
+a15 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/filter3d/RCS/filter3d.c,v 1.2 1993/11/08 18:02:21 ty7777 Exp ty7777 $";
+d172 1
+a172 1
+	image_mode	= parameter_data.weld_lstmode;	
+@
+
+
+1.2
+log
+@Added rec file.
+@
+text
+@d1 1
+a1 1
+/*$Id: filter3d.c,v 1.1 1993/10/29 22:02:44 ty7777 Exp ty7777 $*/
+d3 3
+d12 1
+a12 1
+static char rcsid [] = "$Header: /home/petsun4/ty7777/src/filter3d/RCS/filter3d.c,v 1.1 1993/10/29 22:02:44 ty7777 Exp ty7777 $";
+a147 2
+	else if (strcmp (filter_specification, "recfilter") == 0)
+		filter_mode	= RECFILTER_MODE;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d9 1
+a9 1
+static char rcsid [] = "$Header$";
+d75 1
+d79 1
+d84 1
+d89 1
+d108 2
+d165 1
+a165 1
+	 * Compute the mean for each image pair.
+d228 1
+a228 1
+					return FAIL;
+d230 38
+d272 2
+a273 2
+				"The filtered image for raw image %s can be found in %s.\n",
+				complete_image_files [j], complete_filter_filename);
+@

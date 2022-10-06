@@ -1,0 +1,306 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*--------------------------------------------------------------------
+
+Program: make_geo.c
+
+Purpose: Make geometric factors from 3D blank scan.
+
+Perpetrator: John Ollinger
+
+Date: August 7, 1990
+
+Copyright 1991-1996, Washington University.
+All rights reserved. Unauthorized reproduction prohibited.
+
+---------------------------------------------------------------------*/
+
+#include <stdio.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string.h>
+#include <imagio.h>
+#include <cti_proto.h>
+#include <scatter.h>
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/make_geo.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+void main(argc,argv)
+
+int	argc;
+char	*argv[];
+
+{
+
+SubHeader	*sh;
+MainHeader     *mh;
+
+int	i,j,joff,stat,arg,plane=1,frame=1,gate=1,data=0,bed=0,nsum,ioff,
+	numray,numang,iang,ray,rayoff,jang,detoff,lensin,pad,geoff,lcnorm=FALSE;
+
+float	*sino,raysiz,sum,*geo,x,dm1,*source,xmin,*geo_full,den,d,scl,
+	g[DET_STRIDE],*mean_sino,
+	**inflate_norm(),**norm;
+
+char	geo_file[MAXNAME],*blank_file,*dot,out1[MAXNAME],*nrmfil;
+
+NormData *nrm,*read_norm();
+
+if(argc < 2) {
+        fprintf(stderr,"Usage: make_geo blank_file -nf normfile\n");
+	fprintf(stderr,"       Make file of geometric factors for use with makenorm.\n");
+        exit(-1);
+        }
+
+blank_file  = argv[1];
+for(i=2;i<argc;i++) {
+    if(!strcmp(argv[i],"-nf") && i < argc-1) {
+        nrmfil = argv[i+1];
+        lcnorm = TRUE;
+	++i;
+        }
+    }
+
+strcpy(geo_file,blank_file);
+dot = strrchr(geo_file,(int)'.');
+*dot = NULL;
+strcpy(out1,geo_file);
+strcat(geo_file,"_geo.scn");
+strcat(out1,"_geo_full.scn");
+
+if((mh=getmhdr(blank_file)) == NULL) {
+    fprintf(stderr,"Could not read main header., %s\n",blank_file);
+    exit(ERROR);
+    }
+
+/* Find out how many data planes there are. */
+if((sh=getsbhdr(blank_file,plane,frame,gate,data,bed)) == NULL) {
+    fprintf(stderr,"Could not read subheader for %s\n",blank_file);
+    exit(-1);
+    }
+numray = NUMRAY;
+numang = NUMANG;
+raysiz = sh->sample_size_1*10;
+lensin = numray*numang;
+xmin = -raysiz*numray/2;
+
+source = (float *)malloc(numray*sizeof(float));
+geo    = (float *)malloc(numray*(DET_STRIDE+2)*sizeof(float));
+geo_full = (float *)malloc(lensin*sizeof(float));
+
+/* Correct for effective source geometry due to rod orbit. */
+dm1 = RADIUS_DET*sin(xmin/RADIUS_DET);
+for(ray=0,x=xmin;ray<numray;ray++,x+=raysiz) {
+    d = RADIUS_DET*sin(x/RADIUS_DET);
+    if(d < -ROD_RADIUS || d < -PATIENT_PORT_RAD) 
+	/* LOR does not sample source. */
+    	source[ray] = 0.;
+    else if(dm1 > ROD_RADIUS || d > PATIENT_PORT_RAD) 
+	/* LOR does not sample source. */
+    	source[ray] = 0.;
+    else if(d >= -ROD_RADIUS && dm1 < -ROD_RADIUS) 
+	/* LOR sample negative x-intercept of orbit. */
+/*    	source[ray] = 2.*acos((double)d/ROD_RADIUS);*/
+	source[ray] = 0.;
+    else if(d > ROD_RADIUS && dm1 <= ROD_RADIUS)
+    	/* LOR sample negative x-intercept of orbit. */
+/*    	source[ray] = 2.*acos((double)dm1/ROD_RADIUS);*/
+	source[ray] = 0.;
+    else {
+    	/* LOR internal to orbit. */
+    	source[ray] = acos((double)d/ROD_RADIUS)-acos((double)dm1/ROD_RADIUS);
+    	if(source[ray] < 0)
+    	    source[ray] = -source[ray];
+    	}
+    dm1 = d;
+    }
+
+
+mh->nframe = 1;
+mean_sino = (float *)malloc(LENSIN*sizeof(float));
+for(i=0;i<LENSIN;i++)
+    mean_sino[i] = 0.;
+for(plane=1;plane<=mh->nplane;plane++) {
+    if((sino=rdimg(blank_file,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",blank_file,plane);
+        exit(ERROR);
+        }
+    if((sh=(SubHeader *)getsbhdr(blank_file,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read main header., %s\n",blank_file);
+        exit(ERROR);
+        }
+
+    pad = (sh->dim1 - NUMRAY)/2;
+    for(i=0,ioff=pad,joff=0;i<NUMANG;i++,ioff+=sh->dim1,joff+=NUMRAY) {
+        for(j=0;j<NUMRAY;j++)
+            sino[j+joff] = sino[j+ioff];
+        }
+    sh->dim1 = NUMRAY;
+
+    if(lcnorm == TRUE) {
+        if((nrm=read_norm(nrmfil,plane)) == NULL) {
+            fprintf(stderr,"Error reading %s, plane %d\n",nrmfil,plane);
+            exit(ERROR);
+            }
+        for(i=0;i<NUMRAY*(DET_STRIDE+2);i++)
+            geo[i] = 1.;
+        for(i=0;i<NUMRAY;i++)
+            geo[i+GEOFF+NUMRAY] = 0.;
+        norm = inflate_norm(nrm,geo);
+        for(i=0;i<LENSIN;i++)
+            sino[i] *= norm[0][i];
+        free(nrm);
+        free(norm[0]);
+        free(norm[1]);
+        free(norm);
+        }
+    for(i=0;i<LENSIN;i++)
+        mean_sino[i] += sino[i];
+    free(sino);
+    }
+
+/* Calculate geometric factors. */
+for(i=0;i<numray*(DET_STRIDE+1);i++) 
+    geo[i] = 0.;
+
+geoff = DET_STRIDE*numray;
+for(iang=0,rayoff=0;iang<numang;iang++,rayoff+=numray) {
+    for(ray=0;ray<numray;ray++) {
+	if(sino[ray+rayoff] > 0.)
+            geo[ray+geoff] += mean_sino[ray+rayoff];
+        }
+    }
+/***geo[geoff] = 0.;
+geo[geoff+numray/2] = .5*source[numray/2]/geo[geoff+numray/2];
+sum = geo[geoff+numray/2];
+nsum = 0;
+for(ray=1;ray<numray/2;ray++) {
+    den = geo[ray+geoff] + geo[numray-ray+geoff];
+    if(den > 0)
+        geo[ray+geoff] = source[ray]/den;
+    else
+        geo[ray+geoff] = 0.;
+    geo[numray-ray+geoff] = geo[ray+geoff];
+    if(geo[ray+geoff] > 0)
+        nsum += 2;
+    sum += 2.*geo[ray+geoff];
+    }***/
+for(sum=0.,ray=0;ray<numray;ray++) {
+    if(geo[ray+geoff] > 0)
+        geo[ray+geoff] = source[ray]/geo[ray+geoff];
+    sum += geo[ray+geoff];
+    }
+for(ray=0;ray<numray;ray++)
+    geo[ray+geoff] *= numray/sum;
+
+for(plane=1;plane<=mh->nplane;plane++) {
+/***    if((sino=rdimg(blank_file,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Error reading %s, plane %d\n",blank_file,plane);
+        exit(ERROR);
+        }
+    if((sh=(SubHeader *)getsbhdr(blank_file,plane,frame,gate,data,bed)) == NULL) {
+        fprintf(stderr,"Could not read main header., %s\n",blank_file);
+        exit(ERROR);
+        }
+    pad = (sh->dim1 - NUMRAY)/2;
+    for(i=0,ioff=pad,joff=0;i<NUMANG;i++,ioff+=sh->dim1,joff+=NUMRAY) {
+        for(j=0;j<NUMRAY;j++)
+            sino[j+joff] = sino[j+ioff];
+        }
+    sh->dim1 = NUMRAY;***/
+
+    /* Compute interference factors for first DET_STRIDE angles. */
+    for(iang=0,rayoff=0;iang<numang-DET_STRIDE;
+                        iang+=DET_STRIDE,rayoff+=numray*DET_STRIDE) {
+        for(jang=0,detoff=0;jang<DET_STRIDE;jang++,detoff+=numray) {
+            for(ray=0;ray<numray;ray++) {
+		if(mean_sino[ray+rayoff+detoff] > 0.)
+                    geo[ray+detoff] += mean_sino[ray+rayoff+detoff]*geo[ray+geoff];
+                }
+            }
+        }
+
+    sum = 0.;
+    nsum = 0;
+    /* Use even symmetry to average geometric factors. */
+    for(iang=0,rayoff=0;iang<DET_STRIDE;iang++,rayoff+=numray) {
+	geo[rayoff] = 0.;
+	geo[rayoff+numray/2] = .5*source[numray/2]/geo[rayoff+numray/2];
+        for(ray=1;ray<numray/2;ray++) {
+            den = geo[ray+rayoff] + geo[numray-ray+rayoff];
+	    if(den > 0)
+                geo[ray+rayoff] = source[ray]/den;
+	    else
+	        geo[ray+rayoff] = 0.;
+            geo[numray-ray+rayoff] = geo[ray+rayoff];
+	    if(geo[ray+rayoff] > 0)
+		nsum += 2;
+            sum += 2.*geo[ray+rayoff];
+            }
+        }
+    /* Remove symmetry assumption. */
+    for(iang=0,rayoff=0;iang<DET_STRIDE;iang++,rayoff+=numray) {
+        for(ray=0;ray<numray;ray++) {
+            den = geo[ray+rayoff];
+	    if(den > 0)
+                geo[ray+rayoff] = source[ray]/den;
+	    else
+	        geo[ray+rayoff] = 0.;
+	    if(geo[ray+rayoff] > 0)
+		++nsum;
+            sum += geo[ray+rayoff];
+            }
+        }
+
+    for(i=0;i<numray*DET_STRIDE;i++)
+        geo[i] *= (float)nsum/sum;
+
+    sh->dim2 = DET_STRIDE + 1;
+    sh->deadtime_corr = 1.;
+    mh->file_format = INTERFILE;
+    mh->number_format = FLOAT_DATA;
+    if((stat=wrimg(geo_file,geo,mh,sh,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",geo_file,plane);
+        exit(ERROR);
+        }
+
+/***    for(iang=0,rayoff=0;iang<NUMANG;iang++,rayoff+=numray) {
+	ioff = (iang%DET_STRIDE)*numray;
+        for(ray=0;ray<numray;ray++)
+	    geo_full[ray+rayoff] = geo[ray+ioff];
+	}
+
+    sh->dim2 = NUMANG;
+    if((stat=wrimg(out1,geo_full,mh,sh,plane,frame,gate,data,bed)) != OK) {
+        fprintf(stderr,"Error writing %s, plane %d\n",geo_file,plane);
+        exit(ERROR);
+        }***/
+
+     free(sino);
+     }
+
+
+printf("Geometric factors written to %s\n",geo_file);
+
+}
+@

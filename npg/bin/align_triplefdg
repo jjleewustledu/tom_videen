@@ -1,0 +1,197 @@
+#!/bin/csh
+#   Module: align_triplefdg
+#   Author: Tom Videen
+#   Date:   Nov 2010
+#   Use:    Align PET images (FDG HO, OO, CO) 
+#	rcsid = $Id: align_triplefdg,v 1.1 2005/01/25 18:31:06 tom Exp $
+
+if ($#argv != 5) then
+    echo "Usage:  align_triplefdg fdg ho oc oo mask"
+	echo " e.g.,  align_triplefdg p5000fdgc p5000ho1 p5000oc1 p5000oo1 p5000mask"
+    exit 1
+endif
+
+set FDG  = $1
+set HO   = $2
+set OC   = $3
+set OO   = $4
+set MASK = $5
+
+set HOFDG = ${HO}_to_fdg
+set OOHO  = ${OO}_to_ho
+set OCFDG = ${OC}_to_fdg
+set OOFDG = ${OO}_to_fdg
+set LOG  = Align_triplefdg.log
+set THR  = 50
+set FIL  = _g3
+set FDf  = $FDG$FIL
+set HOf  = $HO$FIL
+set OCf  = $OC$FIL
+set OOf  = $OO$FIL
+set ROOT = $MASK:r
+set AMASK = a${ROOT}
+set MASK2 = ${ROOT}b.v
+set AMASK2 = a${ROOT}b
+
+unalias cp
+unalias rm
+
+# Check existence of files:
+
+set EFILES = "$MASK.v $HO.v $OO.v $OC.v $HOf.v $OOf.v $OCf.v $FDG.v $FDf.v"
+set STATUS = 0
+foreach i ($EFILES)
+	if (! -e $i) then
+		echo "ERROR [align_triplefdg]: $i does not exist."
+		set STATUS = 1
+	endif
+end
+if ( $STATUS != 0) exit (1)
+
+# Check the pixel size in PET headers:
+
+set STATUS = 0
+set ORGSIZE = 0
+foreach i ($EFILES)
+	set PIXSIZE = `imghdr $i | grep 'Pixel size' | cut -f4 -d' '`
+	if ($ORGSIZE == 0) then
+		set ORGSIZE = $PIXSIZE
+		set ORGFILE = $i
+	else if ($PIXSIZE != $ORGSIZE) then
+		echo "ERROR [align_triplefdg]: different pixel sizes:"
+		echo "  $ORGFILE = $ORGSIZE"
+		echo "  $i = $PIXSIZE"
+		set STATUS = 1
+	endif
+endif
+if ($STATUS != 0) exit (1)
+
+# Setup log file:
+
+set BINFILE = `which align_triplefdg`
+set VER = `grep rcsid $BINFILE | cut -f2- -d: | cut -f1 -dE | head -1`
+echo "Align Triple:  " `whoami` `date` >! $LOG
+echo "Version: " $VER  >> $LOG
+echo ""                >> $LOG
+
+# Convert images to Analyze format:
+
+set FMAX = `imghdr $FDf.v | grep Max | cut -f2 -d= | cut -f1 -dM`
+set HMAX = `imghdr $HOf.v | grep Max | cut -f2 -d= | cut -f1 -dM`
+set SCAL = `echo $HMAX / $FMAX | bc -l`
+set ISCAL = `echo 1.0 / $SCAL | bc -l`
+echo $SCAL $ISCAL
+scaleimage $FDf.v $SCAL
+
+img2analyze $MASK.v $AMASK
+img2analyze $FDf.v a$FDf
+img2analyze $HOf.v a$HOf
+img2analyze $OOf.v a$OOf
+img2analyze $OCf.v a$OCf
+setanamin $AMASK 0
+
+scaleimage $FDf.v $ISCAL
+
+# Align HO to FDG, then reslice HO:
+
+echo "Aligning:  $HOf to $FDf"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK -x 1 -v"
+echo ">> alignlinear ho to fdg" >> $LOG
+echo $PRM >> $LOG
+setanamin a$FDf 0
+setanamin a$HOf 0
+
+alignlinear a$FDf a$HOf $HOFDG.air $PRM >! log
+tail -6 log | head -3 >> $LOG
+tail -1 log >> $LOG
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOG
+    exit 1
+endif
+imgreslice a$HOf $HOFDG
+analyze2img ra$HOf r$HOf.v
+if (! -e null.air) alignlinear a$FDf a$FDf null.air -m 6 -p1 1 -t1 100 -p2 0 -x 2
+airdif1 $HOFDG.air null.air $MASK.v >> $LOG
+echo " " >> $LOG
+
+# Align OO to HO, then reslice OO to FDG:
+
+echo "Aligning:  $OOf to $HOf"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK -x 1 -v"
+echo ">> alignlinear oo to ho" >> $LOG
+echo $PRM >> $LOG
+setanamin a$HOf 0
+setanamin a$OOf 0
+
+alignlinear a$HOf a$OOf $OOHO.air $PRM >! log
+tail -6 log | head -3 >> $LOG
+tail -1 log >> $LOG
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOG
+    exit 1
+endif
+combine_air $OOFDG.air y $OOHO.air $HOFDG.air
+imgreslice a$OOf $OOFDG
+analyze2img ra$OOf r$OOf.v
+airdif1 $OOHO.air null.air $MASK.v >> $LOG
+airdif1 $OOFDG.air null.air $MASK.v >> $LOG
+echo " " >> $LOG
+
+# Combine resliced OOf with existing mask
+ 
+maskimg $MASK.v r$OOf.v $MASK2.v 10
+img2analyze $MASK2.v $AMASK2
+setanamin $AMASK2 0
+
+# Align CO to resliced OO, then reslice CO:
+ 
+echo "Aligning:  $OCf to r$OOf"
+set PRM = "-m 6 -p1 256 -t1 $THR -p2 256 -t2 $THR -e1 $AMASK -e2 $AMASK2 -x 1 -v"
+echo ">> alignlinear oc to oo" >> $LOG
+echo $PRM >> $LOG
+ 
+setanamin ra$OOf 0
+setanamin a$OCf 0
+alignlinear ra$OOf a$OCf $OCFDG.air $PRM >! log
+tail -6 log | head -3 >> $LOG
+tail -1 log >> $LOG
+set ERROR = `grep HESSIAN log`
+set CHK = `echo $ERROR | wc -w`
+if ($CHK > 0) then
+    echo $ERROR
+    echo "Alignment may require an initialization file"
+    echo $ERROR >> $LOG
+    exit 1
+endif
+imgreslice a$OCf $OCFDG
+analyze2img ra$OCf r$OCf.v
+airdif1 $OCFDG.air null.air $MASK.v >> $LOG
+
+img2analyze $HO.v a$HO
+imgreslice  a$HO  $HOFDG
+analyze2img ra$HO r$HO.v
+
+img2analyze $OO.v a$OO
+imgreslice  a$OO  $OOFDG
+analyze2img ra$OO r$OO.v
+
+img2analyze $OC.v a$OC
+imgreslice  a$OC  $OCFDG
+analyze2img ra$OC r$OC.v
+
+rm $MASK2.v
+rm $AMASK2.img
+rm $AMASK2.ifh
+rm $AMASK2.hdr
+
+echo "Complete [align_triplefdg] ========================="
+cat $LOG
+

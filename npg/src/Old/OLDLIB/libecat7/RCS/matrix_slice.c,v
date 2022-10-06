@@ -1,0 +1,202 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.10.09.16.49.14;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking, working version.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@
+/* static char sccsid[] = "%W% UCL-TOPO %E%"; */
+
+#include	<stdlib.h>
+#include	<fcntl.h>
+#include	<string.h>
+#include	"matrix.h"
+
+extern short find_smax();
+extern float find_fmax();
+extern int mat_errno;
+#define ERROR	 -1
+
+MatrixData *matrix_read_slice(mptr, volume, slice, segment)
+MatrixFile *mptr ;
+MatrixData *volume;
+int	 slice, segment;
+{
+	int	i, group=0, slice_count=0, z_elements;
+	int file_pos, nblks, npixels, data_size ;
+	float *fdata;
+	Scan3D_subheader *scan3Dsub ;
+	struct MatDir matdir;
+	struct Matval val;
+	Attn_subheader *attnsub ;
+	Image_subheader *imagesub;
+	Scan_subheader *scansub ;
+	int y, line_size;
+	char *tmp_line, *line, *p;
+	MatrixData *data = NULL;
+
+	if (matrix_find(mptr,volume->matnum,&matdir) == ERROR)
+		crash("matrix not found\n");
+
+	/* allocate space for MatrixData structure and initialize */
+	data = (MatrixData *) calloc( 1, sizeof(MatrixData)) ;
+	if (!data) return NULL;
+	*data = *volume;
+	data->xdim = volume->xdim;
+	data->ydim = volume->ydim;
+	data->zdim = 1;
+	data->shptr = NULL;
+	npixels = data->xdim*data->ydim;
+	group = abs(segment);
+
+	switch(volume->mat_type) {
+	case Short3dSinogram :
+		data_size = npixels*sizeof(short);
+		file_pos = (matdir.strtblk+1)*MatBLKSIZE;
+		scan3Dsub = (Scan3D_subheader*)volume->shptr;
+		z_elements = scan3Dsub->num_z_elements[group];
+		if (group > 0) z_elements /= 2;
+		if (slice >= z_elements) {
+			free_matrix_data(data);
+			return NULL;
+		}
+		for (i=0; i<group; i++)
+			file_pos += scan3Dsub->num_z_elements[i]*data_size;
+		if (segment < 0) file_pos += z_elements*data_size;
+
+		nblks = (data_size+(MatBLKSIZE-1))/MatBLKSIZE;
+		data->data_size = nblks * MatBLKSIZE;
+		data->data_ptr = (caddr_t) calloc(1, data->data_size) ;
+		if (!data->data_ptr) {
+			free_matrix_data(data);
+			return NULL;
+		}
+
+		line_size = data->xdim*sizeof(short);
+		file_pos += slice*line_size;
+		line = malloc(line_size);
+		data->zdim = 1;
+		p = data->data_ptr;
+		for (y=0; y<data->ydim; y++) {	/* for each planar view fixed theta */
+			if (mptr->acs) byte_acs_read(mptr->fname,file_pos,line,line_size);
+			else {
+					/* skip to planar view and read */
+				if (fseek(mptr->fptr,file_pos,0) == -1) perror(mptr->fname);
+				if (fread(line,sizeof(short),data->xdim,mptr->fptr) != 
+					data->xdim) perror(mptr->fname);
+			}
+			if (ntohs(1) != 1) swab(line,p,line_size);
+			else memcpy(p,line,line_size);
+			p += line_size;
+			file_pos += line_size*z_elements;
+		}
+		data->data_max = find_smax((short*)data->data_ptr, npixels);
+		scansub = (Scan_subheader*)calloc(sizeof(Scan_subheader),1);
+		data->shptr = (caddr_t)scansub;
+		scansub->num_z_elements = 1;
+		scansub->scan_max = data->data_max;
+		scansub->num_angles = scan3Dsub->num_angles;
+		scansub->num_r_elements = scan3Dsub->num_r_elements;
+		scansub->x_resolution = scan3Dsub->x_resolution;
+		free(line);
+		return data;
+	case AttenCor:
+		attnsub = (Attn_subheader*)volume->shptr;
+		data->scale_factor = attnsub->scale_factor ;
+		data_size = npixels*sizeof(float);
+		file_pos = matdir.strtblk*MatBLKSIZE;
+		z_elements = attnsub->z_elements[group];
+		if (group > 0) z_elements /= 2;
+		if (slice >= z_elements) {
+			free_matrix_data(data);
+			return NULL;
+		}
+		for (i=0; i<group; i++) 
+			file_pos += attnsub->z_elements[i]*data_size;
+		if (segment < 0) file_pos += z_elements*data_size;
+
+		nblks = (data_size+(MatBLKSIZE-1))/MatBLKSIZE;
+		data_size = data->data_size = nblks * MatBLKSIZE;
+		if ((data->data_ptr = malloc(data_size)) == NULL) {
+			free_matrix_data(data);
+			return NULL;
+		}
+		fdata = (float*)data->data_ptr;
+		line_size = data->xdim*sizeof(float);
+		file_pos += slice*line_size;
+		line = malloc(line_size);
+		tmp_line = malloc(line_size);
+		data->zdim = 1;
+		p = (char*)fdata;
+		for (y=0; y<data->ydim; y++) {	/* for each planar view fixed theta */
+			if (mptr->acs) byte_acs_read(mptr->fname,file_pos,line,line_size);
+			else {
+					/* skip to planar view and read */
+				fseek(mptr->fptr,file_pos,0);
+				fread(line,sizeof(float),data->xdim,mptr->fptr);
+			}
+			if (ntohs(1) != 1) {
+				swab(line,tmp_line,line_size);
+				swaw(tmp_line,p,line_size/2);
+			}
+			else memcpy(p,line,line_size);
+			p += line_size;
+			file_pos += line_size*z_elements;
+		}
+		data->data_max = find_fmax(fdata,npixels);
+		free(line);
+		return data;
+	case PetVolume:
+		imagesub = (Image_subheader *) volume->shptr ;
+		data->data_type = imagesub->data_type ;
+		data->xdim = imagesub->x_dimension ;
+		data->ydim = imagesub->y_dimension ;
+		data->zdim = 1;
+		npixels = data->xdim*data->ydim;
+		imagesub->z_dimension = 1;
+		file_pos = matdir.strtblk*MatBLKSIZE;
+		data_size = npixels*sizeof(short);
+		file_pos += slice*data_size;
+		nblks = (data_size+(MatBLKSIZE-1))/MatBLKSIZE;
+		data_size = data->data_size = nblks * MatBLKSIZE;
+		if ((data->data_ptr = malloc(data_size)) == NULL) {
+			free_matrix_data(data);
+			return NULL;
+		}
+		line = malloc(data_size);
+		fseek(mptr->fptr,file_pos,0); /* jump to location of this slice*/
+		if (fread(line,sizeof(short),npixels,mptr->fptr) != npixels)
+			perror(mptr->fname);
+		if (ntohs(1) != 1) swab(line,data->data_ptr,data_size);
+		else memcpy(data->data_ptr,line,data_size);
+		free(line);
+		imagesub = (Image_subheader *) malloc(sizeof(Image_subheader));
+		memcpy(imagesub,volume->shptr,sizeof(Image_subheader));
+		imagesub->z_dimension = 1;
+		data->shptr = (caddr_t)imagesub;
+		imagesub->image_max = find_smax((short*)data->data_ptr,npixels);
+		data->data_max = imagesub->image_max * data->scale_factor;
+		return data;
+	default:
+		crash("matrix read slice not implemented for this data set\n");
+		return NULL;
+	}
+}
+@

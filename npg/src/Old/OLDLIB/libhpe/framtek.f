@@ -1,0 +1,174 @@
+C$Id: framtek.f,v 1.11 1994/06/16 21:02:27 ty7777 Exp $
+C$Log: framtek.f,v $
+c Revision 1.11  1994/06/16  21:02:27  ty7777
+c Added LIBPATH.
+c
+c Revision 1.10  1994/06/14  19:54:51  ty7777
+c Changed the type of PCFLAG from LOGICAL*1 to INTEGER*4.
+c
+c Revision 1.9  1994/06/09  19:08:55  ty7777
+c Added processing for PC display.
+c
+c Revision 1.8  1994/06/06  16:50:00  ty7777
+c Introduces x, y, width, and height for ramini ().
+c
+c Revision 1.7  1993/11/24  20:28:01  ty7777
+c Added color table number to RAMINI.
+c
+c Revision 1.6  1993/11/18  19:46:20  ty7777
+c Changed GETPAD.
+c
+c Revision 1.5  1993/11/18  16:53:37  ty7777
+c Before changing getpad.
+c
+c Revision 1.4  1993/11/11  16:22:34  ty7777
+c Added ABSSCALE instead of using it from spideram.inc.
+c
+C
+      SUBROUTINE RAMINI (XSTART, YSTART, WIDTH, HEIGHT, TBLNUM, PCFLAG, LIBPATH)
+
+      INTEGER*4   XSTART
+      INTEGER*4   YSTART
+      INTEGER*4   WIDTH
+      INTEGER*4   HEIGHT
+      INTEGER*4   TBLNUM
+      INTEGER*4   PCFLAG
+      CHARACTER*256 LIBPATH 
+
+      CALL XRAMINI (XSTART, YSTART, WIDTH, HEIGHT, TBLNUM, PCFLAG, LIBPATH)
+
+      RETURN
+      END
+
+      SUBROUTINE RAMWRITE (X, Y, XSIZE, YSIZE, SCAN, PLANES,
+     2			RMD, TEXT, FCODE)
+
+      INTEGER*4		X, Y, XSIZE, YSIZE, SCAN, PLANES, RMD
+      CHARACTER*1	TEXT (100)
+      INTEGER*2		FCODE
+
+      CALL XRAMWRITE (X, Y, SCAN, PLANES, TEXT, FCODE)
+
+      RETURN
+      END
+
+      SUBROUTINE RAMCLEAR (X, Y, SCAN, TEXT, LENGTH, FCODE)
+
+      INTEGER*4		X, Y, SCAN 
+      CHARACTER*1	TEXT (100)
+      INTEGER*2		LENGTH, FCODE
+
+      CALL XRAMCLEAR (X, Y, SCAN, TEXT, LENGTH, FCODE)
+
+      RETURN
+      END
+
+      SUBROUTINE RAMIMG (RAMIMAGE, XDIM, YDIM, XST, YST, 
+     2			SCAN, TYPE, PCFLAG, ABSSCALE, RMD)
+C
+      INTEGER*2 RAMIMAGE (XDIM, YDIM)
+      INTEGER*4	XDIM, YDIM, XST, YST, SCAN, TYPE, RMD
+      INTEGER*4 PCFLAG
+      LOGICAL*1 ABSSCALE
+C
+      CALL XRAMIMG (RAMIMAGE, XDIM, YDIM, XST, YST, 
+     2		SCAN, TYPE, PCFLAG, ABSSCALE)
+C
+      RETURN
+      END
+
+      SUBROUTINE RAMBERS (XSTART, YSTART, WIDTH, HEIGHT, PLANES, RMD)
+
+      INTEGER*4 XSTART
+      INTEGER*4 YSTART
+      INTEGER*4 WIDTH
+      INTEGER*4 HEIGHT
+      INTEGER*4 PLANES, RMD   
+
+      CALL XRAMBERS (XSTART, YSTART, WIDTH, HEIGHT, PLANES)
+
+      RETURN
+      END
+
+      SUBROUTINE RAMERASE(XMIN,YMIN,XMAX,YMAX,PLANES,RMD)
+
+      INTEGER*4 XMIN,YMIN,XMAX,YMAX,PLANES,RMD   
+
+      CALL XRAMERASE(XMIN,YMIN,XMAX,YMAX,PLANES)
+
+      RETURN
+      END
+
+      SUBROUTINE RAMERS (XST, YST, XLEN, YLEN, PLANES, RMD)
+
+      INTEGER*4 XST, YST, XLEN, YLEN, PLANES, RMD   
+
+      CALL XRAMERASE (XST, YST, XST + XLEN, YST + YLEN, 
+     2			PLANES, RMD)
+
+      RETURN
+      END
+
+      SUBROUTINE RAMCIR (CX, CY, R, PLANES, RMD)
+
+      INTEGER*4 CX, CY, R, PLANES, RMD    
+
+      CALL XRAMCIR (CX, CY, R, PLANES)
+
+      RETURN
+      END
+
+      SUBROUTINE RAMLIN (X1, Y1, X2, Y2, PLANES, RMD)
+
+      INTEGER*4 X1, Y1, X2, Y2, PLANES, RMD    
+
+      CALL XRAMLIN (X1, Y1, X2, Y2, PLANES)
+
+      RETURN
+      END
+
+      SUBROUTINE RAMPOINT (X, Y, PLANES, RMD)
+
+      INTEGER*4 X, Y, PLANES, RMD    
+
+      CALL XRAMPOINT (X, Y, PLANES)
+
+      RETURN
+      END
+
+      SUBROUTINE RAMRST (RMD)
+
+      INTEGER*4 RMD
+
+      CALL XRAMRST ()
+
+      RETURN
+      END
+
+      SUBROUTINE GETPAD (X, Y, FLAG, RMD)
+      INTEGER*4 X, Y
+      LOGICAL*1 FLAG (4)
+      INTEGER*4 RMD
+      INTEGER*4 XFLAG (4)
+      INTEGER*4 I
+
+      CALL XGETPAD (X, Y, XFLAG)
+
+      DO 101 I = 1, 4
+        IF (XFLAG (I) .NE. 0) THEN
+	  FLAG (I) = .TRUE.
+	ELSE
+	  FLAG (I) = .FALSE.
+        ENDIF
+101   CONTINUE
+
+      RETURN
+      END
+
+
+      SUBROUTINE SETCUR (X, Y, BL, VI, RMD)
+
+      INTEGER*4 X, Y, BL, VI, RMD
+
+      RETURN
+      END

@@ -1,0 +1,246 @@
+head	2.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.5
+date	2004.02.16.19.39.57;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.06.18.16.31.38;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.01.28.22.30.47;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Working version, initial checking in.
+@
+
+
+2.5
+log
+@Feb 2004
+@
+text
+@C$Id: l1pt2al.f,v 1.2 1998/06/18 16:31:38 tom Exp tom $
+C$Log: l1pt2al.f,v $
+c Revision 1.2  1998/06/18  16:31:38  tom
+c *** empty log message ***
+c
+c Revision 1.1  1994/01/28  22:30:47  ty7777
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   L1PT2AL.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         03-Jun-87
+C  Written for:  LOCATES.FTN
+C
+C  Modified by Tom Yang on 28-Jan-94 to port to the UNIX platform.
+C
+C  Intent:
+C     This subroutine computes atlas stereotaxic coordinates
+C     from PET region coordinates.
+C
+C     Order of conversion:
+C       1) Convert Units
+C       2) Translate
+C       3) Rotate
+C       4) Scale
+C
+C  Common Blocks from LOCATES.INC:
+C     **PETDATA   - tomograph parameters;         (read only)
+C     **REGION   - region analysis parameters     (read only)
+C     **SXRDATA  - skull xray parameters          (read only)
+C     **ATLDATA  - atlas region parameters        (write)
+C
+C  Variables Passed:
+C     N = region number (array index); (input)
+C     RLRATIO = ratio of R-L location to R-L width (scaling factor);
+C
+C  Variables:
+C     SLC1,SLC2 = integral slice numbers which are, respectively,
+C       <= and >= the computed slice location;
+C     YRATIO = scaling factor for A-P dimension (along AC-PC line);
+C     ZRATIO = scaling factor for Z dimension (perpendicular to AC-PC line);
+C     RL = scaled RL PET value;
+C     AP = scaled AP PET value;
+C     ZL = scaled Z PET value;
+C     RLP = best estimate of R-L width of PET slice;
+C     RLC = best estimate of R-L center of PET slice;
+C     P1,P2 = fractions to compute RLP and RLC (range: 0. to 1.0);
+C     DELTAY = delta Y from skull xray times magnification factor;
+C     DELTAZ = delta Z from skull xray times magnification factor;
+C
+C  Uses Subroutines:
+C     L1COORDS - get R-L atlas coordinate (using atlas table);
+C
+C  Called by:  L1PET2AL
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      SUBROUTINE L1PT2AL(N,RLRATIO)
+
+      INCLUDE 'locates.inc'
+
+      INTEGER*4   N,SLC1,SLC2
+      REAL        RLRATIO,YRATIO,ZRATIO,RL,RLA,AP,ZL,RLC,RLP,DELTAY,DELTAZ,P1,P2
+      CHARACTER*256 RCSHEADER
+
+      RCSHEADER = '$Id: l1pt2al.f,v 1.2 1998/06/18 16:31:38 tom Exp tom $'
+
+      ATLAS = ' '
+      YRATIO = APATLDIM/(MF*APXRAY)
+      ZRATIO = ZATLDIM/(MF*ZXRAY)
+      DELTAY = DAP*MF
+      DELTAZ = DZ*MF
+
+C  (Note that the sign of DZ is reversed from derivation)
+
+C  Convert and Translate Y and Z.  Estimate X as 0.0
+
+C  Best estimate of right-left width (RLP) and right-left center (RLC)
+C    (interpolate if between PET slices)
+
+      IF (SLICE(N).LE.1.0) THEN
+        RLP = RLPETDIM(1)
+        RLC = RLCTR(1)
+      ELSE IF (SLICE(N).GE.FLOAT(NSLICES)) THEN
+        RLP = RLPETDIM(NSLICES)
+        RLC = RLCTR(NSLICES)
+      ELSE
+        SLC1 = INT(SLICE(N))
+        SLC2 = SLC1+1
+        P1 = FLOAT(SLC2) - SLICE(N)
+        P2 = SLICE(N) - FLOAT(SLC1)
+        RLP = P1*RLPETDIM(SLC1) + P2*RLPETDIM(SLC2)
+        RLC = P1*RLCTR(SLC1) + P2*RLCTR(SLC2)
+      END IF
+
+      ZL = (FLOAT(REFSLICE) - SLICE(N))*SLCSIZE - DELTAZ
+      AP = (APCTR - APPET(N))*PIX + DELTAY
+      RL = (RLC - RLPET(N))*PIX
+
+C  Rotate and Scale Y and Z.
+
+      ZATLAS(N) = ZL*COS(ANGX)*COS(ANGY) - AP*SIN(ANGX)*COS(ANGY) + RL*SIN(ANGY)
+
+      APATLAS(N) = RL*COS(ANGY)*SIN(ANGZ)
+     &  + AP*(COS(ANGX)*COS(ANGZ) + SIN(ANGX)*SIN(ANGY)*SIN(ANGZ))
+     &  + ZL*(SIN(ANGX)*COS(ANGZ) - COS(ANGX)*SIN(ANGY)*SIN(ANGX))
+
+      ZATLAS(N) = ZATLAS(N)*ZRATIO
+      APATLAS(N) = APATLAS(N)*YRATIO
+
+C  Convert, Rotate, and Scale X
+
+      RLA = RL*COS(ANGY)*COS(ANGZ)
+     &   + AP*(SIN(ANGX)*SIN(ANGY)*COS(ANGZ) - COS(ANGX)*SIN(ANGZ))
+     &   - ZL*(COS(ANGX)*SIN(ANGY)*COS(ANGZ) + SIN(ANGX)*SIN(ANGZ))
+
+      RLRATIO = RLA/(PIX*RLP)
+      CALL L1COORDS(ZATLAS(N),RLRATIO,RLATLAS(N),REGNAME(N))
+
+      RETURN
+      END
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+C$Id: l1pt2al.f,v 1.1 1994/01/28 22:30:47 ty7777 Exp tom $
+d3 3
+d68 1
+a68 1
+      RCSHEADER = '$Id: l1pt2al.f,v 1.1 1994/01/28 22:30:47 ty7777 Exp tom $'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 4
+
+C$Id$
+C$Log$
+C
+d58 1
+a58 4
+C
+C
+C
+C
+d60 1
+a60 1
+C
+d62 1
+a62 2
+      REAL        RLRATIO,YRATIO,ZRATIO,RL,RLA,AP,ZL,RLC,RLP,
+     2            DELTAY,DELTAZ,P1,P2
+d64 3
+a66 3
+C
+      RCSHEADER = '$Id$'
+C
+d72 1
+a72 1
+C
+d74 1
+a74 1
+C
+d76 1
+a76 17
+C
+      ZL = (FLOAT(REFSLICE) - SLICE(N))*SLCSIZE - DELTAZ
+      AP = (APCTR - APPET(N))*PIX + DELTAY
+      RL = (RLC - RLPET(N))*PIX
+C
+C  Rotate and Scale Y and Z.
+C
+      ZATLAS(N) = ZL*COS(ANGX)*COS(ANGY) - AP*SIN(ANGX)*COS(ANGY)
+     2   + RL*SIN(ANGY)
+C
+      APATLAS(N) = RL*COS(ANGY)*SIN(ANGZ)
+     2  + AP*(COS(ANGX)*COS(ANGZ) + SIN(ANGX)*SIN(ANGY)*SIN(ANGZ))
+     3  + ZL*(SIN(ANGX)*COS(ANGZ) - COS(ANGX)*SIN(ANGY)*SIN(ANGX))
+C
+      ZATLAS(N) = ZATLAS(N)*ZRATIO
+      APATLAS(N) = APATLAS(N)*YRATIO
+C
+d79 1
+a79 1
+C
+d94 16
+a109 1
+C
+d111 1
+a111 1
+C
+d113 3
+a115 3
+     2   + AP*(SIN(ANGX)*SIN(ANGY)*COS(ANGZ) - COS(ANGX)*SIN(ANGZ))
+     3   - ZL*(COS(ANGX)*SIN(ANGY)*COS(ANGZ) + SIN(ANGX)*SIN(ANGZ))
+C
+d118 1
+a118 1
+C
+@

@@ -1,0 +1,231 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	94.03.01.16.58.32;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.02.28.16.38.40;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.02.28.16.35.17;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@First checking in, working version.
+@
+
+
+1.3
+log
+@Change the start_slice to start_slice - 1.
+@
+text
+@/*$Id: keepslice.c,v 1.2 1994/02/28 16:38:40 ty7777 Exp ty7777 $*/
+/*$Log: keepslice.c,v $
+ * Revision 1.2  1994/02/28  16:38:40  ty7777
+ * Change the error messages.
+ *
+ * Revision 1.1  1994/02/28  16:35:17  ty7777
+ * Initial revision
+ **/
+
+/*_________________________________________________________________
+  Description:	This program set to 0 all the slices that are not 
+		specified to be kept.
+
+  History:	Created by Tom Yang on 02/28/94. 
+_________________________________________________________________*/
+
+#include <fcntl.h>
+#include <petutil/imglist.h>
+#include <petutil/matrix.h>
+
+static char rcsid [] = "$Id: keepslice.c,v 1.2 1994/02/28 16:38:40 ty7777 Exp ty7777 $";
+
+main (argc, argv)
+	int	argc;
+	char	**argv;
+{
+
+	FILE		*recfp;
+	Image_subheader	**subheader_list;
+	Main_header	*main_header;
+	char		date [MAXLINE];
+	char		*output_imgfile;
+	char		*input_imgfile;
+	char		image_recfile [MAXPATH];
+	char		keep_range [MAXLINE];
+	char		recfile [MAXPATH];
+	char		*uid;
+	float		*image3d;
+	float		pixel_height;
+	float		pixel_width;
+	float		plane_separation;
+	int		i;
+	int		keep_start;
+	int		keep_end;
+	int		nx;
+	int		ny;
+	int		nz;
+	int		scanner;
+	long		dimension;
+	long		slice_dimension;
+	short		width;
+	short		height;
+	short		num_slices;
+	struct Matval	matval;
+
+	/*______________________________________________________
+	 * Get command line arguments.
+	 *______________________________________________________*/
+	input_imgfile		= argv [1];
+	output_imgfile		= argv [2];
+	keep_start		= atoi (argv [3]);
+	keep_end		= atoi (argv [4]);
+	sprintf (date, "%s %s %s %s %s %s", argv [5], argv [6], argv [7], argv [8], argv [9], argv [10]);
+	uid			= argv [11];
+
+	sprintf (keep_range, "%d-%d", keep_start, keep_end);
+	if (keep_start > keep_end)
+	{
+		i		= keep_start;
+		keep_start	= keep_end;
+		keep_end	= i;
+	}
+
+	/*______________________________________________________
+	 * Initialization for matval.
+	 *______________________________________________________*/
+	matval.frame	= 1;
+	matval.plane	= 1;
+	matval.gate	= 1;
+	matval.data	= 0;
+	matval.bed	= 0;
+
+	if (getimagedim (input_imgfile, matval, &scanner, &width, &height, &num_slices, 
+		&pixel_width, &pixel_height, &plane_separation) == FAIL) 
+	{
+		fprintf (stderr, "Error: image file %s cannot be found\n", input_imgfile);
+		exit (FAIL);
+	}
+
+	subheader_list	= (Image_subheader **) pkg_malloc (num_slices * sizeof (caddr_t), 
+			"keepslice", "subheader_list");
+
+	slice_dimension	= width * height;
+	dimension	= num_slices * slice_dimension;
+	image3d		= (float *) pkg_malloc (dimension * sizeof (float), "keepslice", "image3d");
+	main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+
+	if (getrealimg (input_imgfile, scanner, matval, width, height, num_slices, image3d, 
+		main_header, subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in getrealimg ().\n");
+		free (image3d);
+		exit (FAIL);
+	}
+
+	strcpy (recfile, output_imgfile);
+	strcat (recfile, REC_EXT);
+
+	recfp	= fopen (recfile, "w");
+	if (recfp == (FILE *) NULL)
+	{
+		fprintf (stderr, "Error in opening rec file %s\n", recfile);
+		exit (FAIL);
+	}
+	fprintf (recfp, "rec %s %s %s\n", output_imgfile, date, uid);
+	fprintf (recfp, "keepslice %s %s %s\n", input_imgfile, output_imgfile, keep_range);
+	fprintf (recfp, "   %s\n\n", rcsid);
+
+	/*
+ 	 * Copy the image rec files if there are any.
+ 	 */
+	strcpy (image_recfile, input_imgfile);
+	strcat (image_recfile, REC_EXT);
+	copyrec (recfp, image_recfile);
+	fprintf (recfp, "endrec\n");
+	fclose (recfp);
+
+	/*
+	 * Clear the two ends of the image data.
+	 */
+	for (i = 0; i < (keep_start - 1) * slice_dimension; i++)
+	{
+		image3d [i]	= 0.0;
+	}
+
+	for (i = keep_end * slice_dimension; i < dimension; i++)
+	{
+		image3d [i]	= 0.0;
+	}
+
+	/*
+	 * Write the 3D array to filter file.
+	 */
+	strncpy (main_header->physician_name, rcsid + 5, sizeof (main_header->physician_name) - 1);
+	strncpy (main_header->operator_name, date, sizeof (main_header->operator_name) - 1);
+
+	if (writerealimg (output_imgfile, matval, width, height, num_slices, image3d, 
+			main_header, subheader_list) == FAIL)
+	{
+		fprintf (stderr, "Error in writerealimg ().\n");
+	}
+
+	for (i = 0; i < num_slices; i++)
+	{
+		free (subheader_list [i]);
+	}
+	free (subheader_list);
+	free (main_header);
+	free (image3d);
+}
+@
+
+
+1.2
+log
+@Change the error messages.
+@
+text
+@d1 1
+a1 1
+/*$Id: keepslice.c,v 1.1 1994/02/28 16:35:17 ty7777 Exp ty7777 $*/
+d3 3
+d21 1
+a21 1
+static char rcsid [] = "$Id: keepslice.c,v 1.1 1994/02/28 16:35:17 ty7777 Exp ty7777 $";
+d131 1
+a131 1
+	for (i = 0; i < keep_start * slice_dimension; i++)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d18 1
+a18 1
+static char rcsid [] = "$Id$";
+d87 2
+a88 2
+	subheader_list	= (Image_subheader **) pkg_malloc (num_slices * sizeof (caddr_t), "gauss", 
+						"subheader_list");
+@

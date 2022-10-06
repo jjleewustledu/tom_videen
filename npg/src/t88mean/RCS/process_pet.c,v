@@ -1,0 +1,488 @@
+head	1.11;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.11
+date	95.11.10.18.48.14;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	94.10.03.16.17.13;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	94.05.18.15.53.30;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	93.09.29.16.01.52;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	93.08.26.17.26.35;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.08.20.20.24.07;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.08.19.22.55.48;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.08.12.22.58.02;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.08.06.15.16.49;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.06.24.18.57.01;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial test version of tal88 reproduces the output of the current hd6mean
+everywhere within the 100x100 inner array of pixels.
+Tested by TOV 24-Jun-93 using p2000ho1 (PETT VI image)
+@
+
+
+1.11
+log
+@remove petutil parent directory from include statements
+@
+text
+@/* $Log: process_pet.c,v $
+ * Revision 1.10  1994/10/03  16:17:13  tom
+ * standard format with indent
+ *
+ * Revision 1.9  1994/05/18  15:53:30  tom
+ * changed $Id: process_pet.c,v 1.10 1994/10/03 16:17:13 tom Exp tom $ to $Header: /export/home/npggw/tom/src/t88mean/RCS/process_pet.c,v 1.10 1994/10/03 16:17:13 tom Exp tom $
+ *
+ * Revision 1.8  1993/09/29  16:01:52  tom
+ * added metabolic processing and hdr files (cbf, cbv, oef, cmor2)
+ *
+ * Revision 1.7  1993/08/26  17:26:35  tom
+ * changed atlas y-dim to used 5 mm between brain and skull
+ *
+ * Revision 1.6  1993/08/20  20:24:07  tom
+ * first version with Talairach 1988 atlas
+ *
+ * Revision 1.5  1993/08/19  22:55:48  tom
+ * a corrected hd6mean-atlas version of t88mean
+ *
+ * Revision 1.4  1993/08/12  22:58:02  tom
+ * equivalent to hd6mean
+ *
+ * Revision 1.3  1993/08/06  15:16:49  tom
+ * reads prm and list files
+ *
+ * Revision 1.1  1993/06/24  18:57:01  tom
+ * Initial revision
+ *
+ */
+/*	========================================================================
+ *	Module:			process_pet.c
+ *	Date:			28-Apr-93
+ *	Author:			Tom Videen
+ *	Description:	process an image for CBF, CBV, or counts and scale the result
+ *
+ *	Input:
+ *		pet         -   PET input image
+ *		nx, ny, nz  -   dimensions of PET image
+ *		scaler      -   normalization factor
+ *		process     -   type of processing
+ *		filename    -   image file name
+ *		recfp       -   rec file pointer
+ *		hdr         -   hdr structure (use: ntype, bvfactor1, aflow1, bflow1)
+ *	 
+ *	Output:
+ *		pet  -   processed, scaled PET image
+ *		writes hdr file used to rec file
+ *	 
+ *	Returns:
+ *		SUCCEED or FAIL
+ *	 
+ *	Algorithm:
+ *	1)  If (process = "none" OR process = "") then only scale:
+ *		pet = scaler * pet
+ *	2)  Read the hdr file associated with pet
+ *	3)  If (process = "cbv") and (hdr.ntype = 3) then process as blood volume:
+ *		(scaled by 100 to maintain dynamic range with integer pixels)
+ *		pet = 100 * scaler * hdr.bvfactor1 * pet
+ *	4)  If (process = "cbf")  and (hdr.ntype = 2 or 4) then process as blood flow:
+ *		(scaled by 50 to maintain dynamic range with integer pixels)
+ *		pet = 50 * scaler * pet * ((hdr.aflow1 * pet) + hdr.bflow1))
+ *	 
+ *	Reference:
+ *		Videen et al (1987) JCBFM 7:513-516.
+ *	
+ *	History:
+ *		22-Sep-93	Modified to search for hdr file and write the filename
+ *					of the hdr file used to the rec file.
+ *	========================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <petutil.h>	/* HEADER_DATA, SUCCEED, FAIL	*/
+#include "atlas.h"				/* REAL_SLICE */
+
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/t88mean/RCS/process_pet.c,v 1.10 1994/10/03 16:17:13 tom Exp tom $";
+
+/*	-----------------------
+ *	Function process_pet
+ *	-----------------------
+ */
+int 
+process_pet (pet, nx, ny, nz, scaler, process, filename, recfp, hdr)
+	REAL_SLICE     *pet;	/* PET input image */
+	short           nx;	/* x-dimension of PET-array */
+	short           ny;	/* y-dimension of PET-array */
+	short           nz;	/* z-dimension of PET-array/* no. of slices */
+	float           scaler;	/* normalization factor */
+	char            process[10];	/* type of processing */
+	char           *filename;	/* image file name */
+	FILE           *recfp;	/* rec file pointer */
+	HEADER_DATA    *hdr;	/* hdr structure */
+
+{
+	short           i, j, k;
+	float           x;	/* temp for pet */
+	float           sx;	/* combined scaler */
+	char           *c;
+	char           *hdrname;/* hdr filename */
+	char           *local_hdrname;	/* local hdr filename */
+
+/*
+ *	Counts
+ */
+
+	if (strcmp (process, "none") == 0 || strcmp (process, "") == 0) {
+		for (k = 0; k < nz; ++k) {
+			for (j = 0; j < ny; ++j) {
+				for (i = 0; i < nx; ++i) {
+					pet[k][j][i] = scaler * pet[k][j][i];
+				}
+			}
+		}
+		return (SUCCEED);
+	}
+/*
+ *	Read HDR file
+ */
+
+	hdrname = (char *) calloc (MAXLENGTH, sizeof (char));
+	local_hdrname = (char *) calloc (MAXLENGTH, sizeof (char));
+
+	strcpy (hdrname, filename);
+	c = strrchr (hdrname, '.');
+	if (c == NULL)
+		c = strrchr (hdrname, '\0');
+	strcpy (c, ".hdr");
+
+	c = strrchr (hdrname, '/');
+	if (c == NULL)
+		strcpy (local_hdrname, hdrname);
+	else
+		strcpy (local_hdrname, c + 1);
+
+	if (gethdr (local_hdrname, hdr) == 0) {
+		printf ("HDR = %s\n", local_hdrname);
+		fprintf (recfp, "%s\n", local_hdrname);
+	} else if (gethdr (hdrname, hdr) == 0) {
+		printf ("HDR = %s\n", hdrname);
+		fprintf (recfp, "%s\n", hdrname);
+	} else {
+		printf ("Error:  HDR not found\n as %s\n or %s\n", local_hdrname, hdrname);
+		free (hdrname);
+		free (local_hdrname);
+		return (FAIL);
+	}
+	free (hdrname);
+	free (local_hdrname);
+
+/*
+ *	Cerebral Blood Volume  (scaled by 100 to maintain dynamic range with integer pixels)
+ */
+
+	if (strcmp (process, "cbv") == 0 && hdr->ntype == 3) {
+		sx = scaler * 100 * hdr->bvfactor1;
+		for (k = 0; k < nz; ++k) {
+			for (j = 0; j < ny; ++j) {
+				for (i = 0; i < nx; ++i) {
+					pet[k][j][i] = sx * pet[k][j][i];
+				}
+			}
+		}
+		return (SUCCEED);
+	}
+/*
+ *	Cerebral Blood Flow  (scaled by 50 to maintain dynamic range with integer pixels)
+ */
+
+	if (strcmp (process, "cbf") == 0 && (hdr->ntype == 2 || hdr->ntype == 4)) {
+		sx = scaler * 50;
+		for (k = 0; k < nz; ++k) {
+			for (j = 0; j < ny; ++j) {
+				for (i = 0; i < nx; ++i) {
+					x = pet[k][j][i];
+					pet[k][j][i] = sx * x * ((hdr->aflow1 * x) + hdr->bflow1);
+				}
+			}
+		}
+		return (SUCCEED);
+	}
+/*
+ *	Not processed
+ */
+
+	return (FAIL);
+}
+@
+
+
+1.10
+log
+@standard format with indent
+@
+text
+@d2 3
+d6 1
+a6 1
+ * changed $Id$ to $Header$
+d75 1
+a75 1
+#include <petutil/petutil.h>	/* HEADER_DATA, SUCCEED, FAIL	*/
+d78 1
+a78 1
+static char     rcsid[] = "$Header: /export/home/npggw/tom/src/t88mean/RCS/process_pet.c,v 1.9 1994/05/18 15:53:30 tom Exp tom $";
+@
+
+
+1.9
+log
+@changed $Id$ to $Header$
+@
+text
+@d1 4
+a4 1
+/* $Log:	process_pet.c,v $
+d28 3
+a30 3
+ *	Module:				process_pet.c
+ *	Date:					28-Apr-93
+ *	Author:				Tom Videen
+d32 31
+d64 2
+a65 2
+ *		Modified 22-Sep-93 to search for hdr file and write the filename
+ *		  of the hdr file used to the rec file.
+d72 2
+a73 2
+#include <petutil/petutil.h>
+#include "atlas.h"
+d75 1
+a75 1
+static char rcsid []= "$Header: process_pet.c,v 1.1 92/12/30 04:21:03 tom Exp $";
+d81 11
+a91 1
+int process_pet (pet, nx, ny, nz, scaler, process, filename, recfp, hdr)
+a92 10
+	REAL_SLICE	*pet;			/* PET input image */
+	short 	nx;						/* x-dimension of PET-array */
+	short 	ny;						/* y-dimension of PET-array */
+	short		nz;						/* z-dimension of PET-array/* no. of slices */
+	float		scaler;				/* normalization factor */
+	char		process[10];	/* type of processing */
+	char		*filename;		/* image file name */
+	FILE		*recfp;				/* rec file pointer */
+	HEADER_DATA	*hdr;			/* hdr structure */
+
+d94 6
+a99 6
+	short		i, j, k;
+	float		x;							/* temp for pet */
+	float		sx;							/* combined scaler */
+	char		*c;
+	char		*hdrname;				/* hdr filename */
+	char		*local_hdrname;	/* local hdr filename */
+d105 1
+a105 1
+	if (strcmp (process, "none") == 0 || strcmp (process, "" ) == 0) {
+d113 1
+a113 1
+		return 0;
+a114 1
+
+d132 1
+a132 1
+		strcpy (local_hdrname, c+1);
+d141 1
+a141 1
+		printf ("Error:  HDR not found\n as %s\n or %s\n",local_hdrname, hdrname);
+d153 1
+a153 1
+	if (strcmp (process, "cbv")  == 0 && hdr->ntype == 3) {
+d162 1
+a162 1
+		return 0;
+a163 1
+
+d178 1
+a178 1
+		return 0;
+a179 1
+
+@
+
+
+1.8
+log
+@added metabolic processing and hdr files (cbf, cbv, oef, cmor2)
+@
+text
+@d1 4
+a4 1
+/* $Log: process_pet.c,v $
+d41 1
+a41 1
+static char rcsid []= "$Id: process_pet.c,v 1.7 1993/08/26 17:26:35 tom Exp tom $"; 
+@
+
+
+1.7
+log
+@changed atlas y-dim to used 5 mm between brain and skull
+@
+text
+@d2 3
+d27 2
+d33 1
+d38 1
+a38 1
+static char rcsid []= "$Id: process_pet.c,v 1.6 1993/08/20 20:24:07 tom Exp tom $"; 
+d44 1
+a44 1
+int process_pet (pet, nx, ny, nz, scaler, process, filename)
+d53 2
+d58 5
+a62 3
+	float		x;						/* temp for pet */
+	float		sx;						/* combined scaler */
+	HEADER_DATA	hdr;			/* hdr structure */
+d81 1
+d83 2
+a84 2
+	if (gethdr (filename) > 0)
+		return 1;
+d86 29
+a114 1
+ *	Cerebral Blood Volume
+d117 2
+a118 2
+	if (strcmp (process, "cbv")  == 0 && hdr.ntype == 3) {
+		sx = scaler * 100 * hdr.bvfactor1;
+d130 1
+a130 1
+ *	Cerebral Blood Flow
+d133 1
+a133 1
+	if (strcmp (process, "cbf") == 0 && (hdr.ntype == 2 || hdr.ntype == 4)) {
+d139 1
+a139 1
+					pet[k][j][i] = sx * x * ((hdr.aflow1 * x) + hdr.bflow1);
+d150 1
+a150 1
+	return 1;
+@
+
+
+1.6
+log
+@first version with Talairach 1988 atlas
+@
+text
+@d2 3
+d32 1
+a32 1
+static char rcsid []= "$Id: process_pet.c,v 1.5 1993/08/19 22:55:48 tom Exp tom $"; 
+@
+
+
+1.5
+log
+@a corrected hd6mean-atlas version of t88mean
+@
+text
+@d2 3
+d29 1
+a29 1
+static char rcsid []= "$Id: process_pet.c,v 1.4 1993/08/12 22:58:02 tom Exp tom $"; 
+@
+
+
+1.4
+log
+@equivalent to hd6mean
+@
+text
+@d2 3
+d26 1
+a26 1
+static char rcsid []= "$Id: process_pet.c,v 1.3 1993/08/06 15:16:49 tom Exp tom $"; 
+@
+
+
+1.3
+log
+@reads prm and list files
+@
+text
+@d2 3
+d23 1
+a23 1
+static char rcsid []= "$Id: process_pet.c,v 1.1 1993/06/24 18:57:01 tom Exp tom $"; 
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$
+d16 1
+d20 1
+a20 1
+static char rcsid []= "$Id$"; 
+d27 1
+d46 1
+a46 1
+	if (process == "none" || process == NULL) {
+d66 1
+a66 1
+	if (process == "cbv" && hdr.ntype == 3) {
+d82 1
+a82 1
+	if (process == "cbf" && (hdr.ntype == 2 || hdr.ntype == 4)) {
+@

@@ -1,0 +1,878 @@
+<PRE><LI><H2>FILE: rtsacs.c</H2>/* @(#)rtsacs.c	1.2 2/19/93 */
+
+#ifndef	lint
+static char sccsid[]="@(#)rtsacs.c	1.2 2/19/93 Copyright 1991 CTI Pet Systems, Inc.";
+#endif	lint
+
+#include  &lt;<A NAME=7 HREF="stdio.h.html">stdio.h</A>&gt; 
+#include  &lt;<A NAME=8 HREF="sys/time.h.html">sys/time.h</A>&gt; 
+#include  &lt;<A NAME=9 HREF="sys/types.h.html">sys/types.h</A>&gt; 
+#include  &lt;<A NAME=10 HREF="sys/socket.h.html">sys/socket.h</A>&gt; 
+#include  &lt;<A NAME=11 HREF="netdb.h.html">netdb.h</A>&gt; 
+#include  &lt;<A NAME=12 HREF="rpc/rpc.h.html">rpc/rpc.h</A>&gt; 
+#include  &lt;<A NAME=13 HREF="errno.h.html">errno.h</A>&gt; 
+#include  "<A NAME=14 HREF="matrix.h.html">matrix.h</A>" 
+#include  "<A NAME=15 HREF="ecatRts.h.html">ecatRts.h</A>" 
+#include  "<A NAME=16 HREF="ecatAcs.h.html">ecatAcs.h</A>" 
+
+extern	int	errno ;
+
+static CLIENT *acqClient;
+static struct timeval acqTimeout;
+
+bool_t <a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (command, inProc, inArg, outProc, outArg)
+int command;
+xdrproc_t inProc, outProc;
+caddr_t *inArg, *outArg;
+{
+    int status;
+
+    if (!acqClient)
+	<a href="rts_cmd.c.html#initAcqTcpClient">initAcqTcpClient</a> ();
+    status = (int) clnt_call (acqClient, command, inProc, inArg, outProc, outArg, acqTimeout);
+    if ((status != (int) RPC_SUCCESS) && (errno != EINTR))
+    {
+	clnt_perror (acqClient, "acqClient_error");
+	return (FALSE);
+    }
+    return (TRUE);
+}
+
+
+int <a href="rts_cmd.c.html#initAcqTcpClient">initAcqTcpClient</a> ()
+{
+    struct sockaddr_in sock;
+    struct hostent *hp;
+    char	*host, *getenv() ;
+
+    int channel, status, response;
+    u_long program = RTS_SERVER, version = RTS_SERVER_VERSION;
+/*
+    hp = gethostbyname (defaults_get_string ("/Ecat/EcatAcqServer", "localhost", 0));
+*/
+    host = getenv("VXHOST") ;
+    if (!host) host="acs" ;    
+    hp = gethostbyname (host);
+    memcpy ((caddr_t) & sock.sin_addr, hp-&gt;h_addr, hp->h_length);
+    sock.sin_family = AF_INET;
+    sock.sin_port = 0;
+    channel = RPC_ANYSOCK;
+    acqTimeout.tv_sec = 60;
+    acqTimeout.tv_usec = 0;
+
+    if ((acqClient = clnttcp_create (&sock, program, version, &channel,
+		1024, 1024)) == NULL)
+    {
+	clnt_pcreateerror ("acqClient_error");
+	return (0);
+    }
+    return (1);
+}
+
+int <a href="rts_cmd.c.html#rts_rmhd">rts_rmhd</a> (file, mh)
+char *file;
+<a href="ecatRts.h.html#XMAIN_HEAD">XMAIN_HEAD</a> *mh;
+{
+    <a href="ecatRts.h.html#RMHD_resp">RMHD_resp</a> rdResp;
+
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (RMHD, xdr_wrapstring, &file, xdr_RMHD_resp, &rdResp)))
+	return (FALSE);
+    memcpy (<a href="_convert.html#mh">mh</a>, &rdResp.xmain_head, sizeof (XMAIN_HEAD));
+    return (rdResp.status);
+}
+
+int <a href="rts_cmd.c.html#rts_wmhd">rts_wmhd</a> (file, mh)
+char *file;
+<a href="ecatRts.h.html#XMAIN_HEAD">XMAIN_HEAD</a> *mh;
+{
+    <a href="ecatRts.h.html#WMHD_args">WMHD_args</a> wrArgs;
+    int resp;
+
+    wrArgs.file_name = file;
+    memcpy (&wrArgs.xmain_head, <a href="_convert.html#mh">mh</a>, sizeof (XMAIN_HEAD));
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (WMHD, xdr_WMHD_args, &wrArgs, xdr_int, &resp)))
+	resp = FALSE;
+    return (resp);
+}
+
+int <a href="rts_cmd.c.html#rts_rshd">rts_rshd</a> (file, matnum, buffer)
+char *file;
+int matnum;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#RSHD_args">RSHD_args</a> rdArgs;
+    <a href="ecatRts.h.html#RSHD_resp">RSHD_resp</a> rdResp;
+
+    rdArgs.file_name = file;
+    rdArgs.matnum = matnum;
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (RSHD, xdr_RSHD_args, &rdArgs, xdr_RSHD_resp, &rdResp)))
+	return (FALSE);
+    memcpy (buffer, rdResp.rhdat, 512);
+    return (rdResp.status);
+}
+
+int <a href="rts_cmd.c.html#rts_wshd">rts_wshd</a> (file, matnum, buffer)
+char *file;
+int matnum;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#WSHD_args">WSHD_args</a> wrArgs;
+    int resp;
+
+    wrArgs.file_name = file;
+    wrArgs.matnum = matnum;
+    memcpy (wrArgs.whdat, buffer, 512);
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (WSHD, xdr_WSHD_args, &wrArgs, xdr_int, &resp)))
+	return (FALSE);
+    return (resp);
+}
+
+int <a href="rts_cmd.c.html#rts_rdat">rts_rdat</a> (file, matnum, buffer, bufferSize)
+char *file;
+int matnum, *bufferSize;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#RDAT_args">RDAT_args</a> rdArgs;
+    <a href="ecatRts.h.html#RDAT_resp">RDAT_resp</a> rdResp;
+
+    rdArgs.file_name = file;
+    rdArgs.matnum = matnum;
+    rdResp.rdat.rdat_val = (char *) buffer;
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (RDAT, xdr_RDAT_args, &rdArgs, xdr_RDAT_resp, &rdResp)))
+	return (FALSE);
+    *bufferSize = rdResp.rdat.rdat_len;
+    return (rdResp.status);
+}
+
+int <a href="rts_cmd.c.html#rts_wdat">rts_wdat</a> (file, matnum, dataType, buffer, bufferSize)
+char *file;
+int matnum, dataType, bufferSize;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#WDAT_args">WDAT_args</a> wrArgs;
+    int resp;
+
+    wrArgs.file_name = file;
+    wrArgs.matnum = matnum ;
+    wrArgs.data_type = dataType;
+    wrArgs.wdat.wdat_len = bufferSize;
+    wrArgs.wdat.wdat_val = (char *) calloc (1, bufferSize);
+    memcpy (wrArgs.wdat.wdat_val, buffer, bufferSize);
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (WDAT, xdr_WDAT_args, &wrArgs, xdr_int, &resp)))
+	resp = FALSE;
+    cfree (wrArgs.wdat.wdat_val);
+    return (resp);
+}
+
+<LI><H3><a name="convertScanHeaderFromVax">convertScanHeaderFromVax (buf, h)</a></H3>
+short int *buf;
+<a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *h;
+{
+    int i;
+    float <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> ();
+	short b[MatBLKSIZE/2];
+
+    <a href="machine_indep.c.html#SWAB">SWAB</a> (buf, b, MatBLKSIZE);
+    h-&gt;data_type = b[63];
+    h-&gt;dimension_1 = b[66];
+    h-&gt;dimension_2 = b[67];
+    h-&gt;smoothing = b[68];
+    h-&gt;processing_code = b[69];
+    h-&gt;sample_distance = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 73);
+    h-&gt;isotope_halflife = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 83);
+    h-&gt;frame_duration_sec = b[85];
+    h-&gt;gate_duration = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 86);
+    h-&gt;r_wave_offset = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 88);
+    h-&gt;scale_factor = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 91);
+    h-&gt;scan_min = b[96];
+    h-&gt;scan_max = b[97];
+    h-&gt;prompts = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 98);
+    h-&gt;delayed = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 100);
+    h-&gt;multiples = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 102);
+    h-&gt;net_trues = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 104);
+    for (i = 0; i &lt; 16; i++)
+    {
+	h-&gt;cor_singles[i] = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 158 + 2 * i);
+	h-&gt;uncor_singles[i] = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 190 + 2 * i);
+    }
+    h-&gt;tot_avg_cor = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 222);
+    h-&gt;tot_avg_uncor = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 224);
+    h-&gt;total_coin_rate = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 226);
+    h-&gt;frame_start_time = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 228);
+    h-&gt;frame_duration = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 230);
+    h-&gt;loss_correction_fctr = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 232);
+}
+
+<LI><H3><a name="convertImageHeaderFromVax">convertImageHeaderFromVax (buf, h)</a></H3>
+short int *buf;
+<a href="matrix.h.html#Image_subheader">Image_subheader</a> *h;
+{
+    int i;
+	short b[MatBLKSIZE/2];
+    float <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> ();
+
+    strncpy (h-&gt;annotation, b + 420, 40);
+    <a href="machine_indep.c.html#SWAB">SWAB</a> (buf, b, MatBLKSIZE);
+    h-&gt;data_type = b[63];
+    h-&gt;num_dimensions = b[64];
+    h-&gt;dimension_1 = b[66];
+    h-&gt;dimension_2 = b[67];
+    h-&gt;x_origin = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 80);
+    h-&gt;y_origin = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 82);
+    h-&gt;recon_scale = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 84);
+    h-&gt;quant_scale = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 86);
+    h-&gt;image_min = b[88];
+    h-&gt;image_max = b[89];
+    h-&gt;pixel_size = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 92);
+    h-&gt;slice_width = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 94);
+    h-&gt;frame_duration = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 96);
+    h-&gt;frame_start_time = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 98);
+    h-&gt;slice_location = b[100];
+    h-&gt;recon_start_hour = b[101];
+    h-&gt;recon_start_minute = b[102];
+    h-&gt;recon_start_sec = b[103];
+    h-&gt;recon_duration = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 104);
+    h-&gt;filter_code = b[118];
+    h-&gt;scan_matrix_num = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 119);
+    h-&gt;norm_matrix_num = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 121);
+    h-&gt;atten_cor_matrix_num = <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> (b, 123);
+    h-&gt;image_rotation = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 148);
+    h-&gt;plane_eff_corr_fctr = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 150);
+    h-&gt;decay_corr_fctr = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 152);
+    h-&gt;loss_corr_fctr = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 154);
+    h-&gt;processing_code = b[188];
+    h-&gt;quant_units = b[190];
+    h-&gt;recon_start_day = b[191];
+    h-&gt;recon_start_month = b[192];
+    h-&gt;recon_start_year = b[193];
+    h-&gt;ecat_calibration_fctr = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 194);
+    h-&gt;well_counter_cal_fctr = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 196);
+    for (i = 0; i &lt; 6; i++)
+	h-&gt;filter_params[i] = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (b, 198 + 2 * i);
+}
+
+<LI><H3><a name="convertAttnHeaderFromVax">convertAttnHeaderFromVax (buf, header)</a></H3>
+short int *buf;
+<a href="matrix.h.html#Attn_subheader">Attn_subheader</a> *header;
+{
+    int <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> ();
+	short b[MatBLKSIZE/2];
+    float <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> ();
+
+    <a href="machine_indep.c.html#SWAB">SWAB</a> (buf, b, MatBLKSIZE);
+    header-&gt;data_type = bufr[63];
+    header-&gt;attenuation_type = bufr[64];
+    header-&gt;dimension_1 = bufr[66];
+    header-&gt;dimension_2 = bufr[67];
+    header-&gt;scale_factor = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 91);
+    header-&gt;x_origin = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 93);
+    header-&gt;y_origin = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 95);
+    header-&gt;x_radius = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 97);
+    header-&gt;y_radius = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 99);
+    header-&gt;tilt_angle = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 101);
+    header-&gt;attenuation_coeff = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 103);
+    header-&gt;sample_distance = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 105);
+}
+
+<LI><H3><a name="convertNormHeaderFromVax">convertNormHeaderFromVax (buf, h)</a></H3>
+short int *buf;
+<a href="matrix.h.html#Norm_subheader">Norm_subheader</a> *h;
+{
+    int <a href="matrix_64.c.html#get_vax_long">get_vax_long</a> ();
+	short b[MatBLKSIZE/2];
+    float <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> ();
+
+    <a href="machine_indep.c.html#SWAB">SWAB</a> (buf, b, MatBLKSIZE);
+    h-&gt;data_type = bufr[63];
+    h-&gt;dimension_1 = bufr[66];
+    h-&gt;dimension_2 = bufr[67];
+    h-&gt;scale_factor = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 91);
+    h-&gt;norm_hour = bufr[93];
+    h-&gt;norm_minute = bufr[94];
+    h-&gt;norm_second = bufr[95];
+    h-&gt;norm_day = bufr[96];
+    h-&gt;norm_month = bufr[97];
+    h-&gt;norm_year = bufr[98];
+    h-&gt;fov_source_width = <a href="matrix_64.c.html#get_vax_float">get_vax_float</a> (bufr, 99);
+}
+
+<LI><H3><a name="convertScanHeaderToVax">convertScanHeaderToVax (buf, header)</a></H3>
+short int *buf;
+<a href="matrix.h.html#Scan_subheader">Scan_subheader</a> *header;
+{
+    int i;
+	short bufr[MatBLKSIZE/2];
+
+    for (i = 0; i &lt; 256; bufr[i++] = 0);
+    bufr[0] = 256;
+    bufr[1] = 1;
+    bufr[2] = 22;
+    bufr[3] = -1;
+    bufr[4] = 25;
+    bufr[5] = 62;
+    bufr[6] = 79;
+    bufr[7] = 106;
+    bufr[24] = 37;
+    bufr[25] = -1;
+    bufr[61] = 17;
+    bufr[62] = -1;
+    bufr[78] = 27;
+    bufr[79] = -1;
+    bufr[105] = 52;
+    bufr[106] = -1;
+    bufr[63] = header-&gt;data_type;
+    bufr[66] = header-&gt;dimension_1;	/* x dimension */
+    bufr[67] = header-&gt;dimension_2;	/* y_dimension */
+    bufr[68] = header-&gt;smoothing;
+    bufr[69] = header-&gt;processing_code;
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;sample_distance, &bufr[73]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;isotope_halflife, &bufr[83]);
+    bufr[85] = header-&gt;frame_duration_sec;
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;gate_duration, &bufr[86]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;r_wave_offset, &bufr[88]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;scale_factor, &bufr[91]);
+    bufr[96] = header-&gt;scan_min;
+    bufr[97] = header-&gt;scan_max;
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;prompts, &bufr[98]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;delayed, &bufr[100]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;multiples, &bufr[102]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;net_trues, &bufr[104]);
+    for (i = 0; i &lt; 16; i++)
+    {
+	<a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;cor_singles[i], &bufr[158 + 2 * i]);
+	<a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;uncor_singles[i], &bufr[190 + 2 * i]);
+    };
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;tot_avg_cor, &bufr[222]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;tot_avg_uncor, &bufr[224]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;total_coin_rate, &bufr[226]);	/* total coin rate */
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;frame_start_time, &bufr[228]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;frame_duration, &bufr[230]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;loss_correction_fctr, &bufr[232]);
+    <a href="machine_indep.c.html#SWAB">SWAB</a> (bufr, buf, MatBLKSIZE);
+}
+
+<LI><H3><a name="convertImageHeaderToVax">convertImageHeaderToVax (buf, header)</a></H3>
+short int *buf;
+<a href="matrix.h.html#Image_subheader">Image_subheader</a> *header;
+{
+    char *bbufr;
+	short bufr[MatBLKSIZE/2];
+    int i;
+
+    for (i = 0; i &lt; 256; bufr[i++] = 0);
+    bbufr = (char *) buf;
+    bufr[63] = header-&gt;data_type;
+    bufr[64] = header-&gt;num_dimensions;
+    bufr[66] = header-&gt;dimension_1;
+    bufr[67] = header-&gt;dimension_2;
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;x_origin, &bufr[80]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;y_origin, &bufr[82]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;recon_scale, &bufr[84]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;quant_scale, &bufr[86]);
+    bufr[88] = header-&gt;image_min;
+    bufr[89] = header-&gt;image_max;
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;pixel_size, &bufr[92]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;slice_width, &bufr[94]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;frame_duration, &bufr[96]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;frame_start_time, &bufr[98]);
+    bufr[100] = header-&gt;slice_location;
+    bufr[101] = header-&gt;recon_start_hour;
+    bufr[102] = header-&gt;recon_start_minute;
+    bufr[103] = header-&gt;recon_start_sec;
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;recon_duration, &bufr[104]);
+    bufr[118] = header-&gt;filter_code;
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;scan_matrix_num, &bufr[119]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;norm_matrix_num, &bufr[121]);
+    <a href="matrix_64.c.html#sunltovaxl">sunltovaxl</a> (header-&gt;atten_cor_matrix_num, &bufr[123]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;image_rotation, &bufr[148]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;plane_eff_corr_fctr, &bufr[150]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;decay_corr_fctr, &bufr[152]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;loss_corr_fctr, &bufr[154]);
+    bufr[188] = header-&gt;processing_code;
+    bufr[190] = header-&gt;quant_units;
+    bufr[191] = header-&gt;recon_start_day;
+    bufr[192] = header-&gt;recon_start_month;
+    bufr[193] = header-&gt;recon_start_year;
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;ecat_calibration_fctr, &bufr[194]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;well_counter_cal_fctr, &bufr[196]);
+    for (i = 0; i &lt; 6; i++)
+	<a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;filter_params[i], &bufr[198 + 2 * i]);
+    <a href="machine_indep.c.html#SWAB">SWAB</a> (bufr, buf, MatBLKSIZE);
+    strcpy (bbufr + 420, header-&gt;annotation);
+}
+
+<LI><H3><a name="convertAttnHeaderToVax">convertAttnHeaderToVax (buf, header)</a></H3>
+short int *buf;
+<a href="matrix.h.html#Attn_subheader">Attn_subheader</a> *header;
+{
+	short bufr[MatBLKSIZE/2];
+    int i;
+
+    for (i = 0; i &lt; 256; bufr[i++] = 0);
+    bufr[0] = 256;
+    bufr[1] = 1;
+    bufr[2] = 22;
+    bufr[3] = -1;
+    bufr[4] = 25;
+    bufr[5] = 62;
+    bufr[6] = 79;
+    bufr[7] = 106;
+    bufr[24] = 37;
+    bufr[25] = -1;
+    bufr[61] = 17;
+    bufr[62] = -1;
+    bufr[78] = 27;
+    bufr[79] = -1;
+    bufr[105] = 52;
+    bufr[106] = -1;
+    bufr[63] = header-&gt;data_type;
+    bufr[64] = header-&gt;attenuation_type;
+    bufr[66] = header-&gt;dimension_1;
+    bufr[67] = header-&gt;dimension_2;
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;scale_factor, &bufr[91]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;x_origin, &bufr[93]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;y_origin, &bufr[95]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;x_radius, &bufr[97]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;y_radius, &bufr[99]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;tilt_angle, &bufr[101]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;attenuation_coeff, &bufr[103]);
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;sample_distance, &bufr[105]);
+    <a href="machine_indep.c.html#SWAB">SWAB</a> (bufr, buf, 512);
+}
+
+<LI><H3><a name="convertNormHeaderToVax">convertNormHeaderToVax (buf, header)</a></H3>
+short int *buf;
+<a href="matrix.h.html#Norm_subheader">Norm_subheader</a> *header;
+{
+    int i;
+	short bufr[MatBLKSIZE/2];
+
+    for (i = 0; i &lt; 256; bufr[i++] = 0);
+    bufr[0] = 256;
+    bufr[1] = 1;
+    bufr[2] = 22;
+    bufr[3] = -1;
+    bufr[4] = 25;
+    bufr[5] = 62;
+    bufr[6] = 79;
+    bufr[7] = 106;
+    bufr[24] = 37;
+    bufr[25] = -1;
+    bufr[61] = 17;
+    bufr[62] = -1;
+    bufr[78] = 27;
+    bufr[79] = -1;
+    bufr[105] = 52;
+    bufr[106] = -1;
+    bufr[63] = header-&gt;data_type;
+    bufr[66] = header-&gt;dimension_1;
+    bufr[67] = header-&gt;dimension_2;
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;scale_factor, &bufr[91]);
+    bufr[93] = header-&gt;norm_hour;
+    bufr[94] = header-&gt;norm_minute;
+    bufr[95] = header-&gt;norm_second;
+    bufr[96] = header-&gt;norm_day;
+    bufr[97] = header-&gt;norm_month;
+    bufr[98] = header-&gt;norm_year;
+    <a href="machine_indep.c.html#ftovaxf">ftovaxf</a> (header-&gt;fov_source_width, &bufr[99]);
+    <a href="machine_indep.c.html#SWAB">SWAB</a> (bufr, buf, 512);
+}
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_RMHD_resp">xdr_RMHD_resp</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#RMHD_resp">RMHD_resp</a> *objp;
+{
+	if (!xdr_int(xdrs, &objp-&gt;status)) {
+		return (FALSE);
+	}
+	if (!<a href="matrix_xdr.c.html#xdr_XMAIN_HEAD">xdr_XMAIN_HEAD</a>(xdrs, &objp-&gt;xmain_head)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+
+
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_WMHD_args">xdr_WMHD_args</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#WMHD_args">WMHD_args</a> *objp;
+{
+	if (!xdr_string(xdrs, &objp-&gt;file_name, ~0)) {
+		return (FALSE);
+	}
+	if (!<a href="matrix_xdr.c.html#xdr_XMAIN_HEAD">xdr_XMAIN_HEAD</a>(xdrs, &objp-&gt;xmain_head)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+
+
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_RSHD_args">xdr_RSHD_args</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#RSHD_args">RSHD_args</a> *objp;
+{
+	if (!xdr_string(xdrs, &objp-&gt;file_name, ~0)) {
+		return (FALSE);
+	}
+	if (!xdr_int(xdrs, &objp-&gt;matnum)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+
+
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_RSHD_resp">xdr_RSHD_resp</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#RSHD_resp">RSHD_resp</a> *objp;
+{
+	if (!xdr_int(xdrs, &objp-&gt;status)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;rhdat, 512)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+
+
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_WSHD_args">xdr_WSHD_args</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#WSHD_args">WSHD_args</a> *objp;
+{
+	if (!xdr_string(xdrs, &objp-&gt;file_name, ~0)) {
+		return (FALSE);
+	}
+	if (!xdr_int(xdrs, &objp-&gt;matnum)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;whdat, 512)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+
+
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_RDAT_args">xdr_RDAT_args</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#RDAT_args">RDAT_args</a> *objp;
+{
+	if (!xdr_string(xdrs, &objp-&gt;file_name, ~0)) {
+		return (FALSE);
+	}
+	if (!xdr_int(xdrs, &objp-&gt;matnum)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+
+
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_RDAT_resp">xdr_RDAT_resp</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#RDAT_resp">RDAT_resp</a> *objp;
+{
+	if (!xdr_int(xdrs, &objp-&gt;status)) {
+		return (FALSE);
+	}
+	if (!xdr_bytes(xdrs, (char **)&objp-&gt;rdat.rdat_val, (u_int *)&objp->rdat.rdat_len, ~0)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+
+
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_WDAT_args">xdr_WDAT_args</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#WDAT_args">WDAT_args</a> *objp;
+{
+	if (!xdr_string(xdrs, &objp-&gt;file_name, ~0)) {
+		return (FALSE);
+	}
+	if (!xdr_int(xdrs, &objp-&gt;matnum)) {
+		return (FALSE);
+	}
+	if (!xdr_int(xdrs, &objp-&gt;data_type)) {
+		return (FALSE);
+	}
+	if (!xdr_bytes(xdrs, (char **)&objp-&gt;wdat.wdat_val, (u_int *)&objp->wdat.wdat_len, ~0)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_XMAIN_HEAD">xdr_XMAIN_HEAD</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#XMAIN_HEAD">XMAIN_HEAD</a> *objp;
+{
+	if (!xdr_opaque(xdrs, objp-&gt;original_file_name, 20)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;sw_version)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;data_type)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;system_type)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;file_type)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;node_id, 10)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;scan_start_day)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;scan_start_month)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;scan_start_year)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;scan_start_hour)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;scan_start_minute)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;scan_start_second)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;isotope_code, 8)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;isotope_halflife)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;radiopharmaceutical, 32)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;gantry_tilt)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;gantry_rotation)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;bed_elevation)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;rot_source_speed)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;wobble_speed)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;transm_source_type)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;axial_fov)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;transaxial_fov)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;transaxial_samp_mode)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;coin_samp_mode)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;axial_samp_mode)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;calibration_factor)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;calibration_units)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;compression_code)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;study_name, 12)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;patient_id, 16)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;patient_name, 32)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;patient_sex, 1)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;patient_age, 10)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;patient_height, 10)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;patient_weight, 10)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;patient_dexterity, 1)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;physician_name, 32)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;operator_name, 32)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;study_description, 32)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;acquisition_type)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;bed_type)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;septa_type)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;facility_name, 20)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;num_planes)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;num_frames)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;num_gates)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;num_bed_pos)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;init_bed_position)) {
+		return (FALSE);
+	}
+	if (!xdr_vector(xdrs, (char *)objp-&gt;bed_offset, 15, sizeof(float), xdr_float)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;plane_separation)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;lwr_sctr_thres)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;lwr_true_thres)) {
+		return (FALSE);
+	}
+	if (!xdr_short(xdrs, &objp-&gt;upr_true_thres)) {
+		return (FALSE);
+	}
+	if (!xdr_float(xdrs, &objp-&gt;collimator)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;user_process_code, 10)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+int <a href="rts_cmd.c.html#rtsRblk">rtsRblk</a> (file, blockNumber, buffer)
+char *file;
+int blockNumber;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#RBLK_args">RBLK_args</a> rbArgs;
+    <a href="ecatRts.h.html#RBLK_resp">RBLK_resp</a> rbResp;
+
+    rbArgs.filename = file;
+    rbArgs.block_number = blockNumber;
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (RBLK, xdr_RBLK_args, &rbArgs, xdr_RBLK_resp, &rbResp)))
+	return (FALSE);
+    memcpy (buffer, rbResp.rblk, 512);
+    return (rbResp.status);
+}
+
+int <a href="rts_cmd.c.html#rtsWblk">rtsWblk</a> (file, blockNumber, buffer)
+char *file;
+int blockNumber;
+caddr_t buffer;
+{
+    <a href="ecatRts.h.html#WBLK_args">WBLK_args</a> wbArgs;
+    int resp;
+
+    wbArgs.filename = file;
+    wbArgs.block_number = blockNumber;
+    memcpy (wbArgs.wblk, buffer, 512);
+    if (!(<a href="rts_cmd.c.html#doAcsAcqCommand">doAcsAcqCommand</a> (WBLK, xdr_WBLK_args, &wbArgs, xdr_int, &resp)))
+	return (FALSE);
+    return (resp);
+}
+
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_RBLK_args">xdr_RBLK_args</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#RBLK_args">RBLK_args</a> *objp;
+{
+	if (!xdr_string(xdrs, &objp-&gt;filename, ~0)) {
+		return (FALSE);
+	}
+	if (!xdr_int(xdrs, &objp-&gt;block_number)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+
+
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_WBLK_args">xdr_WBLK_args</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#WBLK_args">WBLK_args</a> *objp;
+{
+	if (!xdr_string(xdrs, &objp-&gt;filename, ~0)) {
+		return (FALSE);
+	}
+	if (!xdr_int(xdrs, &objp-&gt;block_number)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;wblk, 512)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}
+
+bool_t
+<a href="matrix_xdr.c.html#xdr_RBLK_resp">xdr_RBLK_resp</a>(xdrs, objp)
+	XDR *xdrs;
+	<a href="ecatRts.h.html#RBLK_resp">RBLK_resp</a> *objp;
+{
+	if (!xdr_int(xdrs, &objp-&gt;status)) {
+		return (FALSE);
+	}
+	if (!xdr_opaque(xdrs, objp-&gt;rblk, 512)) {
+		return (FALSE);
+	}
+	return (TRUE);
+}

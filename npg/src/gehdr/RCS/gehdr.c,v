@@ -1,0 +1,206 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.16.15.43.37;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2003.02.11.16.34.19;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.02.10.20.22.15;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/* $Log: gehdr.c,v $
+ * Revision 1.2  2003/02/11  16:34:19  tom
+ * show imageset info
+ *
+ * Revision 1.1  2003/02/10  20:22:15  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			gehdr.c
+ *	Date:			Feb 2003
+ *	Author:			Tom Videen
+ *	Description:	Read header fields from  GEMS PET Export file
+ *	===============================================================================
+ */
+/*@@unused@@*/
+static char     rcsid[] = "$Header: /home/npggw/tom/src/gehdr/RCS/gehdr.c,v 1.2 2003/02/11 16:34:19 tom Exp tom $";
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <myvalues.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	char          **ge_read_fields ();
+	int             get_field_number ();
+
+	FILE           *fd_ge;			 /* GE Export file */
+	char           *GE_img;			 /* GEMS Export filename */
+	char           *line;
+
+	char          **pat;
+	char          **exm;
+	char          **scn;
+	char          **frm;
+	char          **set;
+	char          **img;
+
+	char          **patstr;
+	char          **exmstr;
+	char          **scnstr;
+	char          **frmstr;
+	char          **setstr;
+	char          **imgstr;
+
+	int             patnum;
+	int             exmnum;
+	int             scnnum;
+	int             frmnum;
+	int             setnum;
+	int             imgnum;
+
+	long            slices, frames;
+	long            i, k;
+	int             n;
+	int             debug = 0;
+	int             maxlen = 256;
+
+	line = (char *) calloc (maxlen + 1, sizeof (char));
+	if (line == NULL) return (ERROR);
+
+/*	Get command line arguments and initialize filenames:	*/
+
+	if (argc != 2) {
+		fprintf (stdout, "Usage: gehdr GE_img\n");
+		return (ERROR);
+	}
+	GE_img = argv[1];
+	if ((fd_ge = fopen (GE_img, "r")) == 0) {
+		fprintf (stderr, "ERROR [gehdr]: Unable to open %s\n", GE_img);
+		return (ERROR);
+	}
+
+/*	Read Header Field Names	*/
+
+	if (fgets (line, maxlen, fd_ge) == 0) {
+		fprintf (stderr, "ERROR [gehdr]: reading %s\n", GE_img);
+		return (ERROR);
+	}
+	if (strstr (line, "GEMS PET Export File") == NULL) {
+		fprintf (stderr, "ERROR [gehdr]: not a GEMS PET Export File  %s\n", GE_img);
+		return (ERROR);
+	}
+	if (fgets (line, maxlen, fd_ge) == 0) {
+		fprintf (stderr, "ERROR [gehdr]: reading %s\n", GE_img);
+		return (ERROR);
+	}
+	fprintf (stderr, "Institution: %s", line);
+
+	patstr = ge_read_fields (fd_ge, &patnum, "patient|", "exam|", line, debug);
+	exmstr = ge_read_fields (fd_ge, &exmnum, "exam|", "scan|", line, debug);
+	scnstr = ge_read_fields (fd_ge, &scnnum, "scan|", "frame|", line, debug);
+	frmstr = ge_read_fields (fd_ge, &frmnum, "frame|", "imageset|", line, debug);
+	setstr = ge_read_fields (fd_ge, &setnum, "imageset|", "image|", line, debug);
+	imgstr = ge_read_fields (fd_ge, &imgnum, "image|", "patient|", line, debug);
+
+/*	Read Header Values	*/
+
+	pat = ge_read_fields (fd_ge, &n, "patient|", "exam|", line, debug);
+	exm = ge_read_fields (fd_ge, &n, "exam|", "scan|", line, debug);
+	scn = ge_read_fields (fd_ge, &n, "scan|", "frame|", line, debug);
+
+	frames = 0;
+	while (strncmp (line, "imageset|", 9) != 0) {
+		frm = ge_read_fields (fd_ge, &n, "frame|", "dummy", line, debug);
+		frames++;
+		for (i = 0; i < 3; i++) {
+			if (fgets (line, maxlen, fd_ge) == 0) {
+				fprintf (stderr, "ERROR [ge2if]: reading %s after Frame field %ld\n", GE_img, frames + 1);
+				return (ERROR);
+			}
+		}
+	}
+	k = get_field_number (frmstr, frmnum, "slice_count");
+	if (k >= 0)
+		slices = atoi (frm[k]);
+	fprintf (stderr, "Frames =%3ld  Planes =%3ld\n", frames, slices);
+	set = ge_read_fields (fd_ge, &n, "imageset|", "blob", line, debug);
+	img = ge_read_fields (fd_ge, &n, "image|", "blob", line, debug);
+
+/*	Print Header Values	*/
+
+	fprintf (stdout, "------------------------------------------\n%2d %s\n", 0, patstr[0]);
+	for (n = 1; n < patnum - 1; n++)
+		fprintf (stdout, "%2d %20s  %s\n", n, patstr[n], pat[n]);
+	fprintf (stdout, "------------------------------------------\n%2d %s\n", 0, exmstr[0]);
+	for (n = 1; n < exmnum - 1; n++)
+		fprintf (stdout, "%2d %20s  %s\n", n, exmstr[n], exm[n]);
+	fprintf (stdout, "------------------------------------------\n%2d %s\n", 0, scnstr[0]);
+	for (n = 1; n < scnnum - 1; n++)
+		fprintf (stdout, "%2d %20s  %s\n", n, scnstr[n], scn[n]);
+	fprintf (stdout, "------------------------------------------\n%2d %s\n", 0, frmstr[0]);
+	for (n = 1; n < frmnum - 1; n++)
+		fprintf (stdout, "%2d %20s  %s\n", n, frmstr[n], frm[n]);
+	fprintf (stdout, "------------------------------------------\n%2d %s\n", 0, setstr[0]);
+	for (n = 1; n < setnum - 1; n++)
+		fprintf (stdout, "%2d %20s  %s\n", n, setstr[n], set[n]);
+	fprintf (stdout, "------------------------------------------\n%2d %s\n", 0, imgstr[0]);
+	for (n = 1; n < imgnum - 1; n++)
+		fprintf (stdout, "%2d %20s  %s\n", n, imgstr[n], img[n]);
+
+	return (OK);
+}
+@
+
+
+1.2
+log
+@show imageset info
+@
+text
+@d2 3
+d15 2
+a16 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/gehdr/RCS/gehdr.c,v 1.1 2003/02/10 20:22:15 tom Exp tom $";
+d62 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/gehdr/RCS/gehdr.c,v 1.2 2003/02/10 19:09:53 tom Exp $";
+d132 3
+@

@@ -1,0 +1,608 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	2004.02.16.15.34.40;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2003.02.11.16.08.00;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2003.02.10.19.09.53;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2003.02.07.21.41.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Feb 2004
+@
+text
+@/* $Log: ge2if.c,v $
+ * Revision 1.3  2003/02/11  16:08:00  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2003/02/10  19:09:53  tom
+ * read images with missing frames and with planes out of order
+ *
+ * Revision 1.1  2003/02/07  21:41:07  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			ge2if.c
+ *	Date:			Feb 2003
+ *	Author:			Tom Videen
+ *	Description:	Convert GEMS PET Export file into Interfile format.
+ *	===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ge2if/RCS/ge2if.c,v 1.3 2003/02/11 16:08:00 tom Exp tom $";
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <myvalues.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+	char          **ge_read_fields ();
+	int             get_field_number ();
+
+	FILE           *fd_ge;			 /* input GE Export file */
+	FILE           *fd_if;			 /* output Interfile Format header */
+	FILE           *fd_img;			 /* output Interfile image  */
+
+	char           *GE_img;			 /* input GEMS Export image filename */
+	char           *IF_img;			 /* output Interfile image filename */
+	char           *IF_hdr;			 /* output Interfile Format header filename */
+	char           *ptr;
+	char           *ch;
+	char           *line;
+	char            version[5];
+	char            program_date[12];
+
+	char          **pat;
+	char          **exm;
+	char          **scn;
+	char          **frm;
+	char          **set;
+	char          **img;
+
+	char          **patstr;
+	char          **exmstr;
+	char          **scnstr;
+	char          **frmstr;
+	char          **setstr;
+	char          **imgstr;
+
+	int             patnum;
+	int             exmnum;
+	int             scnnum;
+	int             frmnum;
+	int             setnum;
+	int             imgnum;
+
+	char            system[20];
+	char            institution[50];
+	char            study_date[20];
+	char            pid[20];
+	char            fid[100];
+	long            dim[4];
+	long            plnsize;
+	float           global_max;
+	float           global_min;
+	float           pixsize[3];
+	double          fac;
+	float          *frmtime;
+	long           *duration;
+
+	long            slice, frame;
+	long            slc;
+	long            i, j, k;
+	int             n;
+	int             debug;
+
+	short          *pln;			 /* input image plane */
+	float         **vol;			 /* output image frame */
+
+	int             maxlen = 256;
+
+/*  Initializations	*/
+
+	dim[0] = 128;
+	dim[1] = 128;
+	pixsize[0] = 4.25;
+	pixsize[1] = 0.75;
+	pixsize[2] = 0.75;
+	line = (char *) calloc (maxlen + 1, sizeof (char));
+	if (line == NULL) return (ERROR);
+	plnsize = dim[0] * dim[1];
+	fac = 1;
+
+	ptr = strstr (rcsid, "v ");
+	ptr += 2;
+	(void) strcpy (version, "    ");
+	if (ptr != NULL)
+		(void) strncpy (version, ptr, 4);
+	if (ptr != NULL) {
+		ptr = strstr (ptr, " ");
+		ptr++;
+	}
+	(void) strcpy (program_date, "           ");
+	if (ptr != NULL) 
+		(void) strncpy (program_date, ptr, 10);
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+	ptr = strchr (program_date, '/');
+	*ptr = ':';
+
+/*	Get command line arguments and initialize filenames:	*/
+
+	if (argc != 5) {
+		fprintf (stdout, "Usage: ge2if GE_img IF_img IF_hdr debug\n");
+		return (ERROR);
+	}
+	GE_img = argv[1];
+	IF_img = argv[2];
+	IF_hdr = argv[3];
+	debug = atoi (argv[4]);
+
+	if ((fd_ge = fopen (GE_img, "r")) == 0) {
+		fprintf (stderr, "ERROR [ge2if]: Unable to open %s\n", GE_img);
+		return (ERROR);
+	}
+	if ((fd_if = fopen (IF_hdr, "w")) == 0) {
+		fprintf (stderr, "ERROR [ge2if]: Unable to create Interfile Format header %s\n", IF_hdr);
+		return (ERROR);
+	}
+	if ((fd_img = fopen (IF_img, "w")) == 0) {
+		fprintf (stderr, "ERROR [ge2if]: Unable to create Interfile image %s\n", IF_img);
+		return (ERROR);
+	}
+
+/*	Read Header Field Names	*/
+
+	if (fgets (line, maxlen, fd_ge) == 0) {
+		fprintf (stderr, "ERROR [ge2if]: reading %s\n", GE_img);
+		return (ERROR);
+	}
+	if (strstr (line, "GEMS PET Export File") == NULL) {
+		fprintf (stderr, "ERROR [ge2if]: not a GEMS PET Export File  %s\n", GE_img);
+		return (ERROR);
+	}
+	if (fgets (line, maxlen, fd_ge) == 0) {
+		fprintf (stderr, "ERROR [ge2if]: reading %s\n", GE_img);
+		return (ERROR);
+	}
+	ch = strrchr (line, ' ');
+	ch = NULL;
+	(void) strncpy (institution, line, 49);
+	fprintf (stderr, "Institution: %s", institution);
+
+	patstr = ge_read_fields (fd_ge, &patnum, "patient|", "exam|", line, debug);
+	exmstr = ge_read_fields (fd_ge, &exmnum, "exam|", "scan|", line, debug);
+	scnstr = ge_read_fields (fd_ge, &scnnum, "scan|", "frame|", line, debug);
+	frmstr = ge_read_fields (fd_ge, &frmnum, "frame|", "imageset|", line, debug);
+	setstr = ge_read_fields (fd_ge, &setnum, "imageset|", "image|", line, debug);
+	imgstr = ge_read_fields (fd_ge, &imgnum, "image|", "patient|", line, debug);
+
+/*	Read Header Values	*/
+
+	dim[0] = 0;
+	dim[1] = 0;
+	dim[2] = 0;
+	dim[3] = 0;
+	pixsize[0] = 0;
+	pixsize[1] = 0;
+	pixsize[2] = 0;
+
+	pat = ge_read_fields (fd_ge, &n, "patient|", "exam|", line, debug);
+	k = get_field_number (patstr, patnum, "patient_datetime");
+	if (k >= 0)
+		(void) strcpy (study_date, pat[k]);
+	k = get_field_number (patstr, patnum, "patient_identifier");
+	if (k >= 0)
+		(void) strcpy (pid, pat[k]);
+
+	exm = ge_read_fields (fd_ge, &n, "exam|", "scan|", line, debug);
+	k = get_field_number (exmstr, exmnum, "scanner_desc");
+	if (k >= 0)
+		(void) strncpy (system, exm[k], 19);
+	k = get_field_number (exmstr, exmnum, "hospital_name");
+	if (k >= 0)
+		(void) strncpy (institution, exm[k], 49);
+
+	scn = ge_read_fields (fd_ge, &n, "scan|", "frame|", line, debug);
+
+	dim[3] = 1;
+	while (strncmp (line, "imageset|", 9) != 0) {
+		frm = ge_read_fields (fd_ge, &n, "frame|", "dummy", line, debug);
+		dim[3]++;
+		for (i = 0; i < 3; i++) {
+			if (fgets (line, maxlen, fd_ge) == 0) {
+				fprintf (stderr, "ERROR [ge2if]: reading %s after Frame field %ld\n", GE_img, dim[3]);
+				return (ERROR);
+			}
+		}
+	}
+	dim[3]--;
+	k = get_field_number (frmstr, frmnum, "slice_count");
+	if (k >= 0)
+		dim[2] = atoi (frm[k]);
+	fprintf (stderr, "Frames =%3ld  Planes =%3ld\n", dim[3], dim[2]);
+	if (dim[2] > 35)
+		dim[2] = 35;
+	frmtime = (float *) calloc (dim[3], sizeof (float));
+	if (frmtime == NULL) return (ERROR);
+	duration = (long *) calloc (dim[3], sizeof (long));
+	if (duration == NULL) return (ERROR);
+
+	set = ge_read_fields (fd_ge, &n, "imageset|", "blob", line, debug);
+
+/*
+ *	Read Images
+ *	Note: frames are not numbered; planes may be missing or out-of-order;
+ *	Therefore, read planes until no more are found; place by slice_number field;
+ *	Store frame_id and increment frame whenever it changes;
+ */
+
+	frame = -1;
+	slice = 0;
+	global_max = 0;
+	global_min = 0;
+
+	while ((img = ge_read_fields (fd_ge, &n, "image|", "blob", line, debug)) != NULL) {
+		if (debug > 0)
+			fprintf (stderr, "Frame %ld  Slice %ld\n", frame, slice);
+		if (frame < 0) {
+			k = get_field_number (imgstr, imgnum, "image_array_height");
+			if (k >= 0)
+				dim[0] = atol (img[k]);
+			k = get_field_number (imgstr, imgnum, "image_array_width");
+			if (k >= 0)
+				dim[1] = atol (img[k]);
+			k = get_field_number (imgstr, imgnum, "pixel_width");
+			if (k >= 0)
+				pixsize[0] = atof (img[k]);
+			k = get_field_number (imgstr, imgnum, "pixel_height");
+			if (k >= 0)
+				pixsize[1] = atof (img[k]);
+			k = get_field_number (imgstr, imgnum, "image_thickness");
+			if (k >= 0)
+				pixsize[2] = atof (img[k]);
+			plnsize = dim[0] * dim[1];
+			pln = (short *) calloc (plnsize, sizeof (short));
+			if (pln == NULL) return (ERROR);
+			vol = (float **) calloc (dim[2], sizeof (float *));
+			if (vol == NULL) return (ERROR);
+			for (slc = 0; slc < dim[2]; slc++)
+				vol[slc] = (float *) calloc (plnsize, sizeof (float));
+		}
+		k = get_field_number (imgstr, imgnum, "frame_id");
+		if (k >= 0) {
+			if (strcmp (fid, img[k]) != 0) {	/* New Frame */
+				(void) strcpy (fid, img[k]);
+				if (frame >= 0) {
+					fprintf (stderr, "Frame:%3ld    Max:  %f\n", frame + 1, global_max);
+					for (slc = 0; slc < dim[2]; slc++) {
+						if (fwrite (vol[slc], sizeof (float), plnsize, fd_img) == 0) {
+							fprintf (stderr, "ERROR [ge2if]: writing %s plane %ld\n", GE_img, slc);
+							return (ERROR);
+						}
+					}
+				}
+				frame++;
+				k = get_field_number (imgstr, imgnum, "image_time");
+				if (k >= 0)
+					frmtime[frame] = atol (img[k]);
+				k = get_field_number (imgstr, imgnum, "image_duration");
+				if (k >= 0)
+					duration[frame] = atol (img[k]);
+			}
+		}
+		k = get_field_number (imgstr, imgnum, "slice_number");
+		if (k >= 0) {
+			slice = atoi (img[k]) - 1;
+		} else {
+			fprintf (stderr, "ERROR [ge2if]: slice_number not found for frame %ld of  %s\n", frame, GE_img);
+			return (ERROR);
+		}
+		if (slice >= dim[2] || slice < 0) {
+			fprintf (stderr, "ERROR [ge2if]: Out-of-Range slice_number= %ld  Planes= %ld\n", slice, dim[2]);
+			return (ERROR);
+		}
+		k = get_field_number (imgstr, imgnum, "scale_factor");
+		if (k >= 0)
+			fac = atof (img[k]);
+		if (fgets (line, maxlen, fd_ge) == 0) {
+			fprintf (stderr, "ERROR [ge2if]: reading %s\n", GE_img);
+			return (ERROR);
+		}
+		if ((fread (pln, sizeof (short), plnsize, fd_ge)) != plnsize)
+			fprintf (stderr, "ERROR [ge2if]: Reading %s plane %ld\n", GE_img, slice);
+		for (j = 0; j < plnsize; j++) {
+			vol[slice][j] = fac * pln[j];
+			if (vol[slice][j] > global_max)
+				global_max = vol[slice][j];
+			if (vol[slice][j] < global_min)
+				global_min = vol[slice][j];
+		}
+	}
+	fprintf (stderr, "Frame:%3ld    Max:  %f\n", frame + 1, global_max);
+	for (slc = 0; slc < dim[2]; slc++) {
+		if (fwrite (vol[slc], sizeof (float), plnsize, fd_img) == 0) {
+			fprintf (stderr, "ERROR [ge2if]: writing %s plane %ld\n", GE_img, slc);
+			return (ERROR);
+		}
+	}
+	free (pln);
+	for (k = 0; k < dim[2]; k++)
+		free (vol[k]);
+	(void) fclose (fd_img);
+
+/* Create Interfile Format header file	*/
+
+	fprintf (fd_if, "INTERFILE :=\n");
+	fprintf (fd_if, "image modality     := PET\n");
+	fprintf (fd_if, "originating system := %s\n", system);
+	fprintf (fd_if, "version of keys    := 3.3\n");
+	fprintf (fd_if, "date of keys       := 1992:01:01\n");
+	fprintf (fd_if, "conversion program := ge2if\n");
+	fprintf (fd_if, "program version    := %s\n", version);
+	fprintf (fd_if, "program date       := %s\n", program_date);
+	fprintf (fd_if, ";\n");
+	fprintf (fd_if, "GENERAL DATA :=\n");
+	fprintf (fd_if, "original institution := %s\n", institution);
+	fprintf (fd_if, "data starting block  := 0\n");
+	fprintf (fd_if, "name of data file    := %s\n", IF_img);
+	fprintf (fd_if, "patient ID := %s\n", pid);
+	fprintf (fd_if, "study ID   := PET\n");
+	fprintf (fd_if, ";\n");
+	fprintf (fd_if, "GENERAL IMAGE DATA :=\n");
+	fprintf (fd_if, "type of data := tomographic\n");
+	fprintf (fd_if, "total number of images := %ld\n", dim[2] * dim[3]);
+	fprintf (fd_if, "study date := %s\n", study_date);
+	fprintf (fd_if, "imagedata byte order   := bigendian\n");
+	fprintf (fd_if, ";\n");
+	fprintf (fd_if, "PET STUDY :=\n");
+	fprintf (fd_if, "process status := reconstructed\n");
+	if (dim[3] == 1)
+		fprintf (fd_if, "number of dimensions := 3\n");
+	else
+		fprintf (fd_if, "number of dimensions := 4\n");
+	fprintf (fd_if, "number of slices := %ld\n", dim[2]);
+	fprintf (fd_if, "matrix size [1] := %ld\n", dim[0]);
+	fprintf (fd_if, "matrix size [2] := %ld\n", dim[1]);
+	fprintf (fd_if, "matrix size [3] := %ld\n", dim[2]);
+	fprintf (fd_if, "matrix size [4] := %ld\n", dim[3]);
+	fprintf (fd_if, "number format   := float\n");
+	fprintf (fd_if, "number of bytes per pixel  := 4\n");
+	fprintf (fd_if, "scaling factor (mm/pixel) [1]  := %f\n", pixsize[0]);
+	fprintf (fd_if, "scaling factor (mm/pixel) [2]  := %f\n", pixsize[1]);
+	fprintf (fd_if, "scaling factor (mm/pixel) [3]  := %f\n", pixsize[2]);
+	fprintf (fd_if, "maximum pixel count := %f\n", global_max);
+	fprintf (fd_if, "minimum pixel count := %f\n", global_min);
+	fprintf (fd_if, "matrix initial element [1] := left\n");
+	fprintf (fd_if, "matrix initial element [2] := anterior\n");
+	fprintf (fd_if, "matrix initial element [3] := superior\n");
+	fprintf (fd_if, "END OF INTERFILE :=\n");
+	(void) fclose (fd_if);
+	fprintf (stdout, "Converted: %s to %s\n", GE_img, IF_img);
+	return (OK);
+}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ge2if/RCS/ge2if.c,v 1.2 2003/02/10 19:09:53 tom Exp tom $";
+d99 1
+d106 6
+a111 3
+	(void) strncpy (version, ptr, 4);
+	ptr = strstr (ptr, " ");
+	ptr++;
+d113 2
+a114 1
+	(void) strncpy (program_date, ptr, 10);
+d217 1
+d219 1
+d256 1
+d258 1
+@
+
+
+1.2
+log
+@read images with missing frames and with planes out of order
+@
+text
+@d2 3
+d15 1
+a15 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ge2if/RCS/ge2if.c,v 1.1 2003/02/07 21:41:07 tom Exp tom $";
+a67 2
+	char            tracer[20];
+	char            nuclide[20];
+d73 1
+a74 1
+	double          fac;
+d152 1
+a152 1
+	(void) strcpy (institution, line);
+d183 4
+a186 1
+		(void) strcpy (system, exm[k]);
+a188 6
+	k = get_field_number (scnstr, scnnum, "tracer_name");
+	if (k >= 0)
+		(void) strcpy (tracer, scn[k]);
+	k = get_field_number (scnstr, scnnum, "radionuclide_name");
+	if (k >= 0)
+		(void) strcpy (nuclide, scn[k]);
+d208 2
+a209 2
+	frmtime = (float *) calloc (dim[2], sizeof (float));
+	duration = (long *) calloc (dim[2], sizeof (long));
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d12 1
+a12 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/ge2if/RCS/ge2if.c,v 1.1 2003/02/05 20:00:54 tom Exp $";
+a17 1
+/* #include <imgutil.h>				ROUND */
+d64 1
+d68 1
+a68 1
+	long            imgsize;
+d73 1
+a73 1
+	double         *fac;
+d76 2
+a77 1
+	long            fm, pln;
+d80 1
+d82 2
+a83 2
+	short          *img1;			 /* input GEMS image */
+	float          *img2;			 /* output Interfile image */
+d95 2
+d113 2
+a114 2
+	if (argc != 4) {
+		fprintf (stdout, "Usage: ge2if GE_img IF_img IF_hdr\n");
+d120 1
+a140 1
+
+d154 6
+a159 6
+	patstr = ge_read_fields (fd_ge, &patnum, "patient|", "exam|", line);
+	exmstr = ge_read_fields (fd_ge, &exmnum, "exam|", "scan|", line);
+	scnstr = ge_read_fields (fd_ge, &scnnum, "scan|", "frame|", line);
+	frmstr = ge_read_fields (fd_ge, &frmnum, "frame|", "imageset|", line);
+	setstr = ge_read_fields (fd_ge, &setnum, "imageset|", "image|", line);
+	imgstr = ge_read_fields (fd_ge, &imgnum, "image|", "patient|", line);
+d171 1
+a171 1
+	pat = ge_read_fields (fd_ge, &n, "patient|", "exam|", line);
+d179 1
+a179 1
+	exm = ge_read_fields (fd_ge, &n, "exam|", "scan|", line);
+d184 1
+a184 1
+	scn = ge_read_fields (fd_ge, &n, "scan|", "frame|", line);
+d194 1
+a194 1
+		frm = ge_read_fields (fd_ge, &n, "frame|", "dummy", line);
+d208 4
+d213 1
+a213 1
+	set = ge_read_fields (fd_ge, &n, "imageset|", "blob", line);
+d215 6
+a220 1
+/*	Read Images 	*/
+d222 2
+a223 7
+	frmtime = (float *) calloc (dim[3], sizeof (float));
+	duration = (long *) calloc (dim[3], sizeof (long));
+	fac = (double *) calloc (dim[3], sizeof (double));
+/*
+	global_max = -MAXSHORT;
+	global_min = MAXSHORT;
+*/
+d227 5
+a231 24
+	for (fm = 0; fm < dim[3]; fm++) {
+		for (pln = 0; pln < dim[2]; pln++) {
+			img = ge_read_fields (fd_ge, &n, "image|", "blob", line);
+			if (pln == 0 && fm == 0) {
+				k = get_field_number (imgstr, imgnum, "image_array_height");
+				if (k >= 0)
+					dim[0] = atoi (img[k]);
+				k = get_field_number (imgstr, imgnum, "image_array_width");
+				if (k >= 0)
+					dim[1] = atoi (img[k]);
+				k = get_field_number (imgstr, imgnum, "pixel_width");
+				if (k >= 0)
+					pixsize[0] = atof (img[k]);
+				k = get_field_number (imgstr, imgnum, "pixel_height");
+				if (k >= 0)
+					pixsize[1] = atof (img[k]);
+				k = get_field_number (imgstr, imgnum, "image_thickness");
+				if (k >= 0)
+					pixsize[2] = atof (img[k]);
+				imgsize = dim[0] * dim[1];
+				img1 = (short *) calloc (imgsize, sizeof (short));
+				img2 = (float *) calloc (imgsize, sizeof (float));
+			}
+			k = get_field_number (imgstr, imgnum, "image_time");
+d233 2
+a234 2
+				frmtime[pln] = atol (img[k]);
+			k = get_field_number (imgstr, imgnum, "image_duration");
+d236 2
+a237 2
+				duration[pln] = atol (img[k]);
+			k = get_field_number (imgstr, imgnum, "scale_factor");
+d239 33
+a271 4
+				fac[pln] = atof (img[k]);
+			if (fgets (line, maxlen, fd_ge) == 0) {
+				fprintf (stderr, "ERROR [ge2if]: reading %s\n", GE_img);
+				return (ERROR);
+a272 14
+			if ((fread (img1, sizeof (short), imgsize, fd_ge)) != imgsize)
+				fprintf (stderr, "ERROR [ge2if]: Reading %s plane %ld\n", GE_img, pln);
+			for (j = 0; j < imgsize; j++) {
+				/* img2[j] = ROUND (100000. * fac[pln] * ((double) img1[j])); */
+				img2[j] = fac[pln] * img1[j];
+				if (img2[j] > global_max)
+					global_max = img2[j];
+				if (img2[j] < global_min)
+					global_min = img2[j];
+			}
+			if (fwrite (img2, sizeof (float), imgsize, fd_img) == 0) {
+				fprintf (stderr, "ERROR [ge2if]: writing %s\n", GE_img);
+				return (ERROR);
+			}
+d274 27
+a300 1
+		fprintf (stderr,"Frame:%3ld    Max:  %f\n", fm + 1, global_max);
+d302 10
+a311 2
+	free (img1);
+	free (img2);
+@

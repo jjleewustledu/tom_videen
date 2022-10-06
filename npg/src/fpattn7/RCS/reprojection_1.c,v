@@ -1,0 +1,250 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2001.10.18.15.24.44;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* $Log: reprojection.c,v $
+ * Revision 1.3  2001/10/17  21:44:11  tom
+ * looks good except for missing arc correction 10/17/2001
+ *
+ * Revision 1.2  2001/10/16  20:58:59  tom
+ * pretty good
+ *
+ * Revision 1.3  2001/10/04  17:38:17  tom
+ * *** empty log message ***
+ *
+ * Revision 1.2  2001/09/26  17:31:38  tom
+ * *** empty log message ***
+ * */
+/* ===============================================================================
+ *  Module:     reprojection
+ *  Date:       Oct-2001
+ *  Author:     Tom Videen
+ *	Purpose:	Forward project an image onto projections.
+ *		Uses nearest neighbor interpolation on an interpolated projection
+ *		followed by integration to give a length-of-intersection algorithm.
+ *	Coordinate system:
+ *		Pixel img[pln][1][1] in lies at upper left corner of the image.
+ *		The forward projection of the image at theta=0 sums along pixels lying
+ *			along a vertical path in the image, (i.e., for all i, img[pln][y][i]).
+ *		The resulting projection would lie above the image
+ *			(i.e., proj[p][0] lies above img[p+1][1][1]).
+ *		Increasing theta would rotate the displayed projection CCW.
+ *	Reference: R. Schwinger, S. Cool and M.A. King, "Area Weighted
+ *		 convolutional interpolation for data reprojection in SPECT,"
+ *		 Med Phys 13(3) May/June 1986 pp. 350-353.
+ * ===============================================================================
+ */
+#include <stdio.h>
+#include <math.h>
+#include <nrutil.h>
+#include <myvalues.h>
+
+#define NSUB	1000				 /* interpolation factor (number of subbins per bin */
+#define OFFSET	14				 /* rotational offset for 961 */
+#define XOFF	0.4				 /* offset of x-center of projection bin */
+
+int             reprojection (img, dim, pixsize, sino, numang, numray, numpln, binsize)
+	float        ***img;			 /* image, indexed from 1 */
+	int             dim;			 /* x- y-dimensions in img */
+	float           pixsize;		 /* img pixel width (cm) */
+	float        ***sino;			 /* sinogram, indexed from 0 */
+	int             numray, numang, numpln;	 /* dimensions of sino */
+	float           binsize;		 /* sinogram bin width */
+{
+	double          theta;			 /* projection angle in radians */
+	double          krnl[1000];		 /* projection area */
+	double        **proj;			 /* fine projections bins for each plane */
+	double          val;			 /* pixel value */
+	long            i, j, p;		 /* indices for sino */
+	long            x, y;			 /* indices for img (using p for plane) */
+	long            q, r;			 /* indices for proj */
+	long            nbins;			 /* number of sub-bins in proj */
+	long            bctr;			 /* offset for sub-bins in proj */
+	double          subwid;			 /* sub-bin width in proj */
+	double          phi;			 /* equivalent angle */
+	double          halfpix;		 /* half-width of image pixel */
+	double          d0;				 /* full diagonal across pixel */
+	double          d1;				 /* partial diagonals across pixel */
+	double          dd;				 /* change in length of partial diagonals */
+	double          a;				 /* offset at edge of first diagonal */
+	double          aa;				 /* current offset at edge */
+	double          b;				 /* step offset at edge of other diagonals */
+	double          c;				 /* last step offset at edge */
+	double          ctr;			 /* coords of center of img */
+	double          n;				 /* coords of center of img */
+	double          h, m, xd, yd;	 /* distances locating dist from central pixel */
+	double          alpha, beta;	 /* angles locating distance from central pixel */
+	long            knum;			 /* number of elements in krnl */
+	double          s1, s2, s3;		 /* signs of terms */
+	double          scale;			 /* pixelsize / projection sub-bin size */
+
+	halfpix = pixsize / 2;
+	subwid = binsize / NSUB;
+	nbins = numray * NSUB;
+	scale = pixsize / subwid;
+	bctr = nbins / 2;
+	ctr = (double) (dim-1) / 2.;
+	printf ("Center  %d  %f\n", (int) bctr, ctr);
+
+	if ((proj = dmatrix (0, numpln - 1, 0, nbins - 1)) == NULL) {
+		(void) fprintf (stderr, "ERROR [reprojection]: Cannot malloc proj\n");
+		return (ERROR);
+	}
+
+/*	Kernel is symmetric about 45 degrees (pi/4) */
+
+	for (j = 0; j < numang; j++) {
+		theta = (double) (j - OFFSET) * M_PI / (double) numang;
+		if (theta < 0)
+			phi = -theta;
+		else if (theta <= M_PI / 4)
+			phi = theta;
+		else if (theta <= M_PI / 2)
+			phi = M_PI / 2 - theta;
+		else if (theta <= 3 * M_PI / 4)
+			phi = theta - M_PI / 2;
+		else if (theta <= M_PI)
+			phi = M_PI - theta;
+		else
+			phi = theta - M_PI;
+		if (fmod ((double) j, (double) 4) == 0) {
+			(void) fputc ('.', stdout);
+			(void) fflush (stdout);
+		}
+
+/*	Compute pixel projection bins for single pixel */
+
+		a = halfpix * tan (phi);
+		b = subwid / cos (phi);
+		d0 = pixsize / cos (phi);
+
+		i = 0;
+		aa = a;
+		while (aa <= halfpix) {
+			krnl[i] = d0;
+			knum = i;
+			i++;
+			aa = a + (i * b);
+		}
+		c = halfpix - aa;
+		if (sin (phi) == 0.) {
+			if (c > 0) {
+				krnl[i] = d0;
+				knum = i;
+				i++;
+			}
+		} else {
+			d1 = d0 - (b - c) / sin (phi);
+			if (c > 0) {
+				krnl[i] = d1;
+				knum = i;
+				i++;
+			}
+			dd = b / sin (phi);
+			d1 -= dd;
+			while (d1 >= 0) {
+				krnl[i] = d1;
+				knum = i;
+				d1 -= dd;
+				i++;
+			}
+		}
+
+/*	Initialize projections for current theta */
+
+		for (p = 0; p < numpln; p++)
+			for (r = 0; r < nbins; r++)
+				proj[p][r] = 0;
+
+/*	Locate projection bin in proj for each pixel in image */
+
+		for (x = 0; x < dim; x++) {
+			for (y = 0; y < dim; y++) {
+				xd = (x - ctr + XOFF);
+				yd = (y - ctr);
+				m = sqrt (xd * xd + yd * yd);
+
+				if (j <= numang / 2) {
+					if (yd > 0)
+						s1 = -1;
+					else
+						s1 = 1;
+				} else {
+					if (yd < 0)
+						s1 = -1;
+					else
+						s1 = 1;
+				}
+				if (xd * yd > 0)
+					s2 = -1;
+				else
+					s2 = 1;
+				if (xd < 0)
+					s3 = -1;
+				else
+					s3 = 1;
+
+				alpha = asin (s3 * xd / m);
+				beta = theta + s2 * alpha;
+				h = s1 * m * sin (beta);
+				q = bctr + h * scale;
+
+/*	Add pixel line-integral to the sub-bin projection (for each plane of image) */
+
+				for (p = 0; p < numpln; p++) {
+					val = img[p + 1][y + 1][x + 1];
+					proj[p][q] += val * krnl[0];
+					for (r = 1; r < knum; r++) {
+						if (r <= q && r < nbins - q) {
+							proj[p][q + r] += val * krnl[r];
+							proj[p][q - r] += val * krnl[r];
+						} else
+							printf ("out of range %d\n", (int) r);
+					}
+				}
+			}
+		}
+
+/*	Select appropriate subbin of proj for sino line-integrals */
+
+		for (p = 0; p < numpln; p++) 
+			for (i = 0; i < numray; i++)
+				sino[p][j][i] = 0;
+	
+		n = NSUB / 2;
+		for (p = 0; p < numpln; p++) {
+			for (i = 0; i < numray; i++) {
+				if (j > numang / 2) {
+					q = NSUB * i + n;
+					sino[p][j][i] = proj[p][q];
+				} else {
+					q =  nbins - 1 - (NSUB * i + n);
+					sino[p][j][i] = proj[p][q];
+				}
+			}
+		}
+	}					 /* end for angle theta (loop over j) */
+
+	(void) fprintf (stdout, "\n");
+	free_dmatrix (proj, 0, numpln - 1, 0, nbins - 1);
+	return (OK);
+}
+@

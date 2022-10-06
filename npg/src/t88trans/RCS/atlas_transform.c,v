@@ -1,0 +1,510 @@
+head	3.0;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+3.0
+date	2004.02.20.16.18.40;	author tom;	state Exp;
+branches;
+next	2.2;
+
+2.2
+date	99.12.17.16.58.46;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	97.01.03.20.19.14;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.08.14.20.14.26;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.08.14.20.12.33;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.12.21.19.02;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+3.0
+log
+@Feb 2004
+@
+text
+@/* $Log: atlas_transform.c,v $
+ * Revision 2.2  1999/12/17  16:58:46  tom
+ * lint cleaning
+ *
+ * Revision 2.1  1997/01/03  20:19:14  tom
+ * fix bug in array indexing
+ *
+ * Revision 2.0  1996/08/14  20:14:26  tom
+ * new libs
+ *
+ * Revision 1.2  1996/08/14  20:12:33  tom
+ * new libraries (libimage)
+ *
+ * Revision 3.6  1996/05/10  22:00:07  tom
+ * new libimage
+ * indexing from 1 on images and atlas
+ *
+ * Revision 3.5  1995/11/10  18:47:52  tom
+ * remove petutil parent directory from include statements
+ *
+ * Revision 3.4  1995/01/19  19:17:03  tom
+ * weights
+ *
+ * Revision 3.3  1994/10/03  16:17:13  tom
+ * Separate functions atlas_scalers and matrix_transform;
+ *
+ * Revision 3.2  1994/09/14  14:40:24  tom
+ * Allow > 49 slices in atlas and any z-origin
+ *
+ * Revision 3.1  1994/05/18  15:53:30  tom
+ */
+/*	========================================================================
+ *	Module:			atlas_transform.c
+ *	Date:			Aug 1993
+ *	Author:			Tom Videen
+ *	Description:	Transform a PET image into Atlas space
+ *
+ *  Input:
+ *		pet		-	PET image;
+ *		pdim	-	PET image dimensions;
+ *		adim	-	atlas image dimensions;
+ *		weight	-	weighting factor for this image;
+ *		mask	-	masking image;
+ *		map		-	conversion matrix Atlas -> PET
+ *		use_mask -	1 -> only include pixels in mask;
+ *		compute_sd - 1 -> compute sum of squares;
+ *      first_slice, last_slice -   range of slices from which an x-scaler may be accepted;
+ *
+ *  Output:
+ *		atl		-	atlas image;
+ *		sd		-	sum-of-squares image;
+ *		totwt	-	total weight of images contributing to each pixel in atlas image;
+ *
+ *	History:
+ *		20-Aug 1993	Modified atlas_trans.c; center and angle are passed in
+ *		24-Aug 1993	Modified to include use_pet to compute y-scaler from PET
+ *		30-Sep 1993	Modified to compute running sum and sd;
+ *					(pass additional parameters: sd, compute_sd)
+ *		04-Oct 1993	Eliminate atl = UNDEFINED; atl is now altered only when it is defined;
+ *		14-Oct 1993	Angles correspond with those returned from imgrot.
+ *		28-Apr 1994   added first_slice and last_slice to limit PET slices included
+ *		29-Apr 1994   subtract 10 cm from atlas.ydim[atlas.z0] when use_pet = TRUE
+ *		10-May 1994   corrected order of matrix concatenation;
+ *					eliminate use_pet option for y-width
+ *		13-Sep 1994	use atlas.nz for loop through atlas array;
+ *		20-Sep 1994	if no PET slice contains the AC-PC plane, compute an x-scaling factor
+ *					based on the nearest slice to it
+ *		22-Sep 1994	Remove as separate functions: atlas_scalers and matrix_transform
+ *		05-Mar 1996	Convert indexing to Numerical Recipes standard (1-based).
+ *	========================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88trans/RCS/atlas_transform.c,v 2.2 1999/12/17 16:58:46 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <math.h>
+#include <nrutil.h>
+#include <matrixlib.h>		 /* vector_mult */
+
+#define TOLERANCE 0.001		 /* max distance from a slice for which to use 2-D interpolation */
+
+/*	-----------------------
+ *	Function atlas_transform
+ *	-----------------------
+ */
+void            atlas_transform (pet, pdim, atl, adim, sd, weight, totwt, mask, map,
+				                 use_mask, compute_sd, first_slice, last_slice)
+	float        ***pet;		 /* PET image array */
+	long           *pdim;		 /* pet image dimensions */
+	float        ***atl;		 /* atlas image array */
+	long           *adim;		 /* atlas image dimensions */
+	float        ***sd;			 /* sum of squares */
+	double          weight;
+	float        ***totwt;		 /* num of images contributing to each pixel in atl array */
+	float        ***mask;		 /* mask for PET images */
+	float         **map;		 /* conversion matrix Atlas -> PET   */
+	int				use_mask;	 /* 1 -> only include pixels in mask */
+	int				compute_sd;	 /* 1 -> compute sum of squares */
+	int             first_slice;
+	int             last_slice;
+
+{
+	float          *a;			 /* vector in ATL-space; a[4] */
+	float          *p;			 /* vector in PET-space; p[4] */
+	float           wx, wy, wz;	 /* weighting factors for x, y, z */
+	float           val;		 /* temporary value computed for ATL */
+	float           temp;		 /* local real no. for z1 */
+	float           zmin, zmax;
+
+	long            xa, ya, za;		 /* indices to atl */
+	long            x1, y1, z1;		 /* indices to PET */
+	long            x2, y2, z2;		 /* indices to PET */
+
+/*
+ *	Initializations
+ */
+	if (last_slice <= 1 || last_slice > pdim[2])
+		last_slice = pdim[2];
+	zmin = (float) first_slice - TOLERANCE;
+	zmax = (float) last_slice + TOLERANCE;
+	a = vector (1, 4);
+	p = vector (1, 4);
+
+/*
+ *	LOOP for ALL ATLAS PIXELS:	Translation, Rotation, and Scaling
+ *	(1 is subtracted from a[] prior to vector_mult to offset indexing to 0;
+ *	 1 is added to p[] after vector_mult to reset indexing to 1)
+ *	--------------------------------------------------------------
+ */
+
+	fprintf (stdout, "z =   ");
+	a[4] = 1;
+	for (za = 1; za <= adim[2]; ++za) {
+		fprintf (stdout, "%c%c%2d", 8, 8, (int) za);
+		(void) fflush (stdout);
+		a[3] = (float) (za-1);
+		for (ya = 1; ya <= adim[1]; ++ya) {
+			a[2] = (float) (ya-1);
+			for (xa = 1; xa <= adim[0]; ++xa) {
+				a[1] = (float) (xa-1);
+
+/*
+ *	Find coordinates of vector A in PET space (MAP*A --> P)
+ */
+				vector_mult (map, a, p, 4, 4);
+				p[1] += 1;
+				p[2] += 1;
+				p[3] += 1;
+				x1 = (long) p[1];
+				y1 = (long) p[2];
+				z1 = (long) p[3];
+				x2 = x1 + 1;
+				y2 = y1 + 1;
+				z2 = z1 + 1;
+				temp = (float) z1;
+/*
+ *	If outside PET array, ATL is not altered (empty statement follows if)
+ */
+				if (p[3] > zmax || p[3] < zmin || y2 > pdim[1] || y1 < 1 || x2 > pdim[0] || x1 < 1);
+/*
+ *	If P is within tolerance of a PET slice, use 2-D interpolation
+ */
+				else if (fabs (p[3] - temp) <= TOLERANCE) {
+					if (use_mask==1 && (mask[z1][y1][x1]==0 || mask[z1][y2][x1]==0 ||
+							 mask[z1][y1][x2]==0 || mask[z1][y2][x2]==0));
+					else {
+						wx = p[1] - (float) x1;
+						wy = p[2] - (float) y1;
+						val = (1 - wx) * (1 - wy) * pet[z1][y1][x1] +
+							wx * (1 - wy) * pet[z1][y1][x2] +
+							(1 - wx) * wy * pet[z1][y2][x1] +
+							wx * wy * pet[z1][y2][x2];
+						atl[za][ya][xa] += val * weight;
+						totwt[za][ya][xa] += weight;
+						if (compute_sd==1)
+							sd[za][ya][xa] += val * val;
+					}
+				}
+/*
+ *  If P is not within TOLERANCE of slice first_slice or last_slice (zmin or zmax),
+ *	then p[3] must be greater than first_slice. and less than last_slice
+ */
+				else if (z1 < first_slice || z2 > last_slice);
+/*
+ *	Otherwise use 3-D interpolation
+ */
+				else {
+					if (use_mask==1 && (mask[z1][y1][x1]==0 || mask[z1][y1][x2]==0 ||
+							 mask[z1][y2][x1]==0 || mask[z1][y2][x2]==0 || mask[z2][y1][x1]==0 ||
+							 mask[z2][y1][x2]==0 || mask[z2][y2][x1]==0 || mask[z2][y2][x2]==0));
+					else {
+						wx = p[1] - (float) x1;
+						wy = p[2] - (float) y1;
+						wz = p[3] - (float) z1;
+						val = (1 - wx) * (1 - wy) * (1 - wz) * pet[z1][y1][x1] +
+							wx * (1 - wy) * (1 - wz) * pet[z1][y1][x2] +
+							(1 - wx) * wy * (1 - wz) * pet[z1][y2][x1] +
+							wx * wy * (1 - wz) * pet[z1][y2][x2] +
+							(1 - wx) * (1 - wy) * wz * pet[z2][y1][x1] +
+							wx * (1 - wy) * wz * pet[z2][y1][x2] +
+							(1 - wx) * wy * wz * pet[z2][y2][x1] +
+							wx * wy * wz * pet[z2][y2][x2];
+						atl[za][ya][xa] += val * weight;
+						totwt[za][ya][xa] += weight;
+						if (compute_sd==1)
+							sd[za][ya][xa] += val * val;
+					}
+				}		 /* end vector  */
+			}			 /* end row    */
+		}				 /* end column */
+	}					 /* end plane  */
+	fprintf (stdout, "\n");
+	free_vector (a, 1, 4);
+	free_vector (p, 1, 4);
+}
+@
+
+
+2.2
+log
+@lint cleaning
+@
+text
+@d2 3
+d34 1
+a34 1
+ *	Date:			19-Aug-93
+d45 2
+a46 2
+ *		use_mask -	if true, only include pixels in mask;
+ *		compute_sd - if true, compute sum of squares;
+d55 3
+a57 3
+ *		20-Aug-93	Modified atlas_trans.c; center and angle are passed in
+ *		24-Aug-93	Modified to include use_pet to compute y-scaler from PET
+ *		30-Sep-93	Modified to compute running sum and sd;
+d59 5
+a63 5
+ *		04-Oct-93	Eliminate atl = UNDEFINED; atl is now altered only when it is defined;
+ *		14-Oct-93	Angles correspond with those returned from imgrot.
+ *		28-Apr-94   added first_slice and last_slice to limit PET slices included
+ *		29-Apr-94   subtract 10 cm from atlas.ydim[atlas.z0] when use_pet = TRUE
+ *		10-May-94   corrected order of matrix concatenation;
+d65 2
+a66 2
+ *		13-Sep-94	use atlas.nz for loop through atlas array;
+ *		20-Sep-94	if no PET slice contains the AC-PC plane, compute an x-scaling factor
+d68 2
+a69 2
+ *		22-Sep-94	Remove as separate functions: atlas_scalers and matrix_transform
+ *		05-Mar-96	Convert indexing to Numerical Recipes standard (1-based).
+d72 1
+d74 1
+a74 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88trans/RCS/atlas_transform.c,v 2.1 1997/01/03 20:19:14 tom Exp tom $";
+a79 1
+#include <myvalues.h>		 /* BOOLEAN, TRUE, FALSE */
+d99 2
+a100 2
+	BOOLEAN         use_mask;	 /* if true, only include pixels in mask */
+	BOOLEAN         compute_sd;	 /* if true, compute sum of squares */
+d137 1
+a137 1
+		fflush (stdout);
+d166 2
+a167 2
+					if (use_mask && (!mask[z1][y1][x1] || !mask[z1][y2][x1] ||
+							 !mask[z1][y1][x2] || !mask[z1][y2][x2]));
+d177 1
+a177 1
+						if (compute_sd)
+d190 3
+a192 3
+					if (use_mask && (!mask[z1][y1][x1] || !mask[z1][y1][x2] ||
+							 !mask[z1][y2][x1] || !mask[z1][y2][x2] || !mask[z2][y1][x1] ||
+							 !mask[z2][y1][x2] || !mask[z2][y2][x1] || !mask[z2][y2][x2]));
+d207 1
+a207 1
+						if (compute_sd)
+@
+
+
+2.1
+log
+@fix bug in array indexing
+@
+text
+@d2 3
+d69 4
+a73 1
+#include <stdlib.h>
+a74 1
+#include <nr.h>
+a80 4
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88trans/RCS/atlas_transform.c,v 2.0 1996/08/14 20:14:26 tom Exp tom $";
+#endif
+
+d88 1
+a88 1
+	int            *pdim;		 /* pet image dimensions */
+d90 1
+a90 1
+	int            *adim;		 /* atlas image dimensions */
+d92 1
+a92 1
+	float           weight;
+d133 1
+a133 1
+		fprintf (stdout, "%c%c%2d", 8, 8, za);
+@
+
+
+2.0
+log
+@new libs
+@
+text
+@d2 3
+d77 1
+a77 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/t88trans/RCS/atlas_transform.c,v 1.2 1996/08/14 20:12:33 tom Exp tom $";
+d124 2
+d134 1
+a134 1
+		a[3] = (float) (za);
+d136 1
+a136 1
+			a[2] = (float) (ya);
+d138 1
+a138 1
+				a[1] = (float) (xa);
+d144 3
+@
+
+
+1.2
+log
+@new libraries (libimage)
+@
+text
+@d2 3
+d74 1
+a74 1
+static char     rcsid[] = "$Header: /home/petsun19/tom/src/t88mean/RCS/atlas_transform.c,v 3.6 1996/05/10 22:00:07 tom Exp $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 19
+a19 2
+/*	$Id$
+	$Log$ */
+d22 1
+a22 1
+ *	Date:			12-Oct-95
+d28 2
+a30 1
+ *      atlas   -   brain atlas structure;
+a31 1
+ *      num_slices -   number of PET slices;
+d36 1
+d43 15
+a57 1
+ *		12-Oct-95	Taken from t88mean
+d61 1
+d63 4
+a66 6
+#include <petutil/petutil.h>
+#include <petutil/package.h>	/* BOOLEAN */
+#include <petutil/matrixlib.h>	/* matrix_mult */
+#include <nrecipes/kr/nr.h>
+#include <nrecipes/kr/nrutil.h>
+#include "brain_atlas.h"		/* BRAIN_ATLAS, DIM */
+d68 1
+a68 1
+#define TOLERANCE 0.001		/* max distance from a slice for which to use 2-D interpolation */
+d70 3
+a72 1
+static char     rcsid[] = "$Header$";
+d78 13
+a90 14
+void 
+atlas_transform (pet, atl, sd, weight, totwt, atlas, mask, map, num_slices, use_mask, 
+		compute_sd, first_slice, last_slice)
+	REAL_SLICE     *pet;	/* PET image array */
+	REAL_SLICE     *atl;	/* atlas image array */
+	REAL_SLICE     *sd;	/* sum of squares */
+	float			weight;
+	REAL_SLICE     *totwt;	/* number of images contributing to each pixel in atlas array */
+	BRAIN_ATLAS     atlas;	/* brain atlas definition */
+	REAL_SLICE     *mask;	/* mask for PET images */
+    float          **map;    /* conversion matrix Atlas -> PET   */
+	int				num_slices;
+	BOOLEAN         use_mask;	/* if true, only include pixels in mask */
+	BOOLEAN         compute_sd;	/* if true, compute sum of squares */
+d95 6
+a100 2
+	float           *a;	/* point in ATL-space; a[4] */
+	float           *p;	/* point in PET-space; p[4] */
+d102 3
+a104 7
+	float           wx;	/* weighting factor for x */
+	float           wy;	/* weighting factor for y */
+	float           wz;	/* weighting factor for z */
+	float           val;	/* temporary value computed for ATL */
+	float           temp;	/* local real no. for z1 */
+	float           z_min;
+	float           z_max;
+a105 5
+	int             xa, ya, za;	/* indices to atlas */
+	int             x1, y1, z1;	/* indices to PET */
+	int             x2, y2, z2;	/* indices to PET */
+	int             xmax, ymax, zmax;	/* maximum indices for PET */
+
+d109 4
+a112 1
+
+a114 7
+	xmax = DIM - 1;
+	ymax = DIM - 1;
+	zmax = num_slices - 1;
+	if (last_slice == 0 || last_slice > zmax)
+		last_slice = zmax;
+	z_min = (float) first_slice - TOLERANCE;
+	z_max = (float) last_slice + TOLERANCE;
+d123 1
+a123 1
+	for (za = 0; za < atlas.zdim; ++za) {
+d127 1
+a127 1
+		for (ya = 0; ya < atlas.ydim; ++ya) {
+d129 1
+a129 1
+			for (xa = 0; xa < atlas.xdim; ++xa) {
+d133 1
+a133 1
+ *	Find coordinates of point A in PET space (MAP*A --> P)
+d135 4
+a138 4
+				matrix_mult (map, a, p, 4, 4, 1);
+				x1 = (int) p[1];
+				y1 = (int) p[2];
+				z1 = (int) p[3];
+d146 1
+a146 1
+				if (p[3] > z_max || p[3] < z_min || y2 > ymax || y1 < 0 || x2 > xmax || x1 < 0);
+d167 1
+a167 1
+ *  If P is not within TOLERANCE of slice first_slice or last_slice (z_min or z_max),
+d195 4
+a198 4
+				}	/* end point  */
+			}	/* end row    */
+		}		/* end column */
+	}			/* end plane  */
+@

@@ -1,0 +1,243 @@
+head	3.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+3.1
+date	2004.02.20.16.12.26;	author tom;	state Exp;
+branches;
+next	3.0;
+
+3.0
+date	2004.02.12.22.15.39;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.14.21.14.50;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+3.1
+log
+@Feb 2004
+@
+text
+@/* $Log: maskmatrix.c,v $
+ * Revision 3.0  2004/02/12  22:15:39  tom
+ * Feb 2004
+ *
+ * Revision 1.1  1996/11/14  21:14:50  tom
+ * Initial revision
+ * */
+/*  ================================================================================
+ *  File Name:      maskmatrix.c
+ *  Date:           Nov 1996
+ *  Author:         Tom Videen
+ *  Description:    Mask 1 plane of an image by first thresholding the image
+ *		and then setting all elements outside the outer boundary to 1 and all
+ *		elements inside the boundary to 0
+ *		A single-plane image is masked (differs from masktensor and maskalltensor)
+ *		and a masked image is returned instead of a mask.
+ *		Total pixels in the mask, npixels, is incremented.
+ *  =============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libnrimg/RCS/maskmatrix.c,v 3.0 2004/02/12 22:15:39 tom Exp tom $";
+#endif
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <values.h>
+#include <image.h>
+#include <nrutil.h>
+
+#define NEITHER		0.
+#define INSIDE		1.
+#define OUTSIDE		2.
+
+void            maskmatrix (img, dim, mskpct, npixels)
+	float         **img;			 /* one plane of image */
+	long            dim;			 /* dimensions of img */
+	int             mskpct;			 /* percent to mask by */
+	long           *npixels;		 /* total pixels within mask */
+{
+	float         **mask;			 /* mask created */
+	int             more;
+	float           threshold;
+	float           peak;
+	int             i, j;
+
+/*
+ * Find the peak element and compute the absolute threshold
+ */
+
+	mask = matrix (1, dim, 1, dim);
+	peak = MINFLOAT;
+	for (j = 1; j <= dim; j++) {
+		for (i = 1; i <= dim; i++) {
+			mask[j][i] = img[j][i];
+			if (mask[j][i] > peak)
+				peak = mask[j][i];
+		}
+	}
+	threshold = peak * mskpct * 0.01;
+	fprintf (stdout, "Peak = %9.3f  Threshold = %9.3f\n", peak, threshold);
+
+/*
+ *	Create a template with mskpct% of the whole brain maximum.
+ *
+ *	Assign INSIDE to all points >= threshold. Assign NEITHER to all points < threshold,
+ */
+	for (j = 1; j <= dim; j++) {
+		for (i = 1; i <= dim; i++) {
+			if (mask[j][i] > threshold)
+				mask[j][i] = INSIDE;
+			else
+				mask[j][i] = NEITHER;
+		}
+	}
+
+/*
+ *	Assign OUTSIDE to all points along the boundaries of each slice which are
+ *	not INSIDE the template.
+ */
+
+	for (i = 1; i <= dim; i++) {
+		if (mask[1][i] != INSIDE)	 /* top row */
+			mask[1][i] = OUTSIDE;
+		if (mask[dim][i] != INSIDE)	 /* bottom row */
+			mask[dim][i] = OUTSIDE;
+	}
+	for (j = 1; j <= dim; j++) {
+		if (mask[j][1] != INSIDE)	 /* left row */
+			mask[j][1] = OUTSIDE;
+		if (mask[j][dim] != INSIDE)	 /* right row */
+			mask[j][dim] = OUTSIDE;
+	}
+
+/*
+ *	Now, starting with the boundaries of the array, expand the area excluded from
+ *	the template by assigning OUTSIDE to all points directly adjacent to a point
+ *	whose value is OUTSIDE and which are currently zero (neither INSIDE nor
+ *	OUTSIDE).
+ */
+	more = FALSE;
+	for (i = 2; i <= dim - 1; i++) {
+		if (mask[1][i] == OUTSIDE && mask[2][i] < INSIDE) {	/* row below top row */
+			mask[2][i] = OUTSIDE;
+			more = TRUE;
+		}
+		if (mask[dim][i] == OUTSIDE && mask[dim - 1][i] < INSIDE) {	/* row below bottom row */
+			mask[dim - 1][i] = OUTSIDE;
+			more = TRUE;
+		}
+	}
+	for (j = 2; j <= dim - 1; j++) {
+		if (mask[j][1] == OUTSIDE && mask[j][2] < INSIDE) {	/* col next to left */
+			mask[j][2] = OUTSIDE;
+			more = TRUE;
+		}
+		if (mask[j][dim] == OUTSIDE && mask[j][dim - 1] < INSIDE) {	/* col next to right */
+			mask[j][dim - 1] = OUTSIDE;
+			more = TRUE;
+		}
+	}
+
+/*
+ *	The following loop is repeated until it cycles with no more points added to the
+ *	outside of the region.
+ */
+
+	while (more) {
+		more = FALSE;
+		for (i = 2; i <= dim - 1; i++) {
+			for (j = 2; j <= dim - 1; j++) {
+				if (mask[j][i] == OUTSIDE) {
+					if (mask[j][i - 1] < INSIDE) {
+						mask[j][i - 1] = OUTSIDE;
+						more = TRUE;
+					}
+					if (mask[j][i + 1] < INSIDE) {
+						mask[j][i + 1] = OUTSIDE;
+						more = TRUE;
+					}
+					if (mask[j - 1][i] < INSIDE) {
+						mask[j - 1][i] = OUTSIDE;
+						more = TRUE;
+					}
+					if (mask[j + 1][i] < INSIDE) {
+						mask[j + 1][i] = OUTSIDE;
+						more = TRUE;
+					}
+				}
+			}
+		}
+	}
+
+/*
+ *	All points that are < OUTSIDE are assigned INSIDE. All points that are >=
+ *	OUTSIDE are assigned 0.
+ */
+	for (j = 1; j <= dim; j++) {
+		for (i = 1; i <= dim; i++) {
+			if (mask[j][i] < OUTSIDE) {
+				mask[j][i] = INSIDE;
+				(*npixels)++;
+			} else
+				mask[j][i] = 0.;
+		}
+	}
+
+/*	Apply the mask to the input plane and return */
+
+	for (j = 1; j <= dim; j++) {
+		for (i = 1; i <= dim; i++) {
+			if (mask[j][i] != INSIDE)
+				img[j][i] = 0;
+		}
+	}
+	free_matrix (mask, 1, dim, 1, dim);
+	free(mask);
+}
+@
+
+
+3.0
+log
+@Feb 2004
+@
+text
+@d2 3
+d22 1
+a22 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libnrimg/RCS/maskmatrix.c,v 1.1 1996/11/14 21:14:50 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d7 1
+a7 1
+ *  Date:           Nov-96
+d17 1
+d19 1
+a19 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libnrimg/RCS/maskmatrix.c,v 1.1 1996/05/23 18:34:32 tom Exp $";
+d22 1
+d173 2
+@

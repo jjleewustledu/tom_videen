@@ -1,0 +1,259 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	2001.03.02.14.59.58;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2001.02.28.20.02.28;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2001.02.28.17.49.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@; $Id: voihisto.pro,v 1.2 2001/02/28 20:02:28 tom Exp tom $
+;
+;+
+; NAME:
+;   VOIHISTO
+;
+; PURPOSE:
+;   Plot histogram of VOI
+;
+; CATEGORY:
+;   Visualization.
+;
+; CALLING SEQUENCE:
+;   voihisto
+;
+; MODIFICATION HISTORY:
+;   Written by: Tom Videen, Feb 2001.
+;-
+
+PRO voihisto
+
+   @@IMAGE_UTILS.h
+
+   on_error, 2
+   loadct,5
+
+   vname = getenv('VOIFILE')
+   id = getenv('VOI')
+   ymax = float(getenv('MAX'))
+
+   voi = ptr_new({VOI})
+   (*voi).id = 'VOI'
+   
+   img = {VIMAGE}
+   img.ff = 1
+   img.lf = 1
+   img.fp = 1
+   img.lp = 255
+   img.proc = 0
+   img.fname = getenv('IMGFILE')
+   msg = ''
+   IF (getframe(img, msg) NE 0) THEN BEGIN
+      print, msg
+      RETURN
+   ENDIF
+
+   IF (VOI_READ(voi, vname, msg) NE 0) THEN BEGIN
+      print, msg
+      RETURN
+   ENDIF
+
+   voilist = VOI_LIST(voi)
+   listing = VOI_LISTING(voi,voilist,img.dim[2])
+   IF (listing[0] EQ '') THEN BEGIN
+      print,  'No data.  VOI file is incorrect format or incompatible with current image.'
+      RETURN
+   END
+
+   roi = VOI_LOCATE(voi, id)
+   IF ptr_valid(roi) THEN BEGIN
+      IF ((*roi).num GT 0) THEN BEGIN
+         pixels = VOI_COORDS(voi, id, img.dim, msg)
+         IF ((size(pixels))[2] GT 1) THEN BEGIN
+            pixels = pixels[sort(pixels)]
+            pixels = pixels[uniq(pixels)]
+         ENDIF
+      ENDIF
+   ENDIF
+   n = n_elements(pixels)
+   print, id+'   Pixels = '+string(n)
+   IF (n LE 0) THEN RETURN
+
+   image = (*img.data)[pixels]
+   x0 = 0.
+   xrange=[0, max(image)]
+   binsize = 10
+
+   hist = histogram(image, MIN=x0, MAX=xrange[1], BINSIZE=binsize)
+   nbins = n_elements(hist)
+   pos = rstrpos(img.fname,'/')
+   title = strmid(img.fname,pos+1)
+   xtitle = 'Intensity'
+   ytitle = 'Number' 
+   y0 = 0.
+   IF (ymax EQ 0) THEN ymax = max(hist)
+   yrange=[0, ymax] 
+   halfmax = ymax/2
+   indx = where (hist GE halfmax)
+   midmax = (binsize*min(indx)+binsize*max(indx))/2
+   print,'Midpoint at Half-Maximum = ',midmax
+
+   limit = ymax/28
+   indx = where (hist GE limit)
+   lolimit = binsize*min(indx)
+   hilimit = midmax + (midmax-lolimit)
+   print,'1/28 Maximum Limits (3SD)= ',lolimit,hilimit
+
+   red = [0,255,255,255]
+   green = [0,0,255,255]
+   blue = [0,0,0,255]
+   tvlct,red,green,blue
+   plot, hist, /nodata, title=title, xtitle=xtitle, ytitle=ytitle, $
+      xrange=xrange, yrange=yrange, xstyle=1, ystyle=1, ytickformat='(I6)',$
+      xtickformat='(I)', charsize=1.4, charthick=2, color=3
+   FOR i=0,nbins-1 DO BEGIN
+      x1 = x0 + binsize
+      y1 = hist[i]
+      IF (y1 GT yrange[1]) THEN y1 = yrange[1]
+      x = [x0,x0,x1,x1]
+      y = [y0,y1,y1,y0]
+      polyfill,x,y,color=2
+      plots,x,y,color=1
+      x0 = x1
+   ENDFOR 
+   location = strcompress(string(midmax),/remove_all)
+   oplot,[midmax,midmax],[0,ymax],color=3
+   xyouts, midmax/2, 0.8*ymax, location, alignment=0.5, charsize=1.5, charthick=1.5, color=3
+   oplot,[lolimit,lolimit],[0,ymax],color=3
+   oplot,[hilimit,hilimit],[0,ymax],color=3
+   
+   ch = ''
+   read,prompt='P=Print, Return=Quit ',ch
+   IF (ch eq 'P' or ch eq 'p') THEN BEGIN
+      printname = '/tmp/voihisto.ps'
+      set_plot,'ps'
+      device,filename=printname,xsize=7,ysize=6,xoffset=0.8,yoffset=3,/inches
+      plot, hist, /nodata, title=title, xtitle=xtitle, ytitle=ytitle, $
+         xrange=xrange, yrange=yrange, xstyle=1, ystyle=1, ytickformat='(I6)', $
+         xtickformat='(I)', charsize=1.4, charthick=2
+      x0 = 0.
+      FOR i=0,nbins-1 DO BEGIN
+         x1 = x0 + binsize
+         y1 = hist[i]
+         IF (y1 GT yrange[1]) THEN y1 = yrange[1]
+         x = [x0,x0,x1,x1]
+         y = [y0,y1,y1,y0]
+         plots,x,y
+         x0 = x1
+      ENDFOR
+      !p.noclip=1
+
+      oplot,[midmax,midmax],[-0.08*ymax,0]
+      oplot,[lolimit,lolimit],[-0.08*ymax,0]
+      oplot,[hilimit,hilimit],[-0.08*ymax,0]
+
+      caption = 'Midpoint at Half-Maximum = '+location
+      xyouts, midmax, -0.25*ymax, caption, alignment=0.5, charsize=1.5, charthick=1.5
+
+      low = strcompress(string(lolimit),/remove_all)
+      high = strcompress(string(hilimit),/remove_all)
+      caption = '1/28 Limits (3SD) = '+low+'-'+high
+      xyouts, midmax, -0.31*ymax, caption, alignment=0.5, charsize=1.5, charthick=1.5
+
+      caption = id+' ('+vname+')'
+      xyouts, midmax, -0.49*ymax, caption, alignment=0.5, charsize=1.5, charthick=1.5
+
+      device,/close
+      cmd = 'cat '+printname+' | lpr'
+      spawn, cmd
+      cmd = '/usr/bin/rm '+printname
+      spawn, cmd
+   END
+   RETURN
+END
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+; $Id: voihisto.pro,v 1.1 2001/02/28 17:49:42 tom Exp tom $
+d92 6
+d118 2
+d141 11
+a151 3
+      oplot,[midmax,midmax],[-0.05*ymax,0]
+      xyouts, midmax, -0.25*ymax, location, alignment=0.5, charsize=1.5, charthick=1.5
+      caption = 'Midpoint at Half-Maximum'
+d153 1
+d155 2
+a156 1
+      xyouts, midmax, -0.37*ymax, caption, alignment=0.5, charsize=1.5, charthick=1.5
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+; $Id: voihisto.pro,v 1.6 2000/09/06 16:51:47 tom Exp $
+d70 1
+a70 1
+   print, id+'  pixels = '+string(n)
+d76 1
+d78 1
+a78 1
+   hist = histogram(image, MIN=x0, MAX=xrange[1], BINSIZE=1)
+d82 2
+a83 2
+   xtitle = 'PET Counts'
+   ytitle = 'Number of Pixels' 
+d85 6
+a90 2
+   IF (ymax EQ 0) THEN yrange=[0, max(hist)] $
+   ELSE yrange=[0, ymax] 
+d98 1
+a98 1
+      charsize=1.4, charthick=2, color=3
+d100 1
+a100 1
+      x1 = x0 + 1
+d109 3
+d121 2
+a122 1
+         charsize=1.4, charthick=2
+d124 1
+a124 1
+         x1 = x0 + 1
+d132 7
+@

@@ -1,0 +1,134 @@
+/*  $Id: fill_mh6.c,v 1.4 2002/12/17 21:55:15 tom Exp $
+    $Log: fill_mh6.c,v $
+ * Revision 1.4  2002/12/17  21:55:15  tom
+ * fix pointer/cast errors found with gcc
+ *
+    Revision 1.3  2002/03/13 21:56:41  tom
+    lint cleaning
+
+ * Revision 1.2  1996/08/15  18:06:00  tom
+ * add node_id
+ *
+ * Revision 1.1  1996/04/19  19:33:20  tom
+ * Initial revision
+ *
+ */
+/* =============================================================================
+ *	Function:		fill_mh6
+ *  Date:           Mar-96
+ *  Author:         Tom Videen
+ *	Description:	Fill Version 6 mainheader from generic mainheader structure, mh
+ * =============================================================================
+ */
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/libimage/Temp/RCS/fill_mh6.c,v 1.4 2002/12/17 21:55:15 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+
+int             fill_mh6 (file)
+	ImageFile      *file;
+{
+	MainHeader     *mh;
+	Main_header    *mh6;
+	int             i;
+
+	if (file->mh == NULL) {
+		fprintf (stderr, "ERROR [fill_mh6]: Mainheader is not defined\n");
+		return (ERROR);
+	}
+	if (file->m6 == NULL) {
+		fprintf (stderr, "ERROR [fill_mh6]: Version 6 header is not defined\n");
+		return (ERROR);
+	}
+	if (file->m6->mh == NULL) {
+		if (make_mh6 (file) == ERROR) {
+			fprintf (stderr, "ERROR [make_mh6]: cannot malloc m6->mh\n");
+			return (ERROR);
+		}
+	}
+	mh = file->mh;
+	mh6 = file->m6->mh;
+
+	mh6->sw_version = (short) mh->sw_version;
+	if (mh->number_format == SHORT_DATA)
+		mh6->data_type = SUN_I2;
+	else if (mh->number_format == BYTE_DATA)
+		mh6->data_type = BYTE_TYPE;
+	else if (mh->number_format == FLOAT_DATA)
+		mh6->data_type = IEEE_R4;
+	mh6->system_type = (short) mh->scanner_type;
+	mh6->file_type = (short) mh->filetype;
+	for (i = 0; i < 10; i++)
+		mh6->node_id[i] = '\0';
+	mh6->scan_start_day = 0;
+	mh6->scan_start_month = 0;
+	mh6->scan_start_year = 0;
+	mh6->scan_start_hour = 0;
+	mh6->scan_start_minute = 0;
+	mh6->scan_start_second = 0;
+	for (i = 0; i < 8; i++)
+		mh6->isotope_code[i] = mh->isotope[i];
+	mh6->isotope_halflife = 0;
+	for (i = 0; i < 32; i++)
+		mh6->radiopharmaceutical[i] = mh->radiopharmaceutical[i];
+	mh6->gantry_tilt = 0;
+	mh6->gantry_rotation = 0;
+	mh6->bed_elevation = mh->bed_elevation;
+	mh6->rot_source_speed = 0;
+	mh6->wobble_speed = (short) mh->wobble_speed;
+	mh6->transm_source_type = 0;
+	mh6->calibration_factor = mh->calibration_factor;
+	mh6->axial_fov = 0;
+	mh6->transaxial_fov = 0;
+	mh6->transaxial_samp_mode = 0;
+	mh6->coin_samp_mode = 0;
+	mh6->axial_samp_mode = 0;
+	mh6->calibration_units = 0;
+	mh6->compression_code = 0;
+	mh6->compression_code = 0;
+
+	for (i = 0; i < 12; i++)
+		mh6->study_name[i] = '\0';
+	for (i = 0; i < 16; i++)
+		mh6->patient_id[i] = mh->patnum[i];
+	for (i = 0; i < 32; i++)
+		mh6->patient_name[i] = '\0';
+	mh6->patient_sex = '\0';
+	for (i = 0; i < 10; i++)
+		mh6->patient_age[i] = '\0';
+	for (i = 0; i < 10; i++)
+		mh6->patient_height[i] = '\0';
+	for (i = 0; i < 10; i++)
+		mh6->patient_weight[i] = '\0';
+	mh6->patient_dexterity = '\0';
+
+	(void) strncpy (mh6->physician_name, mh->sw_revision, 31);
+	(void) strncpy (mh6->operator_name, mh->filetime, 31);
+	info2comment (mh, mh6->study_description);
+
+	mh6->acquisition_type = 0;
+	mh6->bed_type = 0;
+	mh6->septa_type = 0;
+	for (i = 0; i < 20; i++)
+		mh6->facility_name[i] = '\0';
+	mh6->num_planes = (short) mh->nplane;
+	mh6->num_frames = (short) mh->nframe;
+	mh6->num_gates = (short) mh->ngate;
+	mh6->num_bed_pos = (short) mh->nbed;
+	mh6->init_bed_position = mh->init_bed_pos;
+	for (i = 0; i < 15; i++)
+		mh6->bed_offset[i] = mh->bed_off[i];
+	mh6->plane_separation = mh->slicesep;
+	mh6->lwr_sctr_thres = 0;
+	mh6->lwr_true_thres = 0;
+	mh6->upr_true_thres = 0;
+	mh6->collimator = 0;
+	for (i = 0; i < 10; i++)
+		mh6->user_process_code[i] = '\0';
+	return (OK);
+}

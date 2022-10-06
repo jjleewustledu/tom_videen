@@ -1,0 +1,684 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2008.05.22.14.56.14;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2008.05.20.16.49.51;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2008.05.13.13.53.19;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2008.05.06.21.18.40;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@#include <imagetools.h>
+#include <stdlib.h>
+#include <math.h>
+
+// Compute gradient of T using central finite differences; at the boundarys
+// DIRICHLET or NEUMANN are used,
+//    d1T[j1][j2] = 1/2* ( T[j1+1][j2] - T[j1-1][j2])
+//    d2T[j1][j2] = 1/2* ( T[j1][j2+1] - T[j1][j2-1])
+
+void            computeFDGrad2D (array2D T, size_t m1, size_t m2, double h1, double h2, boundary_t bc, array3D dT)
+{
+	int             j1, j2;
+	double          fac;
+
+	// Compute Tner gradient without respect to BC
+
+	fac = 1 / (2 * h1);							// Gradient T x1
+	for (j1 = 1; j1 < (m1 - 1); j1++) {
+		for (j2 = 0; j2 < m2; j2++)
+			dT[0][j1][j2] = fac * (T[j1 + 1][j2] - T[j1 - 1][j2]);
+	}
+
+	fac = 1 / (2 * h2);							// Gradient T x2
+	for (j1 = 0; j1 < m1; j1++) {
+		for (j2 = 1; j2 < (m2 - 1); j2++)
+			dT[1][j1][j2] = fac * (T[j1][j2 + 1] - T[j1][j2 - 1]);
+	}
+
+	// Compute gradient on image boundarys with respect to BC
+
+	switch (bc) {
+		case NEUMANN:
+		{
+			fac = 1 / (2 * h1);					  // T x1 Direction
+			for (j2 = 0; j2 < m2; j2++) {
+				dT[0][0][j2] = fac * (T[1][j2] - T[0][j2]);
+				dT[0][m1 - 1][j2] = fac * (T[m1 - 1][j2] - T[m1 - 2][j2]);
+			}
+			fac = 1 / (2 * h2);					  // T x2 Direction
+			for (j1 = 0; j1 < m1; j1++) {
+				dT[1][j1][0] = fac * (T[j1][1] - T[j1][0]);
+				dT[1][j1][m2 - 1] = fac * (T[j1][m2 - 1] - T[j1][m2 - 2]);
+			}
+
+			break;
+		}
+
+		case DIRICHLET:
+		{
+			fac = 1 / (h1);						  // T x1 Direction
+			for (j2 = 0; j2 < m2; j2++) {
+				dT[0][0][j2] = fac * (T[1][j2]);
+				dT[0][m1 - 1][j2] = fac * (-T[m1 - 2][j2]);
+			}
+			fac = 1 / (h2);						  // T x2 Direction
+			for (j1 = 0; j1 < m1; j1++) {
+				dT[1][j1][0] = fac * (T[j1][1]);
+				dT[1][j1][m2 - 1] = fac * (-T[j1][m2 - 2]);
+			}
+
+			break;
+		}
+
+		default:
+		{
+		}
+
+	}
+}
+
+
+void            evalDisplacementLinear2D (array2D T, size_t m1, size_t m2, array2D U1, array2D U2, array2D Tphi)
+{
+	int             j1, j2, k, i1, i2, index;
+	int             I1[2];
+	int             I2[2];
+	double          w1[2];
+	double          w2[2];
+	double          X, Y;
+
+	for (j1 = 0; j1 < m1; j1++) {
+		for (j2 = 0; j2 < m2; j2++) {
+			X = j1 + U1[j1][j2];
+			Y = j2 + U2[j1][j2];
+
+			w1[1] = X - floor (X);
+			w1[0] = 1.0 - w1[1];
+
+			w2[1] = Y - floor (Y);
+			w2[0] = 1.0 - w2[1];
+
+			index = (int) floor (X);
+			for (k = 0; k < 2; ++k) {
+				if ((index < 0) || (index > (m1 - 1))) {
+					I1[k] = 0;
+					w1[k] = 0.0;
+				} else
+					I1[k] = index;
+				index++;
+			}
+
+			index = (int) floor (Y);
+			for (k = 0; k < 2; ++k) {
+				if ((index < 0) || (index > (m2 - 1))) {
+					I2[k] = 0;
+					w2[k] = 0.0;
+				} else
+					I2[k] = index;
+				index++;
+			}
+
+			Tphi[j1][j2] = 0.0;
+			for (i1 = 0; i1 < 2; ++i1)
+				for (i2 = 0; i2 < 2; ++i2)
+					Tphi[j1][j2] += w1[i1] * w2[i2] * T[I1[i1]][I2[i2]];
+
+		}
+	}
+}
+
+
+// 3D code for imagetools
+// ----------------------
+// Compute gradient of T using central finite differences; at the boundarys
+// DIRICHLET or NEUMANN are used,
+//    d1T[j1][j2][j3] = 1/2* ( T[j1+1][j2][j3] - T[j1-1][j2][j3])
+//    d2T[j1][j2][j3] = 1/2* ( T[j1][j2+1][j3] - T[j1][j2-1][j3])
+//    d3T[j1][j2][j3] = 1/2* ( T[j1][j2][j3+1] - T[j1][j2][j3-1])
+
+void            computeFDGrad3D (array3D T, size_t m1, size_t m2, size_t m3, double h1, double h2, double h3, 
+						boundary_t bc, array4D dT)
+{
+	int             j1, j2, j3;
+	double          fac;
+
+	// Compute inner gradient without respect to BC
+
+	fac = 1 / (2 * h1);							// Gradient T x1
+	for (j1 = 1; j1 < (m1 - 1); j1++)
+		for (j2 = 0; j2 < m2; j2++)
+			for (j3 = 0; j3 < m3; j3++)
+				dT[0][j1][j2][j3] = fac * (T[j1 + 1][j2][j3] - T[j1 - 1][j2][j3]);
+
+	fac = 1 / (2 * h2);							// Gradient T x2
+	for (j1 = 0; j1 < m1; j1++)
+		for (j2 = 1; j2 < (m2 - 1); j2++)
+			for (j3 = 0; j3 < m3; j3++)
+				dT[1][j1][j2][j3] = fac * (T[j1][j2 + 1][j3] - T[j1][j2 - 1][j3]);
+
+	fac = 1 / (2 * h3);							// Gradient T x3
+	for (j1 = 0; j1 < m1; j1++)
+		for (j2 = 0; j2 < m2; j2++)
+			for (j3 = 1; j3 < (m3 - 1); j3++)
+				dT[2][j1][j2][j3] = fac * (T[j1][j2][j3 + 1] - T[j1][j2][j3 - 1]);
+
+	// Compute gradient on image boundarys with respect to BC
+
+	switch (bc) {
+		case PERIODIC:
+		{
+			fac = 1 / (2 * h1);					  // T x1 Direction
+			for (j2 = 0; j2 < m2; j2++) {
+				for (j3 = 0; j3 < m3; j3++) {
+					dT[0][0][j2][j3] = fac * (T[1][j2][j3] - T[m1 - 1][j2][j3]);
+					dT[0][m1 - 1][j2][j3] = fac * (T[0][j2][j3] - T[m1 - 2][j2][j3]);
+				}
+			}
+			fac = 1 / (2 * h2);					  // T x2 Direction
+			for (j1 = 0; j1 < m1; j1++) {
+				for (j3 = 0; j3 < m3; j3++) {
+					dT[1][j1][0][j3] = fac * (T[j1][1][j3] - T[j1][m2 - 1][j3]);
+					dT[1][j1][m2 - 1][j3] = fac * (T[j1][0][j3] - T[j1][m2 - 2][j3]);
+				}
+			}
+			fac = 1 / (2 * h3);					  // T x3 Direction
+			for (j1 = 0; j1 < m1; j1++) {
+				for (j2 = 0; j2 < m2; j2++) {
+					dT[2][j1][j2][0] = fac * (T[j1][j2][1] - T[j1][j2][m3 - 1]);
+					dT[2][j1][j2][m3 - 1] = fac * (T[j1][j2][0] - T[j1][j2][m3 - 2]);
+				}
+			}
+
+			break;
+		}
+
+		case NEUMANN:
+		{
+			fac = 1 / (2 * h1);					  // T x1 Direction
+			for (j2 = 0; j2 < m2; j2++) {
+				for (j3 = 0; j3 < m3; j3++) {
+					dT[0][0][j2][j3] = fac * (T[1][j2][j3] - T[0][j2][j3]);
+					dT[0][m1 - 1][j2][j3] = fac * (T[m1 - 1][j2][j3] - T[m1 - 2][j2][j3]);
+				}
+			}
+			fac = 1 / (2 * h2);					  // T x2 Direction
+			for (j1 = 0; j1 < m1; j1++) {
+				for (j3 = 0; j3 < m3; j3++) {
+					dT[1][j1][0][j3] = fac * (T[j1][1][j3] - T[j1][0][j3]);
+					dT[1][j1][m2 - 1][j3] = fac * (T[j1][m2 - 1][j3] - T[j1][m2 - 2][j3]);
+				}
+			}
+			fac = 1 / (2 * h3);					  // T x3 Direction
+			for (j1 = 0; j1 < m1; j1++) {
+				for (j2 = 0; j2 < m2; j2++) {
+					dT[2][j1][j2][0] = fac * (T[j1][j2][1] - T[j1][j2][0]);
+					dT[2][j1][j2][m3 - 1] = fac * (T[j1][j2][m3 - 1] - T[j1][j2][m3 - 2]);
+				}
+			}
+
+			break;
+		}
+
+		case DIRICHLET:
+		{
+			fac = 1 / (h1);						  // T x1 Direction
+			for (j2 = 0; j2 < m2; j2++) {
+				for (j3 = 0; j3 < m3; j3++) {
+					dT[0][0][j2][j3] = fac * (T[1][j2][j3]);
+					dT[0][m1 - 1][j2][j3] = fac * (-T[m1 - 2][j2][j3]);
+				}
+			}
+			fac = 1 / (h2);						  // T x2 Direction
+			for (j1 = 0; j1 < m1; j1++) {
+				for (j3 = 0; j3 < m3; j3++) {
+					dT[1][j1][0][j3] = fac * (T[j1][1][j3]);
+					dT[1][j1][m2 - 1][j3] = fac * (-T[j1][m2 - 2][j3]);
+				}
+			}
+			fac = 1 / (h3);						  // T x3 Direction
+			for (j1 = 0; j1 < m1; j1++) {
+				for (j2 = 0; j2 < m2; j2++) {
+					dT[2][j1][j2][0] = fac * (T[j1][j2][1]);
+					dT[2][j1][j2][m3 - 1] = fac * (T[j1][j2][m3 - 1]);
+				}
+			}
+
+			break;
+		}
+
+		default:
+		{
+		}
+
+	}
+
+}
+
+
+void            evalDisplacementLinear3D (array3D T, size_t m1, size_t m2, size_t m3,
+							array3D U1, array3D U2, array3D U3, array3D Tphi)
+{
+	int             j1, j2, j3, k, i1, i2, i3, index;
+	int             I1[2];
+	int             I2[2];
+	int             I3[2];
+	double          w1[2];
+	double          w2[2];
+	double          w3[2];
+	double          X, Y, Z;
+
+	for (j1 = 0; j1 < m1; j1++) {
+		for (j2 = 0; j2 < m2; j2++) {
+			for (j3 = 0; j3 < m3; j3++) {
+				X = j1 + U1[j1][j2][j3];
+				Y = j2 + U2[j1][j2][j3];
+				Z = j3 + U3[j1][j2][j3];
+
+				w1[1] = X - floor (X);
+				w1[0] = 1.0 - w1[1];
+
+				w2[1] = Y - floor (Y);
+				w2[0] = 1.0 - w2[1];
+
+				w3[1] = Z - floor (Z);
+				w3[0] = 1.0 - w3[1];
+
+				index = (int) floor (X);
+
+				for (k = 0; k < 2; ++k) {
+					if ((index < 0) || (index > (m1 - 1))) {
+						I1[k] = 0;
+						w1[k] = 0.0;
+					} else
+						I1[k] = index;
+					index++;
+				}
+
+				index = (int) floor (Y);
+
+				for (k = 0; k < 2; ++k) {
+					if ((index < 0) || (index > (m2 - 1))) {
+						I2[k] = 0;
+						w2[k] = 0.0;
+					} else
+						I2[k] = index;
+					index++;
+				}
+
+				index = (int) floor (Z);
+
+				for (k = 0; k < 2; ++k) {
+					if ((index < 0) || (index > (m3 - 1))) {
+						I3[k] = 0;
+						w3[k] = 0.0;
+					} else
+						I3[k] = index;
+					index++;
+				}
+
+				Tphi[j1][j2][j3] = 0.0;
+				for (i1 = 0; i1 < 2; ++i1)
+					for (i2 = 0; i2 < 2; ++i2)
+						for (i3 = 0; i3 < 2; ++i3)
+							Tphi[j1][j2][j3] += w1[i1] * w2[i2] * w3[i3] * T[I1[i1]][I2[i2]][I3[i3]];
+			}
+		}
+	}
+}
+@
+
+
+1.3
+log
+@May 20 version
+@
+text
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d5 6
+a10 13
+/*
+ * Compute gradient of T using central finite differences; at the boundarys
+ * DIRICHLET or NEUMANN are used,
+ *    d1T[j1][j2] = 1/2* ( T[j1+1][j2] - T[j1-1][j2])
+ *    d2T[j1][j2] = 1/2* ( T[j1][j2+1] - T[j1][j2-1])
+ */
+void            computeFDGrad2D (array2D T,
+				                 size_t m1,
+				                 size_t m2,
+				                 double h1,
+				                 double h2,
+				                 boundary_t bc,
+				                 array3D dT)
+d15 1
+a15 1
+	/* compute Tner gradient without respect to BC */
+d17 1
+a17 2
+	/* Gradient T x1 */
+	fac = 1 / (2 * h1);
+d22 2
+a23 2
+	/* Gradient T x2 */
+	fac = 1 / (2 * h2);
+d28 3
+a30 1
+	/* compute gradient on image boundarys with respect to BC */
+d32 1
+a32 1
+	case NEUMANN:				 /* Neumann 0 BC */
+d34 1
+a34 2
+			/* T x1 Direction */
+			fac = 1 / (2 * h1);
+d39 1
+a39 2
+			/* T x2 Direction */
+			fac = 1 / (2 * h2);
+d46 1
+a46 1
+		}				 /* end of case NEUMANN */
+d48 1
+a48 1
+	case DIRICHLET:			 /* Dirichlet 0 BC */
+d50 1
+a50 2
+			/* T x1 Direction */
+			fac = 1 / (h1);
+d55 1
+a55 3
+
+			/* T x2 Direction */
+			fac = 1 / (h2);
+d62 1
+a62 1
+		}				 /* end of case DIRICHLET */
+d64 2
+a65 1
+	default:{
+d68 2
+a69 3
+	}					 /* end of switch bc */
+	/* printf("\nend\n"); */
+}						 /* end of computeFDGrad2D() */
+d72 1
+a72 6
+void            evalDisplacementLinear2D (array2D T,
+					                  size_t m1,
+					                  size_t m2,
+					                  array2D U1,
+					                  array2D U2,
+					                  array2D Tphi)
+d97 1
+a97 1
+				} else {
+a98 1
+				}
+d107 1
+a107 1
+				} else {
+a108 1
+				}
+d119 1
+a119 1
+}						 /* end of evalDisplacementLinear2D() */
+d122 10
+a131 17
+/* 3D code for imagetools
+ * ----------------------
+ * Compute gradient of T using central finite differences; at the boundarys
+ * DIRICHLET or NEUMANN are used,
+ *    d1T[j1][j2][j3] = 1/2* ( T[j1+1][j2][j3] - T[j1-1][j2][j3])
+ *    d2T[j1][j2][j3] = 1/2* ( T[j1][j2+1][j3] - T[j1][j2-1][j3])
+ *    d3T[j1][j2][j3] = 1/2* ( T[j1][j2][j3+1] - T[j1][j2][j3-1])
+ */
+void            computeFDGrad3D (array3D T,
+				                 size_t m1,
+				                 size_t m2,
+				                 size_t m3,
+				                 double h1,
+				                 double h2,
+				                 double h3,
+				                 boundary_t bc,
+				                 array4D dT)
+d136 1
+a136 1
+	/* compute inner gradient without respect to BC */
+d138 1
+a138 2
+	/* Gradient T x1 */
+	fac = 1 / (2 * h1);
+d144 1
+a144 2
+	/* Gradient T x2 */
+	fac = 1 / (2 * h2);
+d150 1
+a150 2
+	/* Gradient T x3 */
+	fac = 1 / (2 * h3);
+d156 2
+a157 1
+	/* compute gradient on image boundarys with respect to BC */
+d159 1
+a159 1
+	case PERIODIC:				 /* Periodic BC */
+d161 1
+a161 2
+			/* T x1 Direction */
+			fac = 1 / (2 * h1);
+d168 1
+a168 3
+
+			/* T x2 Direction */
+			fac = 1 / (2 * h2);
+d175 1
+a175 3
+
+			/* T x3 Direction */
+			fac = 1 / (2 * h3);
+d184 1
+a184 1
+		}				 /* end of case PERIODIC */
+d186 1
+a186 1
+	case NEUMANN:				 /* Neumann 0 BC */
+d188 1
+a188 2
+			/* T x1 Direction */
+			fac = 1 / (2 * h1);
+d195 1
+a195 3
+
+			/* T x2 Direction */
+			fac = 1 / (2 * h2);
+d202 1
+a202 3
+
+			/* T x3 Direction */
+			fac = 1 / (2 * h3);
+d211 1
+a211 1
+		}				 /* end of case NEUMANN */
+d213 1
+a213 1
+	case DIRICHLET:			 /* Dirichlet 0 BC */
+d215 1
+a215 2
+			/* T x1 Direction */
+			fac = 1 / (h1);
+d222 1
+a222 3
+
+			/* T x2 Direction */
+			fac = 1 / (h2);
+d229 1
+a229 3
+
+			/* T x3 Direction */
+			fac = 1 / (h3);
+d238 1
+a238 1
+		}				 /* end of case DIRICHLET */
+d240 2
+a241 1
+	default:{
+d244 1
+a244 1
+	}					 /* end of switch bc */
+d246 1
+a246 1
+}						 /* end of computeGradient3D */
+d248 3
+a250 8
+void            evalDisplacementLinear3D (array3D T,
+					                  size_t m1,
+					                  size_t m2,
+					                  size_t m3,
+					                  array3D U1,
+					                  array3D U2,
+					                  array3D U3,
+					                  array3D Tphi)
+a263 1
+
+d283 1
+a283 1
+					} else {
+a284 1
+					}
+d294 1
+a294 1
+					} else {
+a295 1
+					}
+d305 1
+a305 1
+					} else {
+a306 1
+					}
+d318 1
+a318 1
+}						 /* end of evalDisplacementLinear3D */
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d6 5
+a10 5
+ Compute gradient of T using central finite differences; at the boundarys
+ DIRICHLET or NEUMANN are used,
+    d1T[j1][j2] = 1/2* ( T[j1+1][j2] - T[j1-1][j2])
+    d2T[j1][j2] = 1/2* ( T[j1][j2+1] - T[j1][j2-1])
+*/
+d27 1
+a27 1
+		for (j2 = 0; j2 < m2; j2++) {
+a28 1
+		}
+d33 1
+a33 1
+		for (j2 = 1; j2 < (m2 - 1); j2++) {
+a34 1
+		}
+a89 1
+
+a90 1
+
+a107 2
+
+
+d140 8
+a147 8
+/* the 3D code for imagetools */
+/*
+ Compute gradient of T using central finite differences; at the boundarys
+ DIRICHLET or NEUMANN are used,
+    d1T[j1][j2][j3] = 1/2* ( T[j1+1][j2][j3] - T[j1-1][j2][j3])
+    d2T[j1][j2][j3] = 1/2* ( T[j1][j2+1][j3] - T[j1][j2-1][j3])
+    d3T[j1][j2][j3] = 1/2* ( T[j1][j2][j3+1] - T[j1][j2][j3-1])
+*/
+d161 1
+a161 1
+	/* compute Tner gradient without respect to BC */
+d165 3
+a167 3
+	for (j1 = 1; j1 < (m1 - 1); j1++) {
+		for (j2 = 0; j2 < m2; j2++) {
+			for (j3 = 0; j3 < m3; j3++) {
+d169 1
+a169 3
+			}
+		}
+	}
+d172 3
+a174 3
+	for (j1 = 0; j1 < m1; j1++) {
+		for (j2 = 1; j2 < (m2 - 1); j2++) {
+			for (j3 = 0; j3 < m3; j3++) {
+d176 1
+a176 3
+			}
+		}
+	}
+d179 3
+a181 3
+	for (j1 = 0; j1 < m1; j1++) {
+		for (j2 = 0; j2 < m2; j2++) {
+			for (j3 = 1; j3 < (m3 - 1); j3++) {
+d183 1
+a183 3
+			}
+		}
+	}
+d196 1
+d205 1
+d216 2
+a217 1
+		}				 /* end of case NEUMANN */
+d228 1
+d237 1
+d269 1
+a298 1
+
+a364 1
+
+a367 1
+
+@

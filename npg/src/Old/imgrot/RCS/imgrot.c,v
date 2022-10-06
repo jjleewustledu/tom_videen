@@ -1,0 +1,427 @@
+head	1.7;
+access;
+symbols;
+locks
+	tom:1.7; strict;
+comment	@ * @;
+
+
+1.7
+date	93.07.26.22.07.18;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.07.26.18.59.40;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.07.26.15.04.40;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.07.26.14.48.56;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.07.22.22.31.17;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@working c/fortran
+@
+
+
+1.7
+log
+@fixed imgrots to use NROW and NCOL
+@
+text
+@/* $Log: imgrot.c,v $
+ * Revision 1.6  1993/07/26  18:59:40  tom
+ * working c/fortran
+ *
+ * Revision 1.5  1993/07/26  15:04:40  tom
+ * working c/fortran
+ *
+ * Revision 1.4  1993/07/26  14:48:56  tom
+ * working c/fortran
+ *
+ * Revision 1.1  1993/07/22  22:31:17  tom
+ * working c/fortran
+ * */
+/*	===============================================================================
+ *	Module:				imgrot.c
+ *	Date:					26-Jul-93
+ *	Author:				Tom Videen
+ *	Description:	Call imgrot.f functions (Avi Snyder 29-Jun-93)
+ *	History:			C main to replace imgrot.f
+ *	===============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <math.h>
+#include <petutil/petutil.h>
+#include <petutil/matrix.h>
+
+static char rcsid []= "$Id: imgrot.c,v 1.6 1993/07/26 18:59:40 tom Exp tom $"; 
+
+char list [] = "*;*;*;*"; 	/* any frame plane gate bed */
+
+/*	----------------------------
+ *	Function:			imgrot
+ *	----------------------------
+ */	
+main (argc, argv)
+	int	argc;
+	char	*argv[];
+{
+#ifdef HP
+	extern alignc ();
+	extern alignr ();
+	extern atteny ();
+	extern imgroto ();
+	extern imgrots ();
+#else
+	extern alignc_ ();
+	extern alignr_ ();
+	extern atteny_ ();
+	extern imgroto_ ();
+	extern imgrots_ ();
+#endif
+
+	MatrixFile			*fptr;
+	Main_header			*main_header;
+	Image_subheader	**subheader;
+	struct	Matval	matval;
+
+	float		*image;						/* input image array */
+	float		*imagenew;				/* rotated, output image array */
+	short		*mask;						/* mask array */
+	float		center[3];				/* param[6-8] */
+	int			fd;
+	int			scanner;					/* 6 = PETT VI;  10 = 953B */
+	short		nx;
+	short		ny;
+	short		num_slices;       /* number of slices in PET image */
+	int			dim;							/* image array dimension nx*nx*num_slices */
+	float		pixel_size;
+	float		plane_separation;
+	BOOLEAN	encoded_flag;
+
+  float		param[12];				/* alignment parameters */
+  float		mmpix[3];					/* mm per pixel for each dimension */
+  float		fovmm[3];					/* FOV in mm */
+  float 	raxis[3];
+	float		scale;
+	float		mean;							/* mean pixel value within threshold */
+	float		t;
+	float		degperad;					/* degrees per radian */
+	float		rmsrot;
+	float		thresht;
+	float		err;
+	float		r;
+	int			i;
+	int			j;
+	int			k;
+	int			npix;							/* number of pixels in mask */
+
+	char		*imagefile;
+	char		*maskfile;
+  char 		*outfile;
+
+/*
+ *	Initializations
+ */
+
+  degperad = 45 / atan(1.);
+	fovmm[0] = 200;
+	fovmm[1] = 200;
+	fovmm[2] = 110;
+	matval.frame	= 1;			/* default values for matval */
+	matval.plane	= 1;
+	matval.gate		= 1;
+	matval.data		= 0;
+	matval.bed		= 0;
+
+/*
+ *	Get command line arguments.
+ * ----------------------------
+ */
+
+	if (argc != 4) {
+		printf ("Usage: imgrot image mask output\n");
+		exit(FAIL);
+	}
+	imagefile	= argv[1];
+	maskfile	= argv[2];
+	outfile		= argv[3];
+
+/*
+ *	Get image type and size
+ * ------------------------
+ */
+
+	fd = open (imagefile, O_RDONLY, 0);
+	if (fd == -1) {
+		printf ("Error opening %s\n", imagefile);
+		exit (FAIL);
+	}
+	scanner = getimage_type (fd, imagefile, &encoded_flag, &num_slices);
+	close (fd);
+	if (scanner == ERROR_SCANNER) {
+		printf ("Error: file is not a recognized PET image\n");
+		exit (FAIL);
+	}
+	if (scanner == ECAT_SCANNER) {
+		fptr = OpenEcat (imagefile, &num_slices, &nx, &ny, &pixel_size,	&plane_separation, matval);
+		if (fptr  == (MatrixFile *) NULL) {
+			printf ("Error: cannot open %s as an ECAT image file\n", imagefile);
+			exit (FAIL);
+		}
+		matrix_close (fptr);
+	}
+	else {
+		nx = 128;
+		ny = 128;
+		pixel_size = 0.286;
+		plane_separation = 1.44;
+	}
+
+	dim = nx * ny * num_slices;
+	mmpix[0] = 10. * pixel_size;
+	mmpix[1] = 10. * pixel_size;
+	mmpix[2] = 10. * plane_separation;
+	printf ("imgrot version 26-Jul-93\n");
+  printf ("mmpix  %f %f %f\n", mmpix[0], mmpix[1], mmpix[2]);
+
+/*
+ *	Allocate arrays
+ * ----------------
+ */
+
+	image = (float *) calloc (dim, sizeof (float));
+	imagenew = (float *) calloc (dim, sizeof (float));
+	mask = (short *) calloc (dim, sizeof (short));
+	main_header	= (Main_header *) calloc (1, sizeof (Main_header));
+	subheader		= (Image_subheader **) malloc (num_slices * sizeof (caddr_t));
+
+/*
+ *	Read imagefile
+ * ---------------
+ */
+
+	if (getrealimg (imagefile, scanner, matval, nx, ny, num_slices, image, 
+			main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error reading %s\n", imagefile);
+		free (image);
+		free (mask);
+		free (imagenew);
+		free (subheader);
+		free (main_header);
+		exit (FAIL);
+	}
+	
+/*
+ *	Read maskfile
+ * --------------
+ */
+
+	if (strcmp (argv[2], argv[1]) > 0) {
+		maskfile	= argv[2];
+		fd = open (maskfile, O_RDONLY, 0);
+		if (fd == -1) {
+			printf ("Error opening %s\n", maskfile);
+			free (image);
+			free (mask);
+			free (imagenew);
+			free (subheader);
+			free (main_header);
+			exit (FAIL);
+		}
+		scanner = getimage_type (fd, imagefile, &encoded_flag, &num_slices);
+		close (fd);
+		if (scanner == ERROR_SCANNER) {
+			printf ("Error: file is not a recognized PET image\n");
+			free (image);
+			free (mask);
+			free (imagenew);
+			free (subheader);
+			free (main_header);
+			exit (FAIL);
+		}
+		if (getrealimg (maskfile, scanner, matval, nx, ny, num_slices, imagenew,
+				main_header, subheader) == FAIL) {
+			fprintf (stderr, "Error reading %s\n", maskfile);
+			free (image);
+			free (mask);
+			free (imagenew);
+			free (subheader);
+			free (main_header);
+			exit (FAIL);
+		} else {
+			for (i = 0; i < dim; ++i)
+				mask[i] = imagenew[i];
+		}
+
+/*    atteny_ (thresht, mask, num_slices, 1, num_slices);
+ */
+	}
+	else {
+		for (i = 0; i < dim; ++i)
+			mask[i] = 1;
+	}
+
+/*
+ *	Align image
+ * ------------
+ */
+
+	center[0] = param [6];
+	center[1] = param [7];
+	center[2] = param [8];
+
+#ifdef HP
+  alignc (image, mask, &num_slices, &nx, &ny, mmpix, center, &npix, &mean);
+#else
+  alignc_ (image, mask, &num_slices, &nx, &ny, mmpix, center, &npix, &mean);
+#endif
+
+  scale = 1000. / mean;
+	param [6] = center[0];
+	param [7] = center[1];
+	param [8] = center[2];
+	printf ("Mean: %f     Pixels in mask: %d\n", mean, npix);
+  printf ("Image Center mm  %f %f %f\n",param[6], param[7], param[8]);
+
+#ifdef HP
+  imgroto (image, mask, &num_slices, &nx, &ny, fovmm, mmpix, param, &scale, &err);
+  alignr (image, mask, &num_slices, &nx, &ny, mmpix, param, &rmsrot);
+#else
+  imgroto_ (image, mask, &num_slices, &nx, &ny, fovmm, mmpix, param, &scale, &err);
+  alignr_ (image, mask, &num_slices, &nx, &ny, mmpix, param, &rmsrot);
+#endif
+
+	t = sqrt (param[0] * param[0] + param[1] * param[1] + param[2] * param[2]);
+  printf ("ang motion  %f mm\n", rmsrot);
+  printf ("total %f mm\n", sqrt(rmsrot*rmsrot + t*t));
+
+#ifdef HP
+  imgrots (imagenew, image, mask, &num_slices, &nx, &ny, mmpix, param);
+#else
+  imgrots_ (imagenew, image, mask, &num_slices, &nx, &ny, mmpix, param);
+#endif
+
+	free (image);
+	free (mask);
+
+/*
+ *	Write image
+ * ------------
+ */
+
+	for (i = 0; i < num_slices; i++) {
+		subheader[i] = matrixx_init_image_subheader (subheader[0]);
+	}
+	if (writerealimg (outfile, matval, nx, ny, num_slices, imagenew, main_header, subheader) == FAIL) {
+		fprintf (stderr, "Error writing %s\n", outfile);
+	}
+
+/*
+ *	Free memory
+ * ------------
+ */
+
+	free (imagenew);
+	for (i = 0; i < num_slices; i++) {
+		free (subheader [i]);
+	}
+	free (subheader);
+	free (main_header);
+}
+@
+
+
+1.6
+log
+@working c/fortran
+@
+text
+@d2 3
+d30 1
+a30 1
+static char rcsid []= "$Id: imgrot.c,v 1.5 1993/07/26 15:04:40 tom Exp tom $"; 
+d289 1
+a289 1
+	if (writerealimg (outfile, matval, nx, ny, num_slices, image, main_header, subheader) == FAIL) {
+@
+
+
+1.5
+log
+@working c/fortran
+@
+text
+@d2 3
+d27 1
+a27 1
+static char rcsid []= "$Id: imgrot.c,v 1.4 1993/07/26 14:48:56 tom Exp tom $"; 
+@
+
+
+1.4
+log
+@working c/fortran
+@
+text
+@d2 3
+d24 1
+a24 1
+static char rcsid []= "$Id: imgrot.c,v 1.1 1993/07/22 22:31:17 tom Exp tom $"; 
+@
+
+
+1.1
+log
+@working c/fortran
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d7 1
+a7 1
+ *	Date:					22-Jul-93
+d17 1
+d21 1
+a21 1
+static char rcsid []= "$Id$"; 
+d33 1
+d39 7
+d81 1
+a81 1
+	int			npixa;
+d149 1
+a149 1
+	printf ("imgrot version 22-Jul-93\n");
+d237 7
+a243 1
+  alignc_ (image, mask, &num_slices, &nx, &ny, mmpix, center, &npixa, &mean);
+d248 2
+a249 1
+  printf ("image center mm  %f %f %f\n",param[6], param[7], param[8]);
+d251 4
+d256 2
+d259 1
+a259 1
+  alignr_ (image, mask, &num_slices, &nx, &ny, mmpix, param, &rmsrot);
+d263 3
+d267 2
+@

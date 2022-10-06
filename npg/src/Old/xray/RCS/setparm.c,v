@@ -1,0 +1,317 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	93.09.10.14.48.26;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.04.20.19.37.49;	author ty7777;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.02.15.20.34.04;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.01.26.20.59.15;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@setparm.c initial checking in.
+@
+
+
+1.4
+log
+@Change TYPE to XRAY_TYPE.
+@
+text
+@/*$Id: setparm.c,v 1.3 1993/04/20 19:37:49 ty7777 Exp ty7777 $*/
+/*$Log: setparm.c,v $
+ * Revision 1.3  1993/04/20  19:37:49  ty7777
+ * Before getsxr.c
+ *
+ * Revision 1.2  1993/02/15  20:34:04  ty7777
+ * Before adding lines for slices.
+ *
+ * Revision 1.1  1993/01/26  20:59:15  ty7777
+ * Initial revision
+ **/
+
+#ifndef lint
+static char sccsid [] = "@@(#)setparm.c	11/03/92  Copyright Neural Pet Group, Washington University 1992";
+#endif
+
+static char rcsid [] = "$Id: setparm.c,v 1.3 1993/04/20 19:37:49 ty7777 Exp ty7777 $";
+
+/*___________________________________________________________________________
+  File:		setparm.c
+
+  Function:	void SetParameters ()
+
+  Arguments:	
+
+  Description:	This function assigns the parameters type, pix, slcsize, zatldim, apaldim.
+
+  Called by:	The main program xray in xray.c 	
+
+  Calling:	
+
+  History:	Created by Tom Yang on 11/03/92. 
+___________________________________________________________________________*/
+
+#include "xray.h"
+#include <petutil/matrix.h>
+
+PUBLIC int SetParameters (image_name, scanner_type, encoded, num_slices, sxr_output,
+			petimagetype, trim, assigned_threshold)
+	char		*image_name;
+	int		scanner_type;
+	BOOLEAN		encoded;
+	short int	*num_slices;
+	SXR_OUTPUT	*sxr_output;
+	char		*petimagetype;
+	char		*trim;
+	BOOLEAN		assigned_threshold;
+{
+	MatrixFile	*fptr;
+	Mlist		*mlist;
+	struct Matval	matval;
+	BOOLEAN		err_value;
+	PETT6HDR	*pett6_header;
+	float		pixel_size;
+	float		plane_separation;
+	int		diff;  /* number of differences between spec and actual */
+	int		fd;
+	int		file_type;
+	short		height;
+	short		width;
+	short		*header;
+	short		*slice_data;
+
+	sxr_output->type	= XRAY_TYPE;
+
+	fd	= open (image_name, O_RDONLY, 0);
+	if (fd == -1)
+	{
+		fprintf (stderr, "Can't open %s\n", image_name); 
+		return FAIL;
+	}
+
+	if (scanner_type != ECAT_SCANNER)
+	{
+		/* 
+	 	 * Allocate header. 
+	 	 */
+		header = (short *) calloc (HEADER_SIZE / sizeof (short), sizeof (short));
+		if (header == (short *) NULL)
+		{
+			pkg_message (PKG_ERROR, "xray", "SetParameters", "calloc",
+					"Error: Can't allocate header.\n");
+			return FAIL;
+		}
+
+		slice_data	= (short *) calloc (ENCODED_SLICE_DIM, sizeof (short));
+		if (slice_data == (short *) NULL)
+		{
+			pkg_message (PKG_ERROR, "xray", "SetPetParameters", "calloc",
+					"Error: Can't allocate slice_data.\n");
+			return FAIL;
+		}
+
+		getimage (slice_data, header, fd, image_name, 1, 
+				encoded, *num_slices, scanner_type, &err_value);
+		pett6_header	= (PETT6HDR *) header;
+		file_type	= pett6_header->file_type;
+		if (file_type == TRANSMISSION_PET1010)
+		{
+			*petimagetype	= TRANSMISSION_SCAN;
+			if (!assigned_threshold)
+				sxr_output->threshold	= DEFAULT_PETT6_TRANS_THRESH;
+		}
+		else if (file_type == EMISSION_PET1020 || file_type == EMISSION_PET2000
+			|| file_type == EMISSION_PET2010)
+		{
+			*petimagetype	= EMISSION_SCAN;
+			*trim		= 0;
+		}
+		else
+		{
+			fprintf (stderr, "Unknown PETT VI scan type %d.\n", file_type);
+			return FAIL;
+		}
+
+		sxr_output->scan_position	= 0.0;
+		sxr_output->pixel_size		= PETT6_PIXEL_SIZE;
+		sxr_output->slice_separation	= PETT6_SEPARATION;
+		sxr_output->reference_slice	= PETT6_REFERENCE;
+		sxr_output->reference_offset	= PETT6_OFFSET;
+
+		free (header);
+		free (slice_data);
+	}
+	else
+	{
+		/*
+	 	 * Assign default values for matval.
+	 	 */
+		matval.frame	= 1;
+		matval.plane	= 1;
+		matval.gate	= 1;
+		matval.data	= 0;
+		matval.bed	= 0;
+
+		fptr	= OpenEcat (image_name, num_slices, &width, &height, 
+				&pixel_size, &plane_separation, matval);
+		if (fptr == (MatrixFile *) NULL)
+		{
+			fprintf (stderr, "SetParameters: OpenEcat error.\n");
+			return (FAIL);
+		}
+
+		if (plane_separation == 0.0)
+			plane_separation	= ECAT_SEPARATION;
+
+		/*
+	 	 * The number of mats in a list always gives the correct number of
+	 	 * slices.
+	 	 */
+		mlist	= make_list (image_name, (char *) NULL, list, &diff);
+		if (!mlist) 
+		{
+			fprintf (stderr, "make_list error.\n");
+			matrix_close (fptr);
+			return (FAIL);
+		}
+		*num_slices	= mlist->nmats;
+
+		if (fptr->mhptr->acquisition_type == TRANSMISSION_ECAT)
+		{
+			*petimagetype	= TRANSMISSION_SCAN;
+			if (!assigned_threshold)
+				sxr_output->threshold	= DEFAULT_ECAT_TRANS_THRESH;
+		}
+		else if (fptr->mhptr->acquisition_type > TRANSMISSION_ECAT)
+		{
+			*petimagetype	= EMISSION_SCAN;
+			if (!assigned_threshold)
+				sxr_output->threshold	= DEFAULT_ECAT_EMISSION_THRESH;
+			*trim		= 0;
+		}
+		else
+		{
+			fprintf (stderr, "Unknown ECAT scan type %d.\n", scanner_type);
+			return FAIL;
+		}
+
+		free_Mlist (mlist);
+		matrix_close (fptr);
+
+		sxr_output->scan_position	= ECAT_OFFSET;
+		sxr_output->pixel_size		= pixel_size;
+		sxr_output->slice_separation	= plane_separation;
+		sxr_output->reference_slice	= ECAT_REFERENCE;
+		sxr_output->reference_offset	= 0.0;
+
+	}
+	close (fd);
+
+	sxr_output->zatlas_dimension	= ZATLAS_DIMENSION;
+	sxr_output->apatlas_dimension	= APATLAS_DIMENSION;
+
+	return SUCCEED;
+}
+@
+
+
+1.3
+log
+@Before getsxr.c
+@
+text
+@d1 1
+a1 1
+/*$Id: setparm.c,v 1.2 1993/02/15 20:34:04 ty7777 Exp ty7777 $*/
+d3 3
+d17 1
+a17 1
+static char rcsid [] = "$Id: setparm.c,v 1.2 1993/02/15 20:34:04 ty7777 Exp ty7777 $";
+d64 1
+a64 1
+	sxr_output->type	= TYPE;
+@
+
+
+1.2
+log
+@Before adding lines for slices.
+@
+text
+@d1 1
+a1 1
+/*$Id: setparm.c,v 1.1 1993/01/26 20:59:15 ty7777 Exp ty7777 $*/
+d3 3
+d14 1
+a14 1
+static char rcsid [] = "$Id: setparm.c,v 1.1 1993/01/26 20:59:15 ty7777 Exp ty7777 $";
+d33 1
+a33 1
+#include <datacalc/datacalc.h>
+d133 1
+a133 1
+		fptr	= OpenEcat (fd, image_name, num_slices, &width, &height, 
+d152 1
+a152 1
+			matrixx_close (fptr);
+d172 1
+a172 1
+			fprintf (stderr, "Unknown ECAT scan type %d.\n", file_type);
+d177 1
+a177 1
+		matrixx_close (fptr);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 5
+a5 2
+/*$Id$*/
+/*$Log$*/
+d11 1
+a11 1
+static char rcsid [] = "$Id$";
+d33 1
+a33 1
+			petimagetype, threshold, trim, assigned_threshold)
+a39 1
+	char		*threshold;
+d96 1
+a96 1
+				*threshold	= DEFAULT_PETT6_TRANS_THRESH;
+d110 1
+d158 1
+a158 1
+				*threshold	= DEFAULT_PETT6_TRANS_THRESH;
+d163 2
+d169 1
+a169 1
+			fprintf (stderr, "Unknown PETT VI scan type %d.\n", file_type);
+d176 1
+d180 1
+a180 1
+		sxr_output->reference_offset	= ECAT_OFFSET;
+@

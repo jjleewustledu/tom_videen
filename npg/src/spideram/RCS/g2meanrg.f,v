@@ -1,0 +1,900 @@
+head	2.0;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.0
+date	2004.02.20.14.34.10;	author tom;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	2002.12.02.21.26.52;	author tom;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2001.05.30.20.01.40;	author tom;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2001.05.30.19.46.30;	author tom;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.12.15.21.32.32;	author tom;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.03.05.18.49.14;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.04.29.15.20.35;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	94.11.29.23.30.20;	author ty7777;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.10.04.21.55.32;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	92.04.23.21.25.39;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	92.04.13.19.12.07;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@Spideram function.
+@
+
+
+2.0
+log
+@Feb 2004
+@
+text
+@C     $Id: g2meanrg.f,v 1.10 2002/12/02 21:26:52 tom Exp tom $
+C     $Log: g2meanrg.f,v $
+c Revision 1.10  2002/12/02  21:26:52  tom
+c format changes plus fixes for g77
+c
+c     Revision 1.9  2001/05/30  20:01:40  tom
+c     version expanded to 11 chars
+c     
+c     Revision 1.8  2001/05/30  19:46:30  tom
+c     add steady-state oxygen processing
+c     
+c     Revision 1.7  1999/12/15  21:32:32  tom
+c     y2k fix in date print
+c     
+c     Revision 1.6  1999/03/05  18:49:14  tom
+c     add CVO2
+c     
+c     Revision 1.5  1998/04/29  15:20:35  tom
+c     allow processing for CMRGlucose
+c     
+c     Revision 1.4  1994/11/29  23:30:20  ty7777
+c     Deleted VRMVALUE and NORMALIZE from the argument list.
+c     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     
+C     Subroutine:   G2MEANRG.FTN
+C     Author:       Tom O. Videen
+C     Date:         03-Jun-87
+C     Intent:
+C     .  This subroutine computes global mean regional values.
+C     
+C     Note:  regions are designated as left or right hemisphere
+C     .  by the tenth (last) character in the region name (REGNAME)
+C     .  which must be 'L' or 'R'.
+C     
+C     History:
+C     .  Modified 05-Mar-99 by TOV to allow processing for CVO2
+C     .     (PROCESS may be 0-7)
+C     .  Modified 28-Apr-98 by TOV to allow processing for CMRGlucose
+C     .     (PROCESS may be 0-6)
+C     .  Modified 06-Oct-87 by TOV to allow processing for tissue activity
+C     .     either with or without decay correction; (PROCESS may be 0-5)
+C     .  Modified by TOV 13-Sep-88 to print program VERSION date and PROCTYPE.
+C     .  Modified by Tom Yang 19-Sep-91 to port to X windows.
+C     .  Modified by TOV 09-Feb-90 to eliminage bug in computing mean values
+C     .     for multiple scan files.
+C     .  Modified 15-Oct-91 by TOV:
+C     .     1) NRMVALUE and NORMALIZE added to calling parameters.
+C     .  Modified by Tom Yang 30-Nov-94 to delete NORMALIZE and VRMSCALE
+C     .     from the argument list.
+C     
+C     Common Blocks from SPIDERAM:
+C     .  **IMAGEDAT - image arrays                   (read only)
+C     .  **LUINFO   - logical units (also /USRIO/)   (read only)
+C     .  **DISPLAY  - display parameters             (read only)
+C     .  **FILES    - scan file list                 (read only)
+C     .  **GLOBALAV - global averaging parameters    (read only)
+C     .  **REGION   - regions of interest parameters (read only)
+C     .  **AREA     - area of a region               (read only)
+C     .  **REGCOMP  - region analysis parameters     (read only)
+C     
+C     Variables Passed:
+C     .  PRINT = true--> write averages to printer;
+C     .  ERRTYPE = type of error in processing images;
+C     
+C     Local Variables:
+C     .  N = number of pixels in all regions;
+C     .  NL = number of pixels left hemisphere regions;
+C     .  NR = number of pixels right hemisphere regions;
+C     .  SUM = total activity of all included points;
+C     .  SUML = total activity of all left hemisphere regions;
+C     .  SUMR = total activity of all right hemisphere regions;
+C     .  MEAN = mean activity of all included points;
+C     .  MEANL = mean activity of all left hemisphere regions;
+C     .  MEANR = mean activity of all right hemisphere regions;
+C     .  REG = region number to process;
+C     .  FIRSTR = first region (1-100) on the current slice;
+C     .  COUNT = value of a pixel in IMAGE array;
+C     .  X,Y = coordinates of a point included in a region;
+C     
+C     Uses Subroutines:
+C     .  D2GETIMG - get an image from a disk file;
+C     .  D2IMAGE  - assemble an image slice from component image files;
+C     .  P2AREAI  - get points within an irregular region;
+C     .  P2AREAR  - get points within a rectangular region;
+C     
+C     FORTRAN Runtime Library
+C     .  DATE
+C     
+C     Called by:  M2GLOBAL
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C     rcsheader = "$Id: g2meanrg.f,v 1.10 2002/12/02 21:26:52 tom Exp tom $"
+
+      SUBROUTINE G2MEANRG (PRINT, ERRTYPE)
+
+      INTEGER*4     SUM, SUML, SUMR, N, NL, NR, REG, SLCNUM, COUNT,
+     &     SCAN, FIRSTR, COL, ROW, ADATE(3),
+     &     I, K, L, X, Y, ERRTYPE
+      REAL*4        MEAN, MEANL, MEANR
+      CHARACTER*1   FORMFEED
+      CHARACTER*12  FNAME
+      CHARACTER*20  BLANK
+      CHARACTER*26  PROCTYPE
+      LOGICAL*1     PRINT, SUB, DIVIDE, HDRONLY
+      LOGICAL*1     PRINTON
+
+      INCLUDE 'spideram.inc'
+
+C     Currently handles only transverse images with no comparisons
+
+      ERRTYPE = 0
+      COL = 0
+      ROW = 0
+      FIRSTR = 0
+      SUB = .FALSE.
+      DIVIDE = .FALSE.
+      HDRONLY = .FALSE.
+      FORMFEED = CHAR(12)
+      BLANK = ' '
+      CALL INTDATE(ADATE)
+      IF (PROCESS.EQ.0) THEN
+         PROCTYPE = 'PETT Numbers'
+      ELSE IF (PROCESS.EQ.1) THEN
+         PROCTYPE = 'CBF or CBV'
+      ELSE IF (PROCESS.EQ.2) THEN
+         PROCTYPE = 'OEF'
+      ELSE IF (PROCESS.EQ.3) THEN
+         PROCTYPE = 'CMRO2'
+      ELSE IF (PROCESS.EQ.4) THEN
+         PROCTYPE = 'Decay-Cor Tissue Activity'
+      ELSE IF (PROCESS.EQ.5) THEN
+         PROCTYPE = 'Non-Decay-Cor Tissue Activ'
+      ELSE IF (PROCESS.EQ.6) THEN
+         PROCTYPE = 'CMRGlucose'
+      ELSE IF (PROCESS.EQ.7) THEN
+         PROCTYPE = 'CVO2'
+      ELSE
+         PROCTYPE = 'Unknown'
+      END IF
+
+C     Check that the printer is open
+
+      IF (PRINT) THEN
+         INQUIRE (PRINTER, OPENED = PRINTON)
+         IF (.NOT. PRINTON) OPEN (PRINTER,FILE=OUTFILE,STATUS='NEW')
+      END IF
+
+C     Write summary heading with region file name and date
+
+ 8000 FORMAT(2X,'SPIDERAM {version ',A11,'}')
+ 8010 FORMAT(2X,'MEAN REGIONAL GLOBAL AVERAGE: (',I2,'/',I2,'/',I4,')')
+ 8020 FORMAT(2X,'Region File: ',A20,'  Processed as ',A)
+ 8100 FORMAT(50(1H_),/)
+ 8200 FORMAT(1X,'SCAN  NAME',12X,'GLOBAL   ',
+     &     'LEFT HEMISPHERE   RIGHT HEMISPHERE   #VOXELS',/)
+ 8300 FORMAT(2X,I2,3X,A12,F11.1,3X,F11.1,8X,F11.1,I12/)
+
+      WRITE(USEROUT,8010) ADATE(2),ADATE(3),ADATE(1)
+      WRITE(USEROUT,8020) REGFILE,PROCTYPE
+      WRITE(USEROUT,8100)
+      WRITE(USEROUT,8200)
+
+      IF (PRINT) THEN
+         WRITE(PRINTER,8000) VERSION
+         WRITE(PRINTER,8010) ADATE(2),ADATE(3),ADATE(1)
+         WRITE(PRINTER,8020) REGFILE,PROCTYPE
+         WRITE(PRINTER,8100)
+         WRITE(PRINTER,8200)
+      END IF
+
+C     --------------------------------------------------------------
+C     Process all regions on slice 1 before proceeding to the next slice.
+C     Process all scan files
+
+      DO 1000 SCAN=1,20
+         N  = 0
+         NL = 0
+         NR = 0
+         SUM  = 0
+         SUML = 0
+         SUMR = 0
+         MEAN  = 0.0
+         MEANL = 0.0
+         MEANR = 0.0
+         SLCNUM = 0
+
+C     Check if scan can be processed (NTYPE)
+
+         IF (FILENAME(SCAN).EQ.BLANK) GOTO 1000
+         CALL D2GETIMG(1,1,SCAN,ERRTYPE,HDRONLY)
+         IF (ERRTYPE.NE.0) RETURN
+         K = NTYPE(1)
+         IF (PROCESS.EQ.1 .AND. .NOT.(K.EQ.2 .OR. K.EQ.3 .OR. K.EQ.4)) GOTO 1000
+         IF (PROCESS.EQ.2 .AND. .NOT.(K.EQ.1 .OR. K.EQ.7)) GOTO 1000
+         IF (PROCESS.EQ.3 .AND. .NOT.(K.EQ.1 .OR. K.EQ.7)) GOTO 1000
+         IF (PROCESS.EQ.4 .AND. K.NE.5) GOTO 1000
+         IF (PROCESS.EQ.5 .AND. K.NE.5) GOTO 1000
+         IF (PROCESS.EQ.6 .AND. K.NE.6) GOTO 1000
+         IF (PROCESS.EQ.7 .AND. .NOT.(K.EQ.2 .OR. K.EQ.3 .OR. K.EQ.4)) GOTO 1000
+
+ 100     SLCNUM = SLCNUM + 1
+         IF (SLCNUM.GT.NMSLICES) GOTO 600
+
+C     Check if any regions on this slice
+
+         DO 200 I=1,NREGS
+            IF (SLCNUM.EQ.INT(SLICE(I))) THEN
+               FIRSTR = I
+               GOTO 300
+            END IF
+ 200     CONTINUE
+         GOTO 100
+
+C     If there is a region on this slice, read and process the image
+
+ 300     CALL D2IMAGE(SLCNUM,COL,ROW,SUB,DIVIDE,ERRTYPE)
+         IF (ERRTYPE.NE.0) RETURN
+
+C     Compute statistics for all regions on the slice
+
+         DO 500 REG=FIRSTR,NREGS
+            IF (ORIENT.NE.'T') GOTO 500
+            IF (SLCNUM.EQ.INT(SLICE(REG))) THEN
+               IF (REGTYPE(REG).EQ.'R') THEN
+                  CALL P2AREAR(REG)
+               ELSE IF (REGTYPE(REG).EQ.'I') THEN
+                  CALL P2AREAI(REG)
+               ELSE
+                  ERRTYPE = 19
+                  RETURN
+               END IF
+               DO 400 I=1,RTOP
+                  X = INREGION(I,1)
+                  Y = INREGION(I,2)
+                  COUNT = IMAGE(X,Y,1)
+                  IF (REGNAME(REG)(10:10).EQ.'L') THEN
+                     NL = NL + 1
+                     SUML = SUML + COUNT
+                  ELSE IF (REGNAME(REG)(10:10).EQ.'R') THEN
+                     NR = NR + 1
+                     SUMR = SUMR + COUNT
+                  ELSE
+                     N = N + 1
+                     SUM = SUM + COUNT
+                  END IF
+ 400           CONTINUE
+            END IF
+ 500     CONTINUE
+         GOTO 100
+
+C     Compute mean for ALL points in all regions
+
+ 600     IF (NL.GT.0) MEANL = SCALER(1)*FLOAT(SUML)/FLOAT(NL)
+         IF (NR.GT.0) MEANR = SCALER(1)*FLOAT(SUMR)/FLOAT(NR)
+         SUM = SUM + SUML + SUMR
+         N = N + NL + NR
+         IF (N.GT.0)  MEAN = SCALER(1)*FLOAT(SUM)/FLOAT(N)
+
+C     Write to terminal/printer
+
+         L = IANYR(FILENAME(SCAN),'/') + 1
+         FNAME = FILENAME(SCAN)(L:L+11)
+         WRITE(USEROUT,8300) SCAN,FNAME,MEAN,MEANL,MEANR,N
+         IF (PRINT) WRITE(PRINTER,8300) SCAN,FNAME,MEAN,MEANL,MEANR,N
+
+C     Compute scaling factor
+
+         IF (NORMALIZE) THEN
+            MULTFACT(SCAN) = NRMVALUE / MEAN
+         END IF
+ 1000 CONTINUE
+C     --------------------------------------------------------------
+
+ 8400 FORMAT(1X,A1)
+      IF (PRINT) WRITE(PRINTER,8400) FORMFEED
+
+      RETURN
+      END
+@
+
+
+1.10
+log
+@format changes plus fixes for g77
+@
+text
+@d1 1
+a1 1
+C     $Id: g2meanrg.f,v 1.9 2001/05/30 20:01:40 tom Exp tom $
+d3 3
+d93 1
+a93 1
+C     rcsheader = "$Id: g2meanrg.f,v 1.9 2001/05/30 20:01:40 tom Exp tom $"
+@
+
+
+1.9
+log
+@version expanded to 11 chars
+@
+text
+@d1 20
+a20 17
+C$Id: g2meanrg.f,v 1.8 2001/05/30 19:46:30 tom Exp tom $
+C$Log: g2meanrg.f,v $
+c Revision 1.8  2001/05/30  19:46:30  tom
+c add steady-state oxygen processing
+c
+c Revision 1.7  1999/12/15  21:32:32  tom
+c y2k fix in date print
+c
+c Revision 1.6  1999/03/05  18:49:14  tom
+c add CVO2
+c
+c Revision 1.5  1998/04/29  15:20:35  tom
+c allow processing for CMRGlucose
+c
+c Revision 1.4  1994/11/29  23:30:20  ty7777
+c Deleted VRMVALUE and NORMALIZE from the argument list.
+c
+d22 67
+a88 72
+C
+C  Subroutine:   G2MEANRG.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         03-Jun-87
+C  Written For:  SPIDERAM Super PETT Image Display Program
+C
+C  Intent:
+C     This subroutine computes global mean regional values.
+C
+C  Note:  regions are designated as left or right hemisphere
+C     by the tenth (last) character in the region name (REGNAME)
+C     which must be 'L' or 'R'.
+C
+C  History:
+C     Modified 05-Mar-99 by TOV to allow processing for CVO2
+C        (PROCESS may be 0-7)
+C     Modified 28-Apr-98 by TOV to allow processing for CMRGlucose
+C        (PROCESS may be 0-6)
+C     Modified 06-Oct-87 by TOV to allow processing for tissue activity
+C        either with or without decay correction; (PROCESS may be 0-5)
+C     Modified by TOV 13-Sep-88 to print program VERSION date and PROCTYPE.
+C     Modified by Tom Yang 19-Sep-91 to port to X windows.
+C     Modified by TOV 09-Feb-90 to eliminage bug in computing mean values
+C        for multiple scan files.
+C     Modified 15-Oct-91 by TOV:
+C        1) NRMVALUE and NORMALIZE added to calling parameters.
+C     Modified by Tom Yang 30-Nov-94 to delete NORMALIZE and VRMSCALE
+C        from the argument list.
+C
+C  Common Blocks from SPIDERAM:
+C     **IMAGEDAT - image arrays                   (read only)
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **DISPLAY  - display parameters             (read only)
+C     **FILES    - scan file list                 (read only)
+C     **GLOBALAV - global averaging parameters    (read only)
+C     **REGION   - regions of interest parameters (read only)
+C     **AREA     - area of a region               (read only)
+C     **REGCOMP  - region analysis parameters     (read only)
+C
+C  Variables Passed:
+C     PRINT = true--> write averages to printer;
+C     ERRTYPE = type of error in processing images;
+C
+C  Local Variables:
+C     N = number of pixels in all regions;
+C     NL = number of pixels left hemisphere regions;
+C     NR = number of pixels right hemisphere regions;
+C     SUM = total activity of all included points;
+C     SUML = total activity of all left hemisphere regions;
+C     SUMR = total activity of all right hemisphere regions;
+C     MEAN = mean activity of all included points;
+C     MEANL = mean activity of all left hemisphere regions;
+C     MEANR = mean activity of all right hemisphere regions;
+C     REG = region number to process;
+C     FIRSTR = first region (1-100) on the current slice;
+C     COUNT = value of a pixel in IMAGE array;
+C     X,Y = coordinates of a point included in a region;
+C
+C  Uses Subroutines:
+C
+C  SPIDERAM.LIB - main subroutines for SPIDERAM:
+C     D2GETIMG - get an image from a disk file;
+C     D2IMAGE  - assemble an image slice from component image files;
+C     P2AREAI  - get points within an irregular region;
+C     P2AREAR  - get points within a rectangular region;
+C
+C  FORTRAN Runtime Library
+C     DATE
+C
+C  Called by:  M2GLOBAL
+C
+d90 2
+a91 1
+C
+d95 2
+a96 2
+     &              SCAN, FIRSTR, COL, ROW, ADATE(3),
+     &              I, K, L, X, Y, ERRTYPE
+a103 1
+      character*256 rcsheader
+a105 1
+      rcsheader = "$Id: g2meanrg.f,v 1.8 2001/05/30 19:46:30 tom Exp tom $"
+d107 1
+a107 1
+C  Currently handles only transverse images with no comparisons
+d120 1
+a120 1
+        PROCTYPE = 'PETT Numbers'
+d122 1
+a122 1
+        PROCTYPE = 'CBF or CBV'
+d124 1
+a124 1
+        PROCTYPE = 'OEF'
+d126 1
+a126 1
+        PROCTYPE = 'CMRO2'
+d128 1
+a128 1
+        PROCTYPE = 'Decay-Cor Tissue Activity'
+d130 1
+a130 1
+        PROCTYPE = 'Non-Decay-Cor Tissue Activ'
+d132 1
+a132 1
+        PROCTYPE = 'CMRGlucose'
+d134 1
+a134 1
+        PROCTYPE = 'CVO2'
+d136 1
+a136 1
+        PROCTYPE = 'Unknown'
+d139 1
+a139 1
+C  Check that the printer is open
+d142 2
+a143 2
+        INQUIRE (PRINTER, OPENED = PRINTON)
+        IF (.NOT. PRINTON) OPEN (PRINTER,FILE=OUTFILE,STATUS='NEW')
+d146 1
+a146 1
+C  Write summary heading with region file name and date
+d148 7
+a154 7
+8000  FORMAT(2X,'SPIDERAM {version ',A11,'}')
+8010  FORMAT(2X,'MEAN REGIONAL GLOBAL AVERAGE: (',I2,'/',I2,'/',I4,')')
+8020  FORMAT(2X,'Region File: ',A20,'  Processed as ',A)
+8100  FORMAT(50(1H_),/)
+8200  FORMAT(1X,'SCAN  NAME',12X,'GLOBAL   ',
+     &  'LEFT HEMISPHERE   RIGHT HEMISPHERE   #VOXELS',/)
+8300  FORMAT(2X,I2,3X,A12,F11.1,3X,F11.1,8X,F11.1,I12/)
+d162 5
+a166 5
+        WRITE(PRINTER,8000) VERSION
+        WRITE(PRINTER,8010) ADATE(2),ADATE(3),ADATE(1)
+        WRITE(PRINTER,8020) REGFILE,PROCTYPE
+        WRITE(PRINTER,8100)
+        WRITE(PRINTER,8200)
+d169 3
+a171 3
+C  --------------------------------------------------------------
+C  Process all regions on slice 1 before proceeding to the next slice.
+C  Process all scan files
+d174 10
+a183 10
+        N  = 0
+        NL = 0
+        NR = 0
+        SUM  = 0
+        SUML = 0
+        SUMR = 0
+        MEAN  = 0.0
+        MEANL = 0.0
+        MEANR = 0.0
+        SLCNUM = 0
+d185 1
+a185 1
+C  Check if scan can be processed (NTYPE)
+d187 11
+a197 11
+        IF (FILENAME(SCAN).EQ.BLANK) GOTO 1000
+        CALL D2GETIMG(1,1,SCAN,ERRTYPE,HDRONLY)
+        IF (ERRTYPE.NE.0) RETURN
+        K = NTYPE(1)
+        IF (PROCESS.EQ.1 .AND. .NOT.(K.EQ.2 .OR. K.EQ.3 .OR. K.EQ.4)) GOTO 1000
+        IF (PROCESS.EQ.2 .AND. .NOT.(K.EQ.1 .OR. K.EQ.7)) GOTO 1000
+        IF (PROCESS.EQ.3 .AND. .NOT.(K.EQ.1 .OR. K.EQ.7)) GOTO 1000
+        IF (PROCESS.EQ.4 .AND. K.NE.5) GOTO 1000
+        IF (PROCESS.EQ.5 .AND. K.NE.5) GOTO 1000
+        IF (PROCESS.EQ.6 .AND. K.NE.6) GOTO 1000
+        IF (PROCESS.EQ.7 .AND. .NOT.(K.EQ.2 .OR. K.EQ.3 .OR. K.EQ.4)) GOTO 1000
+d199 2
+a200 2
+100     SLCNUM = SLCNUM + 1
+        IF (SLCNUM.GT.NMSLICES) GOTO 600
+d202 1
+a202 1
+C  Check if any regions on this slice
+d204 7
+a210 7
+        DO 200 I=1,NREGS
+          IF (SLCNUM.EQ.INT(SLICE(I))) THEN
+            FIRSTR = I
+            GOTO 300
+          END IF
+200     CONTINUE
+        GOTO 100
+d212 1
+a212 1
+C  If there is a region on this slice, read and process the image
+d214 2
+a215 2
+300     CALL D2IMAGE(SLCNUM,COL,ROW,SUB,DIVIDE,ERRTYPE)
+        IF (ERRTYPE.NE.0) RETURN
+d217 1
+a217 1
+C  Compute statistics for all regions on the slice
+d219 26
+a244 10
+        DO 500 REG=FIRSTR,NREGS
+          IF (ORIENT.NE.'T') GOTO 500
+          IF (SLCNUM.EQ.INT(SLICE(REG))) THEN
+            IF (REGTYPE(REG).EQ.'R') THEN
+              CALL P2AREAR(REG)
+            ELSE IF (REGTYPE(REG).EQ.'I') THEN
+              CALL P2AREAI(REG)
+            ELSE
+              ERRTYPE = 19
+              RETURN
+d246 2
+a247 18
+            DO 400 I=1,RTOP
+              X = INREGION(I,1)
+              Y = INREGION(I,2)
+              COUNT = IMAGE(X,Y,1)
+              IF (REGNAME(REG)(10:10).EQ.'L') THEN
+                NL = NL + 1
+                SUML = SUML + COUNT
+              ELSE IF (REGNAME(REG)(10:10).EQ.'R') THEN
+                NR = NR + 1
+                SUMR = SUMR + COUNT
+              ELSE
+                N = N + 1
+                SUM = SUM + COUNT
+              END IF
+400         CONTINUE
+          END IF
+500     CONTINUE
+        GOTO 100
+d249 1
+a249 1
+C  Compute mean for ALL points in all regions
+d251 5
+a255 5
+600     IF (NL.GT.0) MEANL = SCALER(1)*FLOAT(SUML)/FLOAT(NL)
+        IF (NR.GT.0) MEANR = SCALER(1)*FLOAT(SUMR)/FLOAT(NR)
+        SUM = SUM + SUML + SUMR
+        N = N + NL + NR
+        IF (N.GT.0)  MEAN = SCALER(1)*FLOAT(SUM)/FLOAT(N)
+d257 1
+a257 1
+C  Write to terminal/printer
+d259 4
+a262 4
+        L = IANYR(FILENAME(SCAN),'/') + 1
+        FNAME = FILENAME(SCAN)(L:L+11)
+        WRITE(USEROUT,8300) SCAN,FNAME,MEAN,MEANL,MEANR,N
+        IF (PRINT) WRITE(PRINTER,8300) SCAN,FNAME,MEAN,MEANL,MEANR,N
+d264 1
+a264 1
+C  Compute scaling factor
+d266 5
+a270 5
+	IF (NORMALIZE) THEN
+	  MULTFACT(SCAN) = NRMVALUE / MEAN
+        END IF
+1000  CONTINUE
+C  --------------------------------------------------------------
+d272 1
+a272 1
+8400  FORMAT(1X,A1)
+@
+
+
+1.8
+log
+@add steady-state oxygen processing
+@
+text
+@d1 1
+a1 1
+C$Id: g2meanrg.f,v 1.7 1999/12/15 21:32:32 tom Exp $
+d3 3
+d108 1
+a108 1
+      rcsheader = "$Id: g2meanrg.f,v 1.7 1999/12/15 21:32:32 tom Exp $"
+d151 1
+a151 1
+8000  FORMAT(2X,'SPIDERAM {version ',A9,'}')
+@
+
+
+1.7
+log
+@y2k fix in date print
+@
+text
+@d1 1
+a1 1
+C$Id: g2meanrg.f,v 1.6 1999/03/05 18:49:14 tom Exp $
+d3 3
+d105 1
+a105 1
+      rcsheader = "$Id: g2meanrg.f,v 1.6 1999/03/05 18:49:14 tom Exp $"
+d192 2
+a193 2
+        IF (PROCESS.EQ.2 .AND. K.NE.1) GOTO 1000
+        IF (PROCESS.EQ.3 .AND. K.NE.1) GOTO 1000
+@
+
+
+1.6
+log
+@add CVO2
+@
+text
+@d1 1
+a1 1
+C$Id: g2meanrg.f,v 1.5 1998/04/29 15:20:35 tom Exp tom $
+d3 3
+d102 1
+a102 1
+      rcsheader = "$Id: g2meanrg.f,v 1.5 1998/04/29 15:20:35 tom Exp tom $"
+d146 1
+a146 1
+8010  FORMAT(2X,'MEAN REGIONAL GLOBAL AVERAGE: (',I2,'/',I2,'/',I2,')')
+@
+
+
+1.5
+log
+@allow processing for CMRGlucose
+@
+text
+@d1 1
+a1 1
+C$Id: g2meanrg.f,v 1.4 1994/11/29 23:30:20 ty7777 Exp tom $
+d3 3
+d25 2
+d85 1
+a85 1
+C
+d97 1
+a97 1
+C
+d99 2
+a100 2
+      rcsheader = "$Id: g2meanrg.f,v 1.4 1994/11/29 23:30:20 ty7777 Exp tom $"
+C
+d102 1
+a102 1
+C
+d127 2
+d132 1
+a132 1
+C
+d134 1
+a134 1
+C
+d137 1
+a137 1
+        IF (.NOT. PRINTON) OPEN (PRINTER,FILE=OUTFILE,TYPE='DEVICE')
+d139 1
+a139 1
+C
+d141 1
+a141 1
+C
+d147 1
+a147 1
+     2  'LEFT HEMISPHERE   RIGHT HEMISPHERE   #VOXELS',/)
+d149 1
+a149 1
+C
+d154 1
+a154 1
+C
+d162 1
+a162 1
+C
+d166 1
+a166 1
+C
+d178 1
+a178 1
+C
+d180 2
+a181 2
+C
+        IF (FILENAME(SCAN).EQ.BLANK) GO TO 1000
+d185 8
+a192 8
+        IF (PROCESS.EQ.1 .AND. .NOT.(K.EQ.2 .OR. K.EQ.3 .OR. K.EQ.4))
+     2    GO TO 1000
+        IF (PROCESS.EQ.2 .AND. K.NE.1) GO TO 1000
+        IF (PROCESS.EQ.3 .AND. K.NE.1) GO TO 1000
+        IF (PROCESS.EQ.4 .AND. K.NE.5) GO TO 1000
+        IF (PROCESS.EQ.5 .AND. K.NE.5) GO TO 1000
+        IF (PROCESS.EQ.6 .AND. K.NE.6) GO TO 1000
+C
+d194 2
+a195 2
+        IF (SLCNUM.GT.NMSLICES) GO TO 600
+C
+d197 1
+a197 1
+C
+d201 1
+a201 1
+            GO TO 300
+d204 2
+a205 2
+        GO TO 100
+C
+d207 1
+a207 1
+C
+d210 1
+a210 1
+C
+d212 1
+a212 1
+C
+d214 1
+a214 1
+          IF (ORIENT.NE.'T') GO TO 500
+d241 2
+a242 2
+        GO TO 100
+C
+d244 1
+a244 1
+C
+d250 1
+a250 1
+C
+d252 1
+a252 1
+C
+d257 1
+a257 1
+C
+d259 1
+a259 1
+C
+d265 1
+a265 1
+C
+d268 1
+a268 1
+C
+@
+
+
+1.4
+log
+@Deleted VRMVALUE and NORMALIZE from the argument list.
+@
+text
+@d1 5
+a5 2
+C$Id$
+C$Log$
+d22 2
+d94 1
+a94 1
+      rcsheader = "$Id: g2meanrg.f,v 1.3 1993/10/04 21:55:32 tom Exp ty7777 $"
+d120 2
+d184 1
+@
+
+
+1.3
+log
+@added rcsheader
+@
+text
+@d1 2
+d22 1
+d27 2
+d74 1
+a74 1
+      SUBROUTINE G2MEANRG(PRINT,NRMVALUE,NORMALIZE,ERRTYPE)
+a79 1
+      REAL*4        NRMVALUE
+d85 1
+a85 1
+      LOGICAL*1     PRINTON, NORMALIZE
+d89 1
+a89 1
+      rcsheader = "$Id$"
+d246 1
+a246 1
+	  MULTFACT(SCAN) = NRMVALUE/MEAN
+@
+
+
+1.2
+log
+@Save window dump. 04/23/92 by Tom Yang
+@
+text
+@d82 1
+d85 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@

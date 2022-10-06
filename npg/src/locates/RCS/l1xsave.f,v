@@ -1,0 +1,354 @@
+head	2.5;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+2.5
+date	2004.02.16.19.39.57;	author tom;	state Exp;
+branches;
+next	2.1;
+
+2.1
+date	98.06.18.16.31.38;	author tom;	state Exp;
+branches;
+next	2.0;
+
+2.0
+date	96.10.23.21.26.41;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	94.09.30.15.25.14;	author ty7777;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	94.01.28.22.37.14;	author ty7777;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial checking in, working version.
+@
+
+
+2.5
+log
+@Feb 2004
+@
+text
+@C$Log: l1xsave.f,v $
+c Revision 2.1  1998/06/18  16:31:38  tom
+c *** empty log message ***
+c
+c Revision 2.0  1996/10/23  21:26:41  tom
+c Solaris
+c
+c Revision 1.2  1994/09/30  15:25:14  ty7777
+c Save variables.
+c
+c Revision 1.1  1994/01/28  22:37:14  ty7777
+c Initial revision
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Subroutine:   L1XSAVE.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         07-May-87
+C  Written For:  LOCATES.FTN
+C
+C  Intent:
+C     This subroutine writes skull xray data and atlas/tomograph
+C     constants to a disk file.
+C
+C  History:
+C     Revised Version of XDATA.FTN  by Joel Perlmutter
+C     Modified 15-Jan-88 by TOV to fix a bug (wrote an extra line
+C        after header string) and to change default slice center
+C        to 64.5 (instead of 50).
+C     Modified by Tom Yang on 28-Jan-94 to port to the UNIX platform.
+C     Modified by Tom Yang on 30-Sep-94 to write the following variables:
+C        FILMPOS, SCANPOS, OFFSET, PEAKSLICE, XSCALE
+C
+C  Common Blocks from LOCATES.INC:
+C     **LUINFO   - logical units (also /USRIO/)   (read only)
+C     **PETDATA   - tomograph parameters;         (read only)
+C     **ATLDATA   - atlas regions;                (read only)
+C     **SXRDATA   - skull xray parameters         (write)
+C
+C  Uses:
+C     L1FILE
+C     L1PETDIM
+C
+C  TERMINAL.LIB
+C     GETREAL
+C     GTSTRING
+C     YESNO
+C
+C  Called by:  L1XDATA
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC*
+C
+      SUBROUTINE L1XSAVE(ERROR)
+C
+      INTEGER*4    FTYPE,N
+      REAL         DEGX,DEGY,DEGZ,MAXRLDIM
+      CHARACTER*2  NUM
+      CHARACTER*3  EXT
+      CHARACTER*256 FNAME,BLANK
+      CHARACTER*80 Q,STR
+      LOGICAL*1    ERROR,NEW,ANS
+      CHARACTER*256 RCSHEADER
+C
+      INCLUDE 'locates.inc'
+      DATA FTYPE /12/
+C
+      RCSHEADER = '$Id: l1xsave.f,v 2.1 1998/06/18 16:31:38 tom Exp tom $'
+C
+      EXT = 'SXR'
+      BLANK = ' '
+      FNAME = ' '
+      NEW = .TRUE.
+      ERROR = .TRUE.
+C
+C  Get the file name for storing the parameters
+C
+      CALL L1FILE(FNAME,EXT,NEW)
+      IF (FNAME.EQ.BLANK) RETURN
+C
+C  Write SXR information to disk
+C
+      WRITE(DISK,*) FTYPE,'   {created by LOCATES ver 1.0}'
+C
+      STR = ' '
+      Q = 'File Header'
+      CALL GTSTRING(Q,STR)
+      WRITE(DISK,8000) STR
+8000  FORMAT(A80)
+C
+      Q = 'PET Scan Number (i.e., P1000)'
+      STR = ' '
+      CALL GTSTRING(Q,STR)
+      SCAN = STR(1:5)
+C
+C  Get SXR parameters from the user
+C
+      WRITE(USEROUT,*) 'SKULL XRAY measurements:'
+      WRITE(USEROUT,*) '-----------------------'
+      Q = 'Length of AC-PC line (cm)'
+      CALL GETREAL(Q,APXRAY,1.0,50.0)
+      Q = 'Angle between PET slices and AC-PC line (degrees)'
+      DEGX = ANGX*180.0/3.1416
+      CALL GETREAL(Q,DEGX,-45.0,45.0)
+      ANGX = DEGX*3.1416/180.0
+      Q = 'Distance from center of AC-PC line to Vertex (cm)'
+      CALL GETREAL(Q,ZXRAY,1.0,50.0)
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'Distance from center of AC-PC line ',
+     2  'to reference slice (cm)'
+      WRITE(USEROUT,*) '  (negative if AC-PC is ',
+     2  'below reference slice)'
+      Q = 'Delta Z'
+      CALL GETREAL(Q,DZ,-20.0,20.0)
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'Distance from A-P center of reference slice ',
+     2  'to a line perpendicular'
+      WRITE(USEROUT,*) '   to the reference slice and passing through',
+     2  ' the center of the AC-PC line'
+      WRITE(USEROUT,*) '  (negative if center of reference slice is ',
+     2  'to the right)'
+      Q = 'Delta AP'
+      CALL GETREAL(Q,DAP,-10.0,10.0)
+C
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'PET Image measurements:'
+      WRITE(USEROUT,*) '----------------------'
+C
+C  Get PET slice dimensions
+C
+      Q = 'Get PET slice dimensions automatically from the image file'
+      ANS = .TRUE.
+      CALL YESNO(Q,ANS)
+      IF (ANS) THEN
+        CALL L1PETDIM
+      ELSE
+        DO 300 N=1,NSLICES
+          WRITE(NUM,8100) N
+          Q = 'RL dimension (pixels) of PET slice '//NUM
+          CALL GETREAL(Q,RLPETDIM(N),0.0,100.0)
+300     CONTINUE
+C
+        WRITE(USEROUT,*)
+        Q = 'Center coordinate of the AP axis for reference slice (pixel)'
+        CALL GETREAL(Q,APCTR,0.0,100.0)
+C
+        WRITE(USEROUT,*)
+        DO 400 N=1,NSLICES
+          WRITE(NUM,8100) N
+          Q = 'Center of the RL axis of slice '//NUM
+          IF (RLCTR(N).EQ.0.0) RLCTR(N)=64.5
+          CALL GETREAL(Q,RLCTR(N),0.0,128.0)
+400     CONTINUE
+      END IF
+C
+      MAXRLDIM = 0.0
+      DO 500 N=1,NSLICES
+        IF (RLPETDIM(N).GT.MAXRLDIM) MAXRLDIM=RLPETDIM(N)
+500   CONTINUE
+C
+C  Get angles of rotation about the Y- and Z-axes
+C
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'Ear Marker Separation:'
+      WRITE(USEROUT,*) '---------------------'
+C
+      WRITE(USEROUT,*) 'AP separation is measured in a line ',
+     2  'parallel to the AC-PC line'
+      WRITE(USEROUT,*) '   and is positive if the head is rotated to ',
+     2  'its right side'
+      Q = 'Ear Marker AP-Separation (cm)'
+      CALL GETREAL(Q,EARDAP,-20.0,20.0)
+C
+      WRITE(USEROUT,*) 'Z separation is measured in a line ',
+     2  'perpendicular to the AC-PC line'
+      WRITE(USEROUT,*) '   and is positive if the head is tilted ',
+     2  'towards the right shoulder'
+      Q = 'Ear Marker Z-Separation (cm)'
+      CALL GETREAL(Q,EARDZ,-20.0,20.0)
+C
+      IF (EARDAP.NE.0.0 .OR. EARDZ.NE.0.0) THEN
+        WRITE(USEROUT,*) 'Default distance between the ear markers ',
+     2    'is the greatest R-L'
+        WRITE(USEROUT,*) '   distance in the PET slices plus 3 mm.'
+        WRITE(USEROUT,*) '   = ',MAXRLDIM*PIX + 0.3,' cm'
+        Q = 'Use this default distance between the ear markers'
+        ANS = .TRUE.
+        CALL YESNO(Q,ANS)
+        IF (ANS) THEN
+          EARSEP = MAXRLDIM*PIX + 0.3
+        ELSE
+          Q = 'Distance between ear markers in a PET slice (cm)'
+          CALL GETREAL(Q,EARSEP,5.0,30.0)
+        END IF
+        ANGY = ATAN(MF*EARDZ/EARSEP)
+        DEGY = ANGY*180.0/3.1416
+        WRITE(USEROUT,*) 'Y-angle of tilt is ',DEGY,' degrees'
+        ANGZ = ATAN(MF*EARDAP/EARSEP)
+        DEGZ = ANGZ*180.0/3.1416
+        WRITE(USEROUT,*) 'Z-angle of rotation is ',DEGZ,' degrees'
+      ELSE
+        ANGY = 0.0
+        DEGY = 0.0
+        ANGZ = 0.0
+        DEGZ = 0.0
+      END IF
+C
+C  Write information to the disk
+C
+8100  FORMAT (I2)
+8200  FORMAT (A5)
+      WRITE (DISK, 8200) SCAN
+      WRITE (DISK, *) PIX, '   ', MF, '   ', NSLICES, '   ', SLCSIZE,
+     2  '   ', REFSLICE, '   ', ZATLDIM, '   ', APATLDIM, '   ', FILMPOS,
+     3  '   ', SCANPOS, '   ', OFFSET, '   ', PEAKSLICE, '   ', XSCALE
+      WRITE (DISK, *) APXRAY, '   ', DEGX, '   ', ZXRAY, '   ', DZ, '   ', DAP,
+     2  '   ', APCTR, '   ', EARSEP, '   ', EARDAP, '   ', EARDZ, '   ', DEGY,
+     3  '   ', DEGZ
+      DO 600 N = 1, NSLICES
+        WRITE (DISK, *) RLPETDIM (N), '     ', RLCTR (N)
+600   CONTINUE
+      CLOSE(DISK)
+      WRITE(USEROUT,*)
+      WRITE(USEROUT,*) 'SXR data stored in disk file ',FNAME
+      ERROR = .FALSE.
+C
+      RETURN
+      END
+@
+
+
+2.1
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d68 1
+a68 1
+      RCSHEADER = '$Id: l1xsave.f,v 2.0 1996/10/23 21:26:41 tom Exp tom $'
+@
+
+
+2.0
+log
+@Solaris
+@
+text
+@d2 3
+d65 1
+a65 1
+      RCSHEADER = '$Id: l1xsave.f,v 1.2 1994/09/30 15:25:14 ty7777 Exp tom $'
+d141 1
+a141 2
+        Q = 'Center coordinate of the AP axis for reference slice'//
+     2    ' (pixel no.)'
+@
+
+
+1.2
+log
+@Save variables.
+@
+text
+@a0 2
+
+C$Id: l1xsave.f,v 1.1 1994/01/28 22:37:14 ty7777 Exp ty7777 $
+d2 3
+a7 1
+C
+a49 5
+C
+C
+C
+C
+C
+d54 1
+a54 1
+      CHARACTER*20 FNAME,BLANK
+d62 1
+a62 1
+      RCSHEADER = '$Id: l1xsave.f,v 1.1 1994/01/28 22:37:14 ty7777 Exp ty7777 $'
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 5
+a6 2
+C$Id$
+C$Log$
+d26 2
+d67 1
+a67 1
+      RCSHEADER = '$Id$'
+d210 11
+a220 10
+8100  FORMAT(I2)
+8200  FORMAT(A5)
+      WRITE(DISK,8200) SCAN
+      WRITE(DISK,*) PIX,'   ',MF,'   ',NSLICES,'   ',SLCSIZE,
+     2  '   ',REFSLICE,'   ',ZATLDIM,'   ',APATLDIM
+      WRITE(DISK,*) APXRAY,'   ',DEGX,'   ',ZXRAY,'   ',DZ,'   ',DAP,
+     2  '   ',APCTR,'   ',EARSEP,'   ',EARDAP,'   ',EARDZ,'   ',DEGY,
+     3  '   ',DEGZ
+      DO 600 N=1,NSLICES
+        WRITE(DISK,*) RLPETDIM(N),'     ',RLCTR(N)
+@

@@ -1,0 +1,266 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.8
+date	2004.02.13.21.32.37;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.04.18.06.25.19;	author avi;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.04.18.06.19.46;	author avi;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.04.17.18.07.29;	author avi;	state Exp;
+branches;
+next	;
+
+
+desc
+@Initial RCS version
+@
+
+
+1.8
+log
+@Feb 2004
+@
+text
+@      program crt2crv
+c $Id: crt2crv.f,v 1.3 1995/04/18 06:25:19 avi Exp tom $
+c $Log: crt2crv.f,v $
+c Revision 1.3  1995/04/18  06:25:19  avi
+c Modified to handle pre double frame era plt files, i.e.,
+c without the 1000 hz time register in the last column.
+c
+c Revision 1.1  1995/04/17  18:07:29  avi
+c Initial revision
+c
+c     combines a blood curve file and a head curve file to create a crv file
+c     15-Apr-93 AZS
+C     27-Apr-93 AZS modified to default start of headcurve to first bin
+C                   if a plt_time step decrement is not found
+c     16-Apr-95 AZS above modification made to work correctly
+
+      character*256 rcshdr/'$Header: /home/npggw/tom/src/crt2crv/RCS/crt2crv.f,v 1.3 1995/04/18 06:25:19 avi Exp tom $'/
+      character*256 crtfil,pltfil,crvfil
+      character*160 string
+      character*80 crvstr
+      logical*4 lvalid,lend,lstart
+      parameter (nmax=2048)
+      integer*4 plt_time(nmax),plt_trues(nmax)
+      integer*4 crv_trues(nmax),beta_cts(nmax)
+      integer*4 iset(nmax)/nmax*0/		! tracks set bins in pre 2 frame scheme data
+      real*4 crt_time(nmax)
+
+      call getarg(1,crtfil)		! blood curve input
+      call getarg(2,pltfil)		! head curve input
+      call getarg(3,crvfil)		! output 
+
+      write(*,"('                                 crt2crv'/
+     &          'Copyright 1995.  Washington University, Mallinckrodt Institute of Radiology.'/
+     &          '                             All Rights Reserved'/
+     &          'This software may not be reproduced, copied, or distributed without written'/
+     &          'permission of Washington University. For further information contact A.Z. Snyder.'
+     &   )")
+      open(8,file=crtfil,status='old')
+      read(8,"(a80)",err=91)crvstr
+      write(*,"(a80)")crvstr
+      read(8,*,err=91)nbin_crt,ncol
+      if(nbin_crt.gt.nmax)stop 'crt2crv: curve length limit 2048 points'
+      if(ncol.ne.3)goto 91
+      do 21 i=1,nbin_crt
+   21 read(8,*,err=91)crt_time(i),beta_cts(i)
+      close(8)
+      tmax=crt_time(nbin_crt)
+
+      nread=0
+      open(8,file=pltfil,status='old')
+      nbin_plt=0
+   11 read(8,"(a160)",end=19)string
+      if(nread.eq.0)write(*,"(a80)")string(1:80)
+      nread=nread+1
+      if(index(string,'IPC Total').gt.0)goto 60			! data from before double frame scheme
+      if(index(string,':').ne.5)goto 11
+      nbin_plt=nbin_plt+1
+      call crt2crv1(string,plt_trues(nbin_plt),plt_time(nbin_plt),lvalid)
+      if(nbin_plt.le.nmax)goto 11
+   19 close(8)
+
+      do 12 ibin_plt=2,nbin_plt
+      if(plt_time(ibin_plt).lt.plt_time(ibin_plt-1))then	! start signal found
+        ibin_plt0=ibin_plt
+        goto 30
+      endif
+   12 continue
+      write(*,"('crt2crv: warning - scan start signal not found')")
+      write(*,"('         second bin of plt file taken as headcurve start')")
+      i=plt_time(1)						! start signal not found
+      do 13 ibin_plt=1,nbin_plt
+   13 plt_time(ibin_plt)=plt_time(ibin_plt)-i
+      ibin_plt0=2
+
+   30 lend=.false.
+      t2=float(plt_time(ibin_plt0))/1000.
+      t3=0.
+      t1=0.
+      t0=0.
+      do 33 ibin_crt=1,nbin_crt
+      crv_trues(ibin_crt)=0
+      if(lend)goto 33
+      t=crt_time(ibin_crt)
+      do ibin_plt=ibin_plt0,nbin_plt
+        t4=float(plt_time(ibin_plt))/1000.
+        if(t4.ge.t)goto 32
+      enddo
+      lend=.true.
+      t=t4
+      goto 33
+   32 if(ibin_plt.gt.1)t3=float(plt_time(ibin_plt-1))/1000.
+c     write(*,"('t,t0,t1,t2,t3,t4',6f10.4)")t,t0,t1,t2,t3,t4
+      if(ibin_plt0.eq.ibin_plt)then
+        crv_trues(ibin_crt)=crv_trues(ibin_crt)
+     &  +nint(float(plt_trues(ibin_plt))*(t-t0)/(t4-t3))
+        goto 33
+      endif
+      crv_trues(ibin_crt)=crv_trues(ibin_crt)
+     &+nint(float(plt_trues(ibin_plt0))*(t2-t0)/(t2-t1))
+     &+nint(float(plt_trues(ibin_plt))*(t-t3)/(t4-t3))
+      if(ibin_plt-1.lt.ibin_plt0+1)goto 35
+      do 34 i=ibin_plt0+1,ibin_plt-1
+   34 crv_trues(ibin_crt)=crv_trues(ibin_crt)+plt_trues(i)
+   35 ibin_plt0=ibin_plt
+      t2=t4
+      t1=t3
+   33 t0=t
+
+   40 open(8,file=crvfil)
+      write(8,"(a80)")crvstr
+      write(8,"(2i6)")nbin_crt,ncol
+      do 41 i=1,nbin_crt
+   41 write(8,"(f10.1,2i10)")crt_time(i),beta_cts(i),crv_trues(i)
+      close(8)
+      stop
+
+   60 write(*,"('crt2crv: warning - pre double frame plt file')")
+      write(*,"('         head curve reconstructed from sample (clock) time and Trues/Sec')")
+      lstart=.false.				! pre 2 frame scheme processing
+   61 read(8,"(a160)",end=69)string
+      if(index(string,':').ne.5)goto 61
+      read(string(14:23),"(i)")iprompts
+      read(string(3:10),"(i2,1x,i2,1x,i2)")i,j,k
+      itime=3600*i+60*j+k
+      if(.not.lstart)then
+        itime0=itime
+        lstart=.true.
+      endif
+      if(.not.lstart)goto 61
+      ibin_plt=itime-itime0+1
+      if(ibin_plt.gt.nmax)goto 69
+      read(string(66:75),"(i)")crv_trues(ibin_plt)
+      iset(ibin_plt)=1
+      nbin_plt=ibin_plt
+      goto 61
+   69 close(8)
+
+      ibin_plt=1				! fill in crv_trues gaps
+   70 if(iset(ibin_plt).gt.0)goto 71
+      do 72 i=ibin_plt+1,nbin_plt
+   72 if(iset(i).gt.0)goto 73
+   73 b=float(crv_trues(i)-crv_trues(ibin_plt-1))/float(i-ibin_plt+1)
+      do j=1,i-ibin_plt
+        crv_trues(ibin_plt+j-1)=crv_trues(ibin_plt-1)+nint(b*float(j))
+      enddo
+      ibin_plt=ibin_plt+j
+   71 ibin_plt=ibin_plt+1
+      if(ibin_plt.lt.nbin_plt)goto 70
+      goto 40
+
+   90 stop 'crt2crv: error processing head curve file'
+   91 stop 'crt2crv: error reading blood curve file'
+      end
+
+      subroutine crt2crv1(string,itrues,itime,lvalid)
+      character*(*) string
+      logical*4 lvalid
+
+      if(index(string,':').ne.5)goto 9
+      decode(125,"(49x,i13,51x,i12)",string,err=8)itrues,itime
+      lvalid=.true.
+      return
+    9 lvalid=.false.
+      return
+    8 write(*,"(a80)")string(1:80)
+      stop 'crt2crv: invalid head curve'
+      end
+@
+
+
+1.3
+log
+@Modified to handle pre double frame era plt files, i.e.,
+without the 1000 hz time register in the last column.
+@
+text
+@d2 1
+a2 1
+c $Id: crt2crv.f,v 1.1 1995/04/17 18:07:29 avi Exp $
+d4 4
+d17 1
+a17 1
+      character*256 rcshdr/'$Header: /usr/local/src/crt2crv/RCS/crt2crv.f,v 1.1 1995/04/17 18:07:29 avi Exp $'/
+@
+
+
+1.2
+log
+@Modified to handle pre double frame era plt files, i.e.,
+without the 1000 hz time register in the last column.
+@
+text
+@a163 2
+
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 5
+a6 2
+c $Id$
+c $Log$
+d13 1
+a13 1
+      character*256 rcshdr/'$Header$'/
+d17 1
+a17 1
+      logical*4 lvalid,lend
+d21 1
+d24 3
+a26 3
+      call getarg(1,crtfil)    ! blood curve input
+      call getarg(2,pltfil)    ! head curve input
+      call getarg(3,crvfil)    ! output 
+d51 1
+d65 1
+a65 1
+      write(*,"('         first bin taken as headcurve start')")
+d105 1
+a105 1
+      open(8,file=crvfil)
+d112 34
+@

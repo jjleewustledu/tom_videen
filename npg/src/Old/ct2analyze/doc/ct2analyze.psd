@@ -1,0 +1,176 @@
+/*  ===============================================================================
+ *  File:           ct2analyze.psd
+ *  Date:           28-May-96
+ *  Author:         Jane Dunford-Shore
+ *  Description:    Pseudocode for ct2analyze.c
+ *  ===============================================================================
+ */
+
+/* ---------------------
+ * Function:    get_usage
+ * ---------------------
+ */
+
+Declare a string as (static char *), initialize it to be usage string, and return it.
+
+
+/* ---------------------
+ * Function:    swaptwo
+ * ---------------------
+ */
+
+Reverse the two bytes:
+    Mask the leftmost bit with  (1111111100000000) and shift it right by 8 bits.
+    Mask the rightmost bit with (0000000011111111) and shift it left by 8 bits.
+    Then bitwise or the two values.
+
+
+/* ---------------------
+ * Function:    main
+ * ---------------------
+ */
+ 
+
+1. Initialize error handler:
+   Pass error handler (err_handler.c) values that it needs: 
+   program name and command usage.
+
+2. Get command-line parameters:
+   Check parameter number and syntax.
+   Assign values (first file, last file, number of files, output file prefix).
+
+3. Initialize output header and data file pointers
+
+4. Allocate space for pixel data buffers -- unsigned short (original) and short
+    
+4. Read pixel data from input file(s): 
+
+   for (each input file)
+       Get full filename.
+       Open input file.
+       Read pixel data for each slice -- for concatenation later. Pixel data is read
+           in as unsigned short and later converted to signed short.
+       Close input file.
+
+5. Convert pixel values from unsigned short, little endian, to signed short,
+   big endian, and get max and min pixel values for whole set of images.
+
+/* 
+ * Provide values that cannot currently be extracted from header
+ */
+
+    sspct_init(NUM_SLICES, &num_slices);
+    sspct_init(OUTFILE, file_prefix);
+    sspct_init(GLMIN, &global_min);
+    sspct_init(GLMAX, &global_max);
+
+/* 
+ * Extract info. from header and place in SSPCT_HDR structure
+ * Fill Analyze header structure, and create Interfile header file (.ifh)
+ */
+ 
+    if ((header_info = (SSPCT_HDR *)malloc(sizeof(SSPCT_HDR))) == NULL) {
+        err_handler(MEM_ALLOC_ERR, "");
+    }
+
+    sprintf(input_file, "%05d.ima", first_fileno);
+    if ((fp_input = fopen(input_file,"r")) == NULL) {
+            err_handler(FILE_OPEN_ERR, input_file);
+    }
+    get_sspct_head(fp_input, header_info, &hdr, fp_if); 
+    fprintf(stdout, "%s created\n", if_hdr);
+
+    if (fp_if != NULL) {
+        fclose(fp_if);
+        fp_if = NULL;
+    } 
+
+/* 
+ * Create Analyze header file (.hdr)
+ */
+
+    if ((fwrite (&hdr, sizeof (struct dsr), 1, fp_hdr)) != 1) {
+	err_handler(FILE_WRITE_ERR, anal_img);
+    }
+    else {
+        fprintf(stdout, "%s created\n", anal_hdr);
+    }
+
+    if (fp_hdr != NULL) {
+        fclose(fp_hdr);
+        fp_hdr = NULL;
+    }
+ 
+/*
+ * Create Analyze data file (.img)
+ */
+
+    if ((p_databuf3 = (short *)malloc(LEN_DATA)) == NULL) {
+                err_handler(MEM_ALLOC_ERR, "");    
+    }
+
+    newpixno = 0;
+    for (slice = 0; slice < num_slices; slice++) { 
+
+        /* Rearrange pixels */
+        for (row = ROWS-1; row >= 0; row-- ) {
+            row_offset = row * COLUMNS;
+	    for (column = 0; column < COLUMNS; column++, newpixno++) {
+                p_databuf3[newpixno] = pp_databuf2[slice][row_offset + column];
+            }
+        }
+
+        /* Write pixel data to output file */
+        if ((fwrite(p_databuf3, LEN_DATA, 1, fp_img)) != 1) {
+            err_handler(FILE_WRITE_ERR, anal_img);
+        }
+
+        newpixno = 0;
+        memset(p_databuf3, 0, LEN_DATA);
+    }
+
+    fprintf(stdout, "%s created\n", anal_img);
+ 
+/* 
+ * Clean up and exit 
+ */
+
+ 
+    for (slice = 0; slice < num_slices; slice++) {
+        if (pp_databuf2[slice] != NULL) {
+            free(pp_databuf2[slice]);
+        }
+    }
+
+    if (pp_databuf1 != NULL) {
+        free(pp_databuf1);
+    }
+
+    if (pp_databuf2 != NULL) {
+        free(pp_databuf2);
+    }
+
+    if (p_databuf3 != NULL) {
+        free(p_databuf3);
+    }
+
+    if (fp_input != NULL) {
+        fclose(fp_input);
+    }
+
+    if (fp_hdr != NULL) {
+        fclose(fp_hdr);
+    }
+
+    if (fp_img != NULL) {
+        fclose(fp_img);
+    }
+
+    if (fp_if != NULL) {
+        fclose(fp_if);
+    }
+
+    fprintf(stdout, "\nct2analyze completed successfully\n");
+    exit(0);
+
+}

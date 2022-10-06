@@ -1,0 +1,114 @@
+#!/bin/csh
+#	Name:	pc2sun
+#	Date:	May 2008
+#	Author:	Tom Videen
+#	Intent:	Swap byte order in image files (PC->Sun)
+
+set argc = $#argv
+if ($argc != 2) then
+	echo "Usage: pc2sun input output"
+	exit
+endif
+
+# Define file names
+
+set old = $1:r
+set new = $2:r
+set tmp = tmp$$
+set oldhdr = $old.hdr
+set oldimg = $old.img
+set tmpimg = $tmp.img
+set newhdr = $new.hdr
+set newimg = $new.img
+
+if (! -e $oldhdr) then
+	echo "ERROR: missing $oldhdr"
+	exit
+else if (! -e $oldimg) then
+	echo "ERROR: missing $oldimg"
+	exit
+endif
+if (-e $newimg) echo "Replacing $newimg"
+if (-e $newhdr) echo "Replacing $newhdr"
+
+# Swap byte order
+
+set ch = `echo $oldimg | cut -c1`
+set n = `wc -c $oldimg | cut -f1 -d$ch`
+set bs = 256
+set num = `echo $n / $bs | bc`
+echo $n $num
+dd if=$oldimg of=$tmpimg ibs=$bs obs=$bs count=$n conv="swab"
+
+# Get old Analyze header info
+
+set bits = `scanheader $oldhdr | grep bits/pixel | cut -f2 -d=`
+set xdim = `scanheader $oldhdr | grep x_dim | cut -f2 -d=`
+set ydim = `scanheader $oldhdr | grep y_dim | cut -f2 -d=`
+set zdim = `scanheader $oldhdr | grep z_dim | cut -f2 -d=`
+set xsiz = `scanheader $oldhdr | grep x_size | cut -f2 -d= | cut -f1 -de`
+set xfac = `scanheader $oldhdr | grep x_size | cut -f2 -d= | cut -f2 -de`
+if ($xfac == -01) then
+	set xpix = `echo $xsiz / 10 | bc -l | cut -c1-7`
+	set xpix = 0$xpix
+else if ($xfac == +01) then
+	set xpix = `echo $xsiz \* 10 | bc -l | cut -c1-7`
+else
+	set xpix = $xsiz
+endif
+set ysiz = `scanheader $oldhdr | grep y_size | cut -f2 -d= | cut -f1 -de`
+set yfac = `scanheader $oldhdr | grep x_size | cut -f2 -d= | cut -f2 -de`
+if ($yfac == -01) then
+	set ypix = `echo $ysiz / 10 | bc -l | cut -c1-7`
+	set ypix = 0$ypix
+else if ($yfac == +01) then
+	set ypix = `echo $ysiz \* 10 | bc -l | cut -c1-7`
+else
+	set ypix = $ysiz
+endif
+set zsiz = `scanheader $oldhdr | grep z_size | cut -f2 -d= | cut -f1 -de`
+set zfac = `scanheader $oldhdr | grep z_size | cut -f2 -d= | cut -f2 -de`
+if ($zfac == -01) then
+	set zpix = `echo $zsiz / 10 | bc -l | cut -c1-7`
+	set zpix = 0$zpix
+else if ($zfac == +01) then
+	set zpix = `echo $zsiz \* 10 | bc -l | cut -c1-7`
+else
+	set zpix = $zsiz
+endif
+set bps = `echo $bits / 8 | bc`
+if ($bps == 1) then
+	set ntype = "byte"
+else if ($bps == 2) then
+	set ntype = "signed integer"
+else
+	set ntype ="float"
+endif
+echo $bps $ntype $xdim $ydim $zdim $xpix $ypix $zpix $xfac $yfac $zfac
+
+# Create Interfile header
+
+echo "INTERFILE :="                                     >! $tmp.ifh
+echo "version of keys               := 3.3"             >> $tmp.ifh
+echo "image modality                := mri"             >> $tmp.ifh
+echo "program name                  := mriconvert_fix"  >> $tmp.ifh
+echo "program version               := 1.0"             >> $tmp.ifh
+echo "name of data file             := $tmpimg"         >> $tmp.ifh
+echo "number format                 := $ntype"          >> $tmp.ifh
+echo "number of bytes per pixel     := $bps"            >> $tmp.ifh
+echo "number of dimensions          := 3"               >> $tmp.ifh
+echo "matrix size [1]               := $xdim"           >> $tmp.ifh
+echo "matrix size [2]               := $ydim"           >> $tmp.ifh
+echo "matrix size [3]               := $zdim"           >> $tmp.ifh
+echo "scaling factor (mm/pixel) [1] := $xpix"           >> $tmp.ifh
+echo "scaling factor (mm/pixel) [2] := $ypix"           >> $tmp.ifh
+echo "scaling factor (mm/pixel) [3] := $zpix"           >> $tmp.ifh
+echo "matrix initial element [1]    := right"           >> $tmp.ifh
+echo "matrix initial element [2]    := posterior"       >> $tmp.ifh
+echo "matrix initial element [3]    := inferior"        >> $tmp.ifh
+
+if2analyze $tmp $new
+chmod 660 $new.*
+unalias rm
+rm $tmp.ifh $tmpimg core
+

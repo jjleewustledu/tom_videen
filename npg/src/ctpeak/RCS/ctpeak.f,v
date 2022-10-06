@@ -1,0 +1,211 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	2006.02.23.15.36.10;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@dev
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+C  Program:      CTPEAK.FTN
+C  Author:       Tom O. Videen
+C  Date:         Sep 2004
+C
+C  Parameters of Fit:
+C     A(1) - amplitude of 1st gaussian
+C     A(2) - X-location of peak (both gaussians)
+C     A(3) - Y-location of peak (both gaussians)
+C     A(4) - sigma X of 1st gaussian
+C     A(5) - sigma Y of 1st gaussian
+C     A(6) - amplitude of 2nd gaussian
+C     A(7) - sigma X of 2nd gaussian
+C     A(8) - sigma Y of 2nd gaussian
+C     A(9) - background (constant; not altered in fit)
+C
+C  Logical Units:
+C     1 = Image file (DISK)
+C     2 = Data output file (OUTPUT) (used in GAUSS22E)
+C     5 = User input (USERIN)
+C     6 = User output (USEROUT)
+C
+C  Uses Subroutines:
+C     GETIMAGE - get 1 slice of an image
+C     LOCALMAX - find a local maximum
+C     LOCALMID - find central coordinates of local maximum
+C     LOCALZER - zero pixels corresponding to local maximum
+C     GAUSS22E - fit sum of 2 2D-gaussians to local peak
+C     SIMPINIT - initialize the simplex points
+C     SIMPLEX1 - find best fit using Mead & Nelder algorithm
+C
+C  TERMINAL.LIB
+C     GETINT   - get an integer from user
+C     YESNO    - get an Y/N response from user
+C
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      PROGRAM CTPEAK
+
+      PARAMETER (NDIM = 4)    ! max. number of points
+
+      INTEGER*2  IMAGE(512,512) ! image array
+
+      INTEGER*4  DISK        ! log. unit for image file
+      INTEGER*4  DATAFILE    ! log. unit for final fit parmeters
+      INTEGER*4  SLICE       ! slice number
+      INTEGER*4  FIRST
+      INTEGER*4  LAST
+      INTEGER*4  MAX         ! maximum pixel value
+      INTEGER*4  CUTOFF      ! cutoff for local maxima
+      INTEGER*4  LRANGE      ! local range increment in searching for local max
+      INTEGER*4  FRANGE      ! local range to use for fitting curve to local
+      INTEGER*4  ZRANGE      ! local range to zero around local maxima
+      INTEGER*4  X,Y         ! coordinates of a pixel
+      INTEGER*4  N           ! no of local maxima
+      INTEGER*4  I,J         ! local integers
+
+      REAL*4    XMID(10),YMID(10) ! coordinates of centers of local maxima
+      REAL*4    BKGND           ! background value for all points (constant)
+
+      CHARACTER*256 FNAME     ! image file name
+      CHARACTER*256 FNAME1    ! output file name
+      CHARACTER*80  Q         ! query to user
+
+      LOGICAL*1  HDRONLY     ! false --> read header and image
+      LOGICAL*1  ERR         ! true iff unable to open disk file,
+C        unable to read desired slice, or if file format is incorrect
+
+C  Common Block Variables
+
+      REAL*4    XP(NDIM,NDIM)   ! 1st indep. variable (rotated axes)
+      REAL*4    YP(NDIM,NDIM)   ! 2nd indep. variable (rotated axes)
+      REAL*4    ZP(NDIM,NDIM)   ! value of input data at point X,Y
+
+      INTEGER*4 NPTS            ! number of points in X, Y
+      INTEGER*4 USERIN          ! log. unit for user input
+      INTEGER*4 USEROUT         ! log. unit for user output
+
+C  Common RAWDATA is used in FCHI22DG and GAUSS22E
+
+      COMMON /RAWDATA/ XP,YP,ZP,NPTS
+      COMMON /USRIO/ USERIN,USEROUT
+
+      DATA DISK, DATAFILE, USERIN, USEROUT /1,3,5,6/
+      DATA HDRONLY /.FALSE./
+      BKGND = 0.
+      LRANGE = 5
+      ZRANGE = 7
+      FRANGE = 10
+      FNAME = ' '
+      CALL GETARG (1, FNAME)
+      CALL GETARG (2, FNAME1)
+      WRITE(USEROUT,*) '*** CTPEAK  22-Sep-2004 {fit 2D Gaussian to local peak}'
+
+C  Get the image point for 1 slice
+
+      OPEN (DATAFILE, FILE = FNAME1, STATUS = 'NEW', ERR = 102)
+      GO TO 103
+102   L = INANYR (FNAME1, ' ')
+      WRITE (USEROUT, *) '*** ERROR -- cannot open output file ', FNAME1(1:L),' ***'
+103   CONTINUE
+
+C  The local max is characterized using a rectangular array of pixels
+C  with the dimensions (2*FRANGE+1) x (2*FRANGE + 1)
+
+      Q = 'Range of pixels to include in fitting region'
+      CALL GETINT(Q,FRANGE,0,100)
+
+C     FIRST = 17
+C     LAST = 37
+C     do 1000 slice=FIRST, LAST
+      Q = 'Slice to fit'
+      CALL GETINT(Q,SLICE,1,47)
+
+      X = 235
+      Y = 272
+      Q = 'X'
+C     CALL GETINT(Q,X,0,512)
+      Q = 'Y'
+C     CALL GETINT(Q,Y,0,512)
+
+C  Get Background value
+
+      Q = 'Background level'
+C     CALL GETREAL(Q,BKGND,-10000.,100000.)
+
+      CALL GETUIMAGE (IMAGE, FNAME, SLICE, ERR)
+      WRITE(USEROUT,*) 'ERR = ',ERR
+      IF (ERR) STOP
+
+C  Find max value for this slice
+
+      MAX = 0
+      DO 120 J=1,512
+        DO 110 I=1,512
+          IF (MAX.LT.IMAGE(I,J)) MAX=IMAGE(I,J)
+110     CONTINUE
+120   CONTINUE
+      WRITE(USEROUT,*) 'Slice = ',SLICE,' Maximum Pixel = ',MAX
+
+C  Local peaks must have at least a pixel value of CUTOFF
+
+      Q = 'Minimum value for local maxima (cutoff)'
+      CUTOFF = 3*MAX/4
+C     CALL GETINT(Q,CUTOFF,0,MAX)
+
+C  Once a pixel with a value >= CUTOFF is found, a search is made for
+C  the pixel with the largest value within a rectangle whose dimensions
+C  are (2*LRANGE + 1) x (2*LRANGE + 1) centered on the specified pixel.
+
+      Q = 'Range of pixels to increment in search for local maximum'
+C      CALL GETINT(Q,LRANGE,0,512)
+
+C  After a local maximum has been characterized, a rectangle of pixels
+C  is zeroed so as to skip it in searching for the next peak.
+C  This rectangle has the dimensions (2*ZRANGE + 1) x (2*ZRANGE + 1)
+C  and is centered on the specified pixel.
+
+      Q = 'Range of pixels to zero after locating local maximum'
+C      CALL GETINT(Q,ZRANGE,0,512)
+
+      IF (SLICE.EQ.FIRST) THEN
+         WRITE (DATAFILE,8600) FNAME, SLICE, 2*FRANGE+1, 2*FRANGE+1
+      ENDIF
+8600  FORMAT(A20,' Slice ',I2,3X,I2,'x',I2,' pixel fit',/)
+
+C  Loop until no more peaks are found:
+C     1) find a local max
+C     2) find the coordinates of the center of this local max
+C     3) fit 1 2D gaussian to the region of the local max
+C     4) zero the pixel values in this region
+
+      N = 0
+200   CALL LOCALMAX (X, Y, LRANGE, CUTOFF, MAX, IMAGE)
+
+      IF (X.GT.0) THEN
+        N = N+1
+        CALL LOCALMID (X, Y, MAX, XMID(N), YMID(N), IMAGE)
+		CALL GAUS2DGB (X, Y, MAX, XMID(N), YMID(N), IMAGE, FRANGE, DATAFILE, SLICE, FIRST)
+        CALL LOCALZER (X, Y, ZRANGE, IMAGE)
+C        GO TO 200
+      END IF
+C1000  continue
+
+      STOP
+      END
+@

@@ -1,0 +1,477 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	2002.11.21.20.32.38;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2002.11.20.14.19.56;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@;+
+; NAME:
+;	WARP3D
+;
+; PURPOSE
+;	3D warp of STUDY image into array REF image
+;
+; INPUTS: passed and Environmental variables
+;	REFERENCE: 	Reference image filename
+;	STUDY:	 	Study image filename
+;	WARP:		Name for logfile and x,y,z warp vector image files
+;	PLANE:		Plane displayed during processing
+;	DEBUG:		Enables timing display of subroutines
+;
+; WARP Notes:
+;	f0 smooths residual correction with a vicous-like effect (gauss of incremental difference)
+; 	f1 smooths total displacement correction with an elastic-like effect (gauss of total shift)
+; 		best results with f0=0 (no smooth) and f1 small (greater smooth)-> elastic stretch
+; 		f1=0.01 is too slow and f1=0.03 is too fast (distortion)
+; 	gmin set to distinguish primarily brain/csf boundary
+; 	dsiz is downsampling of image before computing gradient (initial large, then decreasing)
+; 	wfac determines speed of shift (varies with dsiz)
+;
+; REVISION HISTORY:
+;	Nov 2002 Tom Videen
+;-
+
+PRO WARP3D
+@@IMAGE_UTILS.h
+@@WARP.h
+
+   on_error, 2
+   debug = fix(getenv ('DEBUG'))
+   file1 = getenv ('REFERENCE')
+   file2 = getenv ('STUDY')
+   warpfile = getenv ('WARP')
+   viewplane = fix(getenv ('PLANE'))
+   log = warpfile+'.log'
+
+   crit = 0.999      			; stop when MSE changes by LE this
+   gmin = 350					; primarily brain/csf
+   f0 = 0.0						; 0 for elastic warp
+   f1 = float(getenv ('F1'))	; 0.02 works well
+   print,f0,f1,format='("Warp filters:  f0 =",F4.2,"   f1 =",F4.2)'
+
+   IF (strlen(log) GT 0) THEN BEGIN
+      openw, loglun, log, ERROR=err, /GET_LUN
+      IF (err NE 0) THEN BEGIN
+         print, 'Cannot open logfile: ',log
+         loglun = 0
+      ENDIF
+   ENDIF
+
+; Setup Widgets
+
+   base = widget_base (TITLE='Transformer3D', /COLUMN)
+   base1 = widget_base(base, row=2)
+   rbase1 = widget_base(base1, col=4)
+   rbase2 = widget_base(base1, col=7)
+   msg_time = cw_field(rbase1, title='RunTime', /noedit, value=0, xsize=7, ysize=1)
+   msg_cyc = cw_field(rbase1, title='Cycle', /noedit, value=0, xsize=4, ysize=1)
+   msg_wtime = cw_field(rbase1, title='CycleTime', /noedit, value=0, xsize=7, ysize=1)
+   msg_mse = cw_field(rbase1, title='MeanSqrErr', /noedit, value=0, xsize=10, ysize=1)
+   msg_f0 = cw_field(rbase2, title='f0', /noedit, value=0, xsize=4, ysize=1)
+   msg_f1 = cw_field(rbase2, title='f1', /noedit, value=0, xsize=4, ysize=1)
+   msg_gmin = cw_field(rbase2, title='Limit', /noedit, value=0, xsize=4, ysize=1)
+   msg_gmax = cw_field(rbase2, title='GradMax', /noedit, value=0, xsize=7, ysize=1)
+   msg_size = cw_field(rbase2, title='Size', /noedit, value=0, xsize=3, ysize=1)
+   msg_loop = cw_field(rbase2, title='Loop', /noedit, value=0, xsize=3, ysize=1)
+   msg_cnt = cw_field(rbase2, title='Cnt', /noedit, value=0, xsize=3, ysize=1)
+
+   wid = {WIDGETS,		$
+          base : base,	$ ; top level base
+          win  : lonarr(4),	$ ; draw window widget id
+          time : msg_time, $
+          mse  : msg_mse, $
+          cyc  : msg_cyc, $
+          size : msg_size, $
+          loop : msg_loop, $
+          cnt  : msg_cnt, $
+          f0   : msg_f0, $
+          f2   : msg_f1, $
+          gmin : msg_gmin, $
+          gmax : msg_gmax, $
+          wtime : msg_wtime $
+         }
+
+; Read 2 Images
+
+   str = ''
+   refimg = {VIMAGE}
+   refimg.f = 1
+   refimg.fp = 1
+   refimg.lp = 256
+   refimg.ff = 1
+   refimg.lf = 1
+   refimg.fname = file1
+   image = refimg
+   IF (getframe(image, str) NE 0) THEN message, str
+   refimg = image
+   nx = refimg.dim[0]
+   ny = refimg.dim[1]
+   nz = refimg.dim[2]
+
+   stdimg = {VIMAGE}
+   stdimg.f = 1
+   stdimg.fp = 1
+   stdimg.lp = 256
+   stdimg.ff = 1
+   stdimg.lf = 1
+   stdimg.fname = file2
+   image = stdimg
+   IF (getframe(image, str) NE 0) THEN message, str
+   stdimg = image
+
+; Image Arrays
+
+   ref   = float(reform((*refimg.data)[*,*,*]))
+   study = float(reform((*stdimg.data)[*,*,*]))
+   dif = ref-study
+   new = fltarr(nx,ny,nz)
+   ndx = fltarr(nx,ny,nz)
+   ndy = fltarr(nx,ny,nz)
+   ndz = fltarr(nx,ny,nz)
+
+   grad3d, ref, gx, gy, gz, nx, ny, nz
+   dxg = sqrt(gx*gx+gy*gy+gz*gz)
+
+; Setup Display
+
+   dsp1 = 'Reference'
+   dsp2 = 'Resampled Study'
+   dsp3 = 'Reference-Study'
+   dsp4 = 'Dif x |Ref Grad|'
+   dname = [dsp1,dsp2,dsp3,dsp4]
+
+   zoom = 2
+   IF (refimg.pdim[0] GT refimg.pdim[1]) THEN BEGIN
+      xfact = (refimg.pdim[0])/(refimg.pdim[1])
+      stype = 1
+   ENDIF ELSE BEGIN
+      xfact = 1.
+      stype = 0
+   ENDELSE
+   xsize = nx * zoom * xfact
+   ysize = ny * zoom
+
+   IF (!d.n_colors GE 160) THEN nc=80 $
+   ELSE IF (!d.n_colors GE 80) THEN nc=40 $
+   ELSE nc=(!d.n_colors)/2
+   FOR i= 0, 3 DO BEGIN
+      dsp[i].set = 1
+      dsp[i].init = 1
+      dsp[i].type = 1       ; 0=auto scaling, 1=manual scaling
+      dsp[i].zoom = zoom
+      dsp[i].xsize = xsize
+      dsp[i].ysize = ysize
+      dsp[i].nc = nc
+      dsp[i].bot = 0		; first element of color table
+      dsp[i].range = 0		; 0=pos, 1=neg, 2=neg/pos
+      dsp[i].min = 0
+      dsp[i].max = 800
+   ENDFOR
+   dsp[2].bot = nc
+   dsp[2].range = 2
+   dsp[2].type = 0
+   dsp[3].type = 0
+   !p.background = 0
+   loadct, 36, ncolors=nc, bottom=0, file=lut
+   loadct, 37, ncolors=nc, bottom=nc, file=lut
+
+   widget_control, base
+   widget_control, base, /realize, xoffset=0, yoffset=ysize+30
+
+   yloc = 0
+   FOR i= 0, 3 DO BEGIN
+      dispbase = widget_base(TITLE=dname[i], group_leader=wid.base, uvalue=base)
+      win = widget_draw(dispbase, xsize=dsp[i].xsize, ysize=dsp[i].ysize)
+      xloc = i*(xsize + 20) < i*320 ; for 1280x1024 display
+      widget_control, dispbase, /realize, xoffset=xloc, yoffset=yloc
+      widget_control, win, get_value=windowIndex
+      wset, windowIndex
+      xmanager, "DISP"+strcompress(string(i+1),/remove_all), dispbase, /just_reg
+      wid.win[i] = win
+      dsp[i].id = windowIndex
+   ENDFOR
+   display, ref, study, dif, dxg, viewplane, stype, wid
+
+; Shift to Center-of-Mass
+; ---------------------------------------
+
+   t0 = systime(1)
+   shift3d, ref, study, new, dx, dy, dz
+   ndx = ndx + replicate(dx,nx*ny*nz)
+   ndy = ndy + replicate(dy,nx*ny*nz)
+   ndz = ndz + replicate(dz,nx*ny*nz)
+   grad3d, ref, gx, gy, gz, nx, ny, nz
+   dxg = sqrt(gx*gx+gy*gy+gz*gz)
+   dif = ref-new
+   mserror = mean(dif*dif)
+   t1 = systime(1) - t0
+   display, ref, new, dif, dxg, viewplane, stype, wid
+
+   head = '  Time   Cyc Dsiz Loop  Cnt   f0    f1  wfac   gmin   MaxGrad   MeanSqrErr'
+   ;;       3600.    1    8    1    1   0.00  0.02  8.0    350    21159.    17164.10
+   values = string(FORMAT='(F7.0,I5,I5,I5,I5,F7.2,F6.2,F5.1,I7,F10.0,F12.2)', $
+                   t1,0,0,0,0,0,0,0,0,0,mean(dif*dif))
+   IF (strlen(log) GT 0 AND loglun NE 0) THEN printf,loglun,format='(A,/,A)', head,values
+
+   widget_control, wid.time, set_value=string(format='(F7.0)',t1)
+   widget_control, wid.mse,  set_value=string(format='(F10.2)',mean(dif*dif))
+   widget_control, wid.cyc,  set_value=string(format='(I4)',0)
+   widget_control, wid.size, set_value=string(format='(I3)',0)
+   widget_control, wid.loop, set_value=string(format='(I3)',0)
+   widget_control, wid.cnt,  set_value=string(format='(I3)',0)
+   widget_control, wid.f0,   set_value=string(format='(F4.2)',0)
+   widget_control, wid.f2,   set_value=string(format='(F4.2)',0)
+   widget_control, wid.gmin, set_value=string(format='(I4)',0)
+   widget_control, wid.gmax, set_value=string(format='(F7.0)',0)
+   widget_control, wid.wtime, set_value=string(format='(F7.0)',0)
+
+; WARP Loop:
+; ---------------------------------------
+
+   FOR j=1,3 DO BEGIN
+      dsiz = 2^(4-j)     ; 8, 4, 2
+      wfac = 4.0*dsiz     ; 32, 16, 8
+      grad3d, ref, gx, gy, gz, nx/dsiz, ny/dsiz, nz/dsiz
+      tmpmse = mserror
+      cnt = 1
+      WHILE ((mserror LE crit*tmpmse) OR (cnt LT 3)) DO BEGIN
+         cycle = cycle+1
+         tmpdx = ndx
+         tmpdy = ndy
+         tmpdz = ndz
+         ndx = tmpdx
+         ndy = tmpdy
+         ndz = tmpdz
+         wt0 = systime(1)
+         calc_warp, ref, study, new, gx, gy, gz, ndx, ndy, ndz, f0, f1, wfac, dxg, gmin
+         wt1 = systime(1) - wt0
+         dif = ref-new
+         tmpmse = mserror
+         mserror = mean(dif*dif)
+         t1 = systime(1) - t0
+
+         values = string(FORMAT='(F7.0,I5,I5,I5,I5,F7.2,F6.2,F5.1,I7,F10.0,F12.2)', $
+                         t1,cycle,dsiz,j,cnt,f0,f1,wfac,gmin,max(dxg),mserror)
+         IF (strlen(log) GT 0 AND loglun NE 0) THEN printf,loglun,values
+
+         widget_control, wid.time, set_value=string(format='(F7.0)',t1)
+         widget_control, wid.mse,  set_value=string(format='(F10.2)',mserror)
+         widget_control, wid.cyc,  set_value=string(format='(I4)',cycle)
+         widget_control, wid.size, set_value=string(format='(I3)',dsiz)
+         widget_control, wid.loop, set_value=string(format='(I3)',j)
+         widget_control, wid.cnt,  set_value=string(format='(I3)',cnt)
+         widget_control, wid.f0,   set_value=string(format='(F4.2)',f0)
+         widget_control, wid.f2,   set_value=string(format='(F4.2)',f1)
+         widget_control, wid.gmin, set_value=string(format='(I4)',gmin)
+         widget_control, wid.gmax, set_value=string(format='(F7.0)',max(dxg))
+         widget_control, wid.wtime, set_value=string(format='(F7.0)',wt1)
+         display, ref, new, dif, dxg, viewplane, stype, wid
+         cnt = cnt+1
+      ENDWHILE
+      IF (mserror GT tmpmse) THEN BEGIN
+         print, 'Use penultimate warp'
+         ndx = tmpdx
+         ndy = tmpdy
+         ndz = tmpdz
+      ENDIF
+   ENDFOR
+   wt0 = systime(1)
+
+; With final warp, save filtered warp vectors (ndx, ndy, ndz)
+; --------------------------------------------
+
+   apply_warp, study, new, ndx, ndy, ndz, f1
+   wt1 = systime(1) - wt0
+   dif = ref-new
+   display, ref, new, dif, dxg, viewplane, stype, wid
+
+   t1 = systime(1) - t0
+   head = '  Time   Cyc    f0    f1    MeanSqrErr'
+   ;;       3600.    1   0.00  0.02    17164.10
+   values = string(FORMAT='(F7.0,I5,F7.2,F6.2,F12.2)', t1,cycle,f0,f1,mean(dif*dif))
+   IF (strlen(log) GT 0 AND loglun NE 0) THEN printf,loglun,format='(A,/,A)', head,values
+
+   widget_control, wid.time, set_value=string(format='(F7.0)',t1)
+   widget_control, wid.mse,  set_value=string(format='(F10.2)',mserror)
+   widget_control, wid.cyc,  set_value=string(format='(I4)',cycle)
+   widget_control, wid.size, set_value=string(format='(I3)',dsiz)
+   widget_control, wid.loop, set_value=string(format='(I3)',j)
+   widget_control, wid.cnt,  set_value=string(format='(I3)',cnt)
+   widget_control, wid.f0,   set_value=string(format='(F4.2)',f0)
+   widget_control, wid.f2,   set_value=string(format='(F4.2)',f1)
+   widget_control, wid.gmin, set_value=string(format='(I4)',gmin)
+   widget_control, wid.gmax, set_value=string(format='(F7.0)',max(dxg))
+   widget_control, wid.wtime, set_value=string(format='(F7.0)',wt1)
+
+; Save Warped Image
+
+   extra = strarr(3)
+   extra[0] = 'conversion program := warp3d'
+   extra[1] = 'program version    := 1.1'
+   extra[2] = 'program date       := 2002:11:21'
+   str1 = ''
+   fname = warpfile
+   stdimg.fname = fname
+   *stdimg.data = new
+   print,'Saving ',fname
+   stat = putinterfile(stdimg, fname, str1, EXTRA=extra)
+   IF (stat NE 0) THEN message,'ERROR saving '+fname
+
+; Save X,Y,Z Warp Vectors
+
+   fname = warpfile+'_dx'
+   stdimg.fname = fname
+   *stdimg.data = ndx
+   print,'Saving ',fname
+   stat = putinterfile(stdimg, fname, str1, EXTRA=extra)
+   IF (stat NE 0) THEN message,'ERROR saving '+fname
+
+   fname = warpfile+'_dy'
+   stdimg.fname = fname
+   *stdimg.data = ndy
+   print,'Saving ',fname
+   stat = putinterfile(stdimg, fname, str1, EXTRA=extra)
+   IF (stat NE 0) THEN message,'ERROR saving '+fname
+
+   fname = warpfile+'_dz'
+   stdimg.fname = fname
+   *stdimg.data = ndz
+   print,'Saving ',fname
+   stat = putinterfile(stdimg, fname, str1, EXTRA=extra)
+   IF (stat NE 0) THEN message,'ERROR saving '+fname
+
+; Exit
+
+   IF ((loglun NE 0) AND (size(loglun))[1] NE 0) THEN BEGIN
+      status = FSTAT(loglun)
+      IF (status.open GT 0) THEN close, loglun
+      IF (status.size EQ 0) THEN BEGIN
+         command = 'rm ' + status.name
+         spawn, command
+      ENDIF ELSE print,'Processing log saved in ',status.name
+   ENDIF
+   RETURN
+
+END
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d6 1
+a6 3
+;	3D warp of array STUDY based upon the gradient GX,GY of the Reference image.
+;	The dimensions of GX,GY define the (possibly downsampled) arrays upon which
+;	the warp is defined.
+d8 6
+a13 10
+; INPUTS:
+;	REF:	 	Reference or standard			(3D array)
+;	STUDY:	 	Study or reslice				(3D array)
+;	NEW:	 	Current deformed study			(3D array)
+;	GX,GY,GZ:	Gradient						(3D real arrays)
+;	NDX,NDY,NDZ:Total shift (all iterations)	(3D real arrays)
+;	F0:	 Cutoff of gaussian filter applied to residual correction
+;	F1:	 Cutoff of gaussian filter applied to total displacement
+;			 (smaller value -> greater smoothing; 0.1)
+;   DEBUG:		1 -> print processing time for steps
+d15 8
+a22 3
+; OUTPUT:
+;	NDX,NDY,NDZ: Total shift (all iterations)	(3D real arrays)
+;	NEW:	 	 Revised deformed study			(3D array)
+d28 3
+a30 2
+PRO WARP3D, REF, STUDY, NEW, GX, GY, GZ, NDX, NDY, NDZ, F0, F1, FAC, wimg, gmin
+   COMMON TRANSFORMER
+d33 6
+a38 6
+   nx = (size(ref))[1]          ; original image size
+   ny = (size(ref))[2]
+   nz = (size(ref))[3]
+   mx = (size(gx))[1]           ; resampled image size (for gradient definition and warp)
+   my = (size(gx))[2]
+   mz = (size(gx))[3]
+d40 5
+a44 3
+   dx = fltarr(mx,my,mz)
+   dy = fltarr(mx,my,mz)
+   dz = fltarr(mx,my,mz)
+d46 6
+a51 7
+   dif = downsample(new-ref,mx,my,mz)
+   ix = where (abs(gx) GE gmin,cntx)
+   iy = where (abs(gy) GE gmin,cnty)
+   iz = where (abs(gz) GE gmin,cntz)
+   IF (cntx LE 0 OR cnty LE 0 OR cntz LE 0) THEN BEGIN
+      new = study
+      return
+d54 1
+a54 3
+   dx[ix] = fac*dif[ix]*gx[ix]/(gx[ix]*gx[ix] + dif[ix]*dif[ix])
+   dy[iy] = fac*dif[iy]*gy[iy]/(gy[iy]*gy[iy] + dif[iy]*dif[iy])
+   dz[iz] = fac*dif[iz]*gz[iz]/(gz[iz]*gz[iz] + dif[iz]*dif[iz])
+d56 85
+a140 4
+   IF (f0 GT 0.0) THEN BEGIN
+      fdx = gauss3d(dx,f0)
+      fdy = gauss3d(dy,f0)
+      fdz = gauss3d(dz,f0)
+d142 2
+a143 3
+      fdx = dx
+      fdy = dy
+      fdz = dz
+d145 2
+a146 1
+   wimg = 1000*upsample(sqrt(fdx*fdx + fdy*fdy + fdz*fdz),nx,ny,nz) ; dif * |gradient|
+d148 23
+a170 6
+   ndx = ndx + upsample(fdx,nx,ny,nz)
+   ndy = ndy + upsample(fdy,nx,ny,nz)
+   ndz = ndz + upsample(fdz,nx,ny,nz)
+   fdx = gauss3d(ndx,f1)
+   fdy = gauss3d(ndy,f1)
+   fdz = gauss3d(ndz,f1)
+d172 20
+d193 10
+a202 13
+   FOR z=0,nz-1 DO BEGIN
+      FOR y=0,ny-1 DO BEGIN
+         FOR x=0,nx-1 DO BEGIN
+            xx = x-fdx[x,y,z]
+            yy = y-fdy[x,y,z]
+            zz = z-fdz[x,y,z]
+            new[x,y,z] = interpolate(study, xx, yy, zz)
+         ENDFOR 
+      ENDFOR 
+   ENDFOR 
+   result = check_math()
+   IF (result NE 32) THEn print,"math error ",result
+   if debug then print,format='("warp intrp",F6.1)',systime(1) - t0
+d204 145
+@

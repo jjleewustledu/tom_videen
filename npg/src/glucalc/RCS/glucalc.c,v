@@ -1,0 +1,232 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	2004.02.16.15.47.26;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2002.11.26.21.57.33;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.01.12.17.35.11;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Feb 2004
+@
+text
+@/* $Log: glucalc.c,v $
+ * Revision 1.2  2002/11/26  21:57:33  tom
+ * *** empty log message ***
+ *
+ * Revision 1.1  1999/01/12  17:35:11  tom
+ * Initial revision
+ * */
+/*	===============================================================================
+ *	Module:			glucalc.c
+ *	Date:			Jan 1999
+ *	Author:			Tom Videen
+ *	Description:	Compute CMRGlucose from a VOI from a single frame FDG image.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/glucalc/RCS/glucalc.c,v 1.2 2002/11/26 21:57:33 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <imgutil.h>
+
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	double          dconex ();
+	int             getdta ();
+
+	char           *dtafile;
+	int             model;			 /* 0 = Huang; 1 = Brooks */
+	int             np = 0;			 /* number of plasma data points */
+	float           time[1000];		 /* sec: from dta file */
+	float           plasma[1000];	 /* decay-corrected well counts/sec: from dta file */
+	float           meancounts;
+	double          f0, f1, f2, beta;
+	double          ri1, ri2;		 /* convolutions */
+	double          k1, k2, k3, k4;	 /* rate constants */
+	double          lc;				 /* lumped constant */
+	double          alpha1, alpha2;	 /* macro parameters clearance rates */
+	double          gc;				 /* glucose concentration in micromoles/ml */
+	double          t0, t1;			 /* range of integration */
+	double          pie;			 /* (wellcounts/ml/sec)/(PETcounts/pixel/min) */
+	double          duration;
+	double          adjusted_frametime;
+	double          gluc;
+	double          tau = 0.00010529;
+
+/*
+ *	Read command line arguments. Initialize filenames and parameters.
+ */
+
+	if (argc != 13) {
+		printf ("Usage: glucalc counts t1 duration dta k1 k2 k3 k4 lc gc pie model\n");
+		return (ERROR);
+	}
+	meancounts = (double) atof (argv[1]);
+	t1 = (double) atof (argv[2]);
+	duration = (double) atof (argv[3]);
+	dtafile = argv[4];
+	k1 = (double) atof (argv[5]);
+	k2 = (double) atof (argv[6]);
+	k3 = (double) atof (argv[7]);
+	k4 = (double) atof (argv[8]);
+	lc = (double) atof (argv[9]);
+	gc = (double) atof (argv[10]);
+	pie = (double) atof (argv[11]);
+	model = atoi (argv[12]);
+
+/*	Read blood curve */
+
+	if (getdta (dtafile, &np, &time, &plasma) != 0) {
+		fprintf (stderr, "ERROR [glucalc]: Reading %s\n", dtafile);
+		return (ERROR);
+	}
+
+/*  Convert rate constants to 1/sec */
+
+	k1 /= 60.;
+	k2 /= 60.;
+	k3 /= 60.;
+	k4 /= 60.;
+	t0 = 0.;
+
+/*	Computations */
+
+	f0 = sqrt (pow ((k2 + k3 + k4), 2.) - 4 * k2 * k4);
+	alpha1 = (k2 + k3 + k4 - f0) / 2;
+	alpha2 = (k2 + k3 + k4 + f0) / 2;
+
+	printf ("FDG Uptake Time    = %.0f - %.0f sec\n", t0, t1);
+	printf ("PET frame duration =%5.0f sec\n", duration);
+	ri1 = dconex (&time, &plasma, np, t0, t1, alpha1);
+	ri2 = dconex (&time, &plasma, np, t0, t1, alpha2);
+
+	if (ri1 < 0. || ri2 < 0.) {
+		fprintf (stderr, "ERROR [glucalc]: negative value for blood curve convolution\n");
+		return (ERROR);
+	}
+
+/*	Convert gc in uMoles/ml to mg/100cc:
+ *  uMoles/ml * ug/uMole * .001 mg/ug * 100 ml/100cc = mg/100cc
+ *	uMoles/ml * 180.16   * 0.1
+ */
+	gc = gc * 18.016;			 /* mg/100cc */
+
+/*
+ *	CMRglu should be in mg/min/100g:
+ *	f0 converts PETcounts/pixel/duration to wellcounts/sec/gm
+ *		pie factor is in (wellcounts/ml/sec)/(PETcounts/pixel/min)
+ *		pie	* 60 converts to (wellcounts/ml)/(PETcounts/pixel)
+ *		img1 is in PETcounts/pixel/duration
+ *		frame duration is in sec
+ *		use 60/duration to convert to PETcounts/pixel/duration to PETcounts/pixel/min
+ *		use 1/1.05 to convert to rate per 100cc to rate per 100g
+ *  gc is in mg/100cc
+ */
+
+	adjusted_frametime = t1 - (log (0.5 * (1.0 + exp (-tau * duration)))) / tau;
+	printf ("Average frame time =%8.2f sec\n", adjusted_frametime);
+	f0 = pie * 60 * exp (adjusted_frametime * tau) * 60 / duration / 1.05;
+
+	printf ("tau = %f 1/sec\n", tau);
+	printf ("k1  = %f ml/g/min\n", k1 * 60);
+	printf ("k2  = %f 1/min\n", k2 * 60);
+	printf ("k3  = %f 1/min\n", k3 * 60);
+	printf ("k4  = %f 1/min\n", k4 * 60);
+	printf ("LC  = %f\n", lc);
+	printf ("plasma glucose =%7.2f mg/100ml\n", gc);
+	gluc = 0;
+
+/*	Using Huang's formula: Am J Physiol 238:E69-E82, 1980.
+ *	Equation 8, p. E71
+ */
+
+	if (model == 0) {
+		f1 = (k1 / (alpha2 - alpha1)) * ((k4 - alpha1) * ri1 + (alpha2 - k4) * ri2);
+		f2 = gc / (lc * (k2 + k3) * (ri1 - ri2) / (alpha2 - alpha1));
+		gluc = f2 * (f0 * meancounts - f1);
+/*	Using Brooks' formula: J Nucl Med 23:538-539, 1982.
+ *	Equation 10, p. 539
+ */
+
+	} else {
+
+		f1 = k1 * (alpha2 - k3 - k4) * ri2 / (alpha2 - alpha1);
+		f2 = pow ((1 + k4 / (k2 + k3)), 2.) - 4 * k2 * k4 / pow (k2 + k3, 2.);
+		beta = (1 + (k4 - alpha1) / k3) / sqrt (f2);
+		f2 = gc / (lc * beta * ri1);
+		gluc = f2 * (f0 * meancounts - f1);
+	}
+
+	printf ("CMRglucose =%6.2f mg/min/100g\n", gluc);
+	return (0);
+}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d10 1
+a10 1
+ *	Date:			Jan-99
+d15 1
+d17 1
+a17 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/glucalc/RCS/glucalc.c,v 1.1 1999/01/12 17:35:11 tom Exp tom $";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/* $Log$ */
+d13 1
+a13 1
+static char     rcsid[] = "$Header: /home/npggw/tom/src/glucalc/RCS/glucalc.c,v 1.1 1998/04/29 14:48:10 tom Exp $";
+a17 1
+#include <string.h>
+d31 1
+a31 1
+	int             np;				 /* number of plasma data points */
+d86 1
+a86 1
+	f0 = sqrt (pow ((k2 + k3 + k4), 2) - 4 * k2 * k4);
+d146 1
+a146 1
+		f2 = pow ((1 + k4 / (k2 + k3)), 2) - 4 * k2 * k4 / pow (k2 + k3, 2);
+@

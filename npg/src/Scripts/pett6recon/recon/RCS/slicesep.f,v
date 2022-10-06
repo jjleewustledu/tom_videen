@@ -1,0 +1,503 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@c @;
+
+
+1.1
+date	97.09.19.22.13.12;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC 
+C
+C  Program:      SLICESEP.FTN
+C
+C  Author:       Tom O. Videen
+C  Date:         08-Sep-88
+C  Written For:  PETT VI Image Reconstruction                                 
+C                                                                             
+C  History/Revisions:                                                         
+C     Original SLEPAL.FTN written for PETT VI 3/23/81 by Mark Mintun.         
+C     Current SLICESEP created 04-Aug-88 by Tom Videen.
+C     Uses outlying detector-detector pairs to compute randoms                 
+C        for NORM and ATTEN scans as well as emission scans  
+C        and performs randoms subtraction in this routine                      
+C        (subtracting directly from det-det-wobble pair coincidences)      
+C        instead of in RANNORM, RANATTN, or ARYAL (as previously done).        
+C        It also eliminates rotation of PETT VI during scans (as this is      
+C        thought to have never been used for patient images and the           
+C        the motor is no longer functional).                             
+C        Data type changed to 20 in header of output file.               
+C     Modified 08-Sep-88 to multiply the randoms estimated for each          
+C        detector-detector pair by the relative efficiency of that pair.      
+C        (Sensitivity is computed by DETNORM6.FTN and stored in a disk file)   
+C     Modified 06-Oct-88 to use alpha factors interpolated between the smallest
+C        phantom (AREA1) and 0 if the attenuation object size is smaller than  
+C        AREA1.                                                               
+C     Modified 17-Oct-88 by TOV to use area instead of diameter of the        
+C        attenuation object.                                                 
+C     Modified 06-Nov-89 by TOV to properly enter total, randoms, and true 
+C        events into the header.                                              
+C                                                                             
+C  Intent:                                                                   
+C     Read a raw data filae and separate into 7 slices.                        
+C     Sum total events for all detector-detector pairs.                    
+C     Compute the mean randoms per detector-detector pair & wobble             
+C        position for each slice using the outermost 144 det-det               
+C        pairs (16 per outer bankpair).                                        
+C     Correct raw data for randoms:                                            
+C        Subtract mean random per det-det pair for 1 wobble position          
+C        (multiplied times the relativity sensitivity of that det-det         
+C        pair) from all raw data values before writing to output file.         
+C                                                                              
+C  IMPORTANT ASSUMPTION:                                                       
+C     The runname for normal or blank scans must begin with 'NO'               
+C     or ' NO' and the runname for attenuation scans must begin                
+C     with 'AT' or ' AT'.  This is typically entered in the                    
+C     program SETUP.  SLICESEP uses this to identify the type of              
+C     scan and to determine which set of alphas to use in the computations.    
+C                                                                              
+C  Assumes no rotations were used during PETT VI scan.                        
+C                                                                             
+C  Notes:                                                                     
+C        Reads alpha for each slice from an external file (ALPHAFILE).     
+C                                                                             
+C        Outliers = Scatter + Randoms                                        
+C        Scatter  = Alpha * Singles                                         
+C        Randoms  = Tau * Singles**2                                         
+C                                                                           
+C     The program writes the following values to the file header:           
+C       (18) slice number;                                                    
+C       (38) file type changed to 20;                                         
+C       (51-52) total events for this slice;                                  
+C       (53-54) total randoms for this slice;                                 
+C       (55-56) total events - total randoms;                                 
+C                                                                             
+C     Input Files: see PETT6RAW.FIL (lu 1)   Raw data                         
+C                      PETT6ALP.FIL (lu 3)   Alpha factors                   
+C                      PETT6SIZ.FIL (lu 4)   Attenuation object size         
+C                      PETT6DNF.FIL (lu 6)   Detector normalization factors   
+C     Output File: see PETT6SLC.FIL (lu 2)   Slice-separated data             
+C                                                                             
+C  Logical Units:                                                             
+C     0 = User output (USEROUT);                                               
+C     1 = Raw data (NORM, ATTENn, SCANn) input file (IN);                     
+C     2 = Raw data separated into slices (SLICES) output file (OUT);        
+C     3 = File of alpha factors (ALPHAFILE);                                  
+C         Record 1: Areas of attenuation phantoms: AREA1, AREA2              
+C         Record 2: Emission scan;    low resolution                         
+C         Record 3: Blank scan;       low resolution                           
+C         Record 4: Attenuation scan; low resolution;  phantom size AREA1 mm  
+C         Record 5: Attenuation scan; low resolution;  phantom size AREA2 mm  
+C         Record 6: Blank scan;       high resolution                         
+C         Record 7: Emission scan;    high resolution                        
+C         Record 8: Attenuation scan; high resolution; phantom size AREA1 mm  
+C         Record 9: Attenuation scan; high resolution; phantom size AREA2 mm  
+C     4 = File of object attenuating area for each slice (ATENSIZE)           
+C     6 = File of detector-detector pair sensitivity normalization factors    
+C         (DETNORM)                                                           
+C                                                                             
+C  Uses Subroutines:                                                          
+C     SYSIO                                                                  
+C                                                                             
+C  Instructions for Compiling/Linking:  LINK7 SLICESEP                         
+C                                                                             
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC             
+C
+      PROGRAM SLICESEP
+C
+      INTEGER*2   ARRAY(8,8,16,18,7) ! data sorted by slice (for output)      
+C                     8 = detectors in 2nd bank of pair                       
+C                     8 = detectors in 1st bank of pair                       
+C                    16 = wobble positions                                     
+C                    18 = bank pair no.                                        
+C                     7 = slice no.                                            
+      INTEGER*2   PAIR(8,8,16,16) ! raw data for 1 bank pair of 16 slices    
+C                     8 = detectors in 2nd bank of pair                       
+C                     8 = detectors in 1st bank of pair                        
+C                    16 = wobble positions                                     
+C                    16 = slice no. (only first 7 are significant)            
+      INTEGER*2   HEADER(128)  ! file header record (read from raw file,       
+C                              !   altered and written to output file)        
+      INTEGER*2   RAND         ! temporary value for random/scan/bin           
+      REAL*4      TEMP         ! temporary value for random/scan/bin         
+C                                                                              
+      INTEGER*4   ETOTAL       ! total raw events                             
+      INTEGER*4   RTOTAL       ! total random events                          
+      INTEGER*4   TTOTAL       ! total true events (raw - random)             
+      INTEGER*4   COUNTS       ! temporary value for ARRAY()                  
+      INTEGER*4   PB(6)        ! parameter block in SYSIO                     
+      INTEGER*4   IOREAD       ! SYSIO read sequential binary wait            
+      INTEGER*4   IOWRITE      ! SYSIO write sequential binary wait           
+      INTEGER*4   IN           ! log unit for input file (raw data)           
+      INTEGER*4   OUT          ! log unit for output file (slices separated)   
+      INTEGER*4   USEROUT      ! log unit for output to user                   
+      INTEGER*4   ALPHAFILE    ! log unit for reading alpha factor             
+      INTEGER*4   ATENSIZE     ! log unit for reading object atten areas       
+      INTEGER*4   DETNORM      ! log unit for reading detector pair           
+C                                   sensitivity normalization factors          
+      INTEGER*4   AREA(7)      ! object area (pixels) for each slice           
+      INTEGER*4   AREA1        ! 1st (small) phantom area used in ALPHAFAC file
+      INTEGER*4   AREA2        ! 2nd (large) phantom area used in ALPHAFAC file
+      INTEGER*4   NBYTES       ! no. of bytes per slice                        
+      INTEGER*4   ADDRESS      ! address of ALPHAFILE to read                  
+C                                                                             
+      INTEGER*4   NUMEVENTS(7) ! total events for each slice (raw data)       
+      INTEGER*4   SUMEVENTS    ! total events ALL slices                      
+C                                                                              
+C      (det-det bin includes all 16 wobble positions)                          
+C                                                                              
+      REAL*4      OUTLIERS(7)  ! mean outliers per det-det bin for each slice
+      INTEGER*4   NOUTLIERS(7) ! total outlying coincidences for each slice  
+C                                                                          
+      REAL*4      RANDOMS(7)   ! mean randoms per det-det bin for each slice 
+      INTEGER*4   NRANDOMS(7)  ! total randoms for each slice               
+      INTEGER*4   SUMRANDOM    ! total randoms ALL slices               
+C                                                                           
+      REAL*4      SINGLES(7)   ! mean singles per det-det bin for each slice 
+C                                                                            
+      INTEGER*4   TRUES(7)     ! total events - total randoms              
+      INTEGER*4   SUMTRUES     ! total events-randoms ALL slices              
+C                                                                         
+      INTEGER*4   RESOLUTION   ! image resolution (0=low; 1=high)             
+      INTEGER*4   BP           ! bank pair number (1-18)                   
+      INTEGER*4   D1           ! detector number of 1st bank (1-8)         
+      INTEGER*4   D2           ! detector number of 2nd bank (1-8)            
+      INTEGER*4   WOB          ! wobble position (1-16)                   
+      INTEGER*4   SLICE        ! slice number (1-7)                        
+      INTEGER*4   I,J          ! local integers                               
+C                                                                        
+      REAL*4      SENSITIVITY(8,8,18,7) ! detector-detector pair sensitivity 
+C        normalization factors (detector 2, detector 1, bank pair, slice no)
+C     INTEGER*4   ISENSITIVITY(8,8,18,7) ! sensitivity is read in through here
+C        and then a floating point conversion is done and assigned to it
+      REAL*4      TIME         ! scan time (seconds)                         
+      REAL*4      TAU          ! PET system coincidence window (nsec)       
+      REAL*4      ALPHA(7)     ! scattered coincidences factor for slices 1-7 
+      REAL*4      ALPHA2(7)    ! scattered coincidences factor for AREA2 atten
+C
+      CHARACTER*1 BELL         ! used to ring terminal bell                  
+      CHARACTER*3 RUNNAME      ! first 3 characters of run name
+      CHARACTER*20 SCANNAME,SLICESNAME,ATENNAME,DETNAME  ! file names input as command line args
+      CHARACTER*80 ALPHANAME
+C                                                                             
+      EQUIVALENCE (RUNNAME, HEADER(2))                                    
+      EQUIVALENCE (ETOTAL, HEADER(51))                                       
+      EQUIVALENCE (RTOTAL, HEADER(53))                                      
+      EQUIVALENCE (TTOTAL, HEADER(55))                                      
+C                                                                           
+C  Initializations                                                         
+C                                                                         
+      DATA IOREAD, IOWRITE  /88,56/                                         
+      DATA USEROUT, IN, OUT, ALPHAFILE, ATENSIZE, DETNORM /6,0,1,2,3,4/       
+      DATA TAU /6.0E-09/                                               
+C
+      WRITE(USEROUT,*) '*** SLICESEP  Sep-97  {slice separation & randoms subtraction}'
+      CALL GETARG (1, SCANNAME)
+      CALL GETARG (2, SLICESNAME)
+      CALL GETARG (3, ALPHANAME)
+      CALL GETARG (4, ATENNAME)
+      CALL GETARG (5, DETNAME)
+
+C      WRITE(USEROUT,*) 'SCANNAME SLICESNAME ATENNAME DETNAME ALPHANAME'
+C      WRITE(USEROUT,*) SCANNAME, SLICESNAME, ATENNAME, DETNAME, ALPHANAME
+
+      PB(6) = 0                                                      
+      BELL = CHAR(7)                                                    
+      ADDRESS = 0            ! avoid compiler warning                    
+      DO 20 SLICE=1,7                                                      
+        TRUES(SLICE)     = 0                                               
+        NOUTLIERS(SLICE) = 0                                              
+        NRANDOMS(SLICE)  = 0                                         
+        NUMEVENTS(SLICE) = 0                                                
+        OUTLIERS(SLICE)  = 0.0                                         
+        RANDOMS(SLICE)   = 0.0                                            
+        SINGLES(SLICE)   = 0.0                                              
+20    CONTINUE
+C
+C  Added the following open statements when porting to HP 4-29-91 KMG
+      OPEN(IN,FILE=SCANNAME)
+      OPEN(ALPHAFILE,FILE=ALPHANAME,ERR=21)
+      OPEN(ATENSIZE,FILE=ATENNAME)
+      OPEN(DETNORM,FILE=DETNAME)
+      OPEN(OUT,FILE=SLICESNAME)
+      GOTO 22
+ 21   WRITE(6,*) 'error'
+C                                                                             
+C  Read header and check for rotation (which should never occur)          
+C
+ 22   CALL SYSIO(PB,IOREAD,IN,HEADER,256,0)                                 
+      I = INT(HEADER(5))                                                     
+      IF (I.NE.0) THEN                                                       
+        WRITE(USEROUT,*) '********************************************'   
+        WRITE(USEROUT,*) '*  File header indicates rotation was used.'         
+        WRITE(USEROUT,*) '*  This program will NOT process raw data'      
+        WRITE(USEROUT,*) '*    files in which PETT VI was rotated.'          
+        WRITE(USEROUT,*) '********************************************'  
+        STOP                                                                  
+      END IF                                                                 
+C                                                                            
+C  Check image resolution  (0=low, 1=high)                                   
+C                                                                          
+      RESOLUTION = HEADER(16)      ! get resolution (0 or 1)             
+      TIME = FLOAT(HEADER(8))      ! get scan time (sec)                   
+C                                                                             
+C  Determine which pair of ALPHA factors to read from ALPHAFILE.           
+C  Write choice to user.                                                
+C                                                                          
+      IF (RUNNAME(1:2).EQ.'NO' .OR. RUNNAME(2:3).EQ.' NO') THEN           
+        IF (RESOLUTION.EQ.1) THEN                                         
+          WRITE(USEROUT,8100) 'Blank/High Resolution'                    
+          ADDRESS = 6                                                   
+        ELSE IF (RESOLUTION.EQ.0) THEN                                     
+          WRITE(USEROUT,8100) 'Blank/Low Resolution'                    
+          ADDRESS = 2                                                    
+        END IF                                                            
+      ELSE IF (RUNNAME(1:2).EQ.'AT' .OR. RUNNAME(2:3). EQ.'AT') THEN        
+        IF (RESOLUTION.EQ.1) THEN                                          
+          WRITE(USEROUT,8100) 'Attenuation/High Resolution'                  
+          ADDRESS = 7                                                       
+        ELSE IF (RESOLUTION.EQ.0) THEN                                       
+          WRITE(USEROUT,8100) 'Attenuation/Low Resolution'                  
+          ADDRESS = 3                                                      
+        END IF                                                              
+      ELSE                                                                 
+        IF (RESOLUTION.EQ.1) THEN                                         
+          WRITE(USEROUT,8100) 'Emission/High Resolution'                  
+          ADDRESS = 5                                                       
+        ELSE IF (RESOLUTION.EQ.0) THEN                                      
+          WRITE(USEROUT,8100) 'Emission/Low Resolution'                       
+          ADDRESS = 1                                                       
+        END IF                                                              
+      END IF                                                                
+8100  FORMAT(1X,'SCAN FILE is ',A)                                            
+C                                                                         
+C  Read areas of phantoms used for attenuation slice factors          
+C                                                                         
+C      READ (ALPHAFILE,8150) AREA1,AREA2                
+      READ (ALPHAFILE,*) AREA1,AREA2                
+8150  FORMAT(2I1)
+C      WRITE(USEROUT,*) "AREA1 ",AREA1," AREA2 ",AREA2
+C                                                                          
+C  Read slice factors appropriate for scan type & resolution           
+C                                                                          
+      DO 50 J=1,ADDRESS                                              
+C        READ (ALPHAFILE,8200) (ALPHA(I),I=1,7)
+        READ (ALPHAFILE,*) (ALPHA(I),I=1,7)
+C        WRITE(USEROUT,*) "J = ",J
+C        WRITE(USEROUT,*) "ALPHA(1-7)",ALPHA(1), ALPHA(2), ALPHA(3), ALPHA(4),
+C     +    ALPHA(5), ALPHA(6), ALPHA(7)
+50    CONTINUE                                                          
+8200  FORMAT(7F1.0)                                                        
+C                                                                         
+C  For attenuation scans                                               
+C                                                                        
+      IF (RUNNAME(1:2).EQ.'AT' .OR. RUNNAME(2:3).EQ.'AT') THEN         
+C                                                                         
+C  Read object area for each slice                                      
+C                                                                          
+C        READ (ATENSIZE,8000) (AREA(I),I=1,7)                      
+        READ (ATENSIZE,*) (AREA(I),I=1,7)                      
+8000    FORMAT(7I1)                                                         
+        WRITE (USEROUT,8010) (AREA(I),I=1,7)                                  
+C        WRITE (USEROUT,*) (AREA(I),I=1,7)                                  
+8010    FORMAT(1X,'Object Area (pixels): ',7I6)                            
+C                                                                           
+C  Adjust alpha for attenuation object size (linear interpolation)     
+C                                                                         
+C        READ (ALPHAFILE,8200) (ALPHA2(I),I=1,7)                           
+        READ (ALPHAFILE,*) (ALPHA2(I),I=1,7)                           
+        DO 60 I=1,7                                                       
+          IF (AREA(I).GT.AREA1) THEN                                       
+            ALPHA(I) = ALPHA(I) +                                             
+     2      (ALPHA2(I)-ALPHA(I))*FLOAT(AREA(I)-AREA1)/FLOAT(AREA2-AREA1)   
+          ELSE IF (AREA(I).LT.AREA1) THEN                                  
+            ALPHA(I) = ALPHA(I)*FLOAT(AREA(I))/FLOAT(AREA1)                 
+          END IF                                                           
+60      CONTINUE                                                           
+      END IF                                                                 
+      WRITE (USEROUT,8210) (ALPHA(I),I=1,7)                               
+8210  FORMAT(1X,'Alpha:  ',7(2X,F8.7))                                     
+C                                                                          
+C  Read detector-detector pair relative sensitivity factors                
+C                                                                          
+C      CALL SYSIO(PB,IOREAD,DETNORM,ISENSITIVITY,32256,0)
+      CALL SYSIO(PB,IOREAD,DETNORM,SENSITIVITY,32256,0)
+      CLOSE(DETNORM)
+C      DO 320 I1=1,8
+C         DO 330 I2=1,8
+C            DO 340 I3=1,18
+C               DO 350 I4=1,7
+C                  SENSITIVITY(I1,I2,I3,I4)=
+C     2                 pe2ieee(ISENSITIVITY(I1,I2,I3,I4))
+C350            CONTINUE
+C340         CONTINUE
+C330      CONTINUE
+C320   CONTINUE
+       
+C                                                                           
+C -----------------------------------------------------------          
+C  Sort and count randoms in each bank pair                             
+C                                                                         
+      NBYTES = 2*16*16*8*8   ! bytes per bank pair               
+      DO 400 BP=1,18         ! 18 bank pairs                              
+C                                                                         
+C  Read all coincidence pairs for this pair of banks                    
+C                                                                           
+        CALL SYSIO(PB,IOREAD,IN,PAIR,NBYTES,0)
+C                                                                           
+        DO 300 SLICE=1,7                                               
+C                                                                           
+C  FLAG=1: outermost pair is D1=8, D2=1                                    
+C                                                                          
+          IF (BP.EQ.1 .or. BP.EQ.5 .or. BP.EQ.9 .or. BP.EQ.13                
+     2     .or. BP.EQ.16 .or. BP.EQ.18) THEN                                  
+            DO 140 D1=5,8                                                   
+              DO 130 D2=1,4                                                  
+                DO 120 WOB=1,16                                             
+                  NOUTLIERS(SLICE) =                                          
+     2              NOUTLIERS(SLICE) + PAIR(D2,D1,WOB,SLICE)                 
+120             CONTINUE                                                   
+130           CONTINUE                                                     
+140         CONTINUE                                                       
+C                                                                              
+C  FLAG=2: outermost pair is D1=1, D2=8                                      
+C                                                                            
+          ELSE IF (BP.EQ.4 .or. BP.EQ.8 .or. BP.EQ.12) THEN                 
+            DO 180 D1=1,4                                                  
+              DO 170 D2=5,8                                                 
+                DO 160 WOB=1,16                                            
+                  NOUTLIERS(SLICE) =                                           
+     2              NOUTLIERS(SLICE) + PAIR(D2,D1,WOB,SLICE)               
+160             CONTINUE                                                    
+170           CONTINUE                                                      
+180         CONTINUE                                                        
+          END IF                                                              
+C                                                                             
+C  Sum total coincidences detected for this slice and                     
+C  Move raw data from bank pair array to slice-sorted array               
+C                                                                         
+          DO 230 WOB=1,16                                                
+            DO 220 D1=1,8                                                    
+              DO 210 D2=1,8                                                  
+                NUMEVENTS(SLICE) =                                             
+     2            NUMEVENTS(SLICE) + PAIR(D2,D1,WOB,SLICE)                  
+                ARRAY(D2,D1,WOB,BP,SLICE) = PAIR(D2,D1,WOB,SLICE)          
+210           CONTINUE                                                    
+220         CONTINUE                                                   
+230       CONTINUE                                                      
+C                                                                            
+300     CONTINUE       ! end of slice loop                               
+400   CONTINUE         ! end of bank pair loop                     
+C                                                                      
+C -----------------------------------------------------------                  
+C                                                                         
+C  Compute singles and randoms for each slice.                             
+C     144 =  9 Bank Pairs * 16 Det-Det Pairs (for outliers)              
+C    1152 = 18 Bank Pairs * 64 Det-Det Pairs (for entire slice)            
+C                                                                         
+      DO 420 I=1,7                                                         
+        OUTLIERS(I) = NOUTLIERS(I)/(144.0*TIME)                            
+        IF (MOD(I,2).NE.0) THEN                                          
+          SINGLES(I) = ( -ALPHA(I) +                                      
+     2      SQRT(ALPHA(I)**2 + 4.0*TAU*OUTLIERS(I)) ) / (2.0*TAU)          
+          RANDOMS(I) = TAU * (SINGLES(I)**2)                                   
+        ELSE                                                               
+          OUTLIERS(I) = 0.5*OUTLIERS(I)                                  
+          SINGLES(I) = ( -ALPHA(I) +                                     
+     2      SQRT(ALPHA(I)**2 + 4.0*TAU*OUTLIERS(I)) ) / (2.0*TAU)       
+          RANDOMS(I) = 2.0 * TAU * (SINGLES(I)**2)                         
+C                                                                           
+C  Double singles and outliers for cross slices for output to user      
+C                                                                        
+          SINGLES(I) = 2.0*SINGLES(I)                                      
+          OUTLIERS(I) = 2.0*OUTLIERS(I)                                    
+        END IF                                                             
+        NRANDOMS(I) = JNINT(RANDOMS(I)*1152.0*TIME)                        
+420   CONTINUE                                                             
+C                                                                           
+C -----------------------------------------------------------              
+C  Subtract randoms from each detector-detector pair.                   
+C                                                                          
+      DO 500 SLICE=1,7                                                    
+        TEMP = RANDOMS(SLICE)*TIME/16.0                                     
+        DO 470 BP=1,18                                                        
+          DO 460 D1=1,8                                                    
+            DO 450 D2=1,8
+C Changed from INT2 to IINT when porting to HP  KMG 4-16-91           
+C              RAND = INT2(NINT(TEMP*SENSITIVITY(D2,D1,BP,SLICE)))         
+              RAND = ININT(TEMP*SENSITIVITY(D2,D1,BP,SLICE))           
+              DO 440 WOB=1,16                                              
+                COUNTS = ARRAY(D2,D1,WOB,BP,SLICE) - RAND                   
+                IF (COUNTS.LT.0) COUNTS=0         ! no negative counts
+C Commented out the INT2 conversion because INT*4 will get converted to
+C  INT*2 automatically
+C     ARRAY(D2,D1,WOB,BP,SLICE) = INT2(COUNTS)
+                ARRAY(D2,D1,WOB,BP,SLICE) = (COUNTS)
+                TRUES(SLICE) = TRUES(SLICE) + COUNTS                  
+440           CONTINUE                                                        
+450         CONTINUE                                                     
+460       CONTINUE                                                        
+470     CONTINUE                                                           
+500   CONTINUE                                                             
+C                                                                             
+C -----------------------------------------------------------               
+C  Write separated slices (1-7) to output file 1 slice at a time        
+C                                                                           
+      NBYTES = 2*18*16*8*8        ! bytes per slice                        
+      HEADER(38) = 20             ! file type                  
+      DO 600 SLICE=1,7                                                       
+        HEADER(18) = SLICE                                                  
+        ETOTAL = NUMEVENTS(SLICE)                                          
+        RTOTAL = NRANDOMS(SLICE)                                          
+        TTOTAL = TRUES(SLICE)                                             
+        CALL SYSIO(PB,IOWRITE,OUT,HEADER,256,0)                          
+        CALL SYSIO(PB,IOWRITE,OUT,ARRAY(1,1,1,1,SLICE),NBYTES,0)        
+600   CONTINUE                                                            
+C                                                                          
+C  Write out total events and total minus randoms               
+C                                                                         
+      WRITE(USEROUT,8300)                                                     
+      WRITE(USEROUT,8310)                                                   
+      SUMEVENTS = 0                                                       
+      SUMRANDOM = 0                                                      
+      SUMTRUES  = 0                                                        
+      DO 700 I=1,7                                                        
+        WRITE(USEROUT,8320) I, NUMEVENTS(I), NRANDOMS(I), TRUES(I),        
+     2    100.0*FLOAT(NRANDOMS(I))/FLOAT(NUMEVENTS(I)),                   
+     3    NINT(RANDOMS(I)*TIME/16.0),                                     
+     4    NINT(SINGLES(I)), NINT(OUTLIERS(I)*TIME),                      
+     5    RANDOMS(I)/OUTLIERS(I)                                              
+        SUMEVENTS = SUMEVENTS + NUMEVENTS(I)                                  
+        SUMRANDOM = SUMRANDOM + NRANDOMS(I)                                 
+        SUMTRUES  = SUMTRUES + TRUES(I)                                   
+700   CONTINUE                                                            
+      WRITE(USEROUT,*) ' '                                             
+      WRITE(USEROUT,8330) SUMEVENTS, SUMRANDOM, SUMTRUES,                
+     2    100.0*FLOAT(SUMRANDOM)/FLOAT(SUMEVENTS)                          
+C                                                                          
+8300  FORMAT(1X,'Slice',4X,'Total ',4X,' Total ',5X,'Events-',3X,            
+     2   ' %  ',2X,'Randoms',2X,'Singles',2X,'Outliers',2X,'Frac')      
+8310  FORMAT(1X,' No. ',4X,'Events',4X,'Randoms',5X,'Randoms',3X,              
+     2   'Rand',2X,'Per Bin',2X,'Per Sec',2X,'Per Scan',2X,'Subt')             
+8320  FORMAT(1X,I3,I12,I11,I12,F7.1,I7,I10,I9,F8.2)                         
+8330  FORMAT(1X,'SUM',I12,I11,I12,F7.1)                                      
+C                                                                             
+      CLOSE(ALPHAFILE)
+      CLOSE(ATENSIZE)
+      CLOSE(OUT)
+      STOP                                                                
+      END                                                                  
+@

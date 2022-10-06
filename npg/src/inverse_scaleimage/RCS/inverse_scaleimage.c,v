@@ -1,0 +1,123 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2006.10.27.17.33.04;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*	$Id$
+	$Log$ */
+/* ===============================================================================
+ *	Module:			inverse_scaleimage.c
+ *	Date:			Oct 2006
+ *	Author:			Tom Videen
+ *	Description:	Scale an image file by the inverse of input factor.
+ *					Alters the subheader scale_factor and notes the change in the
+ *					main header comment field.
+ * ===============================================================================
+ */
+static char     rcsid[] = "$Header: /home/npggw/tom/src/inverse_scaleimage/RCS/inverse_scaleimage.c,v 3.0 2004/02/19 22:12:27 tom Exp $";
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <libimage.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	ImageFile      *file;
+	Index           indx;
+	char           *fname;			 /* file to process */
+	float           factor;			 /* scaling factor */
+	char            runstamp[40];	 /* version, date and userid info */
+	int             i;
+
+/*
+ *  Get command line arguments
+ */
+	fname = argv[1];
+	factor = atof (argv[2]);
+	factor = 1.0 / factor;
+	i = 3;
+	(void) sprintf (runstamp, "%s %s %s %s %s %s", argv[i], argv[i + 1], argv[i + 2],
+		 argv[i + 4], argv[i + 5], argv[i + 6]);
+	indx.frm = 1;
+	indx.pln = 1;
+	indx.gate = 1;
+	indx.data = 0;
+	indx.bed = 0;
+
+/*
+ *  Get main header
+ *  Store RCS version in mh->sw_revision.
+ */
+	file = make_imgfile (fname);
+	(void) strcpy (file->mode, "r+");
+	if (open_imgfile (file) == ERROR) {
+		fprintf (stderr, "ERROR [inverse_scaleimage]: Could not open %s\n", fname);
+		return (ERROR);
+	}
+	if (get_mh (file) == ERROR) {
+		fprintf (stderr, "ERROR [inverse_scaleimage]: Could not get MainHeader from %s\n", fname);
+		return (ERROR);
+	}
+	(void) save_rcs (file, rcsid, runstamp);
+
+	if (file->mh->scale_flag == 1)
+		file->mh->pr_scaler *= factor;
+	else {
+		file->mh->scale_flag = 1;
+		file->mh->pr_scaler = factor;
+	}
+	if ((put_mh (file)) == ERROR) {
+		fprintf (stderr, "ERROR [inverse_scaleimage]: Cannot write MainHeader to %s\n", fname);
+		return (ERROR);
+	}
+/*
+ *	Get subheaders and change scale factors until no more frames
+ *	Always try frame 1
+ *	existimgfrm avoids the error messages which getsbhdr generates
+ */
+
+	if (existimgfrm (file, &indx) == OK) {
+		fprintf (stdout, "Scaling %s, frame %d\n", file->name, indx.frm);
+		if (scale_sh (file, &indx, factor) == ERROR) {
+			fprintf (stderr, "ERROR [inverse_scaleimage]: Scaling frame %d\n", indx.frm);
+			return (ERROR);
+		}
+	}
+/*	then frame 2 and additional frames until no more are found */
+
+	++(indx.frm);
+	while (existimgfrm (file, &indx) == OK) {
+		fprintf (stdout, "Scaling %s, frame %d\n", file->name, indx.frm);
+		if (scale_sh (file, &indx, factor) == ERROR) {
+			fprintf (stderr, "ERROR [inverse_scaleimage]: Scaling frame %d\n", indx.frm);
+			return (ERROR);
+		}
+		++(indx.frm);
+	}
+	close_imgfile (file);
+	free_imgfile (file);
+	return (OK);
+}
+@

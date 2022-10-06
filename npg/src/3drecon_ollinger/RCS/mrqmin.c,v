@@ -1,0 +1,117 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	98.04.01.14.39.42;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Id: mrqmin.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $*/
+/*$Log: mrqmin.c,v $
+ * Revision 3.1  1998/03/24  23:43:10  jmo
+ * ..
+ *
+ * Revision 3.0  1997/10/29  19:26:43  jmo
+ * Support Exact HR.
+ *
+ * Revision 2.5  1997/08/06  18:22:04  jmo
+ * Last version before adding CTI rev 7 support.
+ *
+ * Revision 2.4  1996/06/19  11:20:23  jmo
+ *
+ * Revision 2.3  1996/04/23  15:02:05  jmo
+ * Version released April 23, 1996
+ *
+ * Revision 2.0  1996/01/27  13:46:07  jmo
+ * Version installed at Neuro-imaging group, January 1996
+ *
+ * Revision 1.2  1996/01/18  16:10:05  jmo
+ * Modified file formats, Interfile and Matrix Rev 7.0 support.
+ *
+ * Revision 1.1  1996/01/12  18:09:18  jmo
+ * Initial revision
+ *
+ * Revision 1.1  1995/01/19  22:40:20  ty7777
+ * Initial revision
+ **/
+
+static char rcsid [] = "$Header: /home/fafner/jmo/src/scatter/scat/RCS/mrqmin.c,v 3.1 1998/03/24 23:43:10 jmo Exp jmo $";
+
+void mrqmin(x,y,sig,ndata,a,ma,lista,mfit,covar,alpha,chisq,funcs,alamda)
+float x[],y[],sig[],a[],**covar,**alpha,*chisq,*alamda;
+int ndata,ma,lista[],mfit;
+void (*funcs)();
+{
+	int k,kk,j,ihit;
+	static float *da,*atry,**oneda,*beta,ochisq;
+	float *vector(),**matrix();
+	void mrqcof(),gaussj(),covsrt(),nrerror(),free_matrix(),free_vector();
+
+	if (*alamda < 0.0) {
+		oneda=matrix(1,mfit,1,1);
+		atry=vector(1,ma);
+		da=vector(1,ma);
+		beta=vector(1,ma);
+		kk=mfit+1;
+		for (j=1;j<=ma;j++) {
+			ihit=0;
+			for (k=1;k<=mfit;k++)
+				if (lista[k] == j) ihit++;
+			if (ihit == 0)
+				lista[kk++]=j;
+			else if (ihit > 1) nrerror("Bad LISTA permutation in MRQMIN-1");
+		}
+		if (kk != ma+1) nrerror("Bad LISTA permutation in MRQMIN-2");
+		*alamda=0.001;
+		mrqcof(x,y,sig,ndata,a,ma,lista,mfit,alpha,beta,chisq,funcs);
+		ochisq=(*chisq);
+	}
+	for (j=1;j<=mfit;j++) {
+		for (k=1;k<=mfit;k++) covar[j][k]=alpha[j][k];
+		covar[j][j]=alpha[j][j]*(1.0+(*alamda));
+		oneda[j][1]=beta[j];
+	}
+	gaussj(covar,mfit,oneda,1);
+	for (j=1;j<=mfit;j++)
+		da[j]=oneda[j][1];
+	if (*alamda == 0.0) {
+		covsrt(covar,ma,lista,mfit);
+		free_vector(beta,1,ma);
+		free_vector(da,1,ma);
+		free_vector(atry,1,ma);
+		free_matrix(oneda,1,mfit,1,1);
+		return;
+	}
+	for (j=1;j<=ma;j++) atry[j]=a[j];
+	for (j=1;j<=mfit;j++)
+		atry[lista[j]] = a[lista[j]]+da[j];
+	mrqcof(x,y,sig,ndata,atry,ma,lista,mfit,covar,da,chisq,funcs);
+	if (*chisq < ochisq) {
+		*alamda *= 0.1;
+		ochisq=(*chisq);
+		for (j=1;j<=mfit;j++) {
+			for (k=1;k<=mfit;k++) alpha[j][k]=covar[j][k];
+			beta[j]=da[j];
+			a[lista[j]]=atry[lista[j]];
+		}
+	} else {
+		*alamda *= 10.0;
+		*chisq=ochisq;
+	}
+	return;
+}
+@

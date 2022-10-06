@@ -1,0 +1,270 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	2004.02.16.14.59.35;	author tom;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2002.11.26.21.12.24;	author tom;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.10.12.13.24.26;	author tom;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.05.07.16.07.11;	author tom;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.01.03.15.53.35;	author tom;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.05.17.18.10.19;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@Feb 2004
+@
+text
+@/*	$Log: filterimg.c,v $
+ * Revision 1.5  2002/11/26  21:12:24  tom
+ * *** empty log message ***
+ *
+ * Revision 1.4  1999/10/12  13:24:26  tom
+ * new libimgutil with updated arc path
+ *
+ * Revision 1.3  1999/05/07  16:07:11  tom
+ * add gauss2d
+ *
+ * Revision 1.2  1997/01/03  15:53:35  tom
+ * new libimgutil with filter types 'fbu' and 'fb'
+ *
+ * Revision 1.1  1996/05/17  18:10:19  tom
+ * Initial revision
+ * */
+/*	=========================================================================
+ *	Module:			filterimg.c
+ *	Author:			Tom Videen
+ *	Description:	filter all images in an imagelist
+ *	Input Parameters:
+ *		1) imagelist file
+ *		2) parameter file (uses "imgfilter")
+ *	=================================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Id: filterimg.c,v 1.5 2002/11/26 21:12:24 tom Exp tom $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <nrutil.h>
+#include <myvalues.h>
+#include <imgutil.h>
+
+main (argc, argv)
+/*@@unused@@*/
+	int             argc;
+	char           *argv[];
+{
+	IMAGE_LIST_DATA *list;			 /* image list */
+	PARAMETER_DATA  prm;			 /* parameters */
+	char           *prmname;		 /* parameter filename */
+	char           *listname;		 /* filename of image list */
+	char           *fname;			 /* temp filename */
+	char           *(imgname[6]);	 /* filtered image filenames */
+	char           *(orgname[6]);	 /* unfiltered image filenames */
+	char           *sxrname;		 /* sxr filename */
+	char           *dtype;			 /* data type (for archive paths to files */
+	char            cbuffer[MAXFNAME];
+	char            command[MAXPATH];
+	int             filtmode;
+	int             nfiles;
+	int             listsize;
+	int             i, j;
+
+/*
+ *	Get command line arguments.
+ */
+	prmname = argv[1];
+	listname = argv[2];
+	for (i = 0; i < 6; i++) {
+		imgname[i] = (char *) malloc (MAXPATH);
+		orgname[i] = (char *) malloc (MAXPATH);
+	}
+	sxrname = (char *) malloc (MAXPATH);
+	dtype = (char *) malloc (MAXPATH);
+	if (dtype == NULL) return (ERROR);
+
+/*
+ *	Read parameter file into the structure INFO_TYPE finfo.
+ */
+	if (readprm (prmname, &prm) == ERROR) {
+		fprintf (stderr, "ERROR [filterimg]: reading parameters from %s\n", prmname);
+		return (ERROR);
+	}
+/*
+ *	Read listname into IMAGE_LIST_DATA structure
+ */
+	list = (IMAGE_LIST_DATA *) malloc (sizeof (IMAGE_LIST_DATA) * MAX_IMAGE_LIST_SIZE);
+	if (readimglist (listname, list, &listsize) == ERROR) {
+		fprintf (stderr, "ERROR [filterimg]: reading imagelist %s\n", listname);
+		return (ERROR);
+	}
+/*
+ *	Filter each image in the imagelist
+ */
+	for (i = 0; i < listsize; i++) {
+		filtmode = IMGFILTER_MODE;
+		if (buildnames (prm, list[i], filtmode, &nfiles, imgname, sxrname) == ERROR) {
+			fprintf (stderr, "Error building filenames from %s %s %f %s %f %s\n",
+				 list[i].subject_id, list[i].scanset1_id, list[i].mean1,
+				 list[i].scanset2_id, list[i].mean2, list[i].sxrid);
+		}
+		filtmode = RECFILTER_MODE;
+		if (buildnames (prm, list[i], filtmode, &nfiles, orgname, sxrname) == ERROR) {
+			fprintf (stderr, "Error building filenames from %s %s %f %s %f %s\n",
+				 list[i].subject_id, list[i].scanset1_id, list[i].mean1,
+				 list[i].scanset2_id, list[i].mean2, list[i].sxrid);
+		}
+/*
+ *	Get complete paths to files
+ */
+		strcpy (dtype, prm.scanner);
+		strcat (dtype, "_");
+		strcat (dtype, prm.acquisition);
+		strcat (dtype, "_");
+		strcat (dtype, prm.reconstruction);
+		strcat (dtype, "_");
+		strcat (dtype, prm.recfilter);
+		for (j = 0; j < nfiles; j++) {
+			fname = getpath (imgname[j], dtype, prm);
+			if (strcmp (fname, "") == 0) {
+				fname = getpath (orgname[j], dtype, prm);
+				if (strcmp (fname, "") == 0) {
+					printf ("ERROR: Cannot find %s\n", orgname[j]);
+				} else {
+					if (prm.imgfilter_type == FILTER_GAUSS)
+						strcpy (command, "gauss ");
+					else if (prm.imgfilter_type == FILTER_GAUSS2D)
+						strcpy (command, "gauss2d ");
+					else if (prm.imgfilter_type == FILTER_BUTTERWORTH)
+						strcpy (command, "butterworth ");
+					strcat (command, fname);
+					strcat (command, " ");
+					strcat (command, imgname[j]);
+					strcat (command, " ");
+					sprintf (cbuffer, " %f", prm.imgfilter_cutoff);
+					strcat (command, cbuffer);
+					if (prm.imgfilter_type == FILTER_BUTTERWORTH) {
+						sprintf (cbuffer, " %d", prm.imgfilter_order);
+						strcat (command, cbuffer);
+					}
+					if (system (command) != 0) {
+						fprintf (stderr, "ERROR [filterimg]: Could not filter %s\n", fname);
+						return (ERROR);
+					}
+				}
+			}
+		}
+	}
+
+	free (list);
+	free (dtype);
+	free (sxrname);
+	return (OK);
+}
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 3
+d26 1
+d28 1
+a28 1
+static char     rcsid[] = "$Id: filterimg.c,v 1.4 1999/10/12 13:24:26 tom Exp tom $";
+d39 1
+d70 1
+a146 2
+	for (i = 0; i < 6; i++)
+		free (imgname[i]);
+@
+
+
+1.4
+log
+@new libimgutil with updated arc path
+@
+text
+@d2 3
+d24 1
+a24 1
+static char     rcsid[] = "$Id: filterimg.c,v 1.3 1999/05/07 16:07:11 tom Exp tom $";
+d28 1
+d70 1
+a70 1
+		fprintf (stderr, "ERROR [filterimg]: reading parameters from %s\n, prmname");
+@
+
+
+1.3
+log
+@add gauss2d
+@
+text
+@d2 3
+d21 1
+a21 1
+static char     rcsid[] = "$Id: filterimg.c,v 1.2 1997/01/03 15:53:35 tom Exp tom $";
+@
+
+
+1.2
+log
+@new libimgutil with filter types 'fbu' and 'fb'
+@
+text
+@d2 3
+d18 1
+a18 1
+static char     rcsid[] = "$Id: filterimg.c,v 1.1 1996/05/17 18:10:19 tom Exp tom $";
+d109 2
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 1
+/*	$Log$ */
+d15 1
+a15 1
+static char     rcsid[] = "$Id: filterimg.c,v 2.0 1996/05/16 19:52:32 tom Exp $";
+@

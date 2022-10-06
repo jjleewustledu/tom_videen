@@ -1,0 +1,280 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	2005.08.18.15.06.32;	author tom;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*$Log$ */
+/*	===============================================================================
+ *	Module:			maicif2analyze.c
+ *	Date:			Aug 2005
+ *	Author:			Tom Videen
+ *	Description:	Create an Analyze image from an Interfile image file.
+ *	===============================================================================
+ */
+/*@@unused@@*/
+#ifndef lint
+static char     rcsid[] = "$Header: /home/npggw/tom/src/maicif2analyze/RCS/maicif2analyze.c,v 2.1 2004/04/12 19:04:22 tom Exp $";
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <image.h>
+#include <nrutil.h>
+#include <ANALYZE.h>
+
+#define MAXSTR 256
+#define CORONAL    '\001'
+
+/*	----------------------------
+ *	Function:	maicif2analyze
+ *	----------------------------
+ */
+main (argc, argv)
+	int             argc;
+	char           *argv[];
+{
+
+	struct dsr      hdr;
+	FILE           *fd;
+	char           *ifhdr;
+	char           *ifimg;
+	char           *anahdr;
+	char           *anaimg;
+	char            str[MAXSTR];
+	char            imagename[MAXSTR] = "";
+	char           *ptr;
+	float           size[3];
+	int             dim[3];
+	short          *img;
+	short        ***omg;
+	long            inpln, i, j, k, n;
+	int             ndim = 0;
+	int             ntype = 0;
+	int             nbytes = 0;
+
+	if (argc != 5) {
+		fprintf (stderr, "Usage: maicif2analyze ifhdr ifimg anahdr anaimg\n");
+		return (ERROR);
+	}
+	ifhdr = argv[1];
+	ifimg = argv[2];
+	anahdr = argv[3];
+	anaimg = argv[4];
+
+/*
+ * Read Interfile header
+ */
+
+	fprintf (stderr, "Reading %s\n", ifhdr);
+	if ((fd = fopen (ifhdr, "r")) == 0) {
+		(void) printf ("Unable to open Interfile header %s\n", ifhdr);
+		return (ERROR);
+	}
+	if (fgets (str, sizeof (str), fd) == NULL) {
+		(void) printf ("ERROR [maicif2analyze]: reading %s\n", ifhdr);
+		return (ERROR);
+	}
+	if (strstr (str, "INTERFILE") == NULL) {
+		(void) printf ("ERROR [maicif2analyze]: %s is not an Interfile header\n", ifhdr);
+		return (ERROR);
+	}
+	while (fgets (str, sizeof (str), fd) != NULL) {
+		ptr = strstr (str, ":=");
+		if (ptr != NULL) {
+			ptr += 2;
+			if (strstr (str, "name of data file") != NULL) {
+				(void) sscanf (ptr, "%s", imagename);
+				continue;
+			}
+			if (strstr (str, "number format") != NULL) {
+				while (*ptr == ' ')
+					ptr++;
+				if (strstr (ptr, "signed integer") != NULL)
+					ntype = 4;
+				else if (strstr (ptr, "float") != NULL)
+					ntype = 16;
+				else {
+					(void) printf ("ERROR [maicif2analyze]: image is not signed integer or float\n");
+					return (ERROR);
+				}
+				continue;
+			}
+			if (strstr (str, "number of bytes per pixel") != NULL) {
+				(void) sscanf (ptr, "%d", &nbytes);
+				continue;
+			}
+			if (strstr (str, "number of dimensions") != NULL) {
+				(void) sscanf (ptr, "%d", &ndim);
+				if (ndim < 3 || ndim > 4) {
+					(void) printf ("WARNING [maicif2analyze]: non-standard number of dimensions = %d\n",
+						       ndim);
+					(void) printf ("Analyze may not handle this image properly without ");
+					(void) printf ("manually editing its header.\n");
+				}
+				continue;
+			}
+			if (strstr (str, "matrix size [1]") != NULL) {
+				(void) sscanf (ptr, "%d", &dim[0]);
+				continue;
+			}
+			if (strstr (str, "matrix size [2]") != NULL) {
+				(void) sscanf (ptr, "%d", &dim[1]);
+				continue;
+			}
+			if (strstr (str, "matrix size [3]") != NULL) {
+				(void) sscanf (ptr, "%d", &dim[2]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [1]") != NULL) {
+				(void) sscanf (ptr, "%f", &size[0]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [2]") != NULL) {
+				(void) sscanf (ptr, "%f", &size[1]);
+				continue;
+			}
+			if (strstr (str, "scaling factor (mm/pixel) [3]") != NULL) {
+				(void) sscanf (ptr, "%f", &size[2]);
+				continue;
+			}
+		}
+	}
+	(void) fclose (fd);
+	inpln = dim[0] * dim[1];
+
+/*
+ * Read Interfile image and Reorient
+ */
+	img = (short *) calloc (inpln, sizeof (short));
+	if (img == NULL) {
+		fprintf (stderr, "ERROR [maicif2analyze]: calloc img\n");
+		return (ERROR);
+	}
+	omg = (short ***) calloc (dim[1], sizeof (short **));
+	if (omg == NULL) {
+		fprintf (stderr, "ERROR [maicif2analyze]: calloc omg\n");
+		return (ERROR);
+	}
+	for (k = 0; k < dim[1]; k++) {
+		omg[k] = (short **) calloc (dim[2], sizeof (short *));
+		if (omg[k] == NULL) {
+			fprintf (stderr, "ERROR [maicif2analyze]: calloc omg\n");
+			return (ERROR);
+		}
+		for (j = 0; j < dim[2]; j++) {
+			omg[k][j] = (short *) calloc (dim[0], sizeof (short));
+			if (omg[k][j] == NULL) {
+				fprintf (stderr, "ERROR [maicif2analyze]: calloc omg\n");
+				return (ERROR);
+			}
+		}
+	}
+
+	if ((fd = fopen (ifimg, "r")) == 0) {
+		fprintf (stderr, "ERROR [maicif2analyze]: opening %s\n", ifimg);
+		return (ERROR);
+	}
+	fprintf (stderr, "Reading %s\n", ifimg);
+	for (j = 0; j < dim[2]; j++) {
+		if ((fread (img, sizeof (short), inpln, fd)) != inpln) {
+			fprintf (stderr, "ERROR [maicif2analyze]: reading %s plane %ld\n", ifimg, j);
+			return (ERROR);
+		}
+		n = 0;
+		for (k = 0; k < dim[1]; k++) {
+			for (i = 0; i < dim[0]; i++) {
+				omg[k][j][i] = img[inpln - n - 1];
+				n++;
+			}
+		}
+
+	}
+	(void) fclose (fd);
+
+/*
+ * Write re-oriented Analyze image
+ */
+	fprintf (stderr, "Writing %s\n", anaimg);
+	if ((fd = fopen (anaimg, "w")) == 0) {
+		fprintf (stderr, "ERROR [maicif2analyze]: opening %s\n", anaimg);
+		return (ERROR);
+	}
+	for (k = 0; k < dim[1]; k++) {
+		for (j = 0; j < dim[2]; j++) {
+			if ((fwrite (omg[k][j], sizeof (short), dim[0], fd)) != dim[0]) {
+				fprintf (stderr, "ERROR [maicif2analyze]: writing %s %ld %ld\n", anaimg, k, j);
+				return (ERROR);
+			}
+		}
+	}
+	(void) fclose (fd);
+
+/*
+ *	Create Analyze hdr file
+ */
+
+	printf ("Writing %s\n", anahdr);
+	(void) strncpy (hdr.hk.db_name, imagename, 17);
+	hdr.hk.sizeof_hdr = sizeof (struct dsr); /* required by developers */
+	hdr.hk.extents = 16384;			 /* recommended by developers  */
+	hdr.hk.regular = 'r';			 /* required by developers */
+	hdr.dime.dim[0] = 4;			 /* typically 4 dimensions  */
+	hdr.dime.dim[1] = dim[0];		 /* x dimension of atlas   */
+	hdr.dime.dim[2] = dim[2];		 /* number of slices in volume (FLIPPED from input) */
+	hdr.dime.dim[3] = dim[1];		 /* y dimension of atlas   (FLIPPED from input) */
+	hdr.dime.dim[4] = 1;			 /* only one volume typically  */
+	hdr.dime.unused8 = 0;			 /* despite the label, some of this is used */
+	hdr.dime.unused9 = 0;
+	hdr.dime.unused10 = 0;
+	hdr.dime.unused11 = 0;
+	hdr.dime.unused12 = 0;
+	hdr.dime.unused13 = 0;
+	hdr.dime.unused14 = 0;
+	hdr.dime.datatype = ntype;		 /* 4-> 16-bit signed integer; 8-> float */
+	hdr.dime.bitpix = 8 * nbytes;		 /* number of bits/pixel */
+	hdr.dime.pixdim[1] = size[0];		 /* in mm */
+	hdr.dime.pixdim[2] = size[2];		 /* in mm (FLIPPED from input) */
+	hdr.dime.pixdim[3] = size[1];		 /* in mm (FLIPPED from input) */
+	hdr.dime.funused8 = 0;
+	hdr.dime.funused9 = 0;
+	hdr.dime.funused10 = 0;
+	hdr.dime.funused11 = 0;
+	hdr.dime.funused12 = 0;
+	hdr.dime.funused13 = 0;
+	hdr.dime.glmax = 255;
+	hdr.dime.glmin = 0;
+	(void) strncpy (hdr.hist.descrip, imagename, 79);
+	(void) strcpy (hdr.hist.originator, "maicif2analyze");
+	hdr.hist.orient = CORONAL;
+	if ((fd = fopen (anahdr, "w")) == 0) {
+		(void) printf ("Unable to create ANALYZE header %s\n", anahdr);
+		return (ERROR);
+	}
+	if ((fwrite (&hdr, sizeof (struct dsr), 1, fd)) != 1) {
+		(void) printf ("Error writing to: %s\n", anahdr);
+		return (ERROR);
+	}
+	(void) fclose (fd);
+	free (img);
+	free (omg);
+	return (0);
+}
+@

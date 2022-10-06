@@ -1,0 +1,77 @@
+      subroutine splitt
+      character*80 string
+      character*40 array(8)
+      character*320 bigstr
+
+   2  write(*,"('Enter test string')")
+      read(*,"(a80)")string
+      write(*,"(a80)")string
+      call split(string,array," ",nfield)
+      bigstr=' '
+      k=1
+      do 1 i=1,nfield
+      l=lnblnk(array(i))
+      write(*,"(i5,1x,a40)")l,array(i)
+      bigstr(k:)=array(i)
+    1 k=k+40
+      call whiteout(bigstr)
+      l=lnblnk(bigstr)
+      write(*,"(a)")bigstr(1:l)
+      goto 2
+      end
+      
+      subroutine split(string,array,fs,nfield)
+      character*(*) string
+      character*(*) array(1)
+      character*1 fs,c
+     
+      len0=len(string)
+      nfield=0
+      do 6 k=1,len0
+      c=string(k:k)
+    6 if(c.ne." ".and.c.ne."\t")goto 1
+      return
+    1 do 5 kk=k,len0
+    5 if(string(kk:kk).eq.fs)goto 4
+      nfield=nfield+1
+      array(nfield)=string(k:len0)
+      call whiteout(array(nfield))
+      return
+    4 nfield=nfield+1
+c      write(*,"('nfield,kk ',3i10)")nfield,kk
+      do 2 l=kk+1,len0
+    2 if(string(l:l).ne.fs)goto 3
+      array(nfield)=string(k:kk-1)
+      call whiteout(array(nfield))
+      return
+    3 array(nfield)=string(k:l-1)
+      call whiteout(array(nfield))
+      k=l
+      goto 1
+      end
+
+      subroutine concat(str1,str2,str3)
+      character*(*) str1,str2,str3
+      l1=lnblnk(str1)
+      l2=lnblnk(str2)
+      str3=str1(1:l1)
+      str3(l1+1:l1+l2)=str2(1:l2)
+      return
+      end
+
+      subroutine whiteout(string)
+      character*(*) string
+      character*1 c
+      l=lnblnk(string)
+      k=0
+      do 1 i=1,l
+      c=string(i:i)
+      if(c.ne." ".and.c.ne."\t".and.c.ne."\n".and.c.ne."\b"
+     &.and.c.ne."\f".and.c.ne."\v".and.c.ne."\0")then
+	k=k+1
+	string(k:k)=c
+      endif
+    1 continue
+      string(k+1:)=' '
+      return
+      end

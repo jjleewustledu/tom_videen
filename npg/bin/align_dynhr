@@ -1,0 +1,198 @@
+#!/bin/csh
+#	Module:	align_dynhr
+#   Date:	Jul 2008
+#   Author:	Tom Videen
+#	Use:	Align all frames of a dynamic PET image (fdopa, nmb) from EXACT HR or HR+
+#   Note:
+#       sumimgframes requires the start time;
+#       single_frames calls sumimgframes;
+#	Modified:	
+#		05-May-2009	changed single_frames to not decay correct
+
+set USAGE = "Usage: align_dynhr pid tracer firstfrm lastfrm reffrm -b 8 -t 40"
+
+if ($#argv < 5) then
+	echo "Usage: align_dynhr pid tracer firstfrm lastfrm reffrm [-b 8] [-t 40]"
+	echo " i.e., align_dynhr p3000 fd 1 30 2"
+	echo "   or, align_dynhr p3000 mb 1 44 2 -b 5 -t 100"
+	exit 1
+endif
+
+set PID   = $1
+set CMPD  = $2
+set FRM1  = $3
+set FRM2  = $4
+set REFRM = $5
+
+set FRAMES = ${FRM1}to$FRM2
+set ROOT   = $PID$CMPD
+set MASK   = ${PID}mask.v
+set ORG    = ../${ROOT}1.v
+set TR1    = ${PID}tr1.v
+set TR1f   = ${PID}tr1_2dg5.v
+set LAT    = ${PID}lat
+set RORG   = r${ROOT}1.v
+set SUM    = ${ROOT}1_sum20.v
+set SUMG   = ${ROOT}1_sum20_g3.v
+set THRESH = 40
+set BLUR   = 8
+shift argv
+shift argv
+shift argv
+shift argv
+shift argv
+top:
+	if ($#argv > 0) then
+		switch ("$argv[1]")
+		case -b:
+			shift argv
+			if ($#argv > 0) then
+				set BLUR = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_dynhr]: missing number following -b"
+				exit 1
+			endif
+			goto top
+		case -t:
+			shift argv
+			if ($#argv > 0) then
+				set THRESH = $argv[1]
+				shift argv
+			else
+				echo "ERROR [align_dynhr]:
+				echo $USAGE
+				exit 1
+			endif
+			goto top
+		case -?*:
+			echo "ERROR [align_dynhr]: illegal parameter $argv[1]"
+			echo $USAGE
+			exit 1
+		default:
+			echo "ERROR [align_dynhr]: extra parameter $argv[1]"
+			echo $USAGE
+			exit 1
+		endsw
+	endif
+endif
+
+echo $BLUR $THRESH
+
+# Check for existence of first, last and reference frames
+# -------------------------------------------------------
+if (! -e $ORG) then
+	echo "ERROR [align_dynhr]: Missing image $ORG"
+	echo "align_dynhr should be called from a subdirectory, Align_dynpet"
+	exit 1
+endif
+imghdr $ORG $FRM1 > & ! align.tmp
+set CHK1 = `head -1 align.tmp | cut -c1-5`
+imghdr $ORG $FRM2 > & ! align.tmp
+set CHK2 = `head -1 align.tmp | cut -c1-5`
+imghdr $ORG $REFRM > & ! align.tmp
+set CHK3 = `head -1 align.tmp | cut -c1-5`
+unalias rm
+rm align.tmp
+if ($CHK1 == ERROR) then
+	echo "ERROR [align_dynhr]: No frame $FRM1 in $ORG"
+	exit 1
+else if ($CHK2 == ERROR) then
+	echo "ERROR [align_dynhr]: No frame $FRM2 in $ORG"
+	exit 1
+else if ($CHK3 == ERROR) then
+	echo "ERROR [align_dynhr]: No frame $REFRM in $ORG"
+	exit 1
+endif
+if (! -e ../$TR1) then
+	echo "ERROR [align_dynhr]: Missing image ../$TR1"
+	exit 1
+endif
+
+# Get Scanner type
+# -------------------------
+set ECAT = `imghdr $ORG | grep ECAT | head -1 | cut -f2 -d" "`
+if ($ECAT == 961) then
+	set SCALE = scale_961a
+else if ($ECAT == 962) then
+	set SCALE = scale_962a
+else
+	echo "ERROR [align_dynhr]: ECAT type is $ECAT"
+	exit 1
+endif
+if (! -e /usr/local/npg/air/$SCALE.air) then
+	echo "ERROR [align_dynhr]: cannot find /usr/local/npg/air/$SCALE.air"
+	exit 1
+endif
+
+# Create mask for alignment 
+# -------------------------
+gauss2d ../$TR1 $TR1f 0.5
+maskslc $TR1f $TR1f 1to2
+if ($ECAT == 961) then
+	maskslc $TR1f $TR1f 46to47
+else if ($ECAT == 962) then
+	maskslc $TR1f $TR1f 62to63
+endif
+sumlateral $TR1f $LAT.v 700 1300
+imghdr $LAT.v | grep Max
+maskpct $LAT.v tmp.v 40
+maskimg $LAT.v tmp.v $LAT.v 1
+rm tmp.v
+
+echo "---------------------------------------------------------------------"
+echo "View $LAT.v with vidi and remove nose and tissues below base of cranium"
+echo
+echo "Save as $LAT.img and then press return to continue."
+set data = `line`
+
+if2analyze $LAT
+analyze2img $LAT $LAT.v
+masklateral $TR1f $LAT.v $MASK 10
+maskimg $MASK $MASK $MASK 700
+
+echo "---------------------------------------------------------------------"
+echo "View $MASK with vidi"
+echo "press return to continue"
+set data = `line`
+
+# Separate single frames from dynamic image
+# ----------------------------------------
+single_frames $ORG $ROOT i $FRM1 $FRM2
+	if ($status != 0) exit 1
+align_dynamic $ROOT i $MASK ${REFRM}to${FRM2} $THRESH $BLUR $SCALE
+	if ($status != 0) exit 1
+reslicedyn $ROOT .i $FRAMES $REFRM $ORG
+	if ($status != 0) exit 1
+merge_dynframes r$ROOT $FRAMES .i $RORG
+	if ($status != 0) exit 1
+remove_dynfiles $ROOT .i $FRAMES
+remove_dynfiles r$ROOT .i $FRAMES
+#fitlog2plt ${ROOT}_m20_b${BLUR}_p1_x3.log $REFRM
+
+# Create composite images of early and late frames
+# ------------------------------------------------
+set N1 = `echo $FRM1 + 7 | bc`
+set N2 = `echo $FRM2 - 5 | bc`
+set time1 = `imghdr $ORG $FRM1 | grep Start | cut -f2 -d= | cut -f1 -ds`
+set time2 = `imghdr $ORG $N2 | grep Start | cut -f2 -d= | cut -f1 -ds`
+sumimgframes $ORG  orig_f${FRM1}to${N1}.v  $FRM1 $N1 $time1
+sumimgframes $ORG  orig_f${N2}to${FRM2}.v  $N2 $FRM2 $time2
+sumimgframes $RORG align_f${FRM1}to${N1}.v $FRM1 $N1 $time1
+sumimgframes $RORG align_f${N2}to${FRM2}.v $N2 $FRM2 $time2
+
+echo "-----------------------------------------------------"
+echo "1) plot_aligndyn ${ROOT}_alignmsk_b${BLUR}_t${THRESH}_p1_x3.log"
+echo 
+echo "2) Compare early and late frames of original and aligned (vidi)"
+echo "	  orig_f${FRM1}to${N1}.v"
+echo "	  orig_f${N2}to${FRM2}.v"
+echo "	  align_f${FRM1}to${N1}.v"
+echo "	  align_f${N2}to${FRM2}.v"
+echo	
+echo "3) View all frames for one plane (vidi)"
+echo
+echo "4) Move the aligned dynamic to the parent directory"
+echo "	  mv $RORG* .."
+echo "-----------------------------------------------------"
+
